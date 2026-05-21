@@ -1,19 +1,11 @@
-//
-//  MyRAMApp.swift
-//  MyRAM
-//
-//  Created by Benjamin Drong on 10/18/25.
-//
-
+// MyRAMApp.swift
 import SwiftUI
-import SwiftData
 
 @main
 struct MyRAMApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            NotesListView(context: PersistenceManager.shared.context)
         }
-        .modelContainer(for: [Folder.self, Note.self])
     }
 }
