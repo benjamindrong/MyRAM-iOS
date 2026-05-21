@@ -1,61 +1,60 @@
+// NotesViewModel.swift
 import SwiftUI
 import SwiftData
 
 @MainActor
 final class NotesViewModel: ObservableObject {
-    @Bindable var folder: Folder
     @Published var notes: [Note] = []
+    @Published var currentNote: Note? = nil
     
-    // Tracks editing or new note
-    @Published var editingNote: Note? = nil
-    @Published var isCreatingNewNote = false
-    
-    init(folder: Folder) {
-        self.folder = folder
-        self.notes = folder.notes
+    private let context: ModelContext
+
+    init(context: ModelContext) {
+        self.context = context
+        fetchNotes()
+        loadLastNote()
     }
-    
-    func startEditing(note: Note) {
-        editingNote = note
-        isCreatingNewNote = false
+
+    func fetchNotes() {
+        let descriptor = FetchDescriptor<Note>(sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)])
+        notes = (try? context.fetch(descriptor)) ?? []
     }
-    
-    func startCreatingNewNote() {
-        editingNote = nil
-        isCreatingNewNote = true
+
+    private func loadLastNote() {
+        if let idString = UserDefaults.standard.string(forKey: "lastNoteID"),
+           let uuid = UUID(uuidString: idString),
+           let note = notes.first(where: { $0.id == uuid }) {
+            currentNote = note
+        }
     }
-    
-    func saveNewNote(title: String, content: String) {
-        guard let context = folder.modelContext else { return }
-        let newNote = Note(title: title, content: content, folder: folder)
-        context.insert(newNote)
-        folder.notes.append(newNote)
-        notes.append(newNote) // triggers SwiftUI update
+
+    func createNewNote() {
+        let note = Note()
+        context.insert(note)
         try? context.save()
-        isCreatingNewNote = false
+        fetchNotes()
+        selectNote(note)
     }
-    
-    // Add a new note only when saving
-//    func addNote(title: String, content: String) {
-//        guard let context = folder.modelContext else { return }
-//        let note = Note(title: title, content: content, folder: folder)
-//        context.insert(note)
-//        folder.notes.append(note)
-//        notes.append(note)
-//        try? context.save()
-//    }
-    
-    func update(note: Note, title: String, content: String) {
+
+    func selectNote(_ note: Note?) {
+        currentNote = note
+        UserDefaults.standard.set(note?.id.uuidString, forKey: "lastNoteID")
+    }
+
+    func updateNote(_ note: Note, title: String, content: String) {
         note.title = title
         note.content = content
         note.modifiedAt = .now
-        try? folder.modelContext?.save()
+        try? context.save()
+        fetchNotes()
     }
-    
-    func delete(note: Note) {
-        folder.notes.removeAll { $0.id == note.id }
-        notes.removeAll { $0.id == note.id }
-        folder.modelContext?.delete(note)
-        try? folder.modelContext?.save()
+
+    func deleteNote(_ note: Note) {
+        context.delete(note)
+        try? context.save()
+        fetchNotes()
+        if currentNote?.id == note.id {
+            currentNote = nil
+        }
     }
 }

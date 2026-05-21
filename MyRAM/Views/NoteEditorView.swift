@@ -1,52 +1,36 @@
-//
-//  NoteEditorView.swift
-//  MyRAM
-//
-//  Created by Benjamin Drong on 10/19/25.
-//
-
+// NoteEditorView.swift
 import SwiftUI
-import SwiftData
 
 struct NoteEditorView: View {
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var vm: NotesViewModel
-    let noteToEdit: Note? // nil for new note
-
+    let note: Note
+    
     @State private var title: String = ""
     @State private var content: String = ""
-
+    
     var body: some View {
         NavigationStack {
             Form {
                 TextField("Title", text: $title)
+                    .font(.title2)
+                
                 TextEditor(text: $content)
-                    .frame(height: 250)
+                    .frame(minHeight: 400)
             }
-            .navigationTitle(noteToEdit == nil ? "New Note" : "Edit Note")
+            .navigationTitle("Note")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
-                        if let note = noteToEdit {
-                            vm.update(note: note, title: title, content: content)
-                        } else {
-                            vm.saveNewNote(title: title, content: content)
-                        }
-                        dismiss()
-                    }
-                }
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
+                    Button("Done") { dismiss() }
                 }
             }
             .onAppear {
-                if let note = noteToEdit {
-                    title = note.title
-                    content = note.content
-                }
+                title = note.title
+                content = note.content
             }
+            .onChange(of: title) { vm.updateNote(note, title: title, content: content) }
+            .onChange(of: content) { vm.updateNote(note, title: title, content: content) }
         }
     }
 }

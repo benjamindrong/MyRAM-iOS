@@ -1,54 +1,52 @@
-//
-//  NotesListView.swift
-//  MyRAM
-//
-//  Created by Benjamin Drong on 10/19/25.
-//
-
+// NotesListView.swift
 import SwiftUI
 import SwiftData
 
 struct NotesListView: View {
-    @StateObject var vm: NotesViewModel
-
+    @StateObject private var vm: NotesViewModel
+    @State private var selectedNote: Note? = nil
+    
+    init(context: ModelContext) {
+        _vm = StateObject(wrappedValue: NotesViewModel(context: context))
+    }
+    
     var body: some View {
         NavigationStack {
             List {
                 ForEach(vm.notes) { note in
                     Button {
-                        vm.startEditing(note: note)
+                        vm.selectNote(note)
+                        selectedNote = note
                     } label: {
-                        VStack(alignment: .leading) {
-                            Text(note.title)
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(note.title.isEmpty ? "Untitled" : note.title)
                                 .font(.headline)
-                            Text(note.content)
-                                .lineLimit(1)
+                            Text(note.content.isEmpty ? "No content yet" : note.content)
+                                .lineLimit(2)
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                         }
                     }
                 }
-                .onDelete { offsets in
-                    for index in offsets {
-                        let note = vm.notes[index]
-                        vm.delete(note: note)
+                .onDelete { indexSet in
+                    for index in indexSet {
+                        vm.deleteNote(vm.notes[index])
                     }
                 }
             }
-            .navigationTitle(vm.folder.name)
+            .navigationTitle("My Notes")
             .toolbar {
-                Button {
-                    vm.startCreatingNewNote()
-                } label: {
+                Button(action: vm.createNewNote) {
                     Label("New Note", systemImage: "square.and.pencil")
                 }
             }
-            .sheet(isPresented: $vm.isCreatingNewNote) {
-                NoteEditorView(vm: vm, noteToEdit: nil)
+            .sheet(item: $selectedNote) { note in
+                NoteEditorView(vm: vm, note: note)
             }
-            .sheet(item: $vm.editingNote) { note in
-                // If note is nil, create new note inside editor
-                NoteEditorView(vm: vm, noteToEdit: note)
+        }
+        .onChange(of: vm.currentNote) { newValue in
+            if let newValue, selectedNote == nil {
+                selectedNote = newValue
             }
         }
     }
