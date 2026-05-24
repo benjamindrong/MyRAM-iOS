@@ -36,15 +36,19 @@ struct NotesListView: View {
             }
             .navigationTitle("My Notes")
             .toolbar {
-                Button(action: vm.createNewNote) {
+                Button {
+                    selectedNote = vm.createNewNote()
+                } label: {
                     Label("New Note", systemImage: "square.and.pencil")
                 }
             }
             .sheet(item: $selectedNote) { note in
-                NoteEditorView(vm: vm, note: note)
+                NoteEditorView(vm: vm, note: note) { newNote in
+                    selectedNote = newNote
+                }
             }
         }
-        .onChange(of: vm.currentNote) { newValue in
+        .onChange(of: vm.currentNote) { _, newValue in
             if let newValue, selectedNote == nil {
                 selectedNote = newValue
             }

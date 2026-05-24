@@ -28,12 +28,14 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    func createNewNote() {
+    @discardableResult
+    func createNewNote() -> Note {
         let note = Note()
         context.insert(note)
         try? context.save()
         fetchNotes()
         selectNote(note)
+        return note
     }
 
     func selectNote(_ note: Note?) {
