@@ -5,6 +5,8 @@ import SwiftData
 struct NotesListView: View {
     @StateObject private var vm: NotesViewModel
     @State private var selectedNote: Note? = nil
+    @State private var showingRecentlyDeleted = false
+    @State private var recentlyDeletedNotes: [Note] = []
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     
     init(context: ModelContext) {
@@ -49,6 +51,13 @@ struct NotesListView: View {
                     }
 
                     Button {
+                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
+                        showingRecentlyDeleted = true
+                    } label: {
+                        Label("Recently Deleted", systemImage: "trash")
+                    }
+
+                    Button {
                         selectedNote = vm.createNewNote()
                     } label: {
                         Label("New Note", systemImage: "square.and.pencil")
@@ -60,10 +69,81 @@ struct NotesListView: View {
                     selectedNote = newNote
                 }
             }
+            .sheet(isPresented: $showingRecentlyDeleted) {
+                RecentlyDeletedView(
+                    notes: recentlyDeletedNotes,
+                    onRestore: { note in
+                        vm.restoreNote(note)
+                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
+                    },
+                    onDelete: { note in
+                        vm.permanentlyDeleteNote(note)
+                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
+                    }
+                )
+            }
         }
         .onChange(of: vm.currentNote) { _, newValue in
             if let newValue, selectedNote == nil {
                 selectedNote = newValue
+            }
+        }
+    }
+}
+
+private struct RecentlyDeletedView: View {
+    @Environment(\.dismiss) private var dismiss
+    let notes: [Note]
+    let onRestore: (Note) -> Void
+    let onDelete: (Note) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if notes.isEmpty {
+                    ContentUnavailableView(
+                        "No Recently Deleted Notes",
+                        systemImage: "trash",
+                        description: Text("Deleted notes are kept here for 7 days.")
+                    )
+                } else {
+                    List {
+                        ForEach(notes) { note in
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(note.title.isEmpty ? "Untitled" : note.title)
+                                    .font(.headline)
+                                Text(note.content.isEmpty ? "No content" : note.content)
+                                    .lineLimit(2)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.secondary)
+                                if let deletedAt = note.deletedAt {
+                                    Text("Deleted \(deletedAt.formatted(date: .abbreviated, time: .shortened))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                                Button("Restore") {
+                                    onRestore(note)
+                                }
+                                .tint(.green)
+                            }
+                            .swipeActions(edge: .trailing) {
+                                Button("Delete") {
+                                    onDelete(note)
+                                }
+                                .tint(.red)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Recently Deleted")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                Button("Done") {
+                    dismiss()
+                }
             }
         }
     }

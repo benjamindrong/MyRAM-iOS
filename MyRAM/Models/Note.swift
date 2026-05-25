@@ -9,11 +9,13 @@ final class Note {
     var content: String
     var createdAt: Date
     var modifiedAt: Date
+    var deletedAt: Date?
 
     init(title: String = "", content: String = "") {
         self.title = title
         self.content = content
         self.createdAt = .now
         self.modifiedAt = .now
+        self.deletedAt = nil
     }
 }
