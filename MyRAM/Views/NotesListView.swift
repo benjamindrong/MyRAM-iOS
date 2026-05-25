@@ -5,6 +5,7 @@ import SwiftData
 struct NotesListView: View {
     @StateObject private var vm: NotesViewModel
     @State private var selectedNote: Note? = nil
+    @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     
     init(context: ModelContext) {
         _vm = StateObject(wrappedValue: NotesViewModel(context: context))
@@ -36,10 +37,22 @@ struct NotesListView: View {
             }
             .navigationTitle("My Notes")
             .toolbar {
-                Button {
-                    selectedNote = vm.createNewNote()
-                } label: {
-                    Label("New Note", systemImage: "square.and.pencil")
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Appearance", selection: $appearanceSettingRaw) {
+                            ForEach(AppearanceSetting.allCases) { appearanceSetting in
+                                Text(appearanceSetting.title).tag(appearanceSetting.rawValue)
+                            }
+                        }
+                    } label: {
+                        Label("Appearance", systemImage: "circle.lefthalf.filled")
+                    }
+
+                    Button {
+                        selectedNote = vm.createNewNote()
+                    } label: {
+                        Label("New Note", systemImage: "square.and.pencil")
+                    }
                 }
             }
             .sheet(item: $selectedNote) { note in
