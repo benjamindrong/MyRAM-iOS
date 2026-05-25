@@ -7,6 +7,7 @@ struct NotesListView: View {
     @State private var selectedNote: Note? = nil
     @State private var showingRecentlyDeleted = false
     @State private var recentlyDeletedNotes: [Note] = []
+    @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     
     init(context: ModelContext) {
         _vm = StateObject(wrappedValue: NotesViewModel(context: context))
@@ -39,6 +40,16 @@ struct NotesListView: View {
             .navigationTitle("My Notes")
             .toolbar {
                 ToolbarItemGroup(placement: .topBarTrailing) {
+                    Menu {
+                        Picker("Appearance", selection: $appearanceSettingRaw) {
+                            ForEach(AppearanceSetting.allCases) { appearanceSetting in
+                                Text(appearanceSetting.title).tag(appearanceSetting.rawValue)
+                            }
+                        }
+                    } label: {
+                        Label("Appearance", systemImage: "circle.lefthalf.filled")
+                    }
+
                     Button {
                         recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
                         showingRecentlyDeleted = true
