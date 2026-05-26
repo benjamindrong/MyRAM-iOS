@@ -1,5 +1,6 @@
 # Xcode
 DerivedData/
+.derivedData/
 build/
 *.xcworkspace
 *.xcuserdata
@@ -10,4 +11,3 @@ build/
 # Swift Package Manager
 /.build/
 Packages/
-

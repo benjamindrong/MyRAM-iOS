@@ -1,36 +1,104 @@
-//
-//  MyRAMTests.swift
-//  MyRAMTests
-//
-//  Created by Benjamin Drong on 10/18/25.
-//
-
 import XCTest
+import SwiftData
+import UIKit
 @testable import MyRAM
 
+@MainActor
 final class MyRAMTests: XCTestCase {
+    func testAddPhotoAttachmentStoresImageOnNote() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+        let imageData = try makeJPEGData()
 
-    override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
+        vm.addPhotoAttachment(to: note, imageData: imageData)
+
+        let notes = try container.mainContext.fetch(FetchDescriptor<Note>())
+        let fetched = try XCTUnwrap(notes.first { $0.id == note.id })
+        XCTAssertEqual(fetched.photoAttachments.count, 1)
+        XCTAssertFalse(fetched.photoAttachments[0].imageData.isEmpty)
     }
 
-    override func tearDownWithError() throws {
-        // Put teardown code here. This method is called after the invocation of each test method in the class.
+    func testRemovePhotoAttachmentDeletesAttachment() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+        let imageData = try makeJPEGData()
+
+        vm.addPhotoAttachment(to: note, imageData: imageData)
+        vm.addPhotoAttachment(to: note, imageData: imageData)
+
+        let attachmentToRemove = try XCTUnwrap(note.photoAttachments.first)
+        vm.removePhotoAttachment(attachmentToRemove, from: note)
+
+        XCTAssertEqual(note.photoAttachments.count, 1)
+        XCTAssertFalse(note.photoAttachments.contains { $0.id == attachmentToRemove.id })
     }
 
-    func testExample() throws {
-        // This is an example of a functional test case.
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
-        // Any test you write for XCTest can be annotated as throws and async.
-        // Mark your test throws to produce an unexpected failure when your test encounters an uncaught error.
-        // Mark your test async to allow awaiting for asynchronous code to complete. Check the results with assertions afterwards.
-    }
+    func testAttachmentsPersistAcrossContainerReinit() throws {
+        let storeName = "MyRAMTests-\(UUID().uuidString)"
+        let noteID: UUID
 
-    func testPerformanceExample() throws {
-        // This is an example of a performance test case.
-        self.measure {
-            // Put the code you want to measure the time of here.
+        do {
+            let container = try makeContainer(
+                isStoredInMemoryOnly: false,
+                configurationName: storeName
+            )
+            let vm = NotesViewModel(context: container.mainContext)
+            let note = vm.createNewNote()
+            let imageData = try makeJPEGData()
+
+            vm.addPhotoAttachment(to: note, imageData: imageData)
+            noteID = note.id
         }
+
+        let reopenedContainer = try makeContainer(
+            isStoredInMemoryOnly: false,
+            configurationName: storeName
+        )
+        let reopenedContext = reopenedContainer.mainContext
+        let reopenedNotes = try reopenedContext.fetch(FetchDescriptor<Note>())
+        let reopenedNote = try XCTUnwrap(reopenedNotes.first { $0.id == noteID })
+
+        XCTAssertEqual(reopenedNote.photoAttachments.count, 1)
     }
 
+    func testUpdateNoteKeepsExistingNotesWithoutAttachmentsCompatible() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+
+        vm.updateNote(note, title: "Title", content: "Content")
+
+        XCTAssertEqual(note.title, "Title")
+        XCTAssertEqual(note.content, "Content")
+        XCTAssertTrue(note.photoAttachments.isEmpty)
+    }
+
+    private func makeContainer(
+        isStoredInMemoryOnly: Bool,
+        configurationName: String = "MyRAMTests"
+    ) throws -> ModelContainer {
+        let schema = Schema([Note.self, NotePhotoAttachment.self])
+        let configuration = ModelConfiguration(
+            configurationName,
+            schema: schema,
+            isStoredInMemoryOnly: isStoredInMemoryOnly
+        )
+
+        return try ModelContainer(
+            for: Note.self, NotePhotoAttachment.self,
+            configurations: configuration
+        )
+    }
+
+    private func makeJPEGData() throws -> Data {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 20, height: 20))
+        let image = renderer.image { context in
+            UIColor.systemBlue.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 20, height: 20))
+        }
+
+        return try XCTUnwrap(image.jpegData(compressionQuality: 0.8))
+    }
 }

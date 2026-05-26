@@ -66,6 +66,25 @@ final class NotesViewModel: ObservableObject {
         fetchNotes()
     }
 
+    func addPhotoAttachment(to note: Note, imageData: Data) {
+        guard note.deletedAt == nil else { return }
+        let attachment = NotePhotoAttachment(imageData: imageData, note: note)
+        context.insert(attachment)
+        note.photoAttachments.append(attachment)
+        note.modifiedAt = .now
+        try? context.save()
+        fetchNotes()
+    }
+
+    func removePhotoAttachment(_ attachment: NotePhotoAttachment, from note: Note) {
+        guard note.deletedAt == nil else { return }
+        note.photoAttachments.removeAll { $0.id == attachment.id }
+        context.delete(attachment)
+        note.modifiedAt = .now
+        try? context.save()
+        fetchNotes()
+    }
+
     func deleteNote(_ note: Note) {
         note.deletedAt = .now
         note.modifiedAt = .now

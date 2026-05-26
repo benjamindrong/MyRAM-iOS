@@ -140,6 +140,19 @@ private struct RecentlyDeletedView: View {
             }
             .navigationTitle("Recently Deleted")
             .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .top) {
+                HStack(spacing: 8) {
+                    Image(systemName: "clock.arrow.circlepath")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                    Text("Deleted notes are kept here for 7 days.")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 6)
+                .background(.ultraThinMaterial)
+            }
             .toolbar {
                 Button("Done") {
                     dismiss()
