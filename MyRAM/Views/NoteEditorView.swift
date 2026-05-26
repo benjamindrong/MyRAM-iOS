@@ -23,6 +23,7 @@ struct NoteEditorView: View {
     @State private var showingPhotoPicker = false
     @State private var showingFileImporter = false
     @State private var expandedAttachment: NotePhotoAttachment?
+    @State private var areAttachmentsExpanded = false
     
     var body: some View {
         NavigationStack {
@@ -42,28 +43,44 @@ struct NoteEditorView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 if !sortedAttachments.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 10) {
-                            ForEach(sortedAttachments, id: \.id) { attachment in
-                                ZStack(alignment: .topTrailing) {
-                                    AttachmentThumbnail(attachment: attachment)
-                                        .onTapGesture {
-                                            expandedAttachment = attachment
-                                        }
+                    DisclosureGroup(isExpanded: $areAttachmentsExpanded) {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 10) {
+                                ForEach(sortedAttachments, id: \.id) { attachment in
+                                    ZStack(alignment: .topTrailing) {
+                                        AttachmentThumbnail(attachment: attachment, size: 64)
+                                            .onTapGesture {
+                                                expandedAttachment = attachment
+                                            }
 
-                                    Button {
-                                        vm.removePhotoAttachment(attachment, from: note)
-                                    } label: {
-                                        Image(systemName: "xmark.circle.fill")
-                                            .font(.title3)
-                                            .foregroundStyle(.white, .black.opacity(0.7))
-                                            .padding(6)
+                                        Button {
+                                            vm.removePhotoAttachment(attachment, from: note)
+                                        } label: {
+                                            Image(systemName: "xmark.circle.fill")
+                                                .font(.body)
+                                                .foregroundStyle(.white, .black.opacity(0.7))
+                                                .padding(4)
+                                        }
                                     }
                                 }
                             }
                         }
+                        .padding(.top, 8)
+                    } label: {
+                        HStack(spacing: 8) {
+                            Label("Attachments", systemImage: "paperclip")
+                                .font(.subheadline.weight(.medium))
+                            Text("\(sortedAttachments.count)")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Color.secondary.opacity(0.2))
+                                .clipShape(Capsule())
+                        }
                     }
-                    .frame(height: 96)
+                    .padding(10)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
             }
             .padding()
@@ -114,6 +131,12 @@ struct NoteEditorView: View {
                         onNewNote(vm.createNewNote())
                     } label: {
                         Image(systemName: "square.and.pencil")
+                    }
+                }
+                ToolbarItemGroup(placement: .keyboard) {
+                    Spacer()
+                    Button("Hide Keyboard") {
+                        dismissKeyboard()
                     }
                 }
             }
@@ -214,6 +237,7 @@ struct NoteEditorView: View {
     }
 
     private func importImageFiles(from urls: [URL]) {
+        var addedAttachment = false
         for url in urls {
             let didStartAccessing = url.startAccessingSecurityScopedResource()
             defer {
@@ -228,10 +252,16 @@ struct NoteEditorView: View {
             }
 
             vm.addPhotoAttachment(to: note, imageData: normalizedData)
+            addedAttachment = true
+        }
+
+        if addedAttachment {
+            areAttachmentsExpanded = true
         }
     }
 
     private func importSelectedPickerItems(_ items: [PhotosPickerItem]) async {
+        var addedAttachment = false
         for item in items {
             guard let data = try? await item.loadTransferable(type: Data.self),
                   let normalizedData = normalizedImageData(from: data) else {
@@ -239,12 +269,26 @@ struct NoteEditorView: View {
             }
 
             vm.addPhotoAttachment(to: note, imageData: normalizedData)
+            addedAttachment = true
+        }
+
+        if addedAttachment {
+            areAttachmentsExpanded = true
         }
     }
 
     private func normalizedImageData(from data: Data) -> Data? {
         guard let image = UIImage(data: data) else { return nil }
         return image.jpegData(compressionQuality: 0.85) ?? data
+    }
+
+    private func dismissKeyboard() {
+        UIApplication.shared.sendAction(
+            #selector(UIResponder.resignFirstResponder),
+            to: nil,
+            from: nil,
+            for: nil
+        )
     }
 }
 
@@ -255,13 +299,14 @@ private struct NoteSnapshot: Equatable {
 
 private struct AttachmentThumbnail: View {
     let attachment: NotePhotoAttachment
+    let size: CGFloat
 
     var body: some View {
         if let image = UIImage(data: attachment.imageData) {
             Image(uiImage: image)
                 .resizable()
                 .scaledToFill()
-                .frame(width: 84, height: 84)
+                .frame(width: size, height: size)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
                 .overlay {
                     RoundedRectangle(cornerRadius: 10)
@@ -270,7 +315,7 @@ private struct AttachmentThumbnail: View {
         } else {
             RoundedRectangle(cornerRadius: 10)
                 .fill(Color.secondary.opacity(0.2))
-                .frame(width: 84, height: 84)
+                .frame(width: size, height: size)
                 .overlay {
                     Image(systemName: "photo")
                         .foregroundStyle(.secondary)
