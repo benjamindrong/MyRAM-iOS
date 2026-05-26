@@ -12,13 +12,13 @@ final class PersistenceManager {
         do {
             let configuration = ModelConfiguration(
                 "MyRAM_Main",
-                schema: Schema([Note.self]),
+                schema: Schema([Note.self, NotePhotoAttachment.self]),
                 isStoredInMemoryOnly: false
             )
             
             container = try ModelContainer(
-                for: Note.self,
-                configurations: configuration   // ← Removed the [ ]
+                for: Note.self, NotePhotoAttachment.self,
+                configurations: configuration
             )
             
             print("✅ Fresh SwiftData store initialized successfully")
