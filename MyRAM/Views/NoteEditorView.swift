@@ -76,6 +76,8 @@ struct NoteEditorView: View {
                                 .padding(.vertical, 3)
                                 .background(Color.secondary.opacity(0.2))
                                 .clipShape(Capsule())
+                            Spacer(minLength: 8)
+                            attachmentInlineActions
                         }
                     }
                     .padding(10)
@@ -97,12 +99,6 @@ struct NoteEditorView: View {
                         Image(systemName: "arrow.uturn.backward")
                     }
                     .disabled(!canUndo)
-
-                    Button {
-                        selectAllToken += 1
-                    } label: {
-                        Image(systemName: "selection.pin.in.out")
-                    }
 
                     Menu {
                         Button {
@@ -131,12 +127,6 @@ struct NoteEditorView: View {
                         onNewNote(vm.createNewNote())
                     } label: {
                         Image(systemName: "square.and.pencil")
-                    }
-                }
-                ToolbarItemGroup(placement: .keyboard) {
-                    Spacer()
-                    Button("Hide Keyboard") {
-                        dismissKeyboard()
                     }
                 }
             }
@@ -282,14 +272,48 @@ struct NoteEditorView: View {
         return image.jpegData(compressionQuality: 0.85) ?? data
     }
 
-    private func dismissKeyboard() {
-        UIApplication.shared.sendAction(
-            #selector(UIResponder.resignFirstResponder),
-            to: nil,
-            from: nil,
-            for: nil
-        )
+    private var attachmentInlineActions: some View {
+        HStack(spacing: 6) {
+            inlineActionButton(systemImage: "keyboard.chevron.compact.down") {
+                dismissKeyboard()
+            }
+            inlineActionButton(systemImage: "scissors") {
+                performResponderAction(#selector(UIResponder.cut(_:)))
+            }
+            inlineActionButton(systemImage: "doc.on.doc") {
+                performResponderAction(#selector(UIResponder.copy(_:)))
+            }
+            inlineActionButton(systemImage: "doc.on.clipboard") {
+                performResponderAction(#selector(UIResponder.paste(_:)))
+            }
+            inlineActionButton(systemImage: "selection.pin.in.out") {
+                selectAllToken += 1
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(.ultraThinMaterial)
+        .clipShape(Capsule())
     }
+
+    private func inlineActionButton(systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .semibold))
+                .frame(width: 18, height: 18)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+    }
+
+    private func performResponderAction(_ action: Selector) {
+        UIApplication.shared.sendAction(action, to: nil, from: nil, for: nil)
+    }
+
+    private func dismissKeyboard() {
+        performResponderAction(#selector(UIResponder.resignFirstResponder))
+    }
+
 }
 
 private struct NoteSnapshot: Equatable {
