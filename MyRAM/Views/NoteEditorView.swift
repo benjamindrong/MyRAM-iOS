@@ -35,12 +35,18 @@ struct NoteEditorView: View {
                 )
                 .frame(height: 44)
                 
-                SelectableTextView(
-                    text: $content,
-                    selectAllToken: selectAllToken,
-                    onUndoManagerChanged: updateActiveUndoManager
-                )
+                ZStack(alignment: .bottomTrailing) {
+                    SelectableTextView(
+                        text: $content,
+                        selectAllToken: selectAllToken,
+                        onUndoManagerChanged: updateActiveUndoManager
+                    )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+                    attachmentInlineActions
+                        .padding(.trailing, 8)
+                        .padding(.bottom, 8)
+                }
 
                 if !sortedAttachments.isEmpty {
                     DisclosureGroup(isExpanded: $areAttachmentsExpanded) {
@@ -76,8 +82,9 @@ struct NoteEditorView: View {
                                 .padding(.vertical, 3)
                                 .background(Color.secondary.opacity(0.2))
                                 .clipShape(Capsule())
-                            Spacer(minLength: 8)
-                            attachmentInlineActions
+                            Image(systemName: areAttachmentsExpanded ? "chevron.up" : "chevron.down")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .padding(10)
@@ -274,19 +281,28 @@ struct NoteEditorView: View {
 
     private var attachmentInlineActions: some View {
         HStack(spacing: 6) {
-            inlineActionButton(systemImage: "keyboard.chevron.compact.down") {
+            inlineActionButton(
+                systemImage: "keyboard.chevron.compact.down",
+                identifier: "keyboard-control-dismiss"
+            ) {
                 dismissKeyboard()
             }
-            inlineActionButton(systemImage: "scissors") {
+            inlineActionButton(systemImage: "scissors", identifier: "keyboard-control-cut") {
                 performResponderAction(#selector(UIResponder.cut(_:)))
             }
-            inlineActionButton(systemImage: "doc.on.doc") {
+            inlineActionButton(systemImage: "doc.on.doc", identifier: "keyboard-control-copy") {
                 performResponderAction(#selector(UIResponder.copy(_:)))
             }
-            inlineActionButton(systemImage: "doc.on.clipboard") {
+            inlineActionButton(
+                systemImage: "doc.on.clipboard",
+                identifier: "keyboard-control-paste"
+            ) {
                 performResponderAction(#selector(UIResponder.paste(_:)))
             }
-            inlineActionButton(systemImage: "selection.pin.in.out") {
+            inlineActionButton(
+                systemImage: "selection.pin.in.out",
+                identifier: "keyboard-control-select-all"
+            ) {
                 selectAllToken += 1
             }
         }
@@ -294,9 +310,14 @@ struct NoteEditorView: View {
         .padding(.vertical, 4)
         .background(.ultraThinMaterial)
         .clipShape(Capsule())
+        .accessibilityIdentifier("keyboard-control-bar")
     }
 
-    private func inlineActionButton(systemImage: String, action: @escaping () -> Void) -> some View {
+    private func inlineActionButton(
+        systemImage: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
                 .font(.system(size: 12, weight: .semibold))
@@ -304,6 +325,7 @@ struct NoteEditorView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
+        .accessibilityIdentifier(identifier)
     }
 
     private func performResponderAction(_ action: Selector) {
