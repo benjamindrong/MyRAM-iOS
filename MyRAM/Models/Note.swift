@@ -10,15 +10,17 @@ final class Note {
     var createdAt: Date
     var modifiedAt: Date
     var deletedAt: Date?
+    var folder: Folder?
     @Relationship(deleteRule: .cascade, inverse: \NotePhotoAttachment.note)
     var photoAttachments: [NotePhotoAttachment] = []
 
-    init(title: String = "", content: String = "") {
+    init(title: String = "", content: String = "", folder: Folder? = nil) {
         self.title = title
         self.content = content
         self.createdAt = .now
         self.modifiedAt = .now
         self.deletedAt = nil
+        self.folder = folder
     }
 }
 

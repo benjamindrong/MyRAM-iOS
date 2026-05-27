@@ -24,9 +24,10 @@ struct NoteEditorView: View {
     @State private var showingFileImporter = false
     @State private var expandedAttachment: NotePhotoAttachment?
     @State private var areAttachmentsExpanded = false
-    @State private var shareURL: URL?
-    @State private var showingShareSheet = false
+    @State private var sharePayload: NoteSharePayload?
     @State private var exportErrorMessage: String?
+    @State private var showingCreateFolderPrompt = false
+    @State private var newFolderName = ""
     
     var body: some View {
         NavigationStack {
@@ -102,47 +103,58 @@ struct NoteEditorView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItemGroup(placement: .primaryAction) {
-                    Button {
-                        undoLastEdit()
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                    }
-                    .disabled(!canUndo)
-
+                ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button {
-                            showingPhotoPicker = true
+                            onNewNote(vm.createNewNote())
                         } label: {
-                            Label("Photo Library", systemImage: "photo")
+                            Label("New Note", systemImage: "square.and.pencil")
                         }
 
                         Button {
-                            showingFileImporter = true
+                            newFolderName = ""
+                            showingCreateFolderPrompt = true
                         } label: {
-                            Label("Import Image", systemImage: "square.and.arrow.down")
+                            Label("New Folder", systemImage: "folder.badge.plus")
+                        }
+
+                        Button {
+                            undoLastEdit()
+                        } label: {
+                            Label("Undo", systemImage: "arrow.uturn.backward")
+                        }
+                        .disabled(!canUndo)
+
+                        Menu {
+                            Button {
+                                showingPhotoPicker = true
+                            } label: {
+                                Label("Photo Library", systemImage: "photo")
+                            }
+
+                            Button {
+                                showingFileImporter = true
+                            } label: {
+                                Label("Import Image", systemImage: "square.and.arrow.down")
+                            }
+                        } label: {
+                            Label("Attachments", systemImage: "paperclip")
+                        }
+
+                        Button {
+                            exportCurrentNote()
+                        } label: {
+                            Label("Export Note", systemImage: "square.and.arrow.up")
+                        }
+
+                        Button(role: .destructive) {
+                            vm.deleteNote(note)
+                            dismiss()
+                        } label: {
+                            Label("Delete Note", systemImage: "trash")
                         }
                     } label: {
-                        Image(systemName: "paperclip")
-                    }
-
-                    Button {
-                        vm.deleteNote(note)
-                        dismiss()
-                    } label: {
-                        Image(systemName: "trash")
-                    }
-
-                    Button {
-                        exportCurrentNote()
-                    } label: {
-                        Image(systemName: "square.and.arrow.up")
-                    }
-
-                    Button {
-                        onNewNote(vm.createNewNote())
-                    } label: {
-                        Image(systemName: "square.and.pencil")
+                        Label("More", systemImage: "ellipsis.circle")
                     }
                 }
             }
@@ -177,10 +189,8 @@ struct NoteEditorView: View {
             .sheet(item: $expandedAttachment) { attachment in
                 ExpandedPhotoView(attachment: attachment)
             }
-            .sheet(isPresented: $showingShareSheet) {
-                if let shareURL {
-                    ActivityShareSheet(activityItems: [shareURL])
-                }
+            .sheet(item: $sharePayload) { payload in
+                ActivityShareSheet(activityItems: payload.urls)
             }
             .alert("Unable to Export Note", isPresented: Binding(
                 get: { exportErrorMessage != nil },
@@ -189,6 +199,18 @@ struct NoteEditorView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(exportErrorMessage ?? "An unknown export error occurred.")
+            }
+            .alert("New Folder", isPresented: $showingCreateFolderPrompt) {
+                TextField("Folder Name", text: $newFolderName)
+                Button("Cancel", role: .cancel) {
+                    newFolderName = ""
+                }
+                Button("Create") {
+                    vm.createFolder(named: newFolderName)
+                    newFolderName = ""
+                }
+            } message: {
+                Text("Enter a name for the new folder.")
             }
         }
     }
@@ -360,13 +382,18 @@ struct NoteEditorView: View {
 
     private func exportCurrentNote() {
         do {
-            shareURL = try vm.exportNotesForSharing([note])
-            showingShareSheet = true
+            let exportURLs = try vm.exportNotesForSharing([note])
+            sharePayload = NoteSharePayload(urls: exportURLs)
         } catch {
             exportErrorMessage = (error as? LocalizedError)?.errorDescription
                 ?? "An unknown export error occurred."
         }
     }
+}
+
+private struct NoteSharePayload: Identifiable {
+    let id = UUID()
+    let urls: [URL]
 }
 
 private struct NoteSnapshot: Equatable {

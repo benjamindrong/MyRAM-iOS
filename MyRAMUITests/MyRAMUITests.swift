@@ -43,6 +43,10 @@ final class MyRAMUITests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
+        let overflowButton = app.buttons["More"]
+        XCTAssertTrue(overflowButton.waitForExistence(timeout: 5))
+        overflowButton.tap()
+
         let newNoteButton = app.buttons["New Note"]
         XCTAssertTrue(newNoteButton.waitForExistence(timeout: 5))
         newNoteButton.tap()
