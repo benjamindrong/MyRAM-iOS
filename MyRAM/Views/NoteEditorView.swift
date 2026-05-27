@@ -24,6 +24,9 @@ struct NoteEditorView: View {
     @State private var showingFileImporter = false
     @State private var expandedAttachment: NotePhotoAttachment?
     @State private var areAttachmentsExpanded = false
+    @State private var shareURL: URL?
+    @State private var showingShareSheet = false
+    @State private var exportErrorMessage: String?
     
     var body: some View {
         NavigationStack {
@@ -131,6 +134,12 @@ struct NoteEditorView: View {
                     }
 
                     Button {
+                        exportCurrentNote()
+                    } label: {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+
+                    Button {
                         onNewNote(vm.createNewNote())
                     } label: {
                         Image(systemName: "square.and.pencil")
@@ -167,6 +176,19 @@ struct NoteEditorView: View {
             }
             .sheet(item: $expandedAttachment) { attachment in
                 ExpandedPhotoView(attachment: attachment)
+            }
+            .sheet(isPresented: $showingShareSheet) {
+                if let shareURL {
+                    ActivityShareSheet(activityItems: [shareURL])
+                }
+            }
+            .alert("Unable to Export Note", isPresented: Binding(
+                get: { exportErrorMessage != nil },
+                set: { if !$0 { exportErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(exportErrorMessage ?? "An unknown export error occurred.")
             }
         }
     }
@@ -336,6 +358,15 @@ struct NoteEditorView: View {
         performResponderAction(#selector(UIResponder.resignFirstResponder))
     }
 
+    private func exportCurrentNote() {
+        do {
+            shareURL = try vm.exportNotesToTextFile([note])
+            showingShareSheet = true
+        } catch {
+            exportErrorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "An unknown export error occurred."
+        }
+    }
 }
 
 private struct NoteSnapshot: Equatable {

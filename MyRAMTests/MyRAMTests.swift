@@ -75,6 +75,54 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(note.photoAttachments.isEmpty)
     }
 
+    func testBuildExportTextIncludesReadableFieldsForSingleNote() throws {
+        let note = Note(title: "Trip Plan", content: "Book flights")
+        note.createdAt = Date(timeIntervalSince1970: 1000)
+        note.modifiedAt = Date(timeIntervalSince1970: 2000)
+        let dateFormatter: (Date) -> String = { date in
+            let seconds = Int(date.timeIntervalSince1970)
+            return "TS-\(seconds)"
+        }
+
+        let exported = NotesViewModel.buildExportText(for: [note], dateFormatter: dateFormatter)
+
+        XCTAssertTrue(exported.contains("MyRAM Notes Export"))
+        XCTAssertTrue(exported.contains("Exported: TS-"))
+        XCTAssertTrue(exported.contains("Title: Trip Plan"))
+        XCTAssertTrue(exported.contains("Created: TS-1000"))
+        XCTAssertTrue(exported.contains("Modified: TS-2000"))
+        XCTAssertTrue(exported.contains("Body:\nBook flights"))
+    }
+
+    func testBuildExportTextForMultipleNotesIncludesSeparatorAndAllBodies() throws {
+        let note1 = Note(title: "One", content: "First body")
+        let note2 = Note(title: "", content: "")
+        let dateFormatter: (Date) -> String = { _ in "DATE" }
+
+        let exported = NotesViewModel.buildExportText(for: [note1, note2], dateFormatter: dateFormatter)
+
+        XCTAssertTrue(exported.contains("Title: One"))
+        XCTAssertTrue(exported.contains("Body:\nFirst body"))
+        XCTAssertTrue(exported.contains("Title: Untitled"))
+        XCTAssertTrue(exported.contains("Body:\n(No content)"))
+        XCTAssertTrue(exported.contains(String(repeating: "=", count: 48)))
+    }
+
+    func testExportNotesToTextFileWritesUTF8TxtFile() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+        vm.updateNote(note, title: "Daily Log", content: "UTF-8 test ✅")
+
+        let fileURL = try vm.exportNotesToTextFile([note])
+        let data = try Data(contentsOf: fileURL)
+        let text = try XCTUnwrap(String(data: data, encoding: .utf8))
+
+        XCTAssertEqual(fileURL.pathExtension.lowercased(), "txt")
+        XCTAssertTrue(text.contains("Title: Daily Log"))
+        XCTAssertTrue(text.contains("UTF-8 test ✅"))
+    }
+
     private func makeContainer(
         isStoredInMemoryOnly: Bool,
         configurationName: String = "MyRAMTests"

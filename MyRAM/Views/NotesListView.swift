@@ -1,12 +1,16 @@
 // NotesListView.swift
 import SwiftUI
 import SwiftData
+import UIKit
 
 struct NotesListView: View {
     @StateObject private var vm: NotesViewModel
     @State private var selectedNote: Note? = nil
     @State private var showingRecentlyDeleted = false
     @State private var recentlyDeletedNotes: [Note] = []
+    @State private var shareURL: URL?
+    @State private var showingShareSheet = false
+    @State private var exportErrorMessage: String?
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     
     init(context: ModelContext) {
@@ -58,6 +62,13 @@ struct NotesListView: View {
                     }
 
                     Button {
+                        exportAllNotes()
+                    } label: {
+                        Label("Export All Notes", systemImage: "square.and.arrow.up")
+                    }
+                    .disabled(vm.notes.isEmpty)
+
+                    Button {
                         selectedNote = vm.createNewNote()
                     } label: {
                         Label("New Note", systemImage: "square.and.pencil")
@@ -82,6 +93,19 @@ struct NotesListView: View {
                     }
                 )
             }
+            .sheet(isPresented: $showingShareSheet) {
+                if let shareURL {
+                    ActivityShareSheet(activityItems: [shareURL])
+                }
+            }
+            .alert("Unable to Export Notes", isPresented: Binding(
+                get: { exportErrorMessage != nil },
+                set: { if !$0 { exportErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(exportErrorMessage ?? "An unknown export error occurred.")
+            }
         }
         .onChange(of: vm.currentNote) { _, newValue in
             if let newValue, selectedNote == nil {
@@ -89,6 +113,30 @@ struct NotesListView: View {
             }
         }
     }
+
+    private func exportAllNotes() {
+        do {
+            shareURL = try vm.exportNotesToTextFile(vm.notes)
+            showingShareSheet = true
+        } catch {
+            exportErrorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "An unknown export error occurred."
+        }
+    }
+}
+
+struct ActivityShareSheet: UIViewControllerRepresentable {
+    let activityItems: [Any]
+    var applicationActivities: [UIActivity]? = nil
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(
+            activityItems: activityItems,
+            applicationActivities: applicationActivities
+        )
+    }
+
+    func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
 
 private struct RecentlyDeletedView: View {

@@ -8,6 +8,7 @@ final class NotesViewModel: ObservableObject {
     @Published var currentNote: Note? = nil
     
     private static let recentlyDeletedRetention: TimeInterval = 7 * 24 * 60 * 60
+    private static let noteSectionSeparator = String(repeating: "=", count: 48)
     private let context: ModelContext
 
     init(context: ModelContext) {
@@ -125,5 +126,101 @@ final class NotesViewModel: ObservableObject {
         }
 
         try? context.save()
+    }
+
+    func exportNotesToTextFile(
+        _ notesToExport: [Note],
+        nowProvider: () -> Date = Date.init
+    ) throws -> URL {
+        let nonDeletedNotes = notesToExport.filter { $0.deletedAt == nil }
+        guard !nonDeletedNotes.isEmpty else {
+            throw NoteExportError.noNotesSelected
+        }
+
+        let exportText = Self.buildExportText(for: nonDeletedNotes)
+        guard let utf8Data = exportText.data(using: .utf8) else {
+            throw NoteExportError.failedToEncodeText
+        }
+
+        let exportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MyRAMExports", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: exportDirectory,
+            withIntermediateDirectories: true
+        )
+
+        let filename = Self.makeExportFilename(notes: nonDeletedNotes, now: nowProvider())
+        let exportURL = exportDirectory.appendingPathComponent(filename)
+        try utf8Data.write(to: exportURL, options: .atomic)
+        return exportURL
+    }
+
+    static func buildExportText(
+        for notes: [Note],
+        dateFormatter: (Date) -> String = NotesViewModel.defaultDateFormatter
+    ) -> String {
+        let entries = notes.map { note in
+            let title = note.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Untitled"
+                : note.title
+            let body = note.content.isEmpty ? "(No content)" : note.content
+
+            return [
+                "Title: \(title)",
+                "Created: \(dateFormatter(note.createdAt))",
+                "Modified: \(dateFormatter(note.modifiedAt))",
+                "Body:",
+                body
+            ].joined(separator: "\n")
+        }
+
+        let header = [
+            "MyRAM Notes Export",
+            "Exported: \(dateFormatter(Date()))",
+            ""
+        ].joined(separator: "\n")
+
+        let body = entries.joined(separator: "\n\n\(noteSectionSeparator)\n\n")
+        return "\(header)\(body)\n"
+    }
+
+    static func makeExportFilename(notes: [Note], now: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = .current
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        let timestamp = formatter.string(from: now)
+
+        if notes.count == 1 {
+            let title = notes[0].title.trimmingCharacters(in: .whitespacesAndNewlines)
+            let sanitizedTitle = title
+                .replacingOccurrences(of: "/", with: "-")
+                .replacingOccurrences(of: ":", with: "-")
+                .replacingOccurrences(of: "\n", with: " ")
+                .prefix(40)
+            let fallbackTitle = sanitizedTitle.isEmpty ? "Note" : String(sanitizedTitle)
+            return "\(fallbackTitle)-\(timestamp).txt"
+        }
+
+        return "MyRAM-Notes-\(timestamp).txt"
+    }
+
+    static func defaultDateFormatter(_ date: Date) -> String {
+        date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+enum NoteExportError: LocalizedError {
+    case noNotesSelected
+    case failedToEncodeText
+
+    var errorDescription: String? {
+        switch self {
+        case .noNotesSelected:
+            "No notes were selected to export."
+        case .failedToEncodeText:
+            "The note export could not be encoded as UTF-8."
+        }
     }
 }
