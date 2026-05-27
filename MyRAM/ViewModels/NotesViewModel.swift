@@ -8,7 +8,6 @@ final class NotesViewModel: ObservableObject {
     @Published var currentNote: Note? = nil
     
     private static let recentlyDeletedRetention: TimeInterval = 7 * 24 * 60 * 60
-    private static let noteSectionSeparator = String(repeating: "=", count: 48)
     private let context: ModelContext
 
     init(context: ModelContext) {
@@ -128,7 +127,7 @@ final class NotesViewModel: ObservableObject {
         try? context.save()
     }
 
-    func exportNotesToTextFile(
+    func exportNotesForSharing(
         _ notesToExport: [Note],
         nowProvider: () -> Date = Date.init
     ) throws -> URL {
@@ -137,76 +136,256 @@ final class NotesViewModel: ObservableObject {
             throw NoteExportError.noNotesSelected
         }
 
-        let exportText = Self.buildExportText(for: nonDeletedNotes)
+        let exportTime = nowProvider()
+        if nonDeletedNotes.count == 1, let note = nonDeletedNotes.first {
+            return try Self.writeSingleNoteExport(note: note, exportedAt: exportTime)
+        }
+
+        return try Self.writeMultipleNoteExportArchive(notes: nonDeletedNotes, exportedAt: exportTime)
+    }
+
+    nonisolated static func buildNoteExportText(
+        for note: Note,
+        exportedAt: Date = Date(),
+        dateFormatter: (Date) -> String = NotesViewModel.defaultDateFormatter
+    ) -> String {
+        let title = note.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? "Untitled"
+            : note.title
+        let body = note.content.isEmpty ? "(No content)" : note.content
+
+        return [
+            "MyRAM Notes Export",
+            "Exported: \(dateFormatter(exportedAt))",
+            "",
+            "Title: \(title)",
+            "Created: \(dateFormatter(note.createdAt))",
+            "Modified: \(dateFormatter(note.modifiedAt))",
+            "Body:",
+            body,
+            ""
+        ].joined(separator: "\n")
+    }
+
+    nonisolated static func makeExportFilename(notes: [Note], now: Date) -> String {
+        let timestamp = makeExportTimestamp(now)
+        if notes.count == 1, let note = notes.first {
+            return "\(makeSafeFileStem(from: note.title, fallback: "Note"))-\(timestamp).txt"
+        }
+        return "MyRAM-Notes-\(timestamp).zip"
+    }
+
+    nonisolated private static func writeSingleNoteExport(note: Note, exportedAt: Date) throws -> URL {
+        let exportText = buildNoteExportText(for: note, exportedAt: exportedAt)
         guard let utf8Data = exportText.data(using: .utf8) else {
             throw NoteExportError.failedToEncodeText
         }
 
-        let exportDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MyRAMExports", isDirectory: true)
-        try FileManager.default.createDirectory(
-            at: exportDirectory,
-            withIntermediateDirectories: true
-        )
-
-        let filename = Self.makeExportFilename(notes: nonDeletedNotes, now: nowProvider())
+        let exportDirectory = try makeExportDirectory()
+        let filename = "\(makeSafeFileStem(from: note.title, fallback: "Note"))-\(makeExportTimestamp(exportedAt)).txt"
         let exportURL = exportDirectory.appendingPathComponent(filename)
         try utf8Data.write(to: exportURL, options: .atomic)
         return exportURL
     }
 
-    static func buildExportText(
-        for notes: [Note],
-        dateFormatter: (Date) -> String = NotesViewModel.defaultDateFormatter
-    ) -> String {
-        let entries = notes.map { note in
-            let title = note.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                ? "Untitled"
-                : note.title
-            let body = note.content.isEmpty ? "(No content)" : note.content
+    nonisolated private static func writeMultipleNoteExportArchive(notes: [Note], exportedAt: Date) throws -> URL {
+        let exportRoot = try makeExportDirectory()
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let notesDirectory = exportRoot.appendingPathComponent("Notes", isDirectory: true)
+        let fileManager = FileManager.default
 
-            return [
-                "Title: \(title)",
-                "Created: \(dateFormatter(note.createdAt))",
-                "Modified: \(dateFormatter(note.modifiedAt))",
-                "Body:",
-                body
-            ].joined(separator: "\n")
+        try fileManager.createDirectory(at: notesDirectory, withIntermediateDirectories: true)
+
+        var usedFilenames: Set<String> = []
+        for (index, note) in notes.enumerated() {
+            let baseName = makeSafeFileStem(from: note.title, fallback: "Note-\(index + 1)")
+            let uniqueName = uniqueFilename(baseName: baseName, used: &usedFilenames)
+            let noteText = buildNoteExportText(for: note, exportedAt: exportedAt)
+
+            guard let utf8Data = noteText.data(using: .utf8) else {
+                throw NoteExportError.failedToEncodeText
+            }
+
+            let fileURL = notesDirectory.appendingPathComponent("\(uniqueName).txt")
+            try utf8Data.write(to: fileURL, options: .atomic)
         }
 
-        let header = [
-            "MyRAM Notes Export",
-            "Exported: \(dateFormatter(Date()))",
-            ""
-        ].joined(separator: "\n")
+        let zipFilename = "MyRAM-Notes-\(makeExportTimestamp(exportedAt)).zip"
+        let zipURL = exportRoot.appendingPathComponent(zipFilename)
+        if fileManager.fileExists(atPath: zipURL.path) {
+            try fileManager.removeItem(at: zipURL)
+        }
+        let filesToArchive = try fileManager.contentsOfDirectory(
+            at: notesDirectory,
+            includingPropertiesForKeys: nil
+        ).sorted { $0.lastPathComponent < $1.lastPathComponent }
 
-        let body = entries.joined(separator: "\n\n\(noteSectionSeparator)\n\n")
-        return "\(header)\(body)\n"
+        let archiveEntries: [(name: String, data: Data)] = try filesToArchive.map { url in
+            let fileData = try Data(contentsOf: url)
+            return ("Notes/\(url.lastPathComponent)", fileData)
+        }
+
+        try writeZipArchive(entries: archiveEntries, to: zipURL)
+        return zipURL
     }
 
-    static func makeExportFilename(notes: [Note], now: Date) -> String {
+    nonisolated private static func makeExportDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MyRAMExports", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory
+    }
+
+    nonisolated private static func makeExportTimestamp(_ date: Date) -> String {
         let formatter = DateFormatter()
         formatter.calendar = Calendar(identifier: .gregorian)
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.timeZone = .current
         formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let timestamp = formatter.string(from: now)
-
-        if notes.count == 1 {
-            let title = notes[0].title.trimmingCharacters(in: .whitespacesAndNewlines)
-            let sanitizedTitle = title
-                .replacingOccurrences(of: "/", with: "-")
-                .replacingOccurrences(of: ":", with: "-")
-                .replacingOccurrences(of: "\n", with: " ")
-                .prefix(40)
-            let fallbackTitle = sanitizedTitle.isEmpty ? "Note" : String(sanitizedTitle)
-            return "\(fallbackTitle)-\(timestamp).txt"
-        }
-
-        return "MyRAM-Notes-\(timestamp).txt"
+        return formatter.string(from: date)
     }
 
-    static func defaultDateFormatter(_ date: Date) -> String {
+    nonisolated private static func makeSafeFileStem(from rawTitle: String, fallback: String) -> String {
+        let trimmed = rawTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let mapped = trimmed
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+            .replacingOccurrences(of: "\n", with: " ")
+            .prefix(40)
+        let safe = String(mapped).trimmingCharacters(in: .whitespacesAndNewlines)
+        return safe.isEmpty ? fallback : safe
+    }
+
+    nonisolated private static func uniqueFilename(baseName: String, used: inout Set<String>) -> String {
+        if !used.contains(baseName) {
+            used.insert(baseName)
+            return baseName
+        }
+
+        var index = 2
+        while used.contains("\(baseName)-\(index)") {
+            index += 1
+        }
+        let unique = "\(baseName)-\(index)"
+        used.insert(unique)
+        return unique
+    }
+
+    nonisolated private static func writeZipArchive(
+        entries: [(name: String, data: Data)],
+        to url: URL
+    ) throws {
+        var archiveData = Data()
+        var centralDirectoryData = Data()
+
+        for entry in entries {
+            let nameData = Data(entry.name.utf8)
+            guard nameData.count <= Int(UInt16.max),
+                  entry.data.count <= Int(UInt32.max),
+                  archiveData.count <= Int(UInt32.max) else {
+                throw NoteExportError.failedToCreateArchive
+            }
+
+            let crc32 = crc32(for: entry.data)
+            let fileSize = UInt32(entry.data.count)
+            let localHeaderOffset = UInt32(archiveData.count)
+
+            appendUInt32(0x04034B50, to: &archiveData)
+            appendUInt16(20, to: &archiveData)
+            appendUInt16(0, to: &archiveData)
+            appendUInt16(0, to: &archiveData)
+            appendUInt16(0, to: &archiveData)
+            appendUInt16(0, to: &archiveData)
+            appendUInt32(crc32, to: &archiveData)
+            appendUInt32(fileSize, to: &archiveData)
+            appendUInt32(fileSize, to: &archiveData)
+            appendUInt16(UInt16(nameData.count), to: &archiveData)
+            appendUInt16(0, to: &archiveData)
+            archiveData.append(nameData)
+            archiveData.append(entry.data)
+
+            appendUInt32(0x02014B50, to: &centralDirectoryData)
+            appendUInt16(20, to: &centralDirectoryData)
+            appendUInt16(20, to: &centralDirectoryData)
+            appendUInt16(0, to: &centralDirectoryData)
+            appendUInt16(0, to: &centralDirectoryData)
+            appendUInt16(0, to: &centralDirectoryData)
+            appendUInt16(0, to: &centralDirectoryData)
+            appendUInt32(crc32, to: &centralDirectoryData)
+            appendUInt32(fileSize, to: &centralDirectoryData)
+            appendUInt32(fileSize, to: &centralDirectoryData)
+            appendUInt16(UInt16(nameData.count), to: &centralDirectoryData)
+            appendUInt16(0, to: &centralDirectoryData)
+            appendUInt16(0, to: &centralDirectoryData)
+            appendUInt16(0, to: &centralDirectoryData)
+            appendUInt16(0, to: &centralDirectoryData)
+            appendUInt32(0, to: &centralDirectoryData)
+            appendUInt32(localHeaderOffset, to: &centralDirectoryData)
+            centralDirectoryData.append(nameData)
+        }
+
+        guard archiveData.count <= Int(UInt32.max),
+              centralDirectoryData.count <= Int(UInt32.max),
+              entries.count <= Int(UInt16.max) else {
+            throw NoteExportError.failedToCreateArchive
+        }
+
+        let centralDirectoryOffset = UInt32(archiveData.count)
+        let centralDirectorySize = UInt32(centralDirectoryData.count)
+        let entryCount = UInt16(entries.count)
+        archiveData.append(centralDirectoryData)
+
+        appendUInt32(0x06054B50, to: &archiveData)
+        appendUInt16(0, to: &archiveData)
+        appendUInt16(0, to: &archiveData)
+        appendUInt16(entryCount, to: &archiveData)
+        appendUInt16(entryCount, to: &archiveData)
+        appendUInt32(centralDirectorySize, to: &archiveData)
+        appendUInt32(centralDirectoryOffset, to: &archiveData)
+        appendUInt16(0, to: &archiveData)
+
+        try archiveData.write(to: url, options: .atomic)
+    }
+
+    nonisolated private static func crc32(for data: Data) -> UInt32 {
+        var crc: UInt32 = 0xFFFF_FFFF
+        for byte in data {
+            let index = Int((crc ^ UInt32(byte)) & 0xFF)
+            crc = (crc >> 8) ^ crc32LookupTable[index]
+        }
+        return crc ^ 0xFFFF_FFFF
+    }
+
+    nonisolated private static let crc32LookupTable: [UInt32] = (0..<256).map { value in
+        var crc = UInt32(value)
+        for _ in 0..<8 {
+            if (crc & 1) == 1 {
+                crc = (crc >> 1) ^ 0xEDB8_8320
+            } else {
+                crc >>= 1
+            }
+        }
+        return crc
+    }
+
+    nonisolated private static func appendUInt16(_ value: UInt16, to data: inout Data) {
+        var littleEndian = value.littleEndian
+        withUnsafeBytes(of: &littleEndian) { bytes in
+            data.append(contentsOf: bytes)
+        }
+    }
+
+    nonisolated private static func appendUInt32(_ value: UInt32, to data: inout Data) {
+        var littleEndian = value.littleEndian
+        withUnsafeBytes(of: &littleEndian) { bytes in
+            data.append(contentsOf: bytes)
+        }
+    }
+
+    nonisolated static func defaultDateFormatter(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
     }
 }
@@ -214,6 +393,7 @@ final class NotesViewModel: ObservableObject {
 enum NoteExportError: LocalizedError {
     case noNotesSelected
     case failedToEncodeText
+    case failedToCreateArchive
 
     var errorDescription: String? {
         switch self {
@@ -221,6 +401,8 @@ enum NoteExportError: LocalizedError {
             "No notes were selected to export."
         case .failedToEncodeText:
             "The note export could not be encoded as UTF-8."
+        case .failedToCreateArchive:
+            "The selected notes could not be zipped for export."
         }
     }
 }

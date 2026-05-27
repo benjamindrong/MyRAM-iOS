@@ -75,7 +75,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(note.photoAttachments.isEmpty)
     }
 
-    func testBuildExportTextIncludesReadableFieldsForSingleNote() throws {
+    func testBuildNoteExportTextIncludesReadableFieldsForSingleNote() throws {
         let note = Note(title: "Trip Plan", content: "Book flights")
         note.createdAt = Date(timeIntervalSince1970: 1000)
         note.modifiedAt = Date(timeIntervalSince1970: 2000)
@@ -84,43 +84,53 @@ final class MyRAMTests: XCTestCase {
             return "TS-\(seconds)"
         }
 
-        let exported = NotesViewModel.buildExportText(for: [note], dateFormatter: dateFormatter)
+        let exported = NotesViewModel.buildNoteExportText(
+            for: note,
+            exportedAt: Date(timeIntervalSince1970: 3000),
+            dateFormatter: dateFormatter
+        )
 
         XCTAssertTrue(exported.contains("MyRAM Notes Export"))
-        XCTAssertTrue(exported.contains("Exported: TS-"))
+        XCTAssertTrue(exported.contains("Exported: TS-3000"))
         XCTAssertTrue(exported.contains("Title: Trip Plan"))
         XCTAssertTrue(exported.contains("Created: TS-1000"))
         XCTAssertTrue(exported.contains("Modified: TS-2000"))
         XCTAssertTrue(exported.contains("Body:\nBook flights"))
     }
 
-    func testBuildExportTextForMultipleNotesIncludesSeparatorAndAllBodies() throws {
-        let note1 = Note(title: "One", content: "First body")
-        let note2 = Note(title: "", content: "")
-        let dateFormatter: (Date) -> String = { _ in "DATE" }
-
-        let exported = NotesViewModel.buildExportText(for: [note1, note2], dateFormatter: dateFormatter)
-
-        XCTAssertTrue(exported.contains("Title: One"))
-        XCTAssertTrue(exported.contains("Body:\nFirst body"))
-        XCTAssertTrue(exported.contains("Title: Untitled"))
-        XCTAssertTrue(exported.contains("Body:\n(No content)"))
-        XCTAssertTrue(exported.contains(String(repeating: "=", count: 48)))
-    }
-
-    func testExportNotesToTextFileWritesUTF8TxtFile() throws {
+    func testExportNotesForSharingSingleNoteWritesUTF8TxtFile() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let note = vm.createNewNote()
         vm.updateNote(note, title: "Daily Log", content: "UTF-8 test ✅")
 
-        let fileURL = try vm.exportNotesToTextFile([note])
+        let fileURL = try vm.exportNotesForSharing([note])
         let data = try Data(contentsOf: fileURL)
         let text = try XCTUnwrap(String(data: data, encoding: .utf8))
 
         XCTAssertEqual(fileURL.pathExtension.lowercased(), "txt")
         XCTAssertTrue(text.contains("Title: Daily Log"))
         XCTAssertTrue(text.contains("UTF-8 test ✅"))
+    }
+
+    func testExportNotesForSharingMultipleNotesCreatesZipWithSeparateTextFiles() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note1 = vm.createNewNote()
+        vm.updateNote(note1, title: "First Note", content: "Body A")
+        let note2 = vm.createNewNote()
+        vm.updateNote(note2, title: "Second Note", content: "Body B")
+
+        let zipURL = try vm.exportNotesForSharing([note1, note2])
+        XCTAssertEqual(zipURL.pathExtension.lowercased(), "zip")
+        let zipData = try Data(contentsOf: zipURL)
+        XCTAssertTrue(zipData.starts(with: [0x50, 0x4B, 0x03, 0x04]))
+        XCTAssertTrue(zipData.contains(Data("Notes/First Note.txt".utf8)))
+        XCTAssertTrue(zipData.contains(Data("Notes/Second Note.txt".utf8)))
+        XCTAssertTrue(zipData.contains(Data("Title: First Note".utf8)))
+        XCTAssertTrue(zipData.contains(Data("Title: Second Note".utf8)))
+        XCTAssertTrue(zipData.contains(Data("Body:\nBody A".utf8)))
+        XCTAssertTrue(zipData.contains(Data("Body:\nBody B".utf8)))
     }
 
     private func makeContainer(

@@ -4,10 +4,12 @@ import SwiftData
 import UIKit
 
 struct NotesListView: View {
+    @Environment(\.editMode) private var editMode
     @StateObject private var vm: NotesViewModel
     @State private var selectedNote: Note? = nil
     @State private var showingRecentlyDeleted = false
     @State private var recentlyDeletedNotes: [Note] = []
+    @State private var selectedNoteIDs: Set<UUID> = []
     @State private var shareURL: URL?
     @State private var showingShareSheet = false
     @State private var exportErrorMessage: String?
@@ -19,11 +21,15 @@ struct NotesListView: View {
     
     var body: some View {
         NavigationStack {
-            List {
-                ForEach(vm.notes) { note in
+            List(selection: $selectedNoteIDs) {
+                ForEach(vm.notes, id: \.id) { note in
                     Button {
-                        vm.selectNote(note)
-                        selectedNote = note
+                        if editMode?.wrappedValue.isEditing == true {
+                            toggleSelection(for: note.id)
+                        } else {
+                            vm.selectNote(note)
+                            selectedNote = note
+                        }
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(note.title.isEmpty ? "Untitled" : note.title)
@@ -34,6 +40,7 @@ struct NotesListView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .tag(note.id)
                 }
                 .onDelete { indexSet in
                     for index in indexSet {
@@ -43,6 +50,10 @@ struct NotesListView: View {
             }
             .navigationTitle("My Notes")
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    EditButton()
+                }
+
                 ToolbarItemGroup(placement: .topBarTrailing) {
                     Menu {
                         Picker("Appearance", selection: $appearanceSettingRaw) {
@@ -62,11 +73,11 @@ struct NotesListView: View {
                     }
 
                     Button {
-                        exportAllNotes()
+                        exportSelectedNotes()
                     } label: {
-                        Label("Export All Notes", systemImage: "square.and.arrow.up")
+                        Label("Export Selected Notes", systemImage: "square.and.arrow.up")
                     }
-                    .disabled(vm.notes.isEmpty)
+                    .disabled(selectedNoteIDs.isEmpty)
 
                     Button {
                         selectedNote = vm.createNewNote()
@@ -112,11 +123,24 @@ struct NotesListView: View {
                 selectedNote = newValue
             }
         }
+        .onChange(of: vm.notes) { _, updatedNotes in
+            let currentIDs = Set(updatedNotes.map(\.id))
+            selectedNoteIDs = selectedNoteIDs.intersection(currentIDs)
+        }
     }
 
-    private func exportAllNotes() {
+    private func toggleSelection(for noteID: UUID) {
+        if selectedNoteIDs.contains(noteID) {
+            selectedNoteIDs.remove(noteID)
+        } else {
+            selectedNoteIDs.insert(noteID)
+        }
+    }
+
+    private func exportSelectedNotes() {
+        let notesToExport = vm.notes.filter { selectedNoteIDs.contains($0.id) }
         do {
-            shareURL = try vm.exportNotesToTextFile(vm.notes)
+            shareURL = try vm.exportNotesForSharing(notesToExport)
             showingShareSheet = true
         } catch {
             exportErrorMessage = (error as? LocalizedError)?.errorDescription

@@ -360,7 +360,7 @@ struct NoteEditorView: View {
 
     private func exportCurrentNote() {
         do {
-            shareURL = try vm.exportNotesToTextFile([note])
+            shareURL = try vm.exportNotesForSharing([note])
             showingShareSheet = true
         } catch {
             exportErrorMessage = (error as? LocalizedError)?.errorDescription
