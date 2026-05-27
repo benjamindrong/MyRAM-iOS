@@ -16,6 +16,7 @@
 		BC9F1BCD2EA47D310045FD72 /* MyRAMUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCC2EA47D310045FD72 /* MyRAMUITests.swift */; };
 		BC9F1BCF2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */; };
 		BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D0B2EA5447D00F2D0AA /* Note.swift */; };
+		BCE65D222EA6000000F2D0AA /* Folder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D212EA6000000F2D0AA /* Folder.swift */; };
 		BCE65D112EA544FB00F2D0AA /* NotesViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D102EA544FB00F2D0AA /* NotesViewModel.swift */; };
 		BCE65D162EA5457600F2D0AA /* NotesListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D152EA5457600F2D0AA /* NotesListView.swift */; };
 		BCE65D1A2EA545B000F2D0AA /* NoteEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D192EA545B000F2D0AA /* NoteEditorView.swift */; };
@@ -53,6 +54,7 @@
 		BC9F1BCC2EA47D310045FD72 /* MyRAMUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITests.swift; sourceTree = "<group>"; };
 		BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		BCE65D0B2EA5447D00F2D0AA /* Note.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Note.swift; sourceTree = "<group>"; };
+		BCE65D212EA6000000F2D0AA /* Folder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Folder.swift; sourceTree = "<group>"; };
 		BCE65D102EA544FB00F2D0AA /* NotesViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesViewModel.swift; sourceTree = "<group>"; };
 		BCE65D152EA5457600F2D0AA /* NotesListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesListView.swift; sourceTree = "<group>"; };
 		BCE65D192EA545B000F2D0AA /* NoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditorView.swift; sourceTree = "<group>"; };
@@ -150,6 +152,7 @@
 		BCE65D0A2EA5446600F2D0AA /* Models */ = {
 			isa = PBXGroup;
 			children = (
+				BCE65D212EA6000000F2D0AA /* Folder.swift */,
 				BCE65D0B2EA5447D00F2D0AA /* Note.swift */,
 			);
 			path = Models;
@@ -308,6 +311,7 @@
 				BC9F1BB02EA47D2E0045FD72 /* MyRAMApp.swift in Sources */,
 				BC7009FE2FBF928500F513B4 /* MyRAMSchema.swift in Sources */,
 				BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */,
+				BCE65D222EA6000000F2D0AA /* Folder.swift in Sources */,
 				BCE65D1A2EA545B000F2D0AA /* NoteEditorView.swift in Sources */,
 				BCE65D162EA5457600F2D0AA /* NotesListView.swift in Sources */,
 				BCE65D1C2EA569BD00F2D0AA /* PersistenceManager.swift in Sources */,

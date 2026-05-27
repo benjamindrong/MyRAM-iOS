@@ -10,14 +10,20 @@ import SwiftData
 
 @MainActor
 final class FoldersViewModel: ObservableObject {
-    private let persistence = PersistenceManager.shared
+    private let context: ModelContext
+
+    init(context: ModelContext = PersistenceManager.shared.context) {
+        self.context = context
+    }
 
     func addFolder(name: String) {
         let folder = Folder(name: name)
-        persistence.insert(folder)
+        context.insert(folder)
+        try? context.save()
     }
 
     func deleteFolder(_ folder: Folder) {
-        persistence.delete(folder)
+        context.delete(folder)
+        try? context.save()
     }
 }
