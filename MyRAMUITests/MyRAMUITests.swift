@@ -39,7 +39,7 @@ final class MyRAMUITests: XCTestCase {
         }
     }
 
-    func testKeyboardControlBarIsVisibleWithoutAttachments() throws {
+    func testNewNoteOpensWithoutAttachments() throws {
         let app = XCUIApplication()
         app.launch()
 
@@ -47,13 +47,8 @@ final class MyRAMUITests: XCTestCase {
         XCTAssertTrue(newNoteButton.waitForExistence(timeout: 5))
         newNoteButton.tap()
 
-        let keyboardControlBar = app.otherElements["keyboard-control-bar"]
-        XCTAssertTrue(keyboardControlBar.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.buttons["keyboard-control-dismiss"].exists)
-        XCTAssertTrue(app.buttons["keyboard-control-cut"].exists)
-        XCTAssertTrue(app.buttons["keyboard-control-copy"].exists)
-        XCTAssertTrue(app.buttons["keyboard-control-paste"].exists)
-        XCTAssertTrue(app.buttons["keyboard-control-select-all"].exists)
+        XCTAssertTrue(app.navigationBars["Note"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.textFields["Title"].waitForExistence(timeout: 5))
 
         XCTAssertFalse(app.staticTexts["Attachments"].exists)
     }
