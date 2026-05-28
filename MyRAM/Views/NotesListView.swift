@@ -212,7 +212,9 @@ struct NotesListView: View {
     }
 
     private func folderRow(_ folder: Folder) -> some View {
-        Button {
+        let noteCount = vm.activeNoteCount(in: folder)
+
+        return Button {
             if editMode.isEditing { return }
             vm.openFolder(folder)
             selectedNoteIDs.removeAll()
@@ -224,6 +226,10 @@ struct NotesListView: View {
                 Text(folder.name)
                     .font(.headline)
                 Spacer()
+                Text("\(noteCount)")
+                    .font(.subheadline.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("\(noteCount) notes")
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)

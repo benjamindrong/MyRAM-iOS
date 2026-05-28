@@ -61,6 +61,47 @@ final class MyRAMTests: XCTestCase {
         XCTAssertNil(rootNote.folder)
     }
 
+    func testActiveNoteCountInFolderExcludesDeletedNotesAndOtherFolders() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+
+        vm.createFolder(named: "A")
+        let folderA = try XCTUnwrap(vm.folders.first(where: { $0.name == "A" }))
+        vm.createFolder(named: "B")
+        let folderB = try XCTUnwrap(vm.folders.first(where: { $0.name == "B" }))
+
+        vm.openFolder(folderA)
+        _ = vm.createNewNote()
+        let deletedNote = vm.createNewNote()
+        vm.deleteNote(deletedNote)
+
+        vm.openFolder(folderB)
+        _ = vm.createNewNote()
+
+        XCTAssertEqual(vm.activeNoteCount(in: folderA), 1)
+        XCTAssertEqual(vm.activeNoteCount(in: folderB), 1)
+    }
+
+    func testActiveNoteCountInFolderIncludesNestedFolders() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+
+        vm.createFolder(named: "Parent")
+        let parentFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Parent" }))
+        vm.openFolder(parentFolder)
+        vm.createFolder(named: "Child")
+        let childFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Child" }))
+
+        vm.openFolder(childFolder)
+        _ = vm.createNewNote()
+        _ = vm.createNewNote()
+        let deletedNestedNote = vm.createNewNote()
+        vm.deleteNote(deletedNestedNote)
+
+        XCTAssertEqual(vm.activeNoteCount(in: childFolder), 2)
+        XCTAssertEqual(vm.activeNoteCount(in: parentFolder), 2)
+    }
+
     func testDeleteFolderPreservingNotesMovesNotesToTopLevel() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)

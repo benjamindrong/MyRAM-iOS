@@ -108,6 +108,25 @@ final class NotesViewModel: ObservableObject {
         return (try? context.fetch(descriptor)) ?? []
     }
 
+    func activeNoteCount(in folder: Folder) -> Int {
+        var total = 0
+        var queue: [Folder] = [folder]
+
+        while let currentFolder = queue.first {
+            queue.removeFirst()
+
+            total += currentFolder.notes.reduce(into: 0) { count, note in
+                if note.deletedAt == nil {
+                    count += 1
+                }
+            }
+
+            queue.append(contentsOf: currentFolder.childFolders)
+        }
+
+        return total
+    }
+
     func openFolder(_ folder: Folder) {
         currentFolder = folder
         refreshCurrentFolderContent()
