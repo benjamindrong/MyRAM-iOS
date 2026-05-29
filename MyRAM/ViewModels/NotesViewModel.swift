@@ -51,6 +51,10 @@ final class NotesViewModel: ObservableObject {
         return (try? context.fetch(descriptor)) ?? []
     }
 
+    func refreshRecentlyDeletedNotes() {
+        purgeExpiredDeletedNotes()
+    }
+
     private func loadLastNote() {
         guard let idString = UserDefaults.standard.string(forKey: "lastNoteID"),
               let uuid = UUID(uuidString: idString) else {

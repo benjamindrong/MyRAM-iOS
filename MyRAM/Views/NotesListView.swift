@@ -8,7 +8,6 @@ struct NotesListView: View {
     @State private var editMode: EditMode = .inactive
     @State private var selectedNote: Note? = nil
     @State private var showingRecentlyDeleted = false
-    @State private var recentlyDeletedNotes: [Note] = []
     @State private var selectedNoteIDs: Set<UUID> = []
     @State private var sharePayload: SharePayload?
     @State private var exportErrorMessage: String?
@@ -72,7 +71,7 @@ struct NotesListView: View {
                         }
 
                         Button {
-                            recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
+                            vm.refreshRecentlyDeletedNotes()
                             showingRecentlyDeleted = true
                         } label: {
                             Label("Recently Deleted", systemImage: "trash")
@@ -96,14 +95,12 @@ struct NotesListView: View {
             }
             .sheet(isPresented: $showingRecentlyDeleted) {
                 RecentlyDeletedView(
-                    notes: recentlyDeletedNotes,
+                    onAppear: vm.refreshRecentlyDeletedNotes,
                     onRestore: { note in
                         vm.restoreNote(note)
-                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
                     },
                     onDelete: { note in
                         vm.permanentlyDeleteNote(note)
-                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
                     }
                 )
             }
@@ -430,7 +427,13 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
 
 private struct RecentlyDeletedView: View {
     @Environment(\.dismiss) private var dismiss
-    let notes: [Note]
+    @Query(
+        filter: #Predicate<Note> { note in
+            note.deletedAt != nil
+        },
+        sort: [SortDescriptor(\Note.deletedAt, order: .reverse)]
+    ) private var notes: [Note]
+    let onAppear: () -> Void
     let onRestore: (Note) -> Void
     let onDelete: (Note) -> Void
 
@@ -496,5 +499,6 @@ private struct RecentlyDeletedView: View {
                 }
             }
         }
+        .onAppear(perform: onAppear)
     }
 }
