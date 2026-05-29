@@ -19,6 +19,11 @@ struct NotesListView: View {
     @State private var noteMoveRequest: NoteMoveRequest?
     @State private var pendingFolderDeletionQueue: [Folder] = []
     @State private var folderAwaitingDeleteDecision: Folder?
+    @State private var noteAwaitingRename: Note?
+    @State private var renameNoteTitle = ""
+    @State private var showingRootTitleRenamePrompt = false
+    @State private var rootTitleDraft = ""
+    @AppStorage("mainListTitle") private var mainListTitle = "My Notes"
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     
     init(context: ModelContext) {
@@ -32,8 +37,9 @@ struct NotesListView: View {
                     row(for: item)
                 }
             }
+            .listStyle(.insetGrouped)
             .environment(\.editMode, $editMode)
-            .navigationTitle(vm.currentFolder?.name ?? "My Notes")
+            .navigationTitle(vm.currentFolder?.name ?? mainListTitle)
             .toolbar {
                 ToolbarItemGroup(placement: .topBarLeading) {
                     if vm.currentFolder != nil {
@@ -50,7 +56,14 @@ struct NotesListView: View {
                     }
                 }
 
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        vm.undoLastAction()
+                    } label: {
+                        Label("Undo", systemImage: "arrow.uturn.backward")
+                    }
+                    .disabled(!vm.hasUndoableAction)
+
                     Menu {
                         Button {
                             selectedNote = vm.createNewNote()
@@ -63,6 +76,15 @@ struct NotesListView: View {
                             showingCreateFolderPrompt = true
                         } label: {
                             Label("New Folder", systemImage: "folder.badge.plus")
+                        }
+
+                        if vm.currentFolder == nil {
+                            Button {
+                                rootTitleDraft = mainListTitle
+                                showingRootTitleRenamePrompt = true
+                            } label: {
+                                Label("Rename Main List", systemImage: "character.cursor.ibeam")
+                            }
                         }
 
                         Picker("Appearance", selection: $appearanceSettingRaw) {
@@ -154,6 +176,40 @@ struct NotesListView: View {
             } message: {
                 Text("Update the folder name.")
             }
+            .alert(
+                "Rename Note",
+                isPresented: Binding(
+                    get: { noteAwaitingRename != nil },
+                    set: { if !$0 { noteAwaitingRename = nil } }
+                )
+            ) {
+                TextField("Note Title", text: $renameNoteTitle)
+                Button("Cancel", role: .cancel) {
+                    noteAwaitingRename = nil
+                    renameNoteTitle = ""
+                }
+                Button("Save") {
+                    if let note = noteAwaitingRename {
+                        vm.renameNote(note, to: renameNoteTitle)
+                    }
+                    noteAwaitingRename = nil
+                    renameNoteTitle = ""
+                }
+            } message: {
+                Text("Update the note title.")
+            }
+            .alert("Rename Main List", isPresented: $showingRootTitleRenamePrompt) {
+                TextField("Main List Title", text: $rootTitleDraft)
+                Button("Cancel", role: .cancel) {
+                    rootTitleDraft = mainListTitle
+                }
+                Button("Save") {
+                    let trimmed = rootTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    mainListTitle = trimmed.isEmpty ? "My Notes" : trimmed
+                }
+            } message: {
+                Text("Set the title shown on the top-level notes list.")
+            }
             .confirmationDialog(
                 "Delete folder \"\(folderAwaitingDeleteDecision?.name ?? "")\"?",
                 isPresented: Binding(
@@ -227,6 +283,7 @@ struct NotesListView: View {
                     .foregroundStyle(Color.accentColor)
                 Text(folder.name)
                     .font(.headline)
+                    .foregroundStyle(.primary)
                 Spacer()
                 Text("\(noteCount)")
                     .font(.subheadline.monospacedDigit())
@@ -237,15 +294,14 @@ struct NotesListView: View {
                     .foregroundStyle(.tertiary)
             }
         }
+        .buttonStyle(.plain)
         .listRowSeparatorTint(.secondary.opacity(0.35))
-        .swipeActions(edge: .leading, allowsFullSwipe: false) {
+        .listRowBackground(Color(.secondarySystemGroupedBackground))
+        .contextMenu {
             Button("Rename") {
                 folderAwaitingRename = folder
                 renameFolderName = folder.name
             }
-            .tint(.blue)
-        }
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
             Button("Delete", role: .destructive) {
                 pendingFolderDeletionQueue.append(folder)
                 presentNextFolderDeletionPromptIfNeeded()
@@ -262,23 +318,44 @@ struct NotesListView: View {
                 selectedNote = note
             }
         } label: {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(note.title.isEmpty ? "Untitled" : note.title)
-                    .font(.headline)
-                Text(note.content.isEmpty ? "No content yet" : note.content)
-                    .lineLimit(2)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(note.title.isEmpty ? "Untitled" : note.title)
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                    Text(note.content.isEmpty ? "No content yet" : note.content)
+                        .lineLimit(2)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer()
+
+                if note.isPinned == true {
+                    Image(systemName: "pin.fill")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
             }
         }
+        .buttonStyle(.plain)
         .tag(note.id)
-        .swipeActions(edge: .leading, allowsFullSwipe: false) {
-            Button("Move") {
+        .listRowSeparatorTint(.secondary.opacity(0.3))
+        .listRowBackground(Color(.secondarySystemGroupedBackground))
+        .contextMenu {
+            Button((note.isPinned ?? false) ? "Unpin" : "Pin") {
+                vm.setNotePinned(note, isPinned: !(note.isPinned ?? false))
+            }
+            Button("Rename") {
+                noteAwaitingRename = note
+                renameNoteTitle = note.title
+            }
+            Button("Move to Folder") {
                 noteMoveRequest = NoteMoveRequest(note: note)
             }
-            .tint(.indigo)
-        }
-        .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+            Button("Export") {
+                exportSingleNote(note)
+            }
             Button("Delete", role: .destructive) {
                 vm.deleteNote(note)
             }
@@ -321,6 +398,17 @@ struct NotesListView: View {
                 ?? "An unknown export error occurred."
         }
     }
+
+    private func exportSingleNote(_ note: Note) {
+        do {
+            let exportURLs = try vm.exportNotesForSharing([note])
+            sharePayload = SharePayload(urls: exportURLs)
+        } catch {
+            exportErrorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "An unknown export error occurred."
+        }
+    }
+
 }
 
 private struct SharePayload: Identifiable {

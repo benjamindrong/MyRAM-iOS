@@ -8,15 +8,32 @@ final class NotesViewModel: ObservableObject {
     @Published var folders: [Folder] = []
     @Published var currentNote: Note? = nil
     @Published var currentFolder: Folder? = nil
+    @Published private(set) var hasUndoableAction = false
     
     private static let recentlyDeletedRetention: TimeInterval = 7 * 24 * 60 * 60
     private let context: ModelContext
+    private var undoStack: [UndoAction] = [] {
+        didSet {
+            hasUndoableAction = !undoStack.isEmpty
+        }
+    }
 
     init(context: ModelContext) {
         self.context = context
         purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
+    }
+
+    func undoLastAction() {
+        guard let action = undoStack.popLast() else { return }
+
+        switch action {
+        case .noteDeletion(let snapshot):
+            undoNoteDeletion(using: snapshot)
+        case .folderDeletion(let snapshot):
+            undoFolderDeletion(using: snapshot)
+        }
     }
 
     func refreshCurrentFolderContent() {
@@ -34,10 +51,14 @@ final class NotesViewModel: ObservableObject {
         let allFolders = (try? context.fetch(foldersDescriptor)) ?? []
 
         if let currentFolder {
-            notes = allNotes.filter { $0.folder?.id == currentFolder.id }
+            notes = allNotes
+                .filter { $0.folder?.id == currentFolder.id }
+                .sorted(by: sortNotes)
             folders = allFolders.filter { $0.parentFolder?.id == currentFolder.id }
         } else {
-            notes = allNotes.filter { $0.folder == nil }
+            notes = allNotes
+                .filter { $0.folder == nil }
+                .sorted(by: sortNotes)
             folders = allFolders.filter { $0.parentFolder == nil }
         }
     }
@@ -105,6 +126,30 @@ final class NotesViewModel: ObservableObject {
         refreshCurrentFolderContent()
     }
 
+    func renameNote(_ note: Note, to newTitle: String) {
+        guard note.deletedAt == nil else { return }
+        note.title = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        note.modifiedAt = .now
+        note.folder?.modifiedAt = .now
+        try? context.save()
+        refreshCurrentFolderContent()
+    }
+
+    func setNotePinned(_ note: Note, isPinned: Bool) {
+        guard note.deletedAt == nil else { return }
+        let currentPinned = note.isPinned ?? false
+        guard currentPinned != isPinned else { return }
+        note.isPinned = isPinned
+        note.modifiedAt = .now
+        note.folder?.modifiedAt = .now
+        try? context.save()
+        refreshCurrentFolderContent()
+    }
+
+    func archiveNote(_ note: Note) {
+        deleteNote(note)
+    }
+
     func fetchAllFolders() -> [Folder] {
         let descriptor = FetchDescriptor<Folder>(
             sortBy: [SortDescriptor(\.name, order: .forward)]
@@ -145,7 +190,13 @@ final class NotesViewModel: ObservableObject {
         let activeFolder = currentFolder
         let shouldNavigateToParent = activeFolder.map { isDescendantOrSame($0, of: folder) } ?? false
         let targetFolder = shouldNavigateToParent ? folder.parentFolder : currentFolder
-        let subtreeFolderIDs = Set(allFoldersInSubtree(of: folder).map(\.id))
+        let subtreeFolders = allFoldersInSubtree(of: folder)
+        let subtreeFolderIDs = Set(subtreeFolders.map(\.id))
+        let deletedAt = Date()
+        let folderSnapshot = buildFolderDeletionSnapshot(
+            for: subtreeFolders,
+            folderIDs: subtreeFolderIDs
+        )
 
         if !preserveNotes,
            let selectedFolderID = currentNote?.folder?.id,
@@ -154,12 +205,19 @@ final class NotesViewModel: ObservableObject {
             UserDefaults.standard.removeObject(forKey: "lastNoteID")
         }
 
-        if preserveNotes {
-            orphanNotes(inFoldersWithIDs: subtreeFolderIDs)
+        for noteMove in folderSnapshot.noteMoves {
+            guard let note = fetchNote(withID: noteMove.noteID) else { continue }
+            note.folder?.modifiedAt = deletedAt
+            note.folder = nil
+            if !preserveNotes {
+                note.deletedAt = deletedAt
+            }
+            note.modifiedAt = deletedAt
         }
 
         context.delete(folder)
         try? context.save()
+        undoStack.append(.folderDeletion(folderSnapshot))
 
         currentFolder = targetFolder
         refreshCurrentFolderContent()
@@ -202,10 +260,16 @@ final class NotesViewModel: ObservableObject {
     }
 
     func deleteNote(_ note: Note) {
+        let snapshot = NoteDeletionUndoSnapshot(
+            noteID: note.id,
+            previousDeletedAt: note.deletedAt,
+            previousFolderID: note.folder?.id
+        )
         note.deletedAt = .now
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        undoStack.append(.noteDeletion(snapshot))
         refreshCurrentFolderContent()
         if currentNote?.id == note.id {
             currentNote = nil
@@ -234,12 +298,138 @@ final class NotesViewModel: ObservableObject {
     }
 
     func permanentlyDeleteNote(_ note: Note) {
+        removeUndoHistoryReferencingDeletedNote(noteID: note.id)
         context.delete(note)
         try? context.save()
         refreshCurrentFolderContent()
         if currentNote?.id == note.id {
             currentNote = nil
             UserDefaults.standard.removeObject(forKey: "lastNoteID")
+        }
+    }
+
+    private func sortNotes(_ lhs: Note, _ rhs: Note) -> Bool {
+        let lhsPinned = lhs.isPinned ?? false
+        let rhsPinned = rhs.isPinned ?? false
+        if lhsPinned != rhsPinned {
+            return lhsPinned && !rhsPinned
+        }
+        if lhs.modifiedAt != rhs.modifiedAt {
+            return lhs.modifiedAt > rhs.modifiedAt
+        }
+        return lhs.createdAt > rhs.createdAt
+    }
+
+    private func undoNoteDeletion(using snapshot: NoteDeletionUndoSnapshot) {
+        guard let note = fetchNote(withID: snapshot.noteID) else {
+            refreshCurrentFolderContent()
+            return
+        }
+
+        note.deletedAt = snapshot.previousDeletedAt
+        note.folder = snapshot.previousFolderID.flatMap(fetchFolder(withID:))
+        note.modifiedAt = .now
+        note.folder?.modifiedAt = .now
+        try? context.save()
+        refreshCurrentFolderContent()
+    }
+
+    private func undoFolderDeletion(using snapshot: FolderDeletionUndoSnapshot) {
+        var recreatedFolders: [UUID: Folder] = [:]
+
+        for folderRecord in snapshot.folders.sorted(by: { $0.depth < $1.depth }) {
+            let parentFolder = folderRecord.parentFolderID.flatMap { parentID in
+                recreatedFolders[parentID] ?? fetchFolder(withID: parentID)
+            }
+            let folder = Folder(name: folderRecord.name, parentFolder: parentFolder)
+            folder.id = folderRecord.id
+            folder.createdAt = folderRecord.createdAt
+            folder.modifiedAt = folderRecord.modifiedAt
+            context.insert(folder)
+            recreatedFolders[folder.id] = folder
+        }
+
+        for noteMove in snapshot.noteMoves {
+            guard let note = fetchNote(withID: noteMove.noteID) else { continue }
+            note.folder = noteMove.originalFolderID.flatMap { folderID in
+                recreatedFolders[folderID] ?? fetchFolder(withID: folderID)
+            }
+            note.deletedAt = noteMove.previousDeletedAt
+            note.modifiedAt = .now
+        }
+
+        try? context.save()
+        refreshCurrentFolderContent()
+    }
+
+    private func buildFolderDeletionSnapshot(
+        for folders: [Folder],
+        folderIDs: Set<UUID>
+    ) -> FolderDeletionUndoSnapshot {
+        let folderSnapshots = folders.map {
+            FolderUndoSnapshot(
+                id: $0.id,
+                name: $0.name,
+                createdAt: $0.createdAt,
+                modifiedAt: $0.modifiedAt,
+                parentFolderID: $0.parentFolder?.id,
+                depth: depth(for: $0)
+            )
+        }
+
+        let allNotes = (try? context.fetch(FetchDescriptor<Note>())) ?? []
+        let noteMoves = allNotes
+            .filter { note in
+                guard let folderID = note.folder?.id else { return false }
+                return folderIDs.contains(folderID)
+            }
+            .map {
+                NoteFolderUndoSnapshot(
+                    noteID: $0.id,
+                    originalFolderID: $0.folder?.id,
+                    previousDeletedAt: $0.deletedAt
+                )
+            }
+
+        return FolderDeletionUndoSnapshot(folders: folderSnapshots, noteMoves: noteMoves)
+    }
+
+    private func depth(for folder: Folder) -> Int {
+        var depth = 0
+        var cursor = folder.parentFolder
+        while cursor != nil {
+            depth += 1
+            cursor = cursor?.parentFolder
+        }
+        return depth
+    }
+
+    private func fetchNote(withID noteID: UUID) -> Note? {
+        let descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { note in
+                note.id == noteID
+            }
+        )
+        return (try? context.fetch(descriptor))?.first
+    }
+
+    private func fetchFolder(withID folderID: UUID) -> Folder? {
+        let descriptor = FetchDescriptor<Folder>(
+            predicate: #Predicate { folder in
+                folder.id == folderID
+            }
+        )
+        return (try? context.fetch(descriptor))?.first
+    }
+
+    private func removeUndoHistoryReferencingDeletedNote(noteID: UUID) {
+        undoStack.removeAll { action in
+            switch action {
+            case .noteDeletion(let snapshot):
+                return snapshot.noteID == noteID
+            case .folderDeletion(let snapshot):
+                return snapshot.noteMoves.contains { $0.noteID == noteID }
+            }
         }
     }
 
@@ -252,16 +442,6 @@ final class NotesViewModel: ObservableObject {
             cursor = current.parentFolder
         }
         return false
-    }
-
-    private func orphanNotes(inFoldersWithIDs folderIDs: Set<UUID>) {
-        guard !folderIDs.isEmpty else { return }
-
-        let allNotes = (try? context.fetch(FetchDescriptor<Note>())) ?? []
-        for note in allNotes where note.folder.map({ folderIDs.contains($0.id) }) == true {
-            note.folder = nil
-            note.modifiedAt = .now
-        }
     }
 
     private func allFoldersInSubtree(of rootFolder: Folder) -> [Folder] {
@@ -702,6 +882,37 @@ final class NotesViewModel: ObservableObject {
     nonisolated static func defaultDateFormatter(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
     }
+}
+
+private enum UndoAction {
+    case noteDeletion(NoteDeletionUndoSnapshot)
+    case folderDeletion(FolderDeletionUndoSnapshot)
+}
+
+private struct NoteDeletionUndoSnapshot {
+    let noteID: UUID
+    let previousDeletedAt: Date?
+    let previousFolderID: UUID?
+}
+
+private struct FolderDeletionUndoSnapshot {
+    let folders: [FolderUndoSnapshot]
+    let noteMoves: [NoteFolderUndoSnapshot]
+}
+
+private struct FolderUndoSnapshot {
+    let id: UUID
+    let name: String
+    let createdAt: Date
+    let modifiedAt: Date
+    let parentFolderID: UUID?
+    let depth: Int
+}
+
+private struct NoteFolderUndoSnapshot {
+    let noteID: UUID
+    let originalFolderID: UUID?
+    let previousDeletedAt: Date?
 }
 
 private struct ExportManifest: Codable {

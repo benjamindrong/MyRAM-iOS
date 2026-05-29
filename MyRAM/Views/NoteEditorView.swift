@@ -103,6 +103,14 @@ struct NoteEditorView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        performUndo()
+                    } label: {
+                        Label("Undo", systemImage: "arrow.uturn.backward")
+                    }
+                    .disabled(!canPerformUndo)
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button {
@@ -117,13 +125,6 @@ struct NoteEditorView: View {
                         } label: {
                             Label("New Folder", systemImage: "folder.badge.plus")
                         }
-
-                        Button {
-                            undoLastEdit()
-                        } label: {
-                            Label("Undo", systemImage: "arrow.uturn.backward")
-                        }
-                        .disabled(!canUndo)
 
                         Menu {
                             Button {
@@ -219,6 +220,10 @@ struct NoteEditorView: View {
         note.photoAttachments.sorted { $0.createdAt < $1.createdAt }
     }
 
+    private var canPerformUndo: Bool {
+        canUndo || vm.hasUndoableAction
+    }
+
     private func updateActiveUndoManager(_ undoManager: UndoManager?) {
         activeUndoManager = undoManager
         refreshUndoState()
@@ -270,6 +275,15 @@ struct NoteEditorView: View {
             isApplyingUndo = false
             refreshUndoState()
         }
+    }
+
+    private func performUndo() {
+        if canUndo {
+            undoLastEdit()
+        } else {
+            vm.undoLastAction()
+        }
+        refreshUndoState()
     }
 
     private func trimUndoHistory(afterRestoring snapshot: NoteSnapshot) {
