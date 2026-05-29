@@ -53,6 +53,14 @@ final class MyRAMTests: XCTestCase {
                 let openCount30d: Int
                 let editCount7d: Int
                 let firstPersonRatio: Double
+
+                enum CodingKeys: String, CodingKey {
+                    case lemmas
+                    case tokens
+                    case openCount30d = "open_count_30d"
+                    case editCount7d = "edit_count_7d"
+                    case firstPersonRatio = "first_person_ratio"
+                }
             }
 
             struct Entities: Decodable {
@@ -71,11 +79,28 @@ final class MyRAMTests: XCTestCase {
             let features: Features
             let entities: Entities
             let similarNoteIds: [String]
+
+            enum CodingKeys: String, CodingKey {
+                case noteId = "note_id"
+                case text
+                case language
+                case createdAt = "created_at"
+                case modifiedAt = "modified_at"
+                case features
+                case entities
+                case similarNoteIds = "similar_note_ids"
+            }
         }
 
         let fixtureId: String
         let input: Input
         let expectedLabels: [String]
+
+        enum CodingKeys: String, CodingKey {
+            case fixtureId = "fixture_id"
+            case input
+            case expectedLabels = "expected_labels"
+        }
     }
 
     func testCreateFolderSupportsRootAndNestedHierarchy() throws {
@@ -537,7 +562,6 @@ final class MyRAMTests: XCTestCase {
         return try fixtureURLs.map { url in
             let data = try Data(contentsOf: url)
             let decoder = JSONDecoder()
-            decoder.keyDecodingStrategy = .convertFromSnakeCase
             return try decoder.decode(NoteIntelligenceFixture.self, from: data)
         }
     }
