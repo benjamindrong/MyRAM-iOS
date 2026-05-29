@@ -163,7 +163,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertNil(preservedChildNote.folder)
     }
 
-    func testDeleteFolderWithoutPreservingNotesRemovesContainedNotes() throws {
+    func testDeleteFolderWithoutPreservingNotesSoftDeletesContainedNotes() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
 
@@ -175,7 +175,9 @@ final class MyRAMTests: XCTestCase {
         vm.deleteFolder(folder, preserveNotes: false)
 
         let notes = try container.mainContext.fetch(FetchDescriptor<Note>())
-        XCTAssertFalse(notes.contains(where: { $0.id == note.id }))
+        let deletedNote = try XCTUnwrap(notes.first(where: { $0.id == note.id }))
+        XCTAssertNotNil(deletedNote.deletedAt)
+        XCTAssertNil(deletedNote.folder)
     }
 
     func testRenameFolderUpdatesNameWhenProvidedNonEmptyValue() throws {
@@ -376,6 +378,61 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(noteByTitle["Second Note"]?.attachments.first?.mimeType, "image/jpeg")
         XCTAssertEqual(noteByTitle["Second Note"]?.attachments.first?.filename, jpgURLs[0].lastPathComponent)
         XCTAssertEqual(try Data(contentsOf: jpgURLs[0]), imageData)
+    }
+
+    func testSetNotePinnedMovesNoteAheadOfUnpinnedNotes() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let older = vm.createNewNote()
+        vm.updateNote(older, title: "Older", content: "")
+        let newer = vm.createNewNote()
+        vm.updateNote(newer, title: "Newer", content: "")
+
+        vm.setNotePinned(older, isPinned: true)
+
+        XCTAssertEqual(vm.notes.first?.id, older.id)
+        XCTAssertTrue(vm.notes.contains { $0.id == newer.id })
+    }
+
+    func testUndoLastActionRestoresSoftDeletedNote() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+
+        vm.deleteNote(note)
+        XCTAssertNotNil(note.deletedAt)
+        XCTAssertTrue(vm.hasUndoableAction)
+
+        vm.undoLastAction()
+
+        XCTAssertNil(note.deletedAt)
+        XCTAssertFalse(vm.hasUndoableAction)
+    }
+
+    func testUndoLastActionRestoresDeletedFolderHierarchyAndNotes() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+
+        vm.createFolder(named: "Parent")
+        let parent = try XCTUnwrap(vm.folders.first(where: { $0.name == "Parent" }))
+        vm.openFolder(parent)
+        vm.createFolder(named: "Child")
+        let child = try XCTUnwrap(vm.folders.first(where: { $0.name == "Child" }))
+        vm.openFolder(child)
+        let nestedNote = vm.createNewNote()
+
+        vm.deleteFolder(parent, preserveNotes: false)
+        XCTAssertNotNil(nestedNote.deletedAt)
+        XCTAssertNil(nestedNote.folder)
+
+        vm.undoLastAction()
+
+        let restoredFolders = try container.mainContext.fetch(FetchDescriptor<Folder>())
+        let restoredParent = try XCTUnwrap(restoredFolders.first(where: { $0.id == parent.id }))
+        let restoredChild = try XCTUnwrap(restoredFolders.first(where: { $0.id == child.id }))
+        XCTAssertEqual(restoredChild.parentFolder?.id, restoredParent.id)
+        XCTAssertEqual(nestedNote.folder?.id, restoredChild.id)
+        XCTAssertNil(nestedNote.deletedAt)
     }
 
     private func makeContainer(
