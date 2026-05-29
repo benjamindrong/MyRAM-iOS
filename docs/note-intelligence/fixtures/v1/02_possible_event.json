@@ -1,0 +1,26 @@
+{
+  "fixture_id": "possible_event_meeting",
+  "input": {
+    "note_id": "n2",
+    "text": "Team sync on Friday at 10:00 AM.",
+    "language": "en",
+    "created_at": "2026-05-27T09:00:00Z",
+    "modified_at": "2026-05-27T09:10:00Z",
+    "features": {
+      "lemmas": ["team", "sync", "friday", "10:00"],
+      "tokens": ["Team", "sync", "on", "Friday", "at", "10:00", "AM"],
+      "open_count_30d": 3,
+      "edit_count_7d": 1,
+      "first_person_ratio": 0.0
+    },
+    "entities": {
+      "datetimes": ["Friday 10:00 AM"],
+      "emails": [],
+      "phones": [],
+      "urls": [],
+      "addresses": []
+    },
+    "similar_note_ids": []
+  },
+  "expected_labels": ["possible_event"]
+}

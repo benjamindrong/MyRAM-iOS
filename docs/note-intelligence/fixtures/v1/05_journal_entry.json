@@ -1,0 +1,26 @@
+{
+  "fixture_id": "journal_reflection",
+  "input": {
+    "note_id": "n5",
+    "text": "I felt calmer after taking a long walk tonight.",
+    "language": "en",
+    "created_at": "2026-05-18T21:00:00Z",
+    "modified_at": "2026-05-18T21:04:00Z",
+    "features": {
+      "lemmas": ["i", "feel", "calm", "after", "take", "long", "walk", "tonight"],
+      "tokens": ["I", "felt", "calmer", "after", "taking", "a", "long", "walk", "tonight"],
+      "open_count_30d": 1,
+      "edit_count_7d": 0,
+      "first_person_ratio": 0.42
+    },
+    "entities": {
+      "datetimes": [],
+      "emails": [],
+      "phones": [],
+      "urls": [],
+      "addresses": []
+    },
+    "similar_note_ids": []
+  },
+  "expected_labels": ["journal_entry"]
+}

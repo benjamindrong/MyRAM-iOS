@@ -1,0 +1,26 @@
+{
+  "fixture_id": "idea_brainstorm",
+  "input": {
+    "note_id": "n4",
+    "text": "Idea: build a compact note timeline view.",
+    "language": "en",
+    "created_at": "2026-05-20T18:00:00Z",
+    "modified_at": "2026-05-20T18:03:00Z",
+    "features": {
+      "lemmas": ["idea", "build", "compact", "note", "timeline", "view"],
+      "tokens": ["Idea", "build", "a", "compact", "note", "timeline", "view"],
+      "open_count_30d": 2,
+      "edit_count_7d": 0,
+      "first_person_ratio": 0.0
+    },
+    "entities": {
+      "datetimes": [],
+      "emails": [],
+      "phones": [],
+      "urls": [],
+      "addresses": []
+    },
+    "similar_note_ids": []
+  },
+  "expected_labels": ["idea"]
+}

@@ -1,0 +1,26 @@
+{
+  "fixture_id": "possible_task_basic",
+  "input": {
+    "note_id": "n1",
+    "text": "Call the dentist tomorrow at 3pm.",
+    "language": "en",
+    "created_at": "2026-05-28T14:00:00Z",
+    "modified_at": "2026-05-28T14:05:00Z",
+    "features": {
+      "lemmas": ["call", "dentist", "tomorrow", "3pm"],
+      "tokens": ["Call", "the", "dentist", "tomorrow", "at", "3pm"],
+      "open_count_30d": 2,
+      "edit_count_7d": 1,
+      "first_person_ratio": 0.0
+    },
+    "entities": {
+      "datetimes": ["tomorrow 3pm"],
+      "emails": [],
+      "phones": [],
+      "urls": [],
+      "addresses": []
+    },
+    "similar_note_ids": []
+  },
+  "expected_labels": ["possible_task"]
+}

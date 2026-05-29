@@ -30,6 +30,54 @@ final class MyRAMTests: XCTestCase {
         let notes: [NoteRecord]
     }
 
+    private struct NoteIntelligenceRuleSpec: Decodable {
+        struct Rule: Decodable {
+            let id: String
+            let label: String
+            let priority: Int
+            let conditions: [String: [String]]
+            let rationale: String
+        }
+
+        let specVersion: Int
+        let specName: String
+        let labels: [String]
+        let rules: [Rule]
+    }
+
+    private struct NoteIntelligenceFixture: Decodable {
+        struct Input: Decodable {
+            struct Features: Decodable {
+                let lemmas: [String]
+                let tokens: [String]
+                let openCount30d: Int
+                let editCount7d: Int
+                let firstPersonRatio: Double
+            }
+
+            struct Entities: Decodable {
+                let datetimes: [String]
+                let emails: [String]
+                let phones: [String]
+                let urls: [String]
+                let addresses: [String]
+            }
+
+            let noteId: String
+            let text: String
+            let language: String
+            let createdAt: String
+            let modifiedAt: String
+            let features: Features
+            let entities: Entities
+            let similarNoteIds: [String]
+        }
+
+        let fixtureId: String
+        let input: Input
+        let expectedLabels: [String]
+    }
+
     func testCreateFolderSupportsRootAndNestedHierarchy() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
@@ -53,6 +101,61 @@ final class MyRAMTests: XCTestCase {
             "Debug runs should include the development app bundle identifier."
         )
 #endif
+    }
+
+    func testNoteIntelligenceRuleSpecV1HasExpectedVersionAndUniqueRuleIds() throws {
+        let spec: NoteIntelligenceRuleSpec = try decodeNoteIntelligenceArtifact(
+            relativePath: "docs/note-intelligence/note_intelligence_rules.v1.json"
+        )
+
+        XCTAssertEqual(spec.specVersion, 1)
+        XCTAssertEqual(spec.specName, "note_intelligence_rules")
+        XCTAssertEqual(Set(spec.labels).count, spec.labels.count, "Labels should be unique.")
+        XCTAssertFalse(spec.rules.isEmpty)
+
+        let ruleIDs = spec.rules.map(\.id)
+        XCTAssertEqual(Set(ruleIDs).count, ruleIDs.count, "Rule IDs should be unique.")
+        XCTAssertTrue(spec.rules.allSatisfy { spec.labels.contains($0.label) })
+        XCTAssertTrue(spec.rules.allSatisfy { $0.priority >= 0 && $0.priority <= 100 })
+    }
+
+    func testNoteIntelligenceFixturesOnlyUseKnownLabels() throws {
+        let spec: NoteIntelligenceRuleSpec = try decodeNoteIntelligenceArtifact(
+            relativePath: "docs/note-intelligence/note_intelligence_rules.v1.json"
+        )
+        let knownLabels = Set(spec.labels)
+        let fixtures = try loadNoteIntelligenceFixtures()
+        XCTAssertEqual(fixtures.count, 8)
+
+        for fixture in fixtures {
+            XCTAssertFalse(fixture.expectedLabels.isEmpty, "Fixture must include expected labels: \(fixture.fixtureId)")
+            XCTAssertEqual(
+                Set(fixture.expectedLabels).count,
+                fixture.expectedLabels.count,
+                "Fixture labels should be unique: \(fixture.fixtureId)"
+            )
+            XCTAssertTrue(
+                fixture.expectedLabels.allSatisfy { knownLabels.contains($0) },
+                "Fixture contains unknown label: \(fixture.fixtureId)"
+            )
+        }
+    }
+
+    func testNoteIntelligenceFixturesHaveBaselineCanonicalInputShape() throws {
+        let fixtures = try loadNoteIntelligenceFixtures()
+
+        for fixture in fixtures {
+            XCTAssertFalse(fixture.fixtureId.isEmpty)
+            XCTAssertFalse(fixture.input.noteId.isEmpty)
+            XCTAssertFalse(fixture.input.text.isEmpty)
+            XCTAssertGreaterThanOrEqual(fixture.input.language.count, 2)
+            XCTAssertGreaterThanOrEqual(fixture.input.features.openCount30d, 0)
+            XCTAssertGreaterThanOrEqual(fixture.input.features.editCount7d, 0)
+            XCTAssertGreaterThanOrEqual(fixture.input.features.firstPersonRatio, 0)
+            XCTAssertLessThanOrEqual(fixture.input.features.firstPersonRatio, 1)
+            XCTAssertNotNil(ISO8601DateFormatter().date(from: fixture.input.createdAt))
+            XCTAssertNotNil(ISO8601DateFormatter().date(from: fixture.input.modifiedAt))
+        }
     }
 
     func testCreateNewNoteUsesCurrentFolderContext() throws {
@@ -419,5 +522,37 @@ final class MyRAMTests: XCTestCase {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+
+    private func loadNoteIntelligenceFixtures() throws -> [NoteIntelligenceFixture] {
+        let fixturesDirectory = repositoryRootURL()
+            .appendingPathComponent("docs/note-intelligence/fixtures/v1", isDirectory: true)
+        let fixtureURLs = try FileManager.default.contentsOfDirectory(
+            at: fixturesDirectory,
+            includingPropertiesForKeys: nil
+        )
+        .filter { $0.pathExtension.lowercased() == "json" }
+        .sorted { $0.lastPathComponent < $1.lastPathComponent }
+
+        return try fixtureURLs.map { url in
+            let data = try Data(contentsOf: url)
+            let decoder = JSONDecoder()
+            decoder.keyDecodingStrategy = .convertFromSnakeCase
+            return try decoder.decode(NoteIntelligenceFixture.self, from: data)
+        }
+    }
+
+    private func decodeNoteIntelligenceArtifact<T: Decodable>(relativePath: String) throws -> T {
+        let artifactURL = repositoryRootURL().appendingPathComponent(relativePath)
+        let data = try Data(contentsOf: artifactURL)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(T.self, from: data)
+    }
+
+    private func repositoryRootURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
     }
 }

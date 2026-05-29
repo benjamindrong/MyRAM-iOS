@@ -1,0 +1,26 @@
+{
+  "fixture_id": "high_revisit_reference",
+  "input": {
+    "note_id": "n6",
+    "text": "Travel checklist and frequent reminders.",
+    "language": "en",
+    "created_at": "2026-04-01T08:00:00Z",
+    "modified_at": "2026-05-27T08:00:00Z",
+    "features": {
+      "lemmas": ["travel", "checklist", "frequent", "reminder"],
+      "tokens": ["Travel", "checklist", "and", "frequent", "reminders"],
+      "open_count_30d": 18,
+      "edit_count_7d": 5,
+      "first_person_ratio": 0.0
+    },
+    "entities": {
+      "datetimes": [],
+      "emails": [],
+      "phones": [],
+      "urls": [],
+      "addresses": []
+    },
+    "similar_note_ids": []
+  },
+  "expected_labels": ["high_revisit_value"]
+}

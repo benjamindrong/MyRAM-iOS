@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://apexcoretechs.com/schemas/note_intelligence_input.schema.v1.json",
+  "title": "NoteIntelligenceInputV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "note_id",
+    "text",
+    "language",
+    "created_at",
+    "modified_at",
+    "features",
+    "entities"
+  ],
+  "properties": {
+    "note_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "text": {
+      "type": "string"
+    },
+    "language": {
+      "type": "string",
+      "minLength": 2
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "modified_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "features": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "lemmas",
+        "tokens",
+        "open_count_30d",
+        "edit_count_7d",
+        "first_person_ratio"
+      ],
+      "properties": {
+        "lemmas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "tokens": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "open_count_30d": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "edit_count_7d": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "first_person_ratio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "entities": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "datetimes",
+        "emails",
+        "phones",
+        "urls",
+        "addresses"
+      ],
+      "properties": {
+        "datetimes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "emails": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "phones": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "urls": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "addresses": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "similar_note_ids": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    }
+  }
+}

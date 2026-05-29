@@ -1,0 +1,99 @@
+{
+  "spec_version": 1,
+  "spec_name": "note_intelligence_rules",
+  "labels": [
+    "possible_task",
+    "possible_event",
+    "reminder_candidate",
+    "idea",
+    "journal_entry",
+    "high_revisit_value",
+    "merge_candidate"
+  ],
+  "rules": [
+    {
+      "id": "task_verbs_with_due_entity",
+      "label": "possible_task",
+      "priority": 90,
+      "conditions": {
+        "all": [
+          "contains_action_verb",
+          "has_datetime_entity"
+        ]
+      },
+      "rationale": "Action language paired with a date/time entity likely represents a task."
+    },
+    {
+      "id": "calendar_phrase_or_datetime",
+      "label": "possible_event",
+      "priority": 85,
+      "conditions": {
+        "any": [
+          "contains_event_phrase",
+          "has_datetime_entity"
+        ]
+      },
+      "rationale": "Event-oriented phrases or date/time entities indicate a possible event."
+    },
+    {
+      "id": "followup_with_date_or_contact",
+      "label": "reminder_candidate",
+      "priority": 80,
+      "conditions": {
+        "all": [
+          "contains_followup_phrase",
+          "has_datetime_or_contact_entity"
+        ]
+      },
+      "rationale": "Follow-up language with scheduling/contact signals suggests a reminder candidate."
+    },
+    {
+      "id": "idea_language_without_task_signals",
+      "label": "idea",
+      "priority": 65,
+      "conditions": {
+        "all": [
+          "contains_idea_phrase",
+          "not_contains_action_verb"
+        ]
+      },
+      "rationale": "Idea language without action intent maps to idea classification."
+    },
+    {
+      "id": "reflective_first_person_text",
+      "label": "journal_entry",
+      "priority": 60,
+      "conditions": {
+        "all": [
+          "contains_reflective_phrase",
+          "first_person_ratio_high"
+        ]
+      },
+      "rationale": "Reflective first-person language indicates journaling content."
+    },
+    {
+      "id": "note_high_access_or_recent_edits",
+      "label": "high_revisit_value",
+      "priority": 70,
+      "conditions": {
+        "any": [
+          "open_count_above_threshold",
+          "edited_recently_multiple_times"
+        ]
+      },
+      "rationale": "Frequently revisited notes may deserve easier access."
+    },
+    {
+      "id": "high_similarity_to_existing_note",
+      "label": "merge_candidate",
+      "priority": 75,
+      "conditions": {
+        "all": [
+          "text_similarity_above_threshold",
+          "shares_topic_keywords"
+        ]
+      },
+      "rationale": "Strong textual/topic overlap suggests merge consideration."
+    }
+  ]
+}
