@@ -72,7 +72,6 @@ struct NotesListView: View {
                         }
 
                         Button {
-                            recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
                             showingRecentlyDeleted = true
                         } label: {
                             Label("Recently Deleted", systemImage: "trash")
@@ -97,6 +96,9 @@ struct NotesListView: View {
             .sheet(isPresented: $showingRecentlyDeleted) {
                 RecentlyDeletedView(
                     notes: recentlyDeletedNotes,
+                    onAppear: {
+                        recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
+                    },
                     onRestore: { note in
                         vm.restoreNote(note)
                         recentlyDeletedNotes = vm.fetchRecentlyDeletedNotes()
@@ -431,6 +433,7 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
 private struct RecentlyDeletedView: View {
     @Environment(\.dismiss) private var dismiss
     let notes: [Note]
+    let onAppear: () -> Void
     let onRestore: (Note) -> Void
     let onDelete: (Note) -> Void
 
@@ -496,5 +499,6 @@ private struct RecentlyDeletedView: View {
                 }
             }
         }
+        .onAppear(perform: onAppear)
     }
 }

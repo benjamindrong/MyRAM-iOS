@@ -102,6 +102,42 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(vm.activeNoteCount(in: parentFolder), 2)
     }
 
+    func testFetchRecentlyDeletedNotesLoadsPreexistingDeletedNotesOnInit() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let preexistingDeletedNote = Note(title: "Deleted Earlier", content: "Body")
+        preexistingDeletedNote.deletedAt = Date()
+        context.insert(preexistingDeletedNote)
+        try context.save()
+
+        let vm = NotesViewModel(context: context)
+        let deletedNotes = vm.fetchRecentlyDeletedNotes()
+
+        XCTAssertTrue(deletedNotes.contains(where: { $0.id == preexistingDeletedNote.id }))
+    }
+
+    func testRefreshRecentlyDeletedNotesPurgesExpiredDeletedNotes() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+
+        let staleDeletedNote = Note(title: "Old Deleted", content: "Expired")
+        staleDeletedNote.deletedAt = Date().addingTimeInterval(-(8 * 24 * 60 * 60))
+        context.insert(staleDeletedNote)
+
+        let recentDeletedNote = Note(title: "New Deleted", content: "Active")
+        recentDeletedNote.deletedAt = Date()
+        context.insert(recentDeletedNote)
+
+        try context.save()
+
+        let vm = NotesViewModel(context: context)
+        vm.refreshRecentlyDeletedNotes()
+        let deletedNotes = vm.fetchRecentlyDeletedNotes()
+
+        XCTAssertFalse(deletedNotes.contains(where: { $0.id == staleDeletedNote.id }))
+        XCTAssertTrue(deletedNotes.contains(where: { $0.id == recentDeletedNote.id }))
+    }
+
     func testDeleteFolderPreservingNotesMovesNotesToTopLevel() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
