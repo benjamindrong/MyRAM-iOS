@@ -45,6 +45,16 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(nestedFolder.parentFolder?.id, rootFolder.id)
     }
 
+    func testDebugBuildUsesDevelopmentBundleIdentifier() {
+#if DEBUG
+        let identifiers = Set(Bundle.allBundles.compactMap(\.bundleIdentifier))
+        XCTAssertTrue(
+            identifiers.contains("com.apexcoretechs.MyRAM.dev"),
+            "Debug runs should include the development app bundle identifier."
+        )
+#endif
+    }
+
     func testCreateNewNoteUsesCurrentFolderContext() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
