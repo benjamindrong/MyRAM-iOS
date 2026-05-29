@@ -1,0 +1,26 @@
+{
+  "fixture_id": "merge_candidate_similarity",
+  "input": {
+    "note_id": "n7",
+    "text": "Draft packing list for Chicago trip.",
+    "language": "en",
+    "created_at": "2026-05-15T10:00:00Z",
+    "modified_at": "2026-05-15T10:06:00Z",
+    "features": {
+      "lemmas": ["draft", "pack", "list", "chicago", "trip"],
+      "tokens": ["Draft", "packing", "list", "for", "Chicago", "trip"],
+      "open_count_30d": 4,
+      "edit_count_7d": 1,
+      "first_person_ratio": 0.0
+    },
+    "entities": {
+      "datetimes": [],
+      "emails": [],
+      "phones": [],
+      "urls": [],
+      "addresses": []
+    },
+    "similar_note_ids": ["n7b"]
+  },
+  "expected_labels": ["merge_candidate"]
+}

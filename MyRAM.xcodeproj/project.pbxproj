@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		BC7009FE2FBF928500F513B4 /* MyRAMSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC7009FD2FBF927F00F513B4 /* MyRAMSchema.swift */; };
+		BC8A7F8E2FCA1F1200A9C001 /* note-intelligence in Resources */ = {isa = PBXBuildFile; fileRef = BC8A7F8D2FCA1F1200A9C001 /* note-intelligence */; };
 		BC9F1BB02EA47D2E0045FD72 /* MyRAMApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BAF2EA47D2E0045FD72 /* MyRAMApp.swift */; };
 		BC9F1BB42EA47D2F0045FD72 /* Item.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BB32EA47D2F0045FD72 /* Item.swift */; };
 		BC9F1BB62EA47D300045FD72 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BC9F1BB52EA47D300045FD72 /* Assets.xcassets */; };
@@ -43,6 +44,7 @@
 
 /* Begin PBXFileReference section */
 		BC7009FD2FBF927F00F513B4 /* MyRAMSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSchema.swift; sourceTree = "<group>"; };
+		BC8A7F8D2FCA1F1200A9C001 /* note-intelligence */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "docs/note-intelligence"; sourceTree = "<group>"; };
 		BC9F1BAC2EA47D2E0045FD72 /* MyRAM.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyRAM.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BC9F1BAF2EA47D2E0045FD72 /* MyRAMApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMApp.swift; sourceTree = "<group>"; };
 		BC9F1BB32EA47D2F0045FD72 /* Item.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Item.swift; sourceTree = "<group>"; };
@@ -91,6 +93,7 @@
 			isa = PBXGroup;
 			children = (
 				BCE65D1F2EA57BCC00F2D0AA /* .gitignore */,
+				BC8A7F8D2FCA1F1200A9C001 /* note-intelligence */,
 				BC9F1BAE2EA47D2E0045FD72 /* MyRAM */,
 				BC9F1BC12EA47D310045FD72 /* MyRAMTests */,
 				BC9F1BCB2EA47D310045FD72 /* MyRAMUITests */,
@@ -289,6 +292,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BC8A7F8E2FCA1F1200A9C001 /* note-intelligence in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -481,6 +485,7 @@
 				DEVELOPMENT_TEAM = 5FF5MBB334;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = "MyRAM Dev";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -491,7 +496,7 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = com.apexcoretechs.MyRAM;
+				PRODUCT_BUNDLE_IDENTIFIER = com.apexcoretechs.MyRAM.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;

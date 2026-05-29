@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://apexcoretechs.com/schemas/note_intelligence_output.schema.v1.json",
+  "title": "NoteIntelligenceOutputV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "note_id",
+    "spec_version",
+    "suggestions"
+  ],
+  "properties": {
+    "note_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "spec_version": {
+      "type": "integer",
+      "const": 1
+    },
+    "suggestions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "label",
+          "rule_id",
+          "score"
+        ],
+        "properties": {
+          "label": {
+            "type": "string",
+            "enum": [
+              "possible_task",
+              "possible_event",
+              "reminder_candidate",
+              "idea",
+              "journal_entry",
+              "high_revisit_value",
+              "merge_candidate"
+            ]
+          },
+          "rule_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "score": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "explanations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          }
+        }
+      }
+    }
+  }
+}
