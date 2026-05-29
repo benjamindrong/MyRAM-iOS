@@ -105,7 +105,7 @@ final class MyRAMTests: XCTestCase {
 
     func testNoteIntelligenceRuleSpecV1HasExpectedVersionAndUniqueRuleIds() throws {
         let spec: NoteIntelligenceRuleSpec = try decodeNoteIntelligenceArtifact(
-            relativePath: "docs/note-intelligence/note_intelligence_rules.v1.json"
+            relativePath: "note_intelligence_rules.v1.json"
         )
 
         XCTAssertEqual(spec.specVersion, 1)
@@ -121,7 +121,7 @@ final class MyRAMTests: XCTestCase {
 
     func testNoteIntelligenceFixturesOnlyUseKnownLabels() throws {
         let spec: NoteIntelligenceRuleSpec = try decodeNoteIntelligenceArtifact(
-            relativePath: "docs/note-intelligence/note_intelligence_rules.v1.json"
+            relativePath: "note_intelligence_rules.v1.json"
         )
         let knownLabels = Set(spec.labels)
         let fixtures = try loadNoteIntelligenceFixtures()
@@ -525,8 +525,8 @@ final class MyRAMTests: XCTestCase {
     }
 
     private func loadNoteIntelligenceFixtures() throws -> [NoteIntelligenceFixture] {
-        let fixturesDirectory = repositoryRootURL()
-            .appendingPathComponent("docs/note-intelligence/fixtures/v1", isDirectory: true)
+        let fixturesDirectory = try noteIntelligenceBaseURL()
+            .appendingPathComponent("fixtures/v1", isDirectory: true)
         let fixtureURLs = try FileManager.default.contentsOfDirectory(
             at: fixturesDirectory,
             includingPropertiesForKeys: nil
@@ -543,16 +543,34 @@ final class MyRAMTests: XCTestCase {
     }
 
     private func decodeNoteIntelligenceArtifact<T: Decodable>(relativePath: String) throws -> T {
-        let artifactURL = repositoryRootURL().appendingPathComponent(relativePath)
+        let artifactURL = try noteIntelligenceBaseURL().appendingPathComponent(relativePath)
         let data = try Data(contentsOf: artifactURL)
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(T.self, from: data)
     }
 
-    private func repositoryRootURL() -> URL {
-        URL(fileURLWithPath: #filePath)
+    private func noteIntelligenceBaseURL() throws -> URL {
+        let testBundle = Bundle(for: Self.self)
+        if let bundledURL = testBundle.url(forResource: "note-intelligence", withExtension: nil) {
+            return bundledURL
+        }
+
+        let repositoryPathURL = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+            .appendingPathComponent("docs/note-intelligence", isDirectory: true)
+        if FileManager.default.fileExists(atPath: repositoryPathURL.path) {
+            return repositoryPathURL
+        }
+
+        throw NSError(
+            domain: "MyRAMTests",
+            code: 404,
+            userInfo: [
+                NSLocalizedDescriptionKey:
+                    "Could not locate note-intelligence test artifacts in bundle or repository path."
+            ]
+        )
     }
 }

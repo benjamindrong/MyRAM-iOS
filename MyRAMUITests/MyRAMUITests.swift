@@ -31,6 +31,9 @@ final class MyRAMUITests: XCTestCase {
     }
 
     func testLaunchPerformance() throws {
+        if ProcessInfo.processInfo.environment["SIMULATOR_DEVICE_NAME"] == nil {
+            throw XCTSkip("Skipping launch performance on physical devices due to unstable test runner behavior.")
+        }
         if #available(macOS 10.15, iOS 13.0, tvOS 13.0, watchOS 7.0, *) {
             // This measures how long it takes to launch your application.
             measure(metrics: [XCTApplicationLaunchMetric()]) {
