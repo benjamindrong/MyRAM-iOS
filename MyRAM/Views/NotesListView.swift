@@ -293,6 +293,8 @@ struct NotesListView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.tertiary)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .listRowSeparatorTint(.secondary.opacity(0.35))
@@ -337,6 +339,8 @@ struct NotesListView: View {
                         .foregroundStyle(Color.accentColor)
                 }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .tag(note.id)

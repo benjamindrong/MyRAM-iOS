@@ -29,3 +29,24 @@ The spec is the source of truth for cross-platform suggestion behavior so iOS an
 - Optional and user-controlled.
 - On-device processing.
 - Rule conditions should stay deterministic and auditable.
+
+## iOS Runtime Notes
+
+- Suggestion generation runs fully on-device via `NaturalLanguage` (`NLTagger`, `NLLanguageRecognizer`) and `NSDataDetector`.
+- Rule evaluation is local and deterministic against `note_intelligence_rules.v1.json` (with an embedded fallback copy for offline resilience).
+- The iOS suggestion pipeline does not call network APIs or rely on remote services.
+
+## Rule/Spec Version Bump Process
+
+1. Copy current artifacts and increment version suffixes:
+- `note_intelligence_rules.v{N+1}.json`
+- `contracts/note_intelligence_input.schema.v{N+1}.json`
+- `contracts/note_intelligence_output.schema.v{N+1}.json`
+
+2. Update `spec_version`, labels/rules, and any condition semantics in the new rule artifact.
+
+3. Add/update fixture corpus under `fixtures/v{N+1}/` with expected labels.
+
+4. Keep prior versions immutable for backward compatibility and release traceability.
+
+5. Update cross-platform evaluators to consume the new version explicitly, then rerun fixture parity tests before release.

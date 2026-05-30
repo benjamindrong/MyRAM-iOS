@@ -12,6 +12,7 @@ final class NotesViewModel: ObservableObject {
     
     private static let recentlyDeletedRetention: TimeInterval = 7 * 24 * 60 * 60
     private let context: ModelContext
+    private let noteIntelligenceService = NoteIntelligenceService()
     private var undoStack: [UndoAction] = [] {
         didSet {
             hasUndoableAction = !undoStack.isEmpty
@@ -226,6 +227,24 @@ final class NotesViewModel: ObservableObject {
     func selectNote(_ note: Note?) {
         currentNote = note
         UserDefaults.standard.set(note?.id.uuidString, forKey: "lastNoteID")
+    }
+
+    func noteSuggestionLabels(for note: Note) -> [String] {
+        let descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { item in
+                item.deletedAt == nil
+            }
+        )
+        let activeNotes = (try? context.fetch(descriptor)) ?? []
+        return noteIntelligenceService.suggestionLabels(for: note, among: activeNotes)
+    }
+
+    func recordNoteOpened(_ note: Note) {
+        noteIntelligenceService.recordNoteOpened(note)
+    }
+
+    func recordNoteEdited(_ note: Note) {
+        noteIntelligenceService.recordNoteEdited(note)
     }
 
     func updateNote(_ note: Note, title: String, content: String) {

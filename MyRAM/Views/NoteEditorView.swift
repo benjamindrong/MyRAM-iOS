@@ -28,6 +28,7 @@ struct NoteEditorView: View {
     @State private var exportErrorMessage: String?
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
+    @State private var suggestionLabels: [String] = []
     
     var body: some View {
         NavigationStack {
@@ -91,6 +92,32 @@ struct NoteEditorView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
+                    .padding(10)
+                    .background(Color(.secondarySystemBackground))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+
+                if !suggestionLabels.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("Optional recommendations")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.secondary)
+
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 8) {
+                                ForEach(suggestionLabels, id: \.self) { label in
+                                    Text(displayName(for: label))
+                                        .font(.caption.weight(.semibold))
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(Color.accentColor.opacity(0.15))
+                                        .foregroundStyle(Color.accentColor)
+                                        .clipShape(Capsule())
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(10)
                     .background(Color(.secondarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -163,6 +190,8 @@ struct NoteEditorView: View {
                 title = note.title
                 content = note.content
                 lastSnapshot = NoteSnapshot(title: title, content: content)
+                vm.recordNoteOpened(note)
+                refreshSuggestionLabels()
             }
             .onChange(of: title) { handleEditorChange() }
             .onChange(of: content) { handleEditorChange() }
@@ -245,7 +274,34 @@ struct NoteEditorView: View {
         }
         lastSnapshot = currentSnapshot
         vm.updateNote(note, title: title, content: content)
+        vm.recordNoteEdited(note)
+        refreshSuggestionLabels()
         refreshUndoState()
+    }
+
+    private func refreshSuggestionLabels() {
+        suggestionLabels = vm.noteSuggestionLabels(for: note)
+    }
+
+    private func displayName(for label: String) -> String {
+        switch label {
+        case "possible_task":
+            return "Possible Task"
+        case "possible_event":
+            return "Possible Event"
+        case "reminder_candidate":
+            return "Reminder Candidate"
+        case "idea":
+            return "Idea"
+        case "journal_entry":
+            return "Journal Entry"
+        case "high_revisit_value":
+            return "High Revisit Value"
+        case "merge_candidate":
+            return "Merge Candidate"
+        default:
+            return label
+        }
     }
 
     private func undoLastEdit() {
