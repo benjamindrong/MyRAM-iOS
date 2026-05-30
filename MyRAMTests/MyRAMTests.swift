@@ -183,6 +183,54 @@ final class MyRAMTests: XCTestCase {
         }
     }
 
+    func testNoteIntelligenceRuleSpecUsesSupportedConditionKeysAndNames() throws {
+        let spec: NoteIntelligenceRuleSpec = try decodeNoteIntelligenceArtifact(
+            relativePath: "note_intelligence_rules.v1.json"
+        )
+        let supportedConditionNames: Set<String> = [
+            "contains_action_verb",
+            "has_datetime_entity",
+            "contains_event_phrase",
+            "contains_followup_phrase",
+            "has_datetime_or_contact_entity",
+            "contains_idea_phrase",
+            "not_contains_action_verb",
+            "contains_reflective_phrase",
+            "first_person_ratio_high",
+            "open_count_above_threshold",
+            "edited_recently_multiple_times",
+            "text_similarity_above_threshold",
+            "shares_topic_keywords"
+        ]
+
+        for rule in spec.rules {
+            for (conditionKey, conditionNames) in rule.conditions {
+                XCTAssertTrue(
+                    conditionKey == "all" || conditionKey == "any",
+                    "Unexpected condition key in rule \(rule.id): \(conditionKey)"
+                )
+                XCTAssertTrue(
+                    conditionNames.allSatisfy { supportedConditionNames.contains($0) },
+                    "Rule uses unsupported condition name: \(rule.id)"
+                )
+            }
+        }
+    }
+
+    func testNoteIntelligenceRuntimeEvaluatorMatchesFixtureExpectedLabels() throws {
+        let fixtures = try loadNoteIntelligenceFixtures()
+        let service = NoteIntelligenceService()
+
+        for fixture in fixtures {
+            let labels = Set(service.evaluateCanonicalInput(canonicalInput(from: fixture)))
+            XCTAssertEqual(
+                labels,
+                Set(fixture.expectedLabels),
+                "Runtime evaluator mismatch for fixture: \(fixture.fixtureId)"
+            )
+        }
+    }
+
     func testCreateNewNoteUsesCurrentFolderContext() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
@@ -621,6 +669,32 @@ final class MyRAMTests: XCTestCase {
             let decoder = JSONDecoder()
             return try decoder.decode(NoteIntelligenceFixture.self, from: data)
         }
+    }
+
+    private func canonicalInput(from fixture: NoteIntelligenceFixture) -> NoteIntelligenceCanonicalInput {
+        .init(
+            noteID: fixture.input.noteId,
+            text: fixture.input.text,
+            language: fixture.input.language,
+            createdAt: fixture.input.createdAt,
+            modifiedAt: fixture.input.modifiedAt,
+            features: .init(
+                lemmas: fixture.input.features.lemmas,
+                tokens: fixture.input.features.tokens,
+                posTags: [],
+                openCount30d: fixture.input.features.openCount30d,
+                editCount7d: fixture.input.features.editCount7d,
+                firstPersonRatio: fixture.input.features.firstPersonRatio
+            ),
+            entities: .init(
+                datetimes: fixture.input.entities.datetimes,
+                emails: fixture.input.entities.emails,
+                phones: fixture.input.entities.phones,
+                urls: fixture.input.entities.urls,
+                addresses: fixture.input.entities.addresses
+            ),
+            similarNoteIDs: fixture.input.similarNoteIds
+        )
     }
 
     private func decodeNoteIntelligenceArtifact<T: Decodable>(relativePath: String) throws -> T {
