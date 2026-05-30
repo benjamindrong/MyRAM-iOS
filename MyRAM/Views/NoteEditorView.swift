@@ -13,10 +13,12 @@ struct NoteEditorView: View {
     
     @State private var title: String = ""
     @State private var content: String = ""
-    @State private var selectAllToken = 0
+    @State private var selectAllToggleToken = 0
     @State private var activeUndoManager: UndoManager?
     @State private var canUndo = false
+    @State private var canRedo = false
     @State private var undoHistory: [NoteSnapshot] = []
+    @State private var redoHistory: [NoteSnapshot] = []
     @State private var lastSnapshot = NoteSnapshot()
     @State private var isApplyingUndo = false
     @State private var selectedPickerItems: [PhotosPickerItem] = []
@@ -29,28 +31,38 @@ struct NoteEditorView: View {
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
     @State private var suggestionLabels: [String] = []
+    @State private var showingTitleEditor = false
+    @State private var titleDraft = ""
+    @State private var keyboardToast: KeyboardToast?
+    @State private var keyboardToastTask: Task<Void, Never>?
     
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
-                UndoableTextField(
-                    text: $title,
-                    placeholder: "Title",
-                    onUndoManagerChanged: updateActiveUndoManager
-                )
-                .frame(height: 44)
-                
+                titleSummary
+
                 ZStack(alignment: .bottomTrailing) {
                     SelectableTextView(
                         text: $content,
-                        selectAllToken: selectAllToken,
+                        selectAllToggleToken: selectAllToggleToken,
                         onUndoManagerChanged: updateActiveUndoManager
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    attachmentInlineActions
-                        .padding(.trailing, 8)
-                        .padding(.bottom, 8)
+                    VStack(alignment: .trailing, spacing: 8) {
+                        if let keyboardToast {
+                            Text(keyboardToast.message)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        }
+
+                        attachmentInlineActions
+                    }
+                    .padding(.trailing, 8)
+                    .padding(.bottom, 8)
                 }
 
                 if !sortedAttachments.isEmpty {
@@ -130,7 +142,14 @@ struct NoteEditorView: View {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { dismiss() }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    Button {
+                        performRedo()
+                    } label: {
+                        Label("Redo", systemImage: "arrow.uturn.forward")
+                    }
+                    .disabled(!canPerformRedo)
+
                     Button {
                         performUndo()
                     } label: {
@@ -184,6 +203,7 @@ struct NoteEditorView: View {
                     } label: {
                         Label("More", systemImage: "ellipsis.circle")
                     }
+                    .accessibilityIdentifier("note-editor-more")
                 }
             }
             .onAppear {
@@ -242,6 +262,16 @@ struct NoteEditorView: View {
             } message: {
                 Text("Enter a name for the new folder.")
             }
+            .alert("Edit Title", isPresented: $showingTitleEditor) {
+                TextField("Title", text: $titleDraft)
+                Button("Cancel", role: .cancel) {}
+                Button("Save") {
+                    let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    title = trimmed
+                }
+            } message: {
+                Text("Update the note title.")
+            }
         }
     }
 
@@ -253,6 +283,37 @@ struct NoteEditorView: View {
         canUndo || vm.hasUndoableAction
     }
 
+    private var canPerformRedo: Bool {
+        canRedo
+    }
+
+    private var titleSummary: some View {
+        Button {
+            titleDraft = title
+            showingTitleEditor = true
+        } label: {
+            HStack(spacing: 8) {
+                Text(title.isEmpty ? "Untitled" : title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(title.isEmpty ? .secondary : .primary)
+                    .italic(title.isEmpty)
+                    .lineLimit(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Image(systemName: "pencil.circle")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("edit-note-title")
+        .accessibilityHint("Edits the note title.")
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Color(.secondarySystemBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+
     private func updateActiveUndoManager(_ undoManager: UndoManager?) {
         activeUndoManager = undoManager
         refreshUndoState()
@@ -261,6 +322,7 @@ struct NoteEditorView: View {
     private func refreshUndoState() {
         DispatchQueue.main.async {
             canUndo = (activeUndoManager?.canUndo ?? false) || !undoHistory.isEmpty
+            canRedo = (activeUndoManager?.canRedo ?? false) || !redoHistory.isEmpty
         }
     }
 
@@ -268,6 +330,7 @@ struct NoteEditorView: View {
         let currentSnapshot = NoteSnapshot(title: title, content: content)
         if !isApplyingUndo, currentSnapshot != lastSnapshot {
             undoHistory.append(lastSnapshot)
+            redoHistory.removeAll()
             if undoHistory.count > 200 {
                 undoHistory.removeFirst(undoHistory.count - 200)
             }
@@ -322,6 +385,40 @@ struct NoteEditorView: View {
             return
         }
 
+        let currentSnapshot = NoteSnapshot(title: title, content: content)
+        redoHistory.append(currentSnapshot)
+
+        isApplyingUndo = true
+        title = snapshot.title
+        content = snapshot.content
+        lastSnapshot = snapshot
+        vm.updateNote(note, title: snapshot.title, content: snapshot.content)
+        DispatchQueue.main.async {
+            isApplyingUndo = false
+            refreshUndoState()
+        }
+    }
+
+    private func redoLastEdit() {
+        if activeUndoManager?.canRedo == true {
+            isApplyingUndo = true
+            activeUndoManager?.redo()
+            DispatchQueue.main.async {
+                isApplyingUndo = false
+                lastSnapshot = NoteSnapshot(title: title, content: content)
+                refreshUndoState()
+            }
+            return
+        }
+
+        guard let snapshot = redoHistory.popLast() else {
+            refreshUndoState()
+            return
+        }
+
+        let currentSnapshot = NoteSnapshot(title: title, content: content)
+        undoHistory.append(currentSnapshot)
+
         isApplyingUndo = true
         title = snapshot.title
         content = snapshot.content
@@ -339,6 +436,11 @@ struct NoteEditorView: View {
         } else {
             vm.undoLastAction()
         }
+        refreshUndoState()
+    }
+
+    private func performRedo() {
+        redoLastEdit()
         refreshUndoState()
     }
 
@@ -394,7 +496,7 @@ struct NoteEditorView: View {
     }
 
     private var attachmentInlineActions: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 8) {
             inlineActionButton(
                 systemImage: "keyboard.chevron.compact.down",
                 identifier: "keyboard-control-dismiss"
@@ -405,7 +507,10 @@ struct NoteEditorView: View {
                 performResponderAction(#selector(UIResponder.cut(_:)))
             }
             inlineActionButton(systemImage: "doc.on.doc", identifier: "keyboard-control-copy") {
-                performResponderAction(#selector(UIResponder.copy(_:)))
+                performKeyboardAction(
+                    #selector(UIResponder.copy(_:)),
+                    toast: KeyboardToast(message: "Copied")
+                )
             }
             inlineActionButton(
                 systemImage: "doc.on.clipboard",
@@ -417,11 +522,11 @@ struct NoteEditorView: View {
                 systemImage: "selection.pin.in.out",
                 identifier: "keyboard-control-select-all"
             ) {
-                selectAllToken += 1
+                selectAllToggleToken += 1
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
         .background(.ultraThinMaterial)
         .clipShape(Capsule())
         .accessibilityIdentifier("keyboard-control-bar")
@@ -434,8 +539,8 @@ struct NoteEditorView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .semibold))
-                .frame(width: 18, height: 18)
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 26, height: 26)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
@@ -444,6 +549,27 @@ struct NoteEditorView: View {
 
     private func performResponderAction(_ action: Selector) {
         UIApplication.shared.sendAction(action, to: nil, from: nil, for: nil)
+    }
+
+    private func performKeyboardAction(_ action: Selector, toast: KeyboardToast) {
+        performResponderAction(action)
+        showKeyboardToast(toast)
+    }
+
+    private func showKeyboardToast(_ toast: KeyboardToast) {
+        keyboardToastTask?.cancel()
+        withAnimation(.easeOut(duration: 0.15)) {
+            keyboardToast = toast
+        }
+        keyboardToastTask = Task {
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(.easeIn(duration: 0.15)) {
+                    keyboardToast = nil
+                }
+            }
+        }
     }
 
     private func dismissKeyboard() {
@@ -469,6 +595,10 @@ private struct NoteSharePayload: Identifiable {
 private struct NoteSnapshot: Equatable {
     var title: String = ""
     var content: String = ""
+}
+
+private struct KeyboardToast: Equatable {
+    let message: String
 }
 
 private struct AttachmentThumbnail: View {
@@ -637,66 +767,9 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
     }
 }
 
-private struct UndoableTextField: UIViewRepresentable {
-    @Binding var text: String
-    let placeholder: String
-    let onUndoManagerChanged: (UndoManager?) -> Void
-
-    func makeUIView(context: Context) -> UITextField {
-        let textField = UITextField()
-        textField.delegate = context.coordinator
-        textField.placeholder = placeholder
-        textField.font = .preferredFont(forTextStyle: .title2)
-        textField.adjustsFontForContentSizeCategory = true
-        textField.borderStyle = .roundedRect
-        textField.clearButtonMode = .whileEditing
-        textField.addTarget(
-            context.coordinator,
-            action: #selector(Coordinator.textDidChange(_:)),
-            for: .editingChanged
-        )
-        return textField
-    }
-
-    func updateUIView(_ textField: UITextField, context: Context) {
-        if textField.text != text {
-            textField.text = text
-        }
-        context.coordinator.text = $text
-        context.coordinator.onUndoManagerChanged = onUndoManagerChanged
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onUndoManagerChanged: onUndoManagerChanged)
-    }
-
-    final class Coordinator: NSObject, UITextFieldDelegate {
-        var text: Binding<String>
-        var onUndoManagerChanged: (UndoManager?) -> Void
-
-        init(text: Binding<String>, onUndoManagerChanged: @escaping (UndoManager?) -> Void) {
-            self.text = text
-            self.onUndoManagerChanged = onUndoManagerChanged
-        }
-
-        @objc func textDidChange(_ textField: UITextField) {
-            text.wrappedValue = textField.text ?? ""
-            onUndoManagerChanged(textField.undoManager)
-        }
-
-        func textFieldDidBeginEditing(_ textField: UITextField) {
-            onUndoManagerChanged(textField.undoManager)
-        }
-
-        func textFieldDidEndEditing(_ textField: UITextField) {
-            onUndoManagerChanged(textField.undoManager)
-        }
-    }
-}
-
 private struct SelectableTextView: UIViewRepresentable {
     @Binding var text: String
-    let selectAllToken: Int
+    let selectAllToggleToken: Int
     let onUndoManagerChanged: (UndoManager?) -> Void
 
     func makeUIView(context: Context) -> UITextView {
@@ -721,9 +794,14 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.text = $text
         context.coordinator.onUndoManagerChanged = onUndoManagerChanged
 
-        if context.coordinator.selectAllToken != selectAllToken {
-            context.coordinator.selectAllToken = selectAllToken
-            textView.selectAll(nil)
+        if context.coordinator.selectAllToggleToken != selectAllToggleToken {
+            context.coordinator.selectAllToggleToken = selectAllToggleToken
+            let fullLength = (textView.text as NSString).length
+            if fullLength > 0 && textView.selectedRange.location == 0 && textView.selectedRange.length == fullLength {
+                textView.selectedRange = NSRange(location: fullLength, length: 0)
+            } else {
+                textView.selectAll(nil)
+            }
             onUndoManagerChanged(textView.undoManager)
         }
     }
@@ -735,7 +813,7 @@ private struct SelectableTextView: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate {
         var text: Binding<String>
         var onUndoManagerChanged: (UndoManager?) -> Void
-        var selectAllToken = 0
+        var selectAllToggleToken = 0
 
         init(text: Binding<String>, onUndoManagerChanged: @escaping (UndoManager?) -> Void) {
             self.text = text

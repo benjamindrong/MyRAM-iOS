@@ -19,8 +19,6 @@ struct NotesListView: View {
     @State private var noteMoveRequest: NoteMoveRequest?
     @State private var pendingFolderDeletionQueue: [Folder] = []
     @State private var folderAwaitingDeleteDecision: Folder?
-    @State private var noteAwaitingRename: Note?
-    @State private var renameNoteTitle = ""
     @State private var showingRootTitleRenamePrompt = false
     @State private var rootTitleDraft = ""
     @AppStorage("mainListTitle") private var mainListTitle = "My Notes"
@@ -108,6 +106,7 @@ struct NotesListView: View {
                     } label: {
                         Label("More", systemImage: "ellipsis.circle")
                     }
+                    .accessibilityIdentifier("notes-list-more")
                 }
             }
             .sheet(item: $selectedNote) { note in
@@ -175,28 +174,6 @@ struct NotesListView: View {
                 }
             } message: {
                 Text("Update the folder name.")
-            }
-            .alert(
-                "Rename Note",
-                isPresented: Binding(
-                    get: { noteAwaitingRename != nil },
-                    set: { if !$0 { noteAwaitingRename = nil } }
-                )
-            ) {
-                TextField("Note Title", text: $renameNoteTitle)
-                Button("Cancel", role: .cancel) {
-                    noteAwaitingRename = nil
-                    renameNoteTitle = ""
-                }
-                Button("Save") {
-                    if let note = noteAwaitingRename {
-                        vm.renameNote(note, to: renameNoteTitle)
-                    }
-                    noteAwaitingRename = nil
-                    renameNoteTitle = ""
-                }
-            } message: {
-                Text("Update the note title.")
             }
             .alert("Rename Main List", isPresented: $showingRootTitleRenamePrompt) {
                 TextField("Main List Title", text: $rootTitleDraft)
@@ -350,10 +327,6 @@ struct NotesListView: View {
             Button((note.isPinned ?? false) ? "Unpin" : "Pin") {
                 vm.setNotePinned(note, isPinned: !(note.isPinned ?? false))
             }
-            Button("Rename") {
-                noteAwaitingRename = note
-                renameNoteTitle = note.title
-            }
             Button("Move to Folder") {
                 noteMoveRequest = NoteMoveRequest(note: note)
             }
@@ -363,6 +336,8 @@ struct NotesListView: View {
             Button("Delete", role: .destructive) {
                 vm.deleteNote(note)
             }
+        } preview: {
+            NoteContextPreview(note: note)
         }
     }
 
@@ -418,6 +393,36 @@ struct NotesListView: View {
 private struct SharePayload: Identifiable {
     let id = UUID()
     let urls: [URL]
+}
+
+private struct NoteContextPreview: View {
+    let note: Note
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(note.title.isEmpty ? "Untitled" : note.title)
+                .font(.subheadline.weight(.semibold))
+                .lineLimit(3)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(note.content.isEmpty ? "No content yet" : note.content)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(12)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .frame(width: 320, height: 320, alignment: .topLeading)
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
+        )
+        .padding(4)
+    }
 }
 
 private enum NotesListItem: Identifiable {
