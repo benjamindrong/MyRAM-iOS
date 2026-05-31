@@ -1454,6 +1454,14 @@ private struct SelectableTextView: UIViewRepresentable {
             onUndoManagerChanged(textView.undoManager)
         }
 
+        func textView(
+            _ textView: UITextView,
+            editMenuForTextIn range: NSRange,
+            suggestedActions: [UIMenuElement]
+        ) -> UIMenu? {
+            UIMenu(children: [])
+        }
+
         func hasPendingFormattingMutation(
             boldToggleToken: Int,
             italicToggleToken: Int,
@@ -1524,6 +1532,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 } else {
                     typingAttributes[.foregroundColor] = color
                 }
+                syncDecorationColorsWithForeground(in: &typingAttributes, color: color)
                 textView.typingAttributes = typingAttributes
                 reportFormattingState(from: textView)
                 return
@@ -1535,6 +1544,7 @@ private struct SelectableTextView: UIViewRepresentable {
             } else if let color {
                 textView.textStorage.addAttribute(.foregroundColor, value: color, range: selectedRange)
             }
+            syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: color)
             textView.textStorage.endEditing()
 
             textView.selectedRange = selectedRange
@@ -1818,11 +1828,20 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func toggleTextDecoration(in textView: UITextView, key: NSAttributedString.Key) {
             let selectedRange = formattingActionRange(in: textView)
+            let colorKey = decorationColorKey(for: key)
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
                 let currentValue = typingAttributes[key] as? Int ?? 0
-                typingAttributes[key] = currentValue == 0 ? NSUnderlineStyle.single.rawValue : 0
+                let shouldApply = currentValue == 0
+                typingAttributes[key] = shouldApply ? NSUnderlineStyle.single.rawValue : 0
+                if let colorKey {
+                    if shouldApply, let color = typingAttributes[.foregroundColor] as? UIColor {
+                        typingAttributes[colorKey] = color
+                    } else {
+                        typingAttributes.removeValue(forKey: colorKey)
+                    }
+                }
                 textView.typingAttributes = typingAttributes
                 reportFormattingState(from: textView)
                 return
@@ -1832,7 +1851,111 @@ private struct SelectableTextView: UIViewRepresentable {
             let shouldApply = shouldApplyDecoration(in: mutable, range: selectedRange, key: key)
             let value = shouldApply ? NSUnderlineStyle.single.rawValue : 0
             mutable.addAttribute(key, value: value, range: selectedRange)
+            if let colorKey {
+                if shouldApply {
+                    mutable.enumerateAttribute(.foregroundColor, in: selectedRange) { foregroundColor, range, _ in
+                        if let foregroundColor {
+                            mutable.addAttribute(colorKey, value: foregroundColor, range: range)
+                        } else {
+                            mutable.removeAttribute(colorKey, range: range)
+                        }
+                    }
+                } else {
+                    mutable.removeAttribute(colorKey, range: selectedRange)
+                }
+            }
             applyAttributedText(mutable, in: textView, selectedRange: selectedRange)
+        }
+
+        private func syncDecorationColorsWithForeground(
+            in typingAttributes: inout [NSAttributedString.Key: Any],
+            color: UIColor?
+        ) {
+            syncDecorationColor(
+                in: &typingAttributes,
+                styleKey: .underlineStyle,
+                colorKey: .underlineColor,
+                color: color
+            )
+            syncDecorationColor(
+                in: &typingAttributes,
+                styleKey: .strikethroughStyle,
+                colorKey: .strikethroughColor,
+                color: color
+            )
+        }
+
+        private func syncDecorationColor(
+            in typingAttributes: inout [NSAttributedString.Key: Any],
+            styleKey: NSAttributedString.Key,
+            colorKey: NSAttributedString.Key,
+            color: UIColor?
+        ) {
+            let style = typingAttributes[styleKey] as? Int ?? 0
+            guard style != 0 else {
+                typingAttributes.removeValue(forKey: colorKey)
+                return
+            }
+
+            if let color {
+                typingAttributes[colorKey] = color
+            } else {
+                typingAttributes.removeValue(forKey: colorKey)
+            }
+        }
+
+        private func syncDecorationColorsWithForeground(
+            in attributedText: NSMutableAttributedString,
+            range: NSRange,
+            color: UIColor?
+        ) {
+            syncDecorationColor(
+                in: attributedText,
+                range: range,
+                styleKey: .underlineStyle,
+                colorKey: .underlineColor,
+                color: color
+            )
+            syncDecorationColor(
+                in: attributedText,
+                range: range,
+                styleKey: .strikethroughStyle,
+                colorKey: .strikethroughColor,
+                color: color
+            )
+        }
+
+        private func syncDecorationColor(
+            in attributedText: NSMutableAttributedString,
+            range: NSRange,
+            styleKey: NSAttributedString.Key,
+            colorKey: NSAttributedString.Key,
+            color: UIColor?
+        ) {
+            attributedText.enumerateAttribute(styleKey, in: range) { value, range, _ in
+                let style = value as? Int ?? 0
+                guard style != 0 else {
+                    attributedText.removeAttribute(colorKey, range: range)
+                    return
+                }
+
+                if let color {
+                    attributedText.addAttribute(colorKey, value: color, range: range)
+                } else {
+                    attributedText.removeAttribute(colorKey, range: range)
+                }
+            }
+        }
+
+        private func decorationColorKey(for key: NSAttributedString.Key) -> NSAttributedString.Key? {
+            switch key {
+            case .underlineStyle:
+                return .underlineColor
+            case .strikethroughStyle:
+                return .strikethroughColor
+            default:
+                return nil
+            }
         }
 
         private func shouldApplyDecoration(
