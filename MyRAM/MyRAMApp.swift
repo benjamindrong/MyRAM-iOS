@@ -63,3 +63,19 @@ enum AppearanceSetting: String, CaseIterable, Identifiable {
         }
     }
 }
+
+enum EditorChromeStyle: String, CaseIterable, Identifiable {
+    case standard
+    case chromeAccent
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .standard:
+            "Standard"
+        case .chromeAccent:
+            "Chrome Accent"
+        }
+    }
+}

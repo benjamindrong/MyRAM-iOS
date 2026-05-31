@@ -17,12 +17,16 @@ struct NotesListView: View {
     @State private var folderAwaitingRename: Folder?
     @State private var renameFolderName = ""
     @State private var noteMoveRequest: NoteMoveRequest?
+    @State private var bulkNoteMoveRequest: BulkNoteMoveRequest?
     @State private var pendingFolderDeletionQueue: [Folder] = []
     @State private var folderAwaitingDeleteDecision: Folder?
     @State private var showingRootTitleRenamePrompt = false
     @State private var rootTitleDraft = ""
+    @State private var rootTitleUndoHistory: [String] = []
+    @State private var rootTitleRedoHistory: [String] = []
     @AppStorage("mainListTitle") private var mainListTitle = "My Notes"
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
+    @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     
     init(context: ModelContext) {
         _vm = StateObject(wrappedValue: NotesViewModel(context: context))
@@ -30,85 +34,20 @@ struct NotesListView: View {
     
     var body: some View {
         NavigationStack {
-            List(selection: $selectedNoteIDs) {
-                ForEach(listItems) { item in
-                    row(for: item)
+            VStack(spacing: 10) {
+                notesListTopBar
+                    .padding(.horizontal)
+                    .padding(.top, 6)
+
+                List(selection: $selectedNoteIDs) {
+                    ForEach(listItems) { item in
+                        row(for: item)
+                    }
                 }
+                .listStyle(.insetGrouped)
+                .environment(\.editMode, $editMode)
             }
-            .listStyle(.insetGrouped)
-            .environment(\.editMode, $editMode)
-            .navigationTitle(vm.currentFolder?.name ?? mainListTitle)
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarLeading) {
-                    if vm.currentFolder != nil {
-                        Button {
-                            vm.navigateToParentFolder()
-                            selectedNoteIDs.removeAll()
-                        } label: {
-                            Label("Back", systemImage: "chevron.left")
-                        }
-                    }
-
-                    Button(editMode.isEditing ? "Done" : "Select") {
-                        editMode = editMode.isEditing ? .inactive : .active
-                    }
-                }
-
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        vm.undoLastAction()
-                    } label: {
-                        Label("Undo", systemImage: "arrow.uturn.backward")
-                    }
-                    .disabled(!vm.hasUndoableAction)
-
-                    Menu {
-                        Button {
-                            selectedNote = vm.createNewNote()
-                        } label: {
-                            Label("New Note", systemImage: "square.and.pencil")
-                        }
-
-                        Button {
-                            newFolderName = ""
-                            showingCreateFolderPrompt = true
-                        } label: {
-                            Label("New Folder", systemImage: "folder.badge.plus")
-                        }
-
-                        if vm.currentFolder == nil {
-                            Button {
-                                rootTitleDraft = mainListTitle
-                                showingRootTitleRenamePrompt = true
-                            } label: {
-                                Label("Rename Main List", systemImage: "character.cursor.ibeam")
-                            }
-                        }
-
-                        Picker("Appearance", selection: $appearanceSettingRaw) {
-                            ForEach(AppearanceSetting.allCases) { appearanceSetting in
-                                Text(appearanceSetting.title).tag(appearanceSetting.rawValue)
-                            }
-                        }
-
-                        Button {
-                            showingRecentlyDeleted = true
-                        } label: {
-                            Label("Recently Deleted", systemImage: "trash")
-                        }
-
-                        Button {
-                            exportSelectedNotes()
-                        } label: {
-                            Label("Export Selected Notes", systemImage: "square.and.arrow.up")
-                        }
-                        .disabled(selectedNoteIDs.isEmpty)
-                    } label: {
-                        Label("More", systemImage: "ellipsis.circle")
-                    }
-                    .accessibilityIdentifier("notes-list-more")
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
             .sheet(item: $selectedNote) { note in
                 NoteEditorView(vm: vm, note: note) { newNote in
                     selectedNote = newNote
@@ -182,7 +121,14 @@ struct NotesListView: View {
                 }
                 Button("Save") {
                     let trimmed = rootTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    mainListTitle = trimmed.isEmpty ? "My Notes" : trimmed
+                    let newTitle = trimmed.isEmpty ? "My Notes" : trimmed
+                    guard newTitle != mainListTitle else { return }
+                    rootTitleUndoHistory.append(mainListTitle)
+                    rootTitleRedoHistory.removeAll()
+                    if rootTitleUndoHistory.count > 40 {
+                        rootTitleUndoHistory.removeFirst(rootTitleUndoHistory.count - 40)
+                    }
+                    mainListTitle = newTitle
                 }
             } message: {
                 Text("Set the title shown on the top-level notes list.")
@@ -225,10 +171,260 @@ struct NotesListView: View {
                     }
                 )
             }
+            .sheet(item: $bulkNoteMoveRequest) { request in
+                BulkNoteMoveDestinationView(
+                    availableFolders: vm.fetchAllFolders(),
+                    folderPathProvider: buildFolderPath(for:),
+                    onMove: { destination in
+                        for note in request.notes {
+                            vm.moveNote(note, to: destination)
+                        }
+                    }
+                )
+            }
         }
         .onChange(of: vm.notes) { _, updatedNotes in
             let currentIDs = Set(updatedNotes.map(\.id))
             selectedNoteIDs = selectedNoteIDs.intersection(currentIDs)
+        }
+    }
+
+    private var editorChromeStyle: EditorChromeStyle {
+        EditorChromeStyle(rawValue: editorChromeStyleRaw) ?? .standard
+    }
+
+    private var notesListTopBar: some View {
+        GeometryReader { proxy in
+            let layout = topBarActionLayout(totalWidth: proxy.size.width)
+            ChromeActionBar(style: editorChromeStyle) {
+                if vm.currentFolder != nil {
+                    compactActionButton(systemImage: "chevron.left", identifier: "notes-topbar-back") {
+                        vm.navigateToParentFolder()
+                        selectedNoteIDs.removeAll()
+                    }
+                }
+
+                selectionModeButton
+
+                titleControl
+
+                Spacer(minLength: 0)
+
+                ForEach(layout.visibleActions, id: \.self) { action in
+                    topBarVisibleAction(for: action)
+                }
+
+                Menu {
+                    ForEach(layout.overflowActions, id: \.self) { action in
+                        overflowMenuItem(for: action)
+                    }
+
+                    Divider()
+
+                    Menu("Appearance") {
+                        Picker("Mode", selection: $appearanceSettingRaw) {
+                            ForEach(AppearanceSetting.allCases) { appearanceSetting in
+                                Text(appearanceSetting.title).tag(appearanceSetting.rawValue)
+                            }
+                        }
+
+                        Picker("Style", selection: $editorChromeStyleRaw) {
+                            ForEach(EditorChromeStyle.allCases) { style in
+                                Text(style.title).tag(style.rawValue)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 28, height: 28)
+                }
+                .accessibilityIdentifier("notes-list-more")
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+        }
+        .frame(height: 42)
+    }
+
+    @ViewBuilder
+    private var titleControl: some View {
+        if vm.currentFolder == nil {
+            Button {
+                rootTitleDraft = mainListTitle
+                showingRootTitleRenamePrompt = true
+            } label: {
+                HStack(spacing: 6) {
+                    Text(mainListTitle)
+                        .font(.headline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.45)
+                        .allowsTightening(true)
+                    Image(systemName: "pencil")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("edit-main-list-title")
+        } else {
+            Text(vm.currentFolder?.name ?? mainListTitle)
+                .font(.headline.weight(.semibold))
+                .foregroundStyle(.primary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.45)
+                .allowsTightening(true)
+        }
+    }
+
+    private var selectionModeButton: some View {
+        compactActionButton(
+            systemImage: editMode.isEditing ? "checkmark.circle.fill" : "checkmark.circle",
+            identifier: "notes-topbar-select"
+        ) {
+            editMode = editMode.isEditing ? .inactive : .active
+        }
+        .accessibilityLabel(editMode.isEditing ? "Finish selecting notes" : "Select notes")
+    }
+
+    private func compactActionButton(
+        systemImage: String,
+        identifier: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .accessibilityIdentifier(identifier)
+    }
+
+    private func topBarActionLayout(totalWidth: CGFloat) -> TopBarActionLayout {
+        let minimumTitleWidth: CGFloat = 56
+        let titleWidth = max(minimumTitleWidth, estimatedTitleWidth)
+        let selectControlWidth: CGFloat = 28
+        let backButtonWidth: CGFloat = vm.currentFolder == nil ? 0 : 28
+        let overflowButtonWidth: CGFloat = 28
+        let actionButtonWidth: CGFloat = 28
+        let interItemSpacing: CGFloat = 8
+        let horizontalPadding: CGFloat = 20
+
+        let reservedLeadingWidth = selectControlWidth + backButtonWidth
+            + (vm.currentFolder == nil ? interItemSpacing : interItemSpacing * 2)
+        let usableWidth = max(0, totalWidth - horizontalPadding)
+        let titleAvailableWidth = max(
+            0,
+            usableWidth - reservedLeadingWidth - overflowButtonWidth - interItemSpacing
+        )
+        var remainingWidth = titleWidth > titleAvailableWidth
+            ? 0
+            : max(0, titleAvailableWidth - titleWidth)
+        var visibleActions: [NotesListTopBarAction] = []
+        var overflowActions: [NotesListTopBarAction] = []
+
+        for action in NotesListTopBarAction.priorityOrder {
+            let neededWidth = actionButtonWidth + (visibleActions.isEmpty ? 0 : interItemSpacing)
+            if remainingWidth >= neededWidth {
+                visibleActions.append(action)
+                remainingWidth -= neededWidth
+            } else {
+                overflowActions.append(action)
+            }
+        }
+
+        return TopBarActionLayout(visibleActions: visibleActions, overflowActions: overflowActions)
+    }
+
+    private var estimatedTitleWidth: CGFloat {
+        let displayTitle = vm.currentFolder?.name ?? mainListTitle
+        let titleFont = UIFont.preferredFont(forTextStyle: .headline)
+        let textWidth = (displayTitle as NSString).size(withAttributes: [.font: titleFont]).width
+        return ceil(textWidth) + 26
+    }
+
+    @ViewBuilder
+    private func topBarVisibleAction(for action: NotesListTopBarAction) -> some View {
+        switch action {
+        case .undo:
+            compactActionButton(systemImage: "arrow.uturn.backward", identifier: "notes-topbar-undo") {
+                performListUndo()
+            }
+            .opacity(canPerformListUndo ? 1 : 0.4)
+            .disabled(!canPerformListUndo)
+        case .redo:
+            compactActionButton(systemImage: "arrow.uturn.forward", identifier: "notes-topbar-redo") {
+                performListRedo()
+            }
+            .opacity(canPerformListRedo ? 1 : 0.4)
+            .disabled(!canPerformListRedo)
+        case .newNote:
+            compactActionButton(systemImage: "square.and.pencil", identifier: "notes-topbar-new-note") {
+                selectedNote = vm.createNewNote()
+            }
+        case .newFolder:
+            compactActionButton(systemImage: "folder.badge.plus", identifier: "notes-topbar-new-folder") {
+                newFolderName = ""
+                showingCreateFolderPrompt = true
+            }
+        case .recentlyDeleted:
+            compactActionButton(systemImage: "trash", identifier: "notes-topbar-recently-deleted") {
+                showingRecentlyDeleted = true
+            }
+        case .exportSelected:
+            compactActionButton(systemImage: "square.and.arrow.up", identifier: "notes-topbar-export-selected") {
+                exportSelectedNotes()
+            }
+            .opacity(selectedNoteIDs.isEmpty ? 0.4 : 1)
+            .disabled(selectedNoteIDs.isEmpty)
+        }
+    }
+
+    @ViewBuilder
+    private func overflowMenuItem(for action: NotesListTopBarAction) -> some View {
+        switch action {
+        case .undo:
+            Button {
+                performListUndo()
+            } label: {
+                Label("Undo", systemImage: "arrow.uturn.backward")
+            }
+            .disabled(!canPerformListUndo)
+        case .redo:
+            Button {
+                performListRedo()
+            } label: {
+                Label("Redo", systemImage: "arrow.uturn.forward")
+            }
+            .disabled(!canPerformListRedo)
+        case .newNote:
+            Button {
+                selectedNote = vm.createNewNote()
+            } label: {
+                Label("New Note", systemImage: "square.and.pencil")
+            }
+        case .newFolder:
+            Button {
+                newFolderName = ""
+                showingCreateFolderPrompt = true
+            } label: {
+                Label("New Folder", systemImage: "folder.badge.plus")
+            }
+        case .recentlyDeleted:
+            Button {
+                showingRecentlyDeleted = true
+            } label: {
+                Label("Recently Deleted", systemImage: "trash")
+            }
+        case .exportSelected:
+            Button {
+                exportSelectedNotes()
+            } label: {
+                Label("Export Selected Notes", systemImage: "square.and.arrow.up")
+            }
+            .disabled(selectedNoteIDs.isEmpty)
         }
     }
 
@@ -289,7 +485,7 @@ struct NotesListView: View {
     }
 
     private func noteRow(_ note: Note) -> some View {
-        Button {
+        return Button {
             if editMode.isEditing {
                 toggleSelection(for: note.id)
             } else {
@@ -324,6 +520,18 @@ struct NotesListView: View {
         .listRowSeparatorTint(.secondary.opacity(0.3))
         .listRowBackground(Color(.secondarySystemGroupedBackground))
         .contextMenu {
+            noteActionButtons(for: noteActionContext(for: note))
+        } preview: {
+            if shouldShowNoteContextPreview(for: note) {
+                NoteContextPreview(note: note)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func noteActionButtons(for context: NoteActionDialogContext) -> some View {
+        switch context {
+        case .single(let note):
             Button((note.isPinned ?? false) ? "Unpin" : "Pin") {
                 vm.setNotePinned(note, isPinned: !(note.isPinned ?? false))
             }
@@ -336,9 +544,74 @@ struct NotesListView: View {
             Button("Delete", role: .destructive) {
                 vm.deleteNote(note)
             }
-        } preview: {
-            NoteContextPreview(note: note)
+        case .bulk:
+            let count = selectedNotes.count
+            Button(bulkPinActionTitleWithCount) {
+                setPinnedStateForSelectedNotes(isPinned: shouldPinSelectedNotes)
+            }
+            Button("Move \(count) to Folder") {
+                bulkNoteMoveRequest = BulkNoteMoveRequest(notes: selectedNotes)
+            }
+            Button("Export \(count) Selected") {
+                exportSelectedNotes()
+            }
+            Button("Delete \(count) Selected", role: .destructive) {
+                deleteSelectedNotes()
+            }
         }
+    }
+
+    private var selectedNotes: [Note] {
+        vm.notes.filter { selectedNoteIDs.contains($0.id) }
+    }
+
+    private var shouldPinSelectedNotes: Bool {
+        selectedNotes.contains { ($0.isPinned ?? false) == false }
+    }
+
+    private var bulkPinActionTitleWithCount: String {
+        shouldPinSelectedNotes
+            ? "Pin \(selectedNotes.count) Selected"
+            : "Unpin \(selectedNotes.count) Selected"
+    }
+
+    private var canPerformListUndo: Bool {
+        !rootTitleUndoHistory.isEmpty || vm.hasUndoableAction
+    }
+
+    private var canPerformListRedo: Bool {
+        !rootTitleRedoHistory.isEmpty || vm.hasRedoableAction
+    }
+
+    private func performListUndo() {
+        if let previousTitle = rootTitleUndoHistory.popLast() {
+            rootTitleRedoHistory.append(mainListTitle)
+            mainListTitle = previousTitle
+            return
+        }
+        vm.undoLastAction()
+    }
+
+    private func performListRedo() {
+        if let nextTitle = rootTitleRedoHistory.popLast() {
+            rootTitleUndoHistory.append(mainListTitle)
+            mainListTitle = nextTitle
+            return
+        }
+        vm.redoLastAction()
+    }
+
+    private func setPinnedStateForSelectedNotes(isPinned: Bool) {
+        for selectedNote in selectedNotes {
+            vm.setNotePinned(selectedNote, isPinned: isPinned)
+        }
+    }
+
+    private func deleteSelectedNotes() {
+        for selectedNote in selectedNotes {
+            vm.deleteNote(selectedNote)
+        }
+        selectedNoteIDs.removeAll()
     }
 
     private func toggleSelection(for noteID: UUID) {
@@ -347,6 +620,24 @@ struct NotesListView: View {
         } else {
             selectedNoteIDs.insert(noteID)
         }
+    }
+
+    private func noteActionContext(for note: Note) -> NoteActionDialogContext {
+        if editMode.isEditing,
+           selectedNoteIDs.contains(note.id),
+           selectedNotes.count > 1 {
+            return .bulk
+        }
+        return .single(note)
+    }
+
+    private func shouldShowNoteContextPreview(for note: Note) -> Bool {
+        if editMode.isEditing,
+           selectedNoteIDs.contains(note.id),
+           selectedNotes.count > 1 {
+            return false
+        }
+        return true
     }
 
     private func presentNextFolderDeletionPromptIfNeeded() {
@@ -439,9 +730,42 @@ private enum NotesListItem: Identifiable {
     }
 }
 
+private enum NotesListTopBarAction: String, CaseIterable {
+    case undo
+    case redo
+    case newNote
+    case newFolder
+    case recentlyDeleted
+    case exportSelected
+
+    static let priorityOrder: [NotesListTopBarAction] = [
+        .undo,
+        .redo,
+        .newNote,
+        .newFolder,
+        .recentlyDeleted,
+        .exportSelected
+    ]
+}
+
+private struct TopBarActionLayout {
+    let visibleActions: [NotesListTopBarAction]
+    let overflowActions: [NotesListTopBarAction]
+}
+
+private enum NoteActionDialogContext {
+    case single(Note)
+    case bulk
+}
+
 private struct NoteMoveRequest: Identifiable {
     let id = UUID()
     let note: Note
+}
+
+private struct BulkNoteMoveRequest: Identifiable {
+    let id = UUID()
+    let notes: [Note]
 }
 
 private struct NoteMoveDestinationView: View {
@@ -501,6 +825,57 @@ private struct NoteMoveDestinationView: View {
                 }
             }
             .navigationTitle("Move Note")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") {
+                        dismiss()
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct BulkNoteMoveDestinationView: View {
+    @Environment(\.dismiss) private var dismiss
+    let availableFolders: [Folder]
+    let folderPathProvider: (Folder) -> String
+    let onMove: (Folder?) -> Void
+
+    private var sortedFolders: [Folder] {
+        availableFolders.sorted {
+            folderPathProvider($0).localizedCaseInsensitiveCompare(folderPathProvider($1)) == .orderedAscending
+        }
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Button {
+                    onMove(nil)
+                    dismiss()
+                } label: {
+                    Text("Top Level")
+                }
+
+                ForEach(sortedFolders, id: \.id) { folder in
+                    Button {
+                        onMove(folder)
+                        dismiss()
+                    } label: {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(folder.name)
+                                .font(.headline)
+                            Text(folderPathProvider(folder))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Move Selected Notes")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {

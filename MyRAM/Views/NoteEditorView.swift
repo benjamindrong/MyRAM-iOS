@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 import VisionKit
 
 struct NoteEditorView: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var vm: NotesViewModel
     let note: Note
@@ -15,10 +16,18 @@ struct NoteEditorView: View {
     @State private var content: String = ""
     @State private var richTextContentData: Data?
     @State private var selectAllToggleToken = 0
+    @State private var captureSelectionToggleToken = 0
     @State private var boldToggleToken = 0
     @State private var italicToggleToken = 0
     @State private var underlineToggleToken = 0
     @State private var strikethroughToggleToken = 0
+    @State private var increaseFontSizeToggleToken = 0
+    @State private var decreaseFontSizeToggleToken = 0
+    @State private var selectedTextUIColor: UIColor?
+    @State private var selectedTextColorForPicker: Color = .primary
+    @State private var applyTextColorToggleToken = 0
+    @State private var formattingState = EditorFormattingState()
+    @State private var showingFormattingControls = false
     @State private var activeUndoManager: UndoManager?
     @State private var canUndo = false
     @State private var canRedo = false
@@ -40,23 +49,32 @@ struct NoteEditorView: View {
     @State private var titleDraft = ""
     @State private var keyboardToast: KeyboardToast?
     @State private var keyboardToastTask: Task<Void, Never>?
+    @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
+    private let editorBottomInset: CGFloat = 58
     
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
-                titleSummary
+                editorTopBar
 
                 ZStack(alignment: .bottomTrailing) {
                     SelectableTextView(
                         text: $content,
                         richTextContentData: $richTextContentData,
+                        bottomContentInset: editorBottomInset,
+                        captureSelectionToggleToken: captureSelectionToggleToken,
                         selectAllToggleToken: selectAllToggleToken,
                         boldToggleToken: boldToggleToken,
                         italicToggleToken: italicToggleToken,
                         underlineToggleToken: underlineToggleToken,
                         strikethroughToggleToken: strikethroughToggleToken,
+                        increaseFontSizeToggleToken: increaseFontSizeToggleToken,
+                        decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
+                        selectedTextColor: selectedTextUIColor,
+                        applyTextColorToggleToken: applyTextColorToggleToken,
                         onContentChanged: handleContentChanged,
-                        onUndoManagerChanged: updateActiveUndoManager
+                        onUndoManagerChanged: updateActiveUndoManager,
+                        onFormattingStateChanged: handleFormattingStateChanged
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -68,6 +86,11 @@ struct NoteEditorView: View {
                                 .padding(.vertical, 6)
                                 .background(.ultraThinMaterial, in: Capsule())
                                 .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        }
+
+                        if showingFormattingControls {
+                            inlineFormattingControls
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
                         }
 
                         attachmentInlineActions
@@ -147,76 +170,8 @@ struct NoteEditorView: View {
                 }
             }
             .padding()
-            .navigationTitle("Note")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Done") { dismiss() }
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        performRedo()
-                    } label: {
-                        Label("Redo", systemImage: "arrow.uturn.forward")
-                    }
-                    .disabled(!canPerformRedo)
-
-                    Button {
-                        performUndo()
-                    } label: {
-                        Label("Undo", systemImage: "arrow.uturn.backward")
-                    }
-                    .disabled(!canPerformUndo)
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        Button {
-                            onNewNote(vm.createNewNote())
-                        } label: {
-                            Label("New Note", systemImage: "square.and.pencil")
-                        }
-
-                        Button {
-                            newFolderName = ""
-                            showingCreateFolderPrompt = true
-                        } label: {
-                            Label("New Folder", systemImage: "folder.badge.plus")
-                        }
-
-                        Menu {
-                            Button {
-                                showingPhotoPicker = true
-                            } label: {
-                                Label("Photo Library", systemImage: "photo")
-                            }
-
-                            Button {
-                                showingFileImporter = true
-                            } label: {
-                                Label("Import Image", systemImage: "square.and.arrow.down")
-                            }
-                        } label: {
-                            Label("Attachments", systemImage: "paperclip")
-                        }
-
-                        Button {
-                            exportCurrentNote()
-                        } label: {
-                            Label("Export Note", systemImage: "square.and.arrow.up")
-                        }
-
-                        Button(role: .destructive) {
-                            vm.deleteNote(note)
-                            dismiss()
-                        } label: {
-                            Label("Delete Note", systemImage: "trash")
-                        }
-                    } label: {
-                        Label("More", systemImage: "ellipsis.circle")
-                    }
-                    .accessibilityIdentifier("note-editor-more")
-                }
-            }
+            .toolbar(.hidden, for: .navigationBar)
+            .presentationDragIndicator(.visible)
             .onAppear {
                 title = note.title
                 content = note.content
@@ -302,31 +257,144 @@ struct NoteEditorView: View {
         canRedo
     }
 
-    private var titleSummary: some View {
+    private var editorTopBar: some View {
+        GeometryReader { proxy in
+            let layout = topBarActionLayout(totalWidth: proxy.size.width)
+            ChromeActionBar(style: editorChromeStyle) {
+                titleEditorButton
+
+                Spacer(minLength: 0)
+
+                ForEach(layout.visibleActions, id: \.self) { action in
+                    topBarVisibleAction(for: action)
+                }
+
+                Menu {
+                    ForEach(layout.overflowActions, id: \.self) { action in
+                        overflowMenuItem(for: action)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 28, height: 28)
+                }
+                .accessibilityIdentifier("note-editor-more")
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+        }
+        .frame(height: 42)
+    }
+
+    private var titleEditorButton: some View {
         Button {
             titleDraft = title
             showingTitleEditor = true
         } label: {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Text(title.isEmpty ? "Untitled" : title)
-                    .font(.subheadline.weight(.semibold))
+                    .font(.headline.weight(.semibold))
                     .foregroundStyle(title.isEmpty ? .secondary : .primary)
                     .italic(title.isEmpty)
-                    .lineLimit(2)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                Image(systemName: "pencil.circle")
-                    .font(.subheadline)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.45)
+                    .allowsTightening(true)
+                Image(systemName: "pencil")
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
             }
-            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("edit-note-title")
-        .accessibilityHint("Edits the note title.")
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(Color(.secondarySystemBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 10))
+        .layoutPriority(1)
+    }
+
+    private var editorChromeStyle: EditorChromeStyle {
+        EditorChromeStyle(rawValue: editorChromeStyleRaw) ?? .standard
+    }
+
+    private func topBarActionLayout(totalWidth: CGFloat) -> TopBarActionLayout {
+        let promotableActions = NoteEditorOverflowAction.priorityOrder.filter { $0 != .deleteNote }
+        let minimumTitleWidth: CGFloat = 130
+        let titleWidth = max(minimumTitleWidth, estimatedTitleWidth)
+        let overflowButtonWidth: CGFloat = 28
+        let actionButtonWidth: CGFloat = 28
+        let interItemSpacing: CGFloat = 8
+        let horizontalPadding: CGFloat = 20
+
+        let usableWidth = max(0, totalWidth - horizontalPadding)
+        let titleAvailableWidth = max(0, usableWidth - overflowButtonWidth - interItemSpacing)
+        var remainingWidth = titleWidth > titleAvailableWidth
+            ? 0
+            : max(0, titleAvailableWidth - titleWidth)
+        var visibleActions: [NoteEditorOverflowAction] = []
+        var overflowActions: [NoteEditorOverflowAction] = []
+
+        for action in promotableActions {
+            let neededWidth = actionButtonWidth + (visibleActions.isEmpty ? 0 : interItemSpacing)
+            if remainingWidth >= neededWidth {
+                visibleActions.append(action)
+                remainingWidth -= neededWidth
+            } else {
+                overflowActions.append(action)
+            }
+        }
+
+        overflowActions.append(.deleteNote)
+        return TopBarActionLayout(visibleActions: visibleActions, overflowActions: overflowActions)
+    }
+
+    private var estimatedTitleWidth: CGFloat {
+        let displayTitle = title.isEmpty ? "Untitled" : title
+        let titleFont = UIFont.preferredFont(forTextStyle: .headline)
+        let textWidth = (displayTitle as NSString).size(withAttributes: [.font: titleFont]).width
+        return ceil(textWidth) + 26
+    }
+
+    @ViewBuilder
+    private func topBarVisibleAction(for action: NoteEditorOverflowAction) -> some View {
+        switch action {
+        case .newNote:
+            topBarActionButton(systemImage: "square.and.pencil", identifier: "topbar-new-note") {
+                onNewNote(vm.createNewNote())
+            }
+        case .newFolder:
+            topBarActionButton(systemImage: "folder.badge.plus", identifier: "topbar-new-folder") {
+                newFolderName = ""
+                showingCreateFolderPrompt = true
+            }
+        case .exportNote:
+            topBarActionButton(systemImage: "square.and.arrow.up", identifier: "topbar-export-note") {
+                exportCurrentNote()
+            }
+        case .attachments:
+            Menu {
+                attachmentImportMenuItems
+            } label: {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .accessibilityIdentifier("topbar-attachments")
+        case .deleteNote:
+            EmptyView()
+        }
+    }
+
+    private func topBarActionButton(
+        systemImage: String,
+        identifier: String,
+        isDisabled: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 28, height: 28)
+        }
+        .buttonStyle(.plain)
+        .opacity(isDisabled ? 0.4 : 1)
+        .disabled(isDisabled)
+        .accessibilityIdentifier(identifier)
     }
 
     private func updateActiveUndoManager(_ undoManager: UndoManager?) {
@@ -375,6 +443,17 @@ struct NoteEditorView: View {
         content = plainText
         richTextContentData = richTextData
         handleEditorChange()
+    }
+
+    private func handleFormattingStateChanged(_ state: EditorFormattingState) {
+        formattingState = state
+        guard !showingFormattingControls else { return }
+
+        if let color = state.foregroundColor {
+            selectedTextColorForPicker = Color(uiColor: color)
+        } else {
+            selectedTextColorForPicker = .primary
+        }
     }
 
     private func refreshSuggestionLabels() {
@@ -566,6 +645,23 @@ struct NoteEditorView: View {
             ) {
                 dismissKeyboard()
             }
+            inlineActionButton(
+                systemImage: "arrow.uturn.backward",
+                identifier: "keyboard-control-undo"
+            ) {
+                performUndo()
+            }
+            .opacity(canPerformUndo ? 1 : 0.4)
+            .disabled(!canPerformUndo)
+
+            inlineActionButton(
+                systemImage: "arrow.uturn.forward",
+                identifier: "keyboard-control-redo"
+            ) {
+                performRedo()
+            }
+            .opacity(canPerformRedo ? 1 : 0.4)
+            .disabled(!canPerformRedo)
             inlineActionButton(systemImage: "scissors", identifier: "keyboard-control-cut") {
                 performResponderAction(#selector(UIResponder.cut(_:)))
             }
@@ -581,33 +677,142 @@ struct NoteEditorView: View {
             ) {
                 performResponderAction(#selector(UIResponder.paste(_:)))
             }
-            inlineActionButton(systemImage: "bold", identifier: "keyboard-control-bold") {
-                boldToggleToken += 1
-            }
-            inlineActionButton(systemImage: "italic", identifier: "keyboard-control-italic") {
-                italicToggleToken += 1
-            }
-            inlineActionButton(systemImage: "underline", identifier: "keyboard-control-underline") {
-                underlineToggleToken += 1
-            }
-            inlineActionButton(
-                systemImage: "strikethrough",
-                identifier: "keyboard-control-strikethrough"
-            ) {
-                strikethroughToggleToken += 1
-            }
             inlineActionButton(
                 systemImage: "selection.pin.in.out",
                 identifier: "keyboard-control-select-all"
             ) {
                 selectAllToggleToken += 1
             }
+            Button {
+                captureSelectionToggleToken += 1
+                withAnimation(.easeInOut(duration: 0.2)) {
+                    showingFormattingControls.toggle()
+                }
+            } label: {
+                Image(systemName: showingFormattingControls ? "xmark.circle" : "ellipsis.circle")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 26, height: 26)
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("keyboard-control-formatting-menu")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
-        .background(.ultraThinMaterial)
-        .clipShape(Capsule())
+        .background {
+            if editorChromeStyle == .chromeAccent {
+                Capsule().fill(chromeAccentGradient(for: colorScheme))
+            } else {
+                Capsule().fill(.ultraThinMaterial)
+            }
+        }
+        .overlay {
+            if editorChromeStyle == .chromeAccent {
+                Capsule()
+                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.22 : 0.44), lineWidth: 0.9)
+            }
+        }
         .accessibilityIdentifier("keyboard-control-bar")
+    }
+
+    private var inlineFormattingControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                formattingToggleButton(
+                    label: "B",
+                    isActive: formattingState.bold,
+                    identifier: "format-bold-toggle"
+                ) {
+                    boldToggleToken += 1
+                }
+                formattingToggleButton(
+                    label: "I",
+                    isActive: formattingState.italic,
+                    identifier: "format-italic-toggle"
+                ) {
+                    italicToggleToken += 1
+                }
+                formattingToggleButton(
+                    label: "U",
+                    isActive: formattingState.underline,
+                    identifier: "format-underline-toggle"
+                ) {
+                    underlineToggleToken += 1
+                }
+                formattingToggleButton(
+                    label: "S",
+                    isActive: formattingState.strikethrough,
+                    identifier: "format-strikethrough-toggle",
+                    isStrikethroughLabel: true
+                ) {
+                    strikethroughToggleToken += 1
+                }
+            }
+
+            HStack(spacing: 14) {
+                Button {
+                    decreaseFontSizeToggleToken += 1
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .font(.title3)
+                }
+                .accessibilityIdentifier("format-font-smaller")
+
+                Text("\(Int(formattingState.fontSize.rounded()))")
+                    .font(.headline.monospacedDigit())
+                    .frame(minWidth: 38)
+
+                Button {
+                    increaseFontSizeToggleToken += 1
+                } label: {
+                    Image(systemName: "plus.circle.fill")
+                        .font(.title3)
+                }
+                .accessibilityIdentifier("format-font-larger")
+            }
+
+            ColorPicker("Text Color", selection: Binding(
+                get: { selectedTextColorForPicker },
+                set: { newValue in
+                    selectedTextColorForPicker = newValue
+                    selectedTextUIColor = UIColor(newValue)
+                    applyTextColorToggleToken += 1
+                }
+            ), supportsOpacity: false)
+            .accessibilityIdentifier("format-color-picker")
+
+            Button("Use Default Text Color") {
+                selectedTextColorForPicker = .primary
+                selectedTextUIColor = nil
+                applyTextColorToggleToken += 1
+            }
+            .accessibilityIdentifier("format-color-default")
+        }
+        .padding(12)
+        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+        )
+        .frame(maxWidth: min(UIScreen.main.bounds.width * 0.82, 320))
+    }
+
+    private func formattingToggleButton(
+        label: String,
+        isActive: Bool,
+        identifier: String,
+        isStrikethroughLabel: Bool = false,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Text(label)
+                .font(.headline.weight(.semibold))
+                .strikethrough(isStrikethroughLabel)
+                .frame(width: 34, height: 34)
+                .background(isActive ? Color.accentColor.opacity(0.2) : Color(.tertiarySystemFill))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier(identifier)
     }
 
     private func inlineActionButton(
@@ -663,6 +868,89 @@ struct NoteEditorView: View {
                 ?? "An unknown export error occurred."
         }
     }
+
+    @ViewBuilder
+    private func overflowMenuItem(for action: NoteEditorOverflowAction) -> some View {
+        switch action {
+        case .exportNote:
+            Button {
+                exportCurrentNote()
+            } label: {
+                Label("Export Note", systemImage: "square.and.arrow.up")
+            }
+        case .attachments:
+            Menu {
+                attachmentImportMenuItems
+            } label: {
+                Label("Attachments", systemImage: "paperclip")
+            }
+        case .newNote:
+            Button {
+                onNewNote(vm.createNewNote())
+            } label: {
+                Label("New Note", systemImage: "square.and.pencil")
+            }
+        case .newFolder:
+            Button {
+                newFolderName = ""
+                showingCreateFolderPrompt = true
+            } label: {
+                Label("New Folder", systemImage: "folder.badge.plus")
+            }
+        case .deleteNote:
+            Button(role: .destructive) {
+                vm.deleteNote(note)
+                dismiss()
+            } label: {
+                Label("Delete Note", systemImage: "trash")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var attachmentImportMenuItems: some View {
+        Button {
+            showingPhotoPicker = true
+        } label: {
+            Label("Photo Library", systemImage: "photo")
+        }
+
+        Button {
+            showingFileImporter = true
+        } label: {
+            Label("Import Image", systemImage: "square.and.arrow.down")
+        }
+    }
+}
+
+enum NoteEditorOverflowAction: String, CaseIterable {
+    case newNote
+    case newFolder
+    case exportNote
+    case attachments
+    case deleteNote
+
+    static let priorityOrder: [NoteEditorOverflowAction] = [
+        .newNote,
+        .newFolder,
+        .exportNote,
+        .attachments,
+        .deleteNote
+    ]
+}
+
+private struct TopBarActionLayout {
+    let visibleActions: [NoteEditorOverflowAction]
+    let overflowActions: [NoteEditorOverflowAction]
+}
+
+struct EditorFormattingState {
+    var bold = false
+    var italic = false
+    var underline = false
+    var strikethrough = false
+    var fontSize: CGFloat = 17
+    var foregroundColor: UIColor?
 }
 
 private struct NoteSharePayload: Identifiable {
@@ -849,46 +1137,108 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
 private struct SelectableTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var richTextContentData: Data?
+    let bottomContentInset: CGFloat
+    let captureSelectionToggleToken: Int
     let selectAllToggleToken: Int
     let boldToggleToken: Int
     let italicToggleToken: Int
     let underlineToggleToken: Int
     let strikethroughToggleToken: Int
+    let increaseFontSizeToggleToken: Int
+    let decreaseFontSizeToggleToken: Int
+    let selectedTextColor: UIColor?
+    let applyTextColorToggleToken: Int
     let onContentChanged: (String, Data?) -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
+    let onFormattingStateChanged: (EditorFormattingState) -> Void
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
         textView.delegate = context.coordinator
         textView.font = .preferredFont(forTextStyle: .body)
+        textView.textColor = .label
         textView.adjustsFontForContentSizeCategory = true
         textView.allowsEditingTextAttributes = true
         textView.backgroundColor = .secondarySystemBackground
         textView.layer.cornerRadius = 8
-        textView.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
+        textView.typingAttributes = [
+            .font: textView.font ?? .preferredFont(forTextStyle: .body),
+            .foregroundColor: UIColor.label
+        ]
+        textView.textContainerInset = UIEdgeInsets(
+            top: 12,
+            left: 8,
+            bottom: 12 + bottomContentInset,
+            right: 8
+        )
         textView.keyboardDismissMode = .interactive
         textView.alwaysBounceVertical = true
+        textView.scrollIndicatorInsets = UIEdgeInsets(top: 0, left: 0, bottom: bottomContentInset, right: 0)
         return textView
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
-        let desiredAttributedText = RichTextContentCodec.decode(
-            richTextData: richTextContentData,
-            plainText: text,
-            baseFont: textView.font ?? .preferredFont(forTextStyle: .body)
+        textView.textColor = .label
+        context.coordinator.isUpdatingUIView = true
+        defer {
+            context.coordinator.isUpdatingUIView = false
+        }
+
+        let desiredInsets = UIEdgeInsets(
+            top: 12,
+            left: 8,
+            bottom: 12 + bottomContentInset,
+            right: 8
         )
-        if !textView.attributedText.isEqual(to: desiredAttributedText) {
-            let selectedRange = textView.selectedRange
-            textView.attributedText = desiredAttributedText
-            let newLength = (textView.text as NSString).length
-            textView.selectedRange = selectedRange.location <= newLength
-                ? selectedRange
-                : NSRange(location: newLength, length: 0)
+        if textView.textContainerInset != desiredInsets {
+            textView.textContainerInset = desiredInsets
+            textView.scrollIndicatorInsets = UIEdgeInsets(
+                top: 0,
+                left: 0,
+                bottom: bottomContentInset,
+                right: 0
+            )
+        }
+
+        let hasPendingFormattingMutation = context.coordinator.hasPendingFormattingMutation(
+            boldToggleToken: boldToggleToken,
+            italicToggleToken: italicToggleToken,
+            underlineToggleToken: underlineToggleToken,
+            strikethroughToggleToken: strikethroughToggleToken,
+            increaseFontSizeToggleToken: increaseFontSizeToggleToken,
+            decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
+            applyTextColorToggleToken: applyTextColorToggleToken
+        )
+
+        if !textView.isFirstResponder && !hasPendingFormattingMutation {
+            let desiredAttributedText = RichTextContentCodec.decode(
+                richTextData: richTextContentData,
+                plainText: text,
+                baseFont: textView.font ?? .preferredFont(forTextStyle: .body)
+            )
+            let normalizedAttributedText = RichTextContentCodec.normalizedForDisplay(
+                desiredAttributedText,
+                traitCollection: textView.traitCollection
+            )
+            if !textView.attributedText.isEqual(to: normalizedAttributedText) {
+                let selectedRange = textView.selectedRange
+                textView.attributedText = normalizedAttributedText
+                let newLength = (textView.text as NSString).length
+                textView.selectedRange = selectedRange.location <= newLength
+                    ? selectedRange
+                    : NSRange(location: newLength, length: 0)
+            }
         }
         context.coordinator.text = $text
         context.coordinator.richTextContentData = $richTextContentData
         context.coordinator.onContentChanged = onContentChanged
         context.coordinator.onUndoManagerChanged = onUndoManagerChanged
+        context.coordinator.onFormattingStateChanged = onFormattingStateChanged
+
+        if context.coordinator.captureSelectionToggleToken != captureSelectionToggleToken {
+            context.coordinator.captureSelectionToggleToken = captureSelectionToggleToken
+            context.coordinator.captureCurrentSelection(in: textView)
+        }
 
         if context.coordinator.selectAllToggleToken != selectAllToggleToken {
             context.coordinator.selectAllToggleToken = selectAllToggleToken
@@ -898,32 +1248,54 @@ private struct SelectableTextView: UIViewRepresentable {
             } else {
                 textView.selectAll(nil)
             }
-            onUndoManagerChanged(textView.undoManager)
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
         }
 
         if context.coordinator.boldToggleToken != boldToggleToken {
             context.coordinator.boldToggleToken = boldToggleToken
             context.coordinator.toggleBold(in: textView)
-            onUndoManagerChanged(textView.undoManager)
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
         }
 
         if context.coordinator.italicToggleToken != italicToggleToken {
             context.coordinator.italicToggleToken = italicToggleToken
             context.coordinator.toggleItalic(in: textView)
-            onUndoManagerChanged(textView.undoManager)
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
         }
 
         if context.coordinator.underlineToggleToken != underlineToggleToken {
             context.coordinator.underlineToggleToken = underlineToggleToken
             context.coordinator.toggleUnderline(in: textView)
-            onUndoManagerChanged(textView.undoManager)
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
         }
 
         if context.coordinator.strikethroughToggleToken != strikethroughToggleToken {
             context.coordinator.strikethroughToggleToken = strikethroughToggleToken
             context.coordinator.toggleStrikethrough(in: textView)
-            onUndoManagerChanged(textView.undoManager)
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
         }
+
+        if context.coordinator.increaseFontSizeToggleToken != increaseFontSizeToggleToken {
+            context.coordinator.increaseFontSizeToggleToken = increaseFontSizeToggleToken
+            context.coordinator.adjustFontSize(in: textView, by: 1)
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
+        }
+
+        if context.coordinator.decreaseFontSizeToggleToken != decreaseFontSizeToggleToken {
+            context.coordinator.decreaseFontSizeToggleToken = decreaseFontSizeToggleToken
+            context.coordinator.adjustFontSize(in: textView, by: -1)
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
+        }
+
+        if context.coordinator.applyTextColorToggleToken != applyTextColorToggleToken {
+            context.coordinator.applyTextColorToggleToken = applyTextColorToggleToken
+            context.coordinator.selectedTextColor = selectedTextColor
+            context.coordinator.applyTextColor(in: textView, color: selectedTextColor)
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
+        }
+
+        context.coordinator.normalizeTypingAttributes(in: textView)
+        context.coordinator.reportFormattingState(from: textView)
     }
 
     func makeCoordinator() -> Coordinator {
@@ -931,7 +1303,8 @@ private struct SelectableTextView: UIViewRepresentable {
             text: $text,
             richTextContentData: $richTextContentData,
             onContentChanged: onContentChanged,
-            onUndoManagerChanged: onUndoManagerChanged
+            onUndoManagerChanged: onUndoManagerChanged,
+            onFormattingStateChanged: onFormattingStateChanged
         )
     }
 
@@ -940,35 +1313,75 @@ private struct SelectableTextView: UIViewRepresentable {
         var richTextContentData: Binding<Data?>
         var onContentChanged: (String, Data?) -> Void
         var onUndoManagerChanged: (UndoManager?) -> Void
+        var onFormattingStateChanged: (EditorFormattingState) -> Void
+        var captureSelectionToggleToken = 0
         var selectAllToggleToken = 0
         var boldToggleToken = 0
         var italicToggleToken = 0
         var underlineToggleToken = 0
         var strikethroughToggleToken = 0
+        var increaseFontSizeToggleToken = 0
+        var decreaseFontSizeToggleToken = 0
+        var selectedTextColor: UIColor?
+        var applyTextColorToggleToken = 0
+        var lastKnownSelectionRange = NSRange(location: 0, length: 0)
+        var isUpdatingUIView = false
 
         init(
             text: Binding<String>,
             richTextContentData: Binding<Data?>,
             onContentChanged: @escaping (String, Data?) -> Void,
-            onUndoManagerChanged: @escaping (UndoManager?) -> Void
+            onUndoManagerChanged: @escaping (UndoManager?) -> Void,
+            onFormattingStateChanged: @escaping (EditorFormattingState) -> Void
         ) {
             self.text = text
             self.richTextContentData = richTextContentData
             self.onContentChanged = onContentChanged
             self.onUndoManagerChanged = onUndoManagerChanged
+            self.onFormattingStateChanged = onFormattingStateChanged
         }
 
         func textViewDidChange(_ textView: UITextView) {
             syncContent(from: textView)
+            reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
         }
 
+        func textViewDidChangeSelection(_ textView: UITextView) {
+            if textView.selectedRange.length > 0 {
+                lastKnownSelectionRange = textView.selectedRange
+            }
+            reportFormattingState(from: textView)
+        }
+
         func textViewDidBeginEditing(_ textView: UITextView) {
+            lastKnownSelectionRange = textView.selectedRange
+            reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
+            syncContent(from: textView)
+            reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
+        }
+
+        func hasPendingFormattingMutation(
+            boldToggleToken: Int,
+            italicToggleToken: Int,
+            underlineToggleToken: Int,
+            strikethroughToggleToken: Int,
+            increaseFontSizeToggleToken: Int,
+            decreaseFontSizeToggleToken: Int,
+            applyTextColorToggleToken: Int
+        ) -> Bool {
+            self.boldToggleToken != boldToggleToken
+                || self.italicToggleToken != italicToggleToken
+                || self.underlineToggleToken != underlineToggleToken
+                || self.strikethroughToggleToken != strikethroughToggleToken
+                || self.increaseFontSizeToggleToken != increaseFontSizeToggleToken
+                || self.decreaseFontSizeToggleToken != decreaseFontSizeToggleToken
+                || self.applyTextColorToggleToken != applyTextColorToggleToken
         }
 
         func toggleBold(in textView: UITextView) {
@@ -987,27 +1400,17 @@ private struct SelectableTextView: UIViewRepresentable {
             toggleTextDecoration(in: textView, key: .strikethroughStyle)
         }
 
-        private func syncContent(from textView: UITextView) {
-            let plainText = textView.text ?? ""
-            let encodedRichText = RichTextContentCodec.encode(textView.attributedText)
-            guard text.wrappedValue != plainText || richTextContentData.wrappedValue != encodedRichText else {
-                return
-            }
-            text.wrappedValue = plainText
-            richTextContentData.wrappedValue = encodedRichText
-            onContentChanged(plainText, encodedRichText)
-        }
-
-        private func toggleFontTrait(_ trait: UIFontDescriptor.SymbolicTraits, in textView: UITextView) {
-            let selectedRange = textView.selectedRange
+        func adjustFontSize(in textView: UITextView, by delta: CGFloat) {
+            let selectedRange = formattingActionRange(in: textView)
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
                     ?? .preferredFont(forTextStyle: .body)
-                typingAttributes[.font] = toggledFont(from: baseFont, trait: trait)
+                typingAttributes[.font] = adjustedFontSize(from: baseFont, delta: delta)
                 textView.typingAttributes = typingAttributes
+                reportFormattingState(from: textView)
                 return
             }
 
@@ -1018,33 +1421,298 @@ private struct SelectableTextView: UIViewRepresentable {
                     ?? .preferredFont(forTextStyle: .body)
                 mutable.addAttribute(
                     .font,
-                    value: toggledFont(from: baseFont, trait: trait),
+                    value: adjustedFontSize(from: baseFont, delta: delta),
                     range: range
                 )
             }
             applyAttributedText(mutable, in: textView, selectedRange: selectedRange)
         }
 
-        private func toggledFont(from baseFont: UIFont, trait: UIFontDescriptor.SymbolicTraits) -> UIFont {
-            var traits = baseFont.fontDescriptor.symbolicTraits
-            if traits.contains(trait) {
-                traits.remove(trait)
-            } else {
-                traits.insert(trait)
+        func applyTextColor(in textView: UITextView, color: UIColor?) {
+            let selectedRange = formattingActionRange(in: textView)
+
+            if selectedRange.length == 0 {
+                var typingAttributes = textView.typingAttributes
+                if color == nil {
+                    typingAttributes.removeValue(forKey: .foregroundColor)
+                } else {
+                    typingAttributes[.foregroundColor] = color
+                }
+                textView.typingAttributes = typingAttributes
+                reportFormattingState(from: textView)
+                return
             }
 
-            let descriptor = baseFont.fontDescriptor.withSymbolicTraits(traits) ?? baseFont.fontDescriptor
-            return UIFont(descriptor: descriptor, size: baseFont.pointSize)
+            let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
+            if color == nil {
+                mutable.removeAttribute(.foregroundColor, range: selectedRange)
+            } else if let color {
+                mutable.addAttribute(.foregroundColor, value: color, range: selectedRange)
+            }
+            applyAttributedText(mutable, in: textView, selectedRange: selectedRange)
+        }
+
+        func normalizeTypingAttributes(in textView: UITextView) {
+            var typingAttributes = textView.typingAttributes
+            if let color = typingAttributes[.foregroundColor] as? UIColor {
+                let resolvedColor = color.resolvedColor(with: textView.traitCollection)
+                if textView.traitCollection.userInterfaceStyle == .dark
+                    && resolvedColor.isPrimaryTextCandidate(in: .dark) {
+                    typingAttributes[.foregroundColor] = UIColor.label
+                }
+                if textView.traitCollection.userInterfaceStyle == .light
+                    && resolvedColor.isPrimaryTextCandidate(in: .light) {
+                    typingAttributes[.foregroundColor] = UIColor.label
+                }
+            }
+            textView.typingAttributes = typingAttributes
+        }
+
+        private func syncContent(from textView: UITextView) {
+            let plainText = textView.text ?? ""
+            let encodedRichText = RichTextContentCodec.encode(textView.attributedText)
+            guard text.wrappedValue != plainText || richTextContentData.wrappedValue != encodedRichText else {
+                return
+            }
+
+            if isUpdatingUIView {
+                RunLoop.main.perform { [weak self] in
+                    guard let self else { return }
+                    guard self.text.wrappedValue != plainText
+                        || self.richTextContentData.wrappedValue != encodedRichText else {
+                        return
+                    }
+                    self.text.wrappedValue = plainText
+                    self.richTextContentData.wrappedValue = encodedRichText
+                    self.onContentChanged(plainText, encodedRichText)
+                }
+                return
+            }
+
+            text.wrappedValue = plainText
+            richTextContentData.wrappedValue = encodedRichText
+            onContentChanged(plainText, encodedRichText)
+        }
+
+        func reportFormattingState(from textView: UITextView) {
+            let state = formattingState(from: textView)
+            if isUpdatingUIView {
+                RunLoop.main.perform { [weak self] in
+                    self?.onFormattingStateChanged(state)
+                }
+                return
+            }
+            onFormattingStateChanged(state)
+        }
+
+        func reportUndoManagerChanged(_ undoManager: UndoManager?) {
+            if isUpdatingUIView {
+                RunLoop.main.perform { [weak self] in
+                    self?.onUndoManagerChanged(undoManager)
+                }
+                return
+            }
+            onUndoManagerChanged(undoManager)
+        }
+
+        func captureCurrentSelection(in textView: UITextView) {
+            let selectedRange = textView.selectedRange
+            guard selectedRange.length > 0 else { return }
+            lastKnownSelectionRange = selectedRange
+            reportFormattingState(from: textView)
+        }
+
+        private func formattingState(from textView: UITextView) -> EditorFormattingState {
+            let range = effectiveSelectionRange(in: textView)
+            let font = selectedFont(in: textView, range: range)
+            let foregroundColor = selectedForegroundColor(in: textView, range: range)
+            return EditorFormattingState(
+                bold: hasTrait(.traitBold, in: textView, range: range),
+                italic: hasTrait(.traitItalic, in: textView, range: range),
+                underline: hasDecoration(.underlineStyle, in: textView, range: range),
+                strikethrough: hasDecoration(.strikethroughStyle, in: textView, range: range),
+                fontSize: font.pointSize,
+                foregroundColor: foregroundColor
+            )
+        }
+
+        private func selectedFont(in textView: UITextView, range: NSRange) -> UIFont {
+            if range.length == 0 {
+                return (textView.typingAttributes[.font] as? UIFont)
+                    ?? textView.font
+                    ?? .preferredFont(forTextStyle: .body)
+            }
+            if range.location < textView.attributedText.length,
+               let font = textView.attributedText.attribute(.font, at: range.location, effectiveRange: nil) as? UIFont {
+                return font
+            }
+            return textView.font ?? .preferredFont(forTextStyle: .body)
+        }
+
+        private func selectedForegroundColor(in textView: UITextView, range: NSRange) -> UIColor? {
+            if range.length == 0 {
+                return textView.typingAttributes[.foregroundColor] as? UIColor
+            }
+            if range.location < textView.attributedText.length {
+                return textView.attributedText.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? UIColor
+            }
+            return nil
+        }
+
+        private func hasTrait(
+            _ trait: UIFontDescriptor.SymbolicTraits,
+            in textView: UITextView,
+            range: NSRange
+        ) -> Bool {
+            if range.length == 0 {
+                let font = (textView.typingAttributes[.font] as? UIFont)
+                    ?? textView.font
+                    ?? .preferredFont(forTextStyle: .body)
+                return font.fontDescriptor.symbolicTraits.contains(trait)
+            }
+
+            var hasAll = true
+            textView.attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
+                let font = value as? UIFont ?? .preferredFont(forTextStyle: .body)
+                if !font.fontDescriptor.symbolicTraits.contains(trait) {
+                    hasAll = false
+                    stop.pointee = true
+                }
+            }
+            return hasAll
+        }
+
+        private func hasDecoration(
+            _ key: NSAttributedString.Key,
+            in textView: UITextView,
+            range: NSRange
+        ) -> Bool {
+            if range.length == 0 {
+                return (textView.typingAttributes[key] as? Int ?? 0) != 0
+            }
+
+            var hasAll = true
+            textView.attributedText.enumerateAttribute(key, in: range) { value, _, stop in
+                if (value as? Int ?? 0) == 0 {
+                    hasAll = false
+                    stop.pointee = true
+                }
+            }
+            return hasAll
+        }
+
+        private func toggleFontTrait(_ trait: UIFontDescriptor.SymbolicTraits, in textView: UITextView) {
+            let selectedRange = formattingActionRange(in: textView)
+
+            if selectedRange.length == 0 {
+                var typingAttributes = textView.typingAttributes
+                let baseFont = (typingAttributes[.font] as? UIFont)
+                    ?? textView.font
+                    ?? .preferredFont(forTextStyle: .body)
+                let shouldApply = !baseFont.fontDescriptor.symbolicTraits.contains(trait)
+                typingAttributes[.font] = fontBySettingTrait(
+                    on: baseFont,
+                    trait: trait,
+                    isEnabled: shouldApply
+                )
+                textView.typingAttributes = typingAttributes
+                reportFormattingState(from: textView)
+                return
+            }
+
+            let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
+            let shouldApply = shouldApplyFontTrait(in: mutable, range: selectedRange, trait: trait)
+            mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
+                let baseFont = (value as? UIFont)
+                    ?? textView.font
+                    ?? .preferredFont(forTextStyle: .body)
+                mutable.addAttribute(
+                    .font,
+                    value: fontBySettingTrait(
+                        on: baseFont,
+                        trait: trait,
+                        isEnabled: shouldApply
+                    ),
+                    range: range
+                )
+            }
+            applyAttributedText(mutable, in: textView, selectedRange: selectedRange)
+        }
+
+        private func shouldApplyFontTrait(
+            in attributedText: NSAttributedString,
+            range: NSRange,
+            trait: UIFontDescriptor.SymbolicTraits
+        ) -> Bool {
+            var hasTraitMissing = false
+            attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
+                let font = value as? UIFont ?? .preferredFont(forTextStyle: .body)
+                if !font.fontDescriptor.symbolicTraits.contains(trait) {
+                    hasTraitMissing = true
+                    stop.pointee = true
+                }
+            }
+            return hasTraitMissing
+        }
+
+        private func fontBySettingTrait(
+            on baseFont: UIFont,
+            trait: UIFontDescriptor.SymbolicTraits,
+            isEnabled: Bool
+        ) -> UIFont {
+            var traits = baseFont.fontDescriptor.symbolicTraits
+            if isEnabled {
+                traits.insert(trait)
+            } else {
+                traits.remove(trait)
+            }
+
+            if let descriptor = baseFont.fontDescriptor.withSymbolicTraits(traits) {
+                return UIFont(descriptor: descriptor, size: baseFont.pointSize)
+            }
+
+            let systemDescriptor = UIFont.systemFont(ofSize: baseFont.pointSize).fontDescriptor
+            if let descriptor = systemDescriptor.withSymbolicTraits(traits) {
+                return UIFont(descriptor: descriptor, size: baseFont.pointSize)
+            }
+
+            if trait == .traitBold {
+                if isEnabled {
+                    return UIFont.boldSystemFont(ofSize: baseFont.pointSize)
+                }
+                if traits.contains(.traitItalic) {
+                    return UIFont.italicSystemFont(ofSize: baseFont.pointSize)
+                }
+                return UIFont.systemFont(ofSize: baseFont.pointSize)
+            }
+
+            if trait == .traitItalic {
+                if isEnabled {
+                    return UIFont.italicSystemFont(ofSize: baseFont.pointSize)
+                }
+                if traits.contains(.traitBold) {
+                    return UIFont.boldSystemFont(ofSize: baseFont.pointSize)
+                }
+                return UIFont.systemFont(ofSize: baseFont.pointSize)
+            }
+
+            return baseFont
+        }
+
+        private func adjustedFontSize(from baseFont: UIFont, delta: CGFloat) -> UIFont {
+            let newPointSize = min(max(baseFont.pointSize + delta, 11), 40)
+            return UIFont(descriptor: baseFont.fontDescriptor, size: newPointSize)
         }
 
         private func toggleTextDecoration(in textView: UITextView, key: NSAttributedString.Key) {
-            let selectedRange = textView.selectedRange
+            let selectedRange = formattingActionRange(in: textView)
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
                 let currentValue = typingAttributes[key] as? Int ?? 0
                 typingAttributes[key] = currentValue == 0 ? NSUnderlineStyle.single.rawValue : 0
                 textView.typingAttributes = typingAttributes
+                reportFormattingState(from: textView)
                 return
             }
 
@@ -1078,7 +1746,44 @@ private struct SelectableTextView: UIViewRepresentable {
         ) {
             textView.attributedText = attributedText
             textView.selectedRange = selectedRange
+            lastKnownSelectionRange = selectedRange
             syncContent(from: textView)
+            reportFormattingState(from: textView)
+        }
+
+        private func effectiveSelectionRange(in textView: UITextView) -> NSRange {
+            let currentRange = textView.selectedRange
+            if currentRange.length > 0 {
+                return currentRange
+            }
+
+            guard !textView.isFirstResponder else {
+                return currentRange
+            }
+
+            let fullLength = (textView.text as NSString).length
+            let cachedRange = lastKnownSelectionRange
+            if cachedRange.length > 0, cachedRange.location + cachedRange.length <= fullLength {
+                return cachedRange
+            }
+
+            return currentRange
+        }
+
+        private func formattingActionRange(in textView: UITextView) -> NSRange {
+            let currentRange = textView.selectedRange
+            if currentRange.length > 0 {
+                return currentRange
+            }
+
+            let fullLength = (textView.text as NSString).length
+            let cachedRange = lastKnownSelectionRange
+            if cachedRange.length > 0, cachedRange.location + cachedRange.length <= fullLength {
+                textView.selectedRange = cachedRange
+                return cachedRange
+            }
+
+            return currentRange
         }
     }
 }
@@ -1110,4 +1815,145 @@ enum RichTextContentCodec {
             documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
         )
     }
+
+    static func normalizedForDisplay(
+        _ attributedText: NSAttributedString,
+        traitCollection: UITraitCollection
+    ) -> NSAttributedString {
+        let mutable = NSMutableAttributedString(attributedString: attributedText)
+        let fullRange = NSRange(location: 0, length: mutable.length)
+
+        mutable.enumerateAttribute(.foregroundColor, in: fullRange) { value, range, _ in
+            guard let color = value as? UIColor else { return }
+            let resolvedColor = color.resolvedColor(with: traitCollection)
+            if traitCollection.userInterfaceStyle == .dark
+                && resolvedColor.isPrimaryTextCandidate(in: .dark) {
+                mutable.addAttribute(.foregroundColor, value: UIColor.label, range: range)
+            }
+            if traitCollection.userInterfaceStyle == .light
+                && resolvedColor.isPrimaryTextCandidate(in: .light) {
+                mutable.addAttribute(.foregroundColor, value: UIColor.label, range: range)
+            }
+        }
+
+        return mutable
+    }
+}
+
+private extension UIColor {
+    func isPrimaryTextCandidate(in interfaceStyle: UIUserInterfaceStyle) -> Bool {
+        guard let components = rgbaComponents, components.alpha > 0.6 else { return false }
+
+        let saturation = components.saturation
+        let luminance = components.luminance
+
+        switch interfaceStyle {
+        case .dark:
+            return saturation <= 0.08 && luminance <= 0.42
+        case .light:
+            return saturation <= 0.08 && luminance >= 0.58
+        default:
+            return false
+        }
+    }
+
+    private var rgbaComponents: RGBAComponents? {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        if getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+            return RGBAComponents(red: red, green: green, blue: blue, alpha: alpha)
+        }
+
+        var white: CGFloat = 0
+        if getWhite(&white, alpha: &alpha) {
+            return RGBAComponents(red: white, green: white, blue: white, alpha: alpha)
+        }
+
+        let ciColor = CIColor(color: self)
+        return RGBAComponents(red: ciColor.red, green: ciColor.green, blue: ciColor.blue, alpha: ciColor.alpha)
+    }
+}
+
+private struct RGBAComponents {
+    let red: CGFloat
+    let green: CGFloat
+    let blue: CGFloat
+    let alpha: CGFloat
+
+    var luminance: CGFloat {
+        (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
+    }
+
+    var saturation: CGFloat {
+        let maxComponent = max(red, green, blue)
+        let minComponent = min(red, green, blue)
+        guard maxComponent > 0 else { return 0 }
+        return (maxComponent - minComponent) / maxComponent
+    }
+}
+
+struct ChromeActionBar<Content: View>: View {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+    let cornerRadius: CGFloat
+    let content: Content
+
+    init(
+        style: EditorChromeStyle,
+        cornerRadius: CGFloat = 12,
+        @ViewBuilder content: () -> Content
+    ) {
+        self.style = style
+        self.cornerRadius = cornerRadius
+        self.content = content()
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            content
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background {
+            if style == .chromeAccent {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(chromeAccentGradient(for: colorScheme))
+            } else {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .fill(.ultraThinMaterial)
+            }
+        }
+        .overlay {
+            if style == .chromeAccent {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.22 : 0.44), lineWidth: 0.9)
+            }
+        }
+    }
+}
+
+func chromeAccentGradient(for colorScheme: ColorScheme) -> LinearGradient {
+    if colorScheme == .dark {
+        return LinearGradient(
+            colors: [
+                Color(red: 0.34, green: 0.35, blue: 0.39),
+                Color(red: 0.19, green: 0.20, blue: 0.23),
+                Color(red: 0.30, green: 0.31, blue: 0.35)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    return LinearGradient(
+        colors: [
+            Color(red: 0.95, green: 0.95, blue: 0.96),
+            Color(red: 0.81, green: 0.82, blue: 0.85),
+            Color(red: 0.92, green: 0.92, blue: 0.94)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
 }
