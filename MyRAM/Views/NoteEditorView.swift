@@ -1251,7 +1251,6 @@ private struct SelectableTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
-        textView.textColor = .label
         context.coordinator.textView = textView
         context.coordinator.formattingController = formattingController
         context.coordinator.installFormattingControllerHandler()
@@ -1530,13 +1529,18 @@ private struct SelectableTextView: UIViewRepresentable {
                 return
             }
 
-            let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
+            textView.textStorage.beginEditing()
             if color == nil {
-                mutable.removeAttribute(.foregroundColor, range: selectedRange)
+                textView.textStorage.removeAttribute(.foregroundColor, range: selectedRange)
             } else if let color {
-                mutable.addAttribute(.foregroundColor, value: color, range: selectedRange)
+                textView.textStorage.addAttribute(.foregroundColor, value: color, range: selectedRange)
             }
-            applyAttributedText(mutable, in: textView, selectedRange: selectedRange)
+            textView.textStorage.endEditing()
+
+            textView.selectedRange = selectedRange
+            lastKnownSelectionRange = selectedRange
+            syncContent(from: textView)
+            reportFormattingState(from: textView)
         }
 
         func normalizeTypingAttributes(in textView: UITextView) {
