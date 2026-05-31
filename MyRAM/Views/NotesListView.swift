@@ -24,6 +24,7 @@ struct NotesListView: View {
     @State private var rootTitleDraft = ""
     @State private var rootTitleUndoHistory: [String] = []
     @State private var rootTitleRedoHistory: [String] = []
+    @State private var noteActionDialogContext: NoteActionDialogContext?
     @AppStorage("mainListTitle") private var mainListTitle = "My Notes"
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
@@ -181,6 +182,18 @@ struct NotesListView: View {
                         }
                     }
                 )
+            }
+            .confirmationDialog(
+                noteActionDialogTitle,
+                isPresented: Binding(
+                    get: { noteActionDialogContext != nil },
+                    set: { if !$0 { noteActionDialogContext = nil } }
+                ),
+                titleVisibility: .visible
+            ) {
+                if let context = noteActionDialogContext {
+                    noteActionButtons(for: context)
+                }
             }
         }
         .onChange(of: vm.notes) { _, updatedNotes in
@@ -485,47 +498,66 @@ struct NotesListView: View {
     }
 
     private func noteRow(_ note: Note) -> some View {
-        return Button {
+        Group {
             if editMode.isEditing {
-                toggleSelection(for: note.id)
+                if isBulkNoteActionTarget(note) {
+                    noteRowContent(note)
+                        .highPriorityGesture(
+                            LongPressGesture(minimumDuration: 0.35)
+                                .onEnded { _ in
+                                    handleBulkNoteLongPress(note)
+                                }
+                        )
+                } else {
+                    noteRowContent(note)
+                        .contextMenu {
+                            noteActionButtons(for: .single(note))
+                        } preview: {
+                            NoteContextPreview(note: note)
+                        }
+                }
             } else {
-                vm.selectNote(note)
-                selectedNote = note
-            }
-        } label: {
-            HStack(spacing: 10) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(note.title.isEmpty ? "Untitled" : note.title)
-                        .font(.headline)
-                        .foregroundStyle(.primary)
-                    Text(note.content.isEmpty ? "No content yet" : note.content)
-                        .lineLimit(2)
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                Button {
+                    vm.selectNote(note)
+                    selectedNote = note
+                } label: {
+                    noteRowContent(note)
                 }
-
-                Spacer()
-
-                if note.isPinned == true {
-                    Image(systemName: "pin.fill")
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
+                .buttonStyle(.plain)
+                .contextMenu {
+                    noteActionButtons(for: .single(note))
+                } preview: {
+                    NoteContextPreview(note: note)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
         }
-        .buttonStyle(.plain)
         .tag(note.id)
         .listRowSeparatorTint(.secondary.opacity(0.3))
         .listRowBackground(Color(.secondarySystemGroupedBackground))
-        .contextMenu {
-            noteActionButtons(for: noteActionContext(for: note))
-        } preview: {
-            if shouldShowNoteContextPreview(for: note) {
-                NoteContextPreview(note: note)
+    }
+
+    private func noteRowContent(_ note: Note) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(note.title.isEmpty ? "Untitled" : note.title)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                Text(note.content.isEmpty ? "No content yet" : note.content)
+                    .lineLimit(2)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+
+            Spacer()
+
+            if note.isPinned == true {
+                Image(systemName: "pin.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
     }
 
     @ViewBuilder
@@ -575,6 +607,16 @@ struct NotesListView: View {
             : "Unpin \(selectedNotes.count) Selected"
     }
 
+    private var noteActionDialogTitle: String {
+        guard let context = noteActionDialogContext else { return "" }
+        switch context {
+        case .single(let note):
+            return note.title.isEmpty ? "Untitled Note" : note.title
+        case .bulk:
+            return "\(selectedNotes.count) Notes Selected"
+        }
+    }
+
     private var canPerformListUndo: Bool {
         !rootTitleUndoHistory.isEmpty || vm.hasUndoableAction
     }
@@ -622,22 +664,18 @@ struct NotesListView: View {
         }
     }
 
-    private func noteActionContext(for note: Note) -> NoteActionDialogContext {
-        if editMode.isEditing,
-           selectedNoteIDs.contains(note.id),
-           selectedNotes.count > 1 {
-            return .bulk
-        }
-        return .single(note)
+    private func isBulkNoteActionTarget(_ note: Note) -> Bool {
+        editMode.isEditing
+            && selectedNoteIDs.contains(note.id)
+            && selectedNotes.count > 1
     }
 
-    private func shouldShowNoteContextPreview(for note: Note) -> Bool {
-        if editMode.isEditing,
-           selectedNoteIDs.contains(note.id),
-           selectedNotes.count > 1 {
-            return false
+    private func handleBulkNoteLongPress(_ note: Note) {
+        guard isBulkNoteActionTarget(note) else {
+            return
         }
-        return true
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        noteActionDialogContext = .bulk
     }
 
     private func presentNextFolderDeletionPromptIfNeeded() {
@@ -706,13 +744,7 @@ private struct NoteContextPreview: View {
         }
         .frame(width: 320, height: 320, alignment: .topLeading)
         .padding(14)
-        .background(Color(.secondarySystemGroupedBackground))
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.secondary.opacity(0.15), lineWidth: 1)
-        )
-        .padding(4)
+        .background(Color.clear)
     }
 }
 

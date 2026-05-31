@@ -11,6 +11,7 @@ struct NoteEditorView: View {
     @ObservedObject var vm: NotesViewModel
     let note: Note
     let onNewNote: (Note) -> Void
+    @StateObject private var formattingController = TextFormattingController()
     
     @State private var title: String = ""
     @State private var content: String = ""
@@ -24,8 +25,6 @@ struct NoteEditorView: View {
     @State private var increaseFontSizeToggleToken = 0
     @State private var decreaseFontSizeToggleToken = 0
     @State private var selectedTextUIColor: UIColor?
-    @State private var selectedTextColorForPicker: Color = .primary
-    @State private var applyTextColorToggleToken = 0
     @State private var formattingState = EditorFormattingState()
     @State private var showingFormattingControls = false
     @State private var activeUndoManager: UndoManager?
@@ -70,8 +69,7 @@ struct NoteEditorView: View {
                         strikethroughToggleToken: strikethroughToggleToken,
                         increaseFontSizeToggleToken: increaseFontSizeToggleToken,
                         decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
-                        selectedTextColor: selectedTextUIColor,
-                        applyTextColorToggleToken: applyTextColorToggleToken,
+                        formattingController: formattingController,
                         onContentChanged: handleContentChanged,
                         onUndoManagerChanged: updateActiveUndoManager,
                         onFormattingStateChanged: handleFormattingStateChanged
@@ -450,9 +448,9 @@ struct NoteEditorView: View {
         guard !showingFormattingControls else { return }
 
         if let color = state.foregroundColor {
-            selectedTextColorForPicker = Color(uiColor: color)
+            selectedTextUIColor = color
         } else {
-            selectedTextColorForPicker = .primary
+            selectedTextUIColor = nil
         }
     }
 
@@ -770,20 +768,41 @@ struct NoteEditorView: View {
                 .accessibilityIdentifier("format-font-larger")
             }
 
-            ColorPicker("Text Color", selection: Binding(
-                get: { selectedTextColorForPicker },
-                set: { newValue in
-                    selectedTextColorForPicker = newValue
-                    selectedTextUIColor = UIColor(newValue)
-                    applyTextColorToggleToken += 1
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Text Color")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(28), spacing: 8), count: 8), spacing: 8) {
+                    ForEach(textColorSwatches) { swatch in
+                        Button {
+                            applyTextColor(swatch.uiColor)
+                        } label: {
+                            Circle()
+                                .fill(swatch.color)
+                                .frame(width: 26, height: 26)
+                                .overlay {
+                                    if isSelectedTextColor(swatch.uiColor) {
+                                        Circle()
+                                            .stroke(Color.primary, lineWidth: 2)
+                                            .padding(-3)
+                                    }
+                                }
+                                .overlay {
+                                    Circle()
+                                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                                }
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("format-color-\(swatch.id)")
+                        .accessibilityLabel(swatch.name)
+                    }
                 }
-            ), supportsOpacity: false)
-            .accessibilityIdentifier("format-color-picker")
+            }
+            .accessibilityIdentifier("format-color-swatches")
 
             Button("Use Default Text Color") {
-                selectedTextColorForPicker = .primary
-                selectedTextUIColor = nil
-                applyTextColorToggleToken += 1
+                applyDefaultTextColor()
             }
             .accessibilityIdentifier("format-color-default")
         }
@@ -813,6 +832,38 @@ struct NoteEditorView: View {
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(identifier)
+    }
+
+    private var textColorSwatches: [TextColorSwatch] {
+        [
+            TextColorSwatch(name: "Red", uiColor: .systemRed),
+            TextColorSwatch(name: "Orange", uiColor: .systemOrange),
+            TextColorSwatch(name: "Yellow", uiColor: .systemYellow),
+            TextColorSwatch(name: "Green", uiColor: .systemGreen),
+            TextColorSwatch(name: "Mint", uiColor: .systemMint),
+            TextColorSwatch(name: "Blue", uiColor: .systemBlue),
+            TextColorSwatch(name: "Purple", uiColor: .systemPurple),
+            TextColorSwatch(name: "Pink", uiColor: .systemPink),
+            TextColorSwatch(name: "Brown", uiColor: .systemBrown),
+            TextColorSwatch(name: "Gray", uiColor: .systemGray),
+            TextColorSwatch(name: "Black", uiColor: .black),
+            TextColorSwatch(name: "White", uiColor: .white)
+        ]
+    }
+
+    private func applyTextColor(_ color: UIColor) {
+        selectedTextUIColor = color
+        formattingController.applyTextColor(color)
+    }
+
+    private func applyDefaultTextColor() {
+        selectedTextUIColor = nil
+        formattingController.applyTextColor(nil)
+    }
+
+    private func isSelectedTextColor(_ color: UIColor) -> Bool {
+        guard let selectedTextUIColor else { return false }
+        return selectedTextUIColor.isApproximatelyEqual(to: color)
     }
 
     private func inlineActionButton(
@@ -956,6 +1007,27 @@ struct EditorFormattingState {
 private struct NoteSharePayload: Identifiable {
     let id = UUID()
     let urls: [URL]
+}
+
+private struct TextColorSwatch: Identifiable {
+    let name: String
+    let uiColor: UIColor
+
+    var id: String {
+        name.lowercased()
+    }
+
+    var color: Color {
+        Color(uiColor: uiColor)
+    }
+}
+
+private final class TextFormattingController: ObservableObject {
+    fileprivate var applyTextColorHandler: ((UIColor?) -> Void)?
+
+    func applyTextColor(_ color: UIColor?) {
+        applyTextColorHandler?(color)
+    }
 }
 
 private struct NoteSnapshot: Equatable {
@@ -1146,14 +1218,15 @@ private struct SelectableTextView: UIViewRepresentable {
     let strikethroughToggleToken: Int
     let increaseFontSizeToggleToken: Int
     let decreaseFontSizeToggleToken: Int
-    let selectedTextColor: UIColor?
-    let applyTextColorToggleToken: Int
+    let formattingController: TextFormattingController
     let onContentChanged: (String, Data?) -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
     let onFormattingStateChanged: (EditorFormattingState) -> Void
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
+        context.coordinator.textView = textView
+        context.coordinator.installFormattingControllerHandler()
         textView.delegate = context.coordinator
         textView.font = .preferredFont(forTextStyle: .body)
         textView.textColor = .label
@@ -1179,6 +1252,9 @@ private struct SelectableTextView: UIViewRepresentable {
 
     func updateUIView(_ textView: UITextView, context: Context) {
         textView.textColor = .label
+        context.coordinator.textView = textView
+        context.coordinator.formattingController = formattingController
+        context.coordinator.installFormattingControllerHandler()
         context.coordinator.isUpdatingUIView = true
         defer {
             context.coordinator.isUpdatingUIView = false
@@ -1206,11 +1282,14 @@ private struct SelectableTextView: UIViewRepresentable {
             underlineToggleToken: underlineToggleToken,
             strikethroughToggleToken: strikethroughToggleToken,
             increaseFontSizeToggleToken: increaseFontSizeToggleToken,
-            decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
-            applyTextColorToggleToken: applyTextColorToggleToken
+            decreaseFontSizeToggleToken: decreaseFontSizeToggleToken
         )
 
-        if !textView.isFirstResponder && !hasPendingFormattingMutation {
+        context.coordinator.clearAppliedContentIfSynced()
+
+        if !textView.isFirstResponder
+            && !hasPendingFormattingMutation
+            && !context.coordinator.hasUnsyncedAppliedContent {
             let desiredAttributedText = RichTextContentCodec.decode(
                 richTextData: richTextContentData,
                 plainText: text,
@@ -1287,19 +1366,13 @@ private struct SelectableTextView: UIViewRepresentable {
             context.coordinator.reportUndoManagerChanged(textView.undoManager)
         }
 
-        if context.coordinator.applyTextColorToggleToken != applyTextColorToggleToken {
-            context.coordinator.applyTextColorToggleToken = applyTextColorToggleToken
-            context.coordinator.selectedTextColor = selectedTextColor
-            context.coordinator.applyTextColor(in: textView, color: selectedTextColor)
-            context.coordinator.reportUndoManagerChanged(textView.undoManager)
-        }
-
         context.coordinator.normalizeTypingAttributes(in: textView)
         context.coordinator.reportFormattingState(from: textView)
     }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(
+            formattingController: formattingController,
             text: $text,
             richTextContentData: $richTextContentData,
             onContentChanged: onContentChanged,
@@ -1309,11 +1382,13 @@ private struct SelectableTextView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
+        var formattingController: TextFormattingController
         var text: Binding<String>
         var richTextContentData: Binding<Data?>
         var onContentChanged: (String, Data?) -> Void
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
+        weak var textView: UITextView?
         var captureSelectionToggleToken = 0
         var selectAllToggleToken = 0
         var boldToggleToken = 0
@@ -1322,23 +1397,37 @@ private struct SelectableTextView: UIViewRepresentable {
         var strikethroughToggleToken = 0
         var increaseFontSizeToggleToken = 0
         var decreaseFontSizeToggleToken = 0
-        var selectedTextColor: UIColor?
-        var applyTextColorToggleToken = 0
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
         var isUpdatingUIView = false
+        private var appliedPlainTextAwaitingBinding: String?
+        private var appliedRichTextDataAwaitingBinding: Data?
 
         init(
+            formattingController: TextFormattingController,
             text: Binding<String>,
             richTextContentData: Binding<Data?>,
             onContentChanged: @escaping (String, Data?) -> Void,
             onUndoManagerChanged: @escaping (UndoManager?) -> Void,
             onFormattingStateChanged: @escaping (EditorFormattingState) -> Void
         ) {
+            self.formattingController = formattingController
             self.text = text
             self.richTextContentData = richTextContentData
             self.onContentChanged = onContentChanged
             self.onUndoManagerChanged = onUndoManagerChanged
             self.onFormattingStateChanged = onFormattingStateChanged
+        }
+
+        deinit {
+            formattingController.applyTextColorHandler = nil
+        }
+
+        func installFormattingControllerHandler() {
+            formattingController.applyTextColorHandler = { [weak self] color in
+                guard let self, let textView = self.textView else { return }
+                self.applyTextColor(in: textView, color: color)
+                self.reportUndoManagerChanged(textView.undoManager)
+            }
         }
 
         func textViewDidChange(_ textView: UITextView) {
@@ -1372,8 +1461,7 @@ private struct SelectableTextView: UIViewRepresentable {
             underlineToggleToken: Int,
             strikethroughToggleToken: Int,
             increaseFontSizeToggleToken: Int,
-            decreaseFontSizeToggleToken: Int,
-            applyTextColorToggleToken: Int
+            decreaseFontSizeToggleToken: Int
         ) -> Bool {
             self.boldToggleToken != boldToggleToken
                 || self.italicToggleToken != italicToggleToken
@@ -1381,7 +1469,6 @@ private struct SelectableTextView: UIViewRepresentable {
                 || self.strikethroughToggleToken != strikethroughToggleToken
                 || self.increaseFontSizeToggleToken != increaseFontSizeToggleToken
                 || self.decreaseFontSizeToggleToken != decreaseFontSizeToggleToken
-                || self.applyTextColorToggleToken != applyTextColorToggleToken
         }
 
         func toggleBold(in textView: UITextView) {
@@ -1472,19 +1559,24 @@ private struct SelectableTextView: UIViewRepresentable {
             let plainText = textView.text ?? ""
             let encodedRichText = RichTextContentCodec.encode(textView.attributedText)
             guard text.wrappedValue != plainText || richTextContentData.wrappedValue != encodedRichText else {
+                clearAppliedContentIfSynced()
                 return
             }
 
             if isUpdatingUIView {
+                appliedPlainTextAwaitingBinding = plainText
+                appliedRichTextDataAwaitingBinding = encodedRichText
                 RunLoop.main.perform { [weak self] in
                     guard let self else { return }
                     guard self.text.wrappedValue != plainText
                         || self.richTextContentData.wrappedValue != encodedRichText else {
+                        self.clearAppliedContentIfSynced()
                         return
                     }
                     self.text.wrappedValue = plainText
                     self.richTextContentData.wrappedValue = encodedRichText
                     self.onContentChanged(plainText, encodedRichText)
+                    self.clearAppliedContentIfSynced()
                 }
                 return
             }
@@ -1492,6 +1584,22 @@ private struct SelectableTextView: UIViewRepresentable {
             text.wrappedValue = plainText
             richTextContentData.wrappedValue = encodedRichText
             onContentChanged(plainText, encodedRichText)
+            clearAppliedContentIfSynced()
+        }
+
+        var hasUnsyncedAppliedContent: Bool {
+            guard let appliedPlainTextAwaitingBinding else { return false }
+            return text.wrappedValue != appliedPlainTextAwaitingBinding
+                || richTextContentData.wrappedValue != appliedRichTextDataAwaitingBinding
+        }
+
+        func clearAppliedContentIfSynced() {
+            guard let appliedPlainTextAwaitingBinding else { return }
+            if text.wrappedValue == appliedPlainTextAwaitingBinding
+                && richTextContentData.wrappedValue == appliedRichTextDataAwaitingBinding {
+                self.appliedPlainTextAwaitingBinding = nil
+                appliedRichTextDataAwaitingBinding = nil
+            }
         }
 
         func reportFormattingState(from textView: UITextView) {
@@ -1841,6 +1949,18 @@ enum RichTextContentCodec {
 }
 
 private extension UIColor {
+    func isApproximatelyEqual(to other: UIColor) -> Bool {
+        guard let lhs = rgbaComponents,
+              let rhs = other.rgbaComponents else {
+            return false
+        }
+
+        return abs(lhs.red - rhs.red) <= 0.02
+            && abs(lhs.green - rhs.green) <= 0.02
+            && abs(lhs.blue - rhs.blue) <= 0.02
+            && abs(lhs.alpha - rhs.alpha) <= 0.02
+    }
+
     func isPrimaryTextCandidate(in interfaceStyle: UIUserInterfaceStyle) -> Bool {
         guard let components = rgbaComponents, components.alpha > 0.6 else { return false }
 
