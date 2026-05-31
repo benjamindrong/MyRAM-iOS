@@ -7,6 +7,7 @@ final class Note {
     @Attribute(.unique) var id: UUID = UUID()
     var title: String
     var content: String
+    @Attribute(.externalStorage) var richTextContentData: Data?
     var isPinned: Bool?
     var createdAt: Date
     var modifiedAt: Date
@@ -18,6 +19,7 @@ final class Note {
     init(title: String = "", content: String = "", folder: Folder? = nil) {
         self.title = title
         self.content = content
+        self.richTextContentData = nil
         self.isPinned = false
         self.createdAt = .now
         self.modifiedAt = .now

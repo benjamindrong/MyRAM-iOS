@@ -13,7 +13,12 @@ struct NoteEditorView: View {
     
     @State private var title: String = ""
     @State private var content: String = ""
+    @State private var richTextContentData: Data?
     @State private var selectAllToggleToken = 0
+    @State private var boldToggleToken = 0
+    @State private var italicToggleToken = 0
+    @State private var underlineToggleToken = 0
+    @State private var strikethroughToggleToken = 0
     @State private var activeUndoManager: UndoManager?
     @State private var canUndo = false
     @State private var canRedo = false
@@ -44,7 +49,13 @@ struct NoteEditorView: View {
                 ZStack(alignment: .bottomTrailing) {
                     SelectableTextView(
                         text: $content,
+                        richTextContentData: $richTextContentData,
                         selectAllToggleToken: selectAllToggleToken,
+                        boldToggleToken: boldToggleToken,
+                        italicToggleToken: italicToggleToken,
+                        underlineToggleToken: underlineToggleToken,
+                        strikethroughToggleToken: strikethroughToggleToken,
+                        onContentChanged: handleContentChanged,
                         onUndoManagerChanged: updateActiveUndoManager
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -209,12 +220,16 @@ struct NoteEditorView: View {
             .onAppear {
                 title = note.title
                 content = note.content
-                lastSnapshot = NoteSnapshot(title: title, content: content)
+                richTextContentData = note.richTextContentData
+                lastSnapshot = NoteSnapshot(
+                    title: title,
+                    content: content,
+                    richTextContentData: richTextContentData
+                )
                 vm.recordNoteOpened(note)
                 refreshSuggestionLabels()
             }
             .onChange(of: title) { handleEditorChange() }
-            .onChange(of: content) { handleEditorChange() }
             .onChange(of: selectedPickerItems) { _, newItems in
                 guard !newItems.isEmpty else { return }
                 Task {
@@ -327,8 +342,17 @@ struct NoteEditorView: View {
     }
 
     private func handleEditorChange() {
-        let currentSnapshot = NoteSnapshot(title: title, content: content)
-        if !isApplyingUndo, currentSnapshot != lastSnapshot {
+        let currentSnapshot = NoteSnapshot(
+            title: title,
+            content: content,
+            richTextContentData: richTextContentData
+        )
+        guard currentSnapshot != lastSnapshot else {
+            refreshUndoState()
+            return
+        }
+
+        if !isApplyingUndo {
             undoHistory.append(lastSnapshot)
             redoHistory.removeAll()
             if undoHistory.count > 200 {
@@ -336,10 +360,21 @@ struct NoteEditorView: View {
             }
         }
         lastSnapshot = currentSnapshot
-        vm.updateNote(note, title: title, content: content)
+        vm.updateNote(
+            note,
+            title: title,
+            content: content,
+            richTextContentData: richTextContentData
+        )
         vm.recordNoteEdited(note)
         refreshSuggestionLabels()
         refreshUndoState()
+    }
+
+    private func handleContentChanged(_ plainText: String, _ richTextData: Data?) {
+        content = plainText
+        richTextContentData = richTextData
+        handleEditorChange()
     }
 
     private func refreshSuggestionLabels() {
@@ -373,7 +408,11 @@ struct NoteEditorView: View {
             activeUndoManager?.undo()
             DispatchQueue.main.async {
                 isApplyingUndo = false
-                lastSnapshot = NoteSnapshot(title: title, content: content)
+                lastSnapshot = NoteSnapshot(
+                    title: title,
+                    content: content,
+                    richTextContentData: richTextContentData
+                )
                 trimUndoHistory(afterRestoring: lastSnapshot)
                 refreshUndoState()
             }
@@ -385,14 +424,24 @@ struct NoteEditorView: View {
             return
         }
 
-        let currentSnapshot = NoteSnapshot(title: title, content: content)
+        let currentSnapshot = NoteSnapshot(
+            title: title,
+            content: content,
+            richTextContentData: richTextContentData
+        )
         redoHistory.append(currentSnapshot)
 
         isApplyingUndo = true
         title = snapshot.title
         content = snapshot.content
+        richTextContentData = snapshot.richTextContentData
         lastSnapshot = snapshot
-        vm.updateNote(note, title: snapshot.title, content: snapshot.content)
+        vm.updateNote(
+            note,
+            title: snapshot.title,
+            content: snapshot.content,
+            richTextContentData: snapshot.richTextContentData
+        )
         DispatchQueue.main.async {
             isApplyingUndo = false
             refreshUndoState()
@@ -405,7 +454,11 @@ struct NoteEditorView: View {
             activeUndoManager?.redo()
             DispatchQueue.main.async {
                 isApplyingUndo = false
-                lastSnapshot = NoteSnapshot(title: title, content: content)
+                lastSnapshot = NoteSnapshot(
+                    title: title,
+                    content: content,
+                    richTextContentData: richTextContentData
+                )
                 refreshUndoState()
             }
             return
@@ -416,14 +469,24 @@ struct NoteEditorView: View {
             return
         }
 
-        let currentSnapshot = NoteSnapshot(title: title, content: content)
+        let currentSnapshot = NoteSnapshot(
+            title: title,
+            content: content,
+            richTextContentData: richTextContentData
+        )
         undoHistory.append(currentSnapshot)
 
         isApplyingUndo = true
         title = snapshot.title
         content = snapshot.content
+        richTextContentData = snapshot.richTextContentData
         lastSnapshot = snapshot
-        vm.updateNote(note, title: snapshot.title, content: snapshot.content)
+        vm.updateNote(
+            note,
+            title: snapshot.title,
+            content: snapshot.content,
+            richTextContentData: snapshot.richTextContentData
+        )
         DispatchQueue.main.async {
             isApplyingUndo = false
             refreshUndoState()
@@ -518,6 +581,21 @@ struct NoteEditorView: View {
             ) {
                 performResponderAction(#selector(UIResponder.paste(_:)))
             }
+            inlineActionButton(systemImage: "bold", identifier: "keyboard-control-bold") {
+                boldToggleToken += 1
+            }
+            inlineActionButton(systemImage: "italic", identifier: "keyboard-control-italic") {
+                italicToggleToken += 1
+            }
+            inlineActionButton(systemImage: "underline", identifier: "keyboard-control-underline") {
+                underlineToggleToken += 1
+            }
+            inlineActionButton(
+                systemImage: "strikethrough",
+                identifier: "keyboard-control-strikethrough"
+            ) {
+                strikethroughToggleToken += 1
+            }
             inlineActionButton(
                 systemImage: "selection.pin.in.out",
                 identifier: "keyboard-control-select-all"
@@ -595,6 +673,7 @@ private struct NoteSharePayload: Identifiable {
 private struct NoteSnapshot: Equatable {
     var title: String = ""
     var content: String = ""
+    var richTextContentData: Data?
 }
 
 private struct KeyboardToast: Equatable {
@@ -769,7 +848,13 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
 
 private struct SelectableTextView: UIViewRepresentable {
     @Binding var text: String
+    @Binding var richTextContentData: Data?
     let selectAllToggleToken: Int
+    let boldToggleToken: Int
+    let italicToggleToken: Int
+    let underlineToggleToken: Int
+    let strikethroughToggleToken: Int
+    let onContentChanged: (String, Data?) -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
 
     func makeUIView(context: Context) -> UITextView {
@@ -777,6 +862,7 @@ private struct SelectableTextView: UIViewRepresentable {
         textView.delegate = context.coordinator
         textView.font = .preferredFont(forTextStyle: .body)
         textView.adjustsFontForContentSizeCategory = true
+        textView.allowsEditingTextAttributes = true
         textView.backgroundColor = .secondarySystemBackground
         textView.layer.cornerRadius = 8
         textView.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
@@ -786,12 +872,22 @@ private struct SelectableTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
-        if textView.text != text {
+        let desiredAttributedText = RichTextContentCodec.decode(
+            richTextData: richTextContentData,
+            plainText: text,
+            baseFont: textView.font ?? .preferredFont(forTextStyle: .body)
+        )
+        if !textView.attributedText.isEqual(to: desiredAttributedText) {
             let selectedRange = textView.selectedRange
-            textView.text = text
-            textView.selectedRange = selectedRange.location <= text.count ? selectedRange : NSRange(location: text.count, length: 0)
+            textView.attributedText = desiredAttributedText
+            let newLength = (textView.text as NSString).length
+            textView.selectedRange = selectedRange.location <= newLength
+                ? selectedRange
+                : NSRange(location: newLength, length: 0)
         }
         context.coordinator.text = $text
+        context.coordinator.richTextContentData = $richTextContentData
+        context.coordinator.onContentChanged = onContentChanged
         context.coordinator.onUndoManagerChanged = onUndoManagerChanged
 
         if context.coordinator.selectAllToggleToken != selectAllToggleToken {
@@ -804,24 +900,66 @@ private struct SelectableTextView: UIViewRepresentable {
             }
             onUndoManagerChanged(textView.undoManager)
         }
+
+        if context.coordinator.boldToggleToken != boldToggleToken {
+            context.coordinator.boldToggleToken = boldToggleToken
+            context.coordinator.toggleBold(in: textView)
+            onUndoManagerChanged(textView.undoManager)
+        }
+
+        if context.coordinator.italicToggleToken != italicToggleToken {
+            context.coordinator.italicToggleToken = italicToggleToken
+            context.coordinator.toggleItalic(in: textView)
+            onUndoManagerChanged(textView.undoManager)
+        }
+
+        if context.coordinator.underlineToggleToken != underlineToggleToken {
+            context.coordinator.underlineToggleToken = underlineToggleToken
+            context.coordinator.toggleUnderline(in: textView)
+            onUndoManagerChanged(textView.undoManager)
+        }
+
+        if context.coordinator.strikethroughToggleToken != strikethroughToggleToken {
+            context.coordinator.strikethroughToggleToken = strikethroughToggleToken
+            context.coordinator.toggleStrikethrough(in: textView)
+            onUndoManagerChanged(textView.undoManager)
+        }
     }
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text, onUndoManagerChanged: onUndoManagerChanged)
+        Coordinator(
+            text: $text,
+            richTextContentData: $richTextContentData,
+            onContentChanged: onContentChanged,
+            onUndoManagerChanged: onUndoManagerChanged
+        )
     }
 
     final class Coordinator: NSObject, UITextViewDelegate {
         var text: Binding<String>
+        var richTextContentData: Binding<Data?>
+        var onContentChanged: (String, Data?) -> Void
         var onUndoManagerChanged: (UndoManager?) -> Void
         var selectAllToggleToken = 0
+        var boldToggleToken = 0
+        var italicToggleToken = 0
+        var underlineToggleToken = 0
+        var strikethroughToggleToken = 0
 
-        init(text: Binding<String>, onUndoManagerChanged: @escaping (UndoManager?) -> Void) {
+        init(
+            text: Binding<String>,
+            richTextContentData: Binding<Data?>,
+            onContentChanged: @escaping (String, Data?) -> Void,
+            onUndoManagerChanged: @escaping (UndoManager?) -> Void
+        ) {
             self.text = text
+            self.richTextContentData = richTextContentData
+            self.onContentChanged = onContentChanged
             self.onUndoManagerChanged = onUndoManagerChanged
         }
 
         func textViewDidChange(_ textView: UITextView) {
-            text.wrappedValue = textView.text
+            syncContent(from: textView)
             onUndoManagerChanged(textView.undoManager)
         }
 
@@ -832,5 +970,144 @@ private struct SelectableTextView: UIViewRepresentable {
         func textViewDidEndEditing(_ textView: UITextView) {
             onUndoManagerChanged(textView.undoManager)
         }
+
+        func toggleBold(in textView: UITextView) {
+            toggleFontTrait(.traitBold, in: textView)
+        }
+
+        func toggleItalic(in textView: UITextView) {
+            toggleFontTrait(.traitItalic, in: textView)
+        }
+
+        func toggleUnderline(in textView: UITextView) {
+            toggleTextDecoration(in: textView, key: .underlineStyle)
+        }
+
+        func toggleStrikethrough(in textView: UITextView) {
+            toggleTextDecoration(in: textView, key: .strikethroughStyle)
+        }
+
+        private func syncContent(from textView: UITextView) {
+            let plainText = textView.text ?? ""
+            let encodedRichText = RichTextContentCodec.encode(textView.attributedText)
+            guard text.wrappedValue != plainText || richTextContentData.wrappedValue != encodedRichText else {
+                return
+            }
+            text.wrappedValue = plainText
+            richTextContentData.wrappedValue = encodedRichText
+            onContentChanged(plainText, encodedRichText)
+        }
+
+        private func toggleFontTrait(_ trait: UIFontDescriptor.SymbolicTraits, in textView: UITextView) {
+            let selectedRange = textView.selectedRange
+
+            if selectedRange.length == 0 {
+                var typingAttributes = textView.typingAttributes
+                let baseFont = (typingAttributes[.font] as? UIFont)
+                    ?? textView.font
+                    ?? .preferredFont(forTextStyle: .body)
+                typingAttributes[.font] = toggledFont(from: baseFont, trait: trait)
+                textView.typingAttributes = typingAttributes
+                return
+            }
+
+            let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
+            mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
+                let baseFont = (value as? UIFont)
+                    ?? textView.font
+                    ?? .preferredFont(forTextStyle: .body)
+                mutable.addAttribute(
+                    .font,
+                    value: toggledFont(from: baseFont, trait: trait),
+                    range: range
+                )
+            }
+            applyAttributedText(mutable, in: textView, selectedRange: selectedRange)
+        }
+
+        private func toggledFont(from baseFont: UIFont, trait: UIFontDescriptor.SymbolicTraits) -> UIFont {
+            var traits = baseFont.fontDescriptor.symbolicTraits
+            if traits.contains(trait) {
+                traits.remove(trait)
+            } else {
+                traits.insert(trait)
+            }
+
+            let descriptor = baseFont.fontDescriptor.withSymbolicTraits(traits) ?? baseFont.fontDescriptor
+            return UIFont(descriptor: descriptor, size: baseFont.pointSize)
+        }
+
+        private func toggleTextDecoration(in textView: UITextView, key: NSAttributedString.Key) {
+            let selectedRange = textView.selectedRange
+
+            if selectedRange.length == 0 {
+                var typingAttributes = textView.typingAttributes
+                let currentValue = typingAttributes[key] as? Int ?? 0
+                typingAttributes[key] = currentValue == 0 ? NSUnderlineStyle.single.rawValue : 0
+                textView.typingAttributes = typingAttributes
+                return
+            }
+
+            let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
+            let shouldApply = shouldApplyDecoration(in: mutable, range: selectedRange, key: key)
+            let value = shouldApply ? NSUnderlineStyle.single.rawValue : 0
+            mutable.addAttribute(key, value: value, range: selectedRange)
+            applyAttributedText(mutable, in: textView, selectedRange: selectedRange)
+        }
+
+        private func shouldApplyDecoration(
+            in attributedText: NSAttributedString,
+            range: NSRange,
+            key: NSAttributedString.Key
+        ) -> Bool {
+            var hasUndecoratedSegment = false
+            attributedText.enumerateAttribute(key, in: range) { value, _, stop in
+                let style = value as? Int ?? 0
+                if style == 0 {
+                    hasUndecoratedSegment = true
+                    stop.pointee = true
+                }
+            }
+            return hasUndecoratedSegment
+        }
+
+        private func applyAttributedText(
+            _ attributedText: NSAttributedString,
+            in textView: UITextView,
+            selectedRange: NSRange
+        ) {
+            textView.attributedText = attributedText
+            textView.selectedRange = selectedRange
+            syncContent(from: textView)
+        }
+    }
+}
+
+enum RichTextContentCodec {
+    static func decode(
+        richTextData: Data?,
+        plainText: String,
+        baseFont: UIFont
+    ) -> NSAttributedString {
+        if let richTextData,
+           let attributedText = try? NSAttributedString(
+            data: richTextData,
+            options: [.documentType: NSAttributedString.DocumentType.rtf],
+            documentAttributes: nil
+           ) {
+            return attributedText
+        }
+        return NSAttributedString(
+            string: plainText,
+            attributes: [.font: baseFont]
+        )
+    }
+
+    static func encode(_ attributedText: NSAttributedString) -> Data? {
+        guard attributedText.length > 0 else { return nil }
+        return try? attributedText.data(
+            from: NSRange(location: 0, length: attributedText.length),
+            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
+        )
     }
 }

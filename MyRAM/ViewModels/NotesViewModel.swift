@@ -247,10 +247,16 @@ final class NotesViewModel: ObservableObject {
         noteIntelligenceService.recordNoteEdited(note)
     }
 
-    func updateNote(_ note: Note, title: String, content: String) {
+    func updateNote(
+        _ note: Note,
+        title: String,
+        content: String,
+        richTextContentData: Data? = nil
+    ) {
         guard note.deletedAt == nil else { return }
         note.title = title
         note.content = content
+        note.richTextContentData = richTextContentData
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
