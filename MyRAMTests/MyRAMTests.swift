@@ -411,6 +411,62 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.folder?.id, folderB.id)
     }
 
+    func testUndoRedoLastActionMovesNoteBetweenFolders() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+
+        vm.createFolder(named: "A")
+        let folderA = try XCTUnwrap(vm.folders.first(where: { $0.name == "A" }))
+        vm.createFolder(named: "B")
+        let folderB = try XCTUnwrap(vm.folders.first(where: { $0.name == "B" }))
+        vm.openFolder(folderA)
+        let note = vm.createNewNote()
+
+        vm.moveNote(note, to: folderB)
+        XCTAssertEqual(note.folder?.id, folderB.id)
+
+        vm.undoLastAction()
+        XCTAssertEqual(note.folder?.id, folderA.id)
+        XCTAssertTrue(vm.hasRedoableAction)
+
+        vm.redoLastAction()
+        XCTAssertEqual(note.folder?.id, folderB.id)
+    }
+
+    func testUndoRedoLastActionTogglesCreatedNoteVisibility() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+
+        let note = vm.createNewNote()
+        XCTAssertNil(note.deletedAt)
+
+        vm.undoLastAction()
+        XCTAssertNotNil(note.deletedAt)
+        XCTAssertFalse(vm.notes.contains { $0.id == note.id })
+        XCTAssertTrue(vm.hasRedoableAction)
+
+        vm.redoLastAction()
+        XCTAssertNil(note.deletedAt)
+        XCTAssertTrue(vm.notes.contains { $0.id == note.id })
+    }
+
+    func testUndoRedoLastActionTogglesCreatedFolderVisibility() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+
+        vm.createFolder(named: "Projects")
+        let folderID = try XCTUnwrap(vm.folders.first(where: { $0.name == "Projects" })?.id)
+
+        vm.undoLastAction()
+        var folders = try container.mainContext.fetch(FetchDescriptor<Folder>())
+        XCTAssertFalse(folders.contains { $0.id == folderID })
+        XCTAssertTrue(vm.hasRedoableAction)
+
+        vm.redoLastAction()
+        folders = try container.mainContext.fetch(FetchDescriptor<Folder>())
+        XCTAssertTrue(folders.contains { $0.id == folderID })
+    }
+
     func testAddPhotoAttachmentStoresImageOnNote() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
@@ -532,6 +588,122 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(underlineValue, NSUnderlineStyle.single.rawValue)
     }
 
+    func testRichTextCodecRoundTripPreservesForegroundColor() throws {
+        let expectedColor = UIColor(red: 0.85, green: 0.18, blue: 0.12, alpha: 1)
+        let mutable = NSMutableAttributedString(string: "Color")
+        mutable.addAttribute(
+            .foregroundColor,
+            value: expectedColor,
+            range: NSRange(location: 0, length: mutable.length)
+        )
+
+        let encoded = try XCTUnwrap(RichTextContentCodec.encode(mutable))
+        let decoded = RichTextContentCodec.decode(
+            richTextData: encoded,
+            plainText: "",
+            baseFont: .preferredFont(forTextStyle: .body)
+        )
+
+        let decodedColor = try XCTUnwrap(decoded.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor)
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        XCTAssertTrue(decodedColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+        XCTAssertEqual(red, 0.85, accuracy: 0.01)
+        XCTAssertEqual(green, 0.18, accuracy: 0.01)
+        XCTAssertEqual(blue, 0.12, accuracy: 0.01)
+        XCTAssertEqual(alpha, 1, accuracy: 0.01)
+    }
+
+    func testRichTextDisplayNormalizationRemovesNearBlackColorInDarkMode() {
+        let mutable = NSMutableAttributedString(string: "AB")
+        mutable.addAttribute(.foregroundColor, value: UIColor.black, range: NSRange(location: 0, length: 1))
+        mutable.addAttribute(.foregroundColor, value: UIColor.systemRed, range: NSRange(location: 1, length: 1))
+
+        let normalized = RichTextContentCodec.normalizedForDisplay(
+            mutable,
+            traitCollection: UITraitCollection(userInterfaceStyle: .dark)
+        )
+
+        XCTAssertEqual(
+            normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
+            UIColor.label
+        )
+        XCTAssertEqual(
+            normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
+            UIColor.systemRed
+        )
+    }
+
+    func testRichTextDisplayNormalizationRemovesNearWhiteColorInLightMode() {
+        let mutable = NSMutableAttributedString(string: "AB")
+        mutable.addAttribute(.foregroundColor, value: UIColor.white, range: NSRange(location: 0, length: 1))
+        mutable.addAttribute(.foregroundColor, value: UIColor.systemBlue, range: NSRange(location: 1, length: 1))
+
+        let normalized = RichTextContentCodec.normalizedForDisplay(
+            mutable,
+            traitCollection: UITraitCollection(userInterfaceStyle: .light)
+        )
+
+        XCTAssertEqual(
+            normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
+            UIColor.label
+        )
+        XCTAssertEqual(
+            normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
+            UIColor.systemBlue
+        )
+    }
+
+    func testRichTextDisplayNormalizationRemovesDarkGrayInDarkMode() {
+        let mutable = NSMutableAttributedString(string: "AB")
+        mutable.addAttribute(
+            .foregroundColor,
+            value: UIColor(white: 0.2, alpha: 1),
+            range: NSRange(location: 0, length: 1)
+        )
+        mutable.addAttribute(.foregroundColor, value: UIColor.systemGreen, range: NSRange(location: 1, length: 1))
+
+        let normalized = RichTextContentCodec.normalizedForDisplay(
+            mutable,
+            traitCollection: UITraitCollection(userInterfaceStyle: .dark)
+        )
+
+        XCTAssertEqual(
+            normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
+            UIColor.label
+        )
+        XCTAssertEqual(
+            normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
+            UIColor.systemGreen
+        )
+    }
+
+    func testNoteEditorOverflowActionPriorityMatchesEditorSpec() {
+        XCTAssertEqual(
+            NoteEditorOverflowAction.priorityOrder,
+            [
+                .newNote,
+                .newFolder,
+                .exportNote,
+                .attachments,
+                .deleteNote
+            ]
+        )
+    }
+
+    func testNoteEditorOverflowActionPriorityIncludesEachActionOnce() {
+        XCTAssertEqual(
+            Set(NoteEditorOverflowAction.priorityOrder),
+            Set(NoteEditorOverflowAction.allCases)
+        )
+        XCTAssertEqual(
+            NoteEditorOverflowAction.priorityOrder.count,
+            NoteEditorOverflowAction.allCases.count
+        )
+    }
+
     func testBuildNoteExportTextIncludesReadableFieldsForSingleNote() throws {
         let note = Note(title: "Trip Plan", content: "Book flights")
         note.createdAt = Date(timeIntervalSince1970: 1000)
@@ -643,7 +815,24 @@ final class MyRAMTests: XCTestCase {
         vm.undoLastAction()
 
         XCTAssertNil(note.deletedAt)
-        XCTAssertFalse(vm.hasUndoableAction)
+        XCTAssertTrue(vm.hasUndoableAction)
+        XCTAssertTrue(vm.hasRedoableAction)
+    }
+
+    func testRedoLastActionReappliesSoftDeletedNote() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+
+        vm.deleteNote(note)
+        vm.undoLastAction()
+        XCTAssertTrue(vm.hasRedoableAction)
+
+        vm.redoLastAction()
+
+        XCTAssertNotNil(note.deletedAt)
+        XCTAssertTrue(vm.hasUndoableAction)
+        XCTAssertFalse(vm.hasRedoableAction)
     }
 
     func testUndoLastActionRestoresDeletedFolderHierarchyAndNotes() throws {
@@ -670,6 +859,100 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(restoredChild.parentFolder?.id, restoredParent.id)
         XCTAssertEqual(nestedNote.folder?.id, restoredChild.id)
         XCTAssertNil(nestedNote.deletedAt)
+    }
+
+    func testRedoLastActionReappliesDeletedFolderHierarchyAndNotes() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+
+        vm.createFolder(named: "Parent")
+        let parent = try XCTUnwrap(vm.folders.first(where: { $0.name == "Parent" }))
+        vm.openFolder(parent)
+        vm.createFolder(named: "Child")
+        let child = try XCTUnwrap(vm.folders.first(where: { $0.name == "Child" }))
+        vm.openFolder(child)
+        let nestedNote = vm.createNewNote()
+
+        vm.deleteFolder(parent, preserveNotes: false)
+        vm.undoLastAction()
+        XCTAssertNil(nestedNote.deletedAt)
+
+        vm.redoLastAction()
+
+        let remainingFolders = try container.mainContext.fetch(FetchDescriptor<Folder>())
+        XCTAssertFalse(remainingFolders.contains { $0.id == parent.id })
+        XCTAssertFalse(remainingFolders.contains { $0.id == child.id })
+        XCTAssertNil(nestedNote.folder)
+        XCTAssertNotNil(nestedNote.deletedAt)
+        XCTAssertTrue(vm.hasUndoableAction)
+        XCTAssertFalse(vm.hasRedoableAction)
+    }
+
+    func testRichTextContentCodecRoundTripPreservesFormattingAttributes() throws {
+        let baseFont = UIFont.systemFont(ofSize: 17)
+        let mutable = NSMutableAttributedString(
+            string: "MyRAM",
+            attributes: [.font: baseFont]
+        )
+
+        let boldFont = UIFont.boldSystemFont(ofSize: 17)
+        let italicFont = UIFont.italicSystemFont(ofSize: 17)
+        mutable.addAttribute(.font, value: boldFont, range: NSRange(location: 0, length: 2))
+        mutable.addAttribute(.font, value: italicFont, range: NSRange(location: 2, length: 2))
+        mutable.addAttribute(
+            .underlineStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 4, length: 1)
+        )
+        mutable.addAttribute(
+            .strikethroughStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 3, length: 2)
+        )
+
+        let data = try XCTUnwrap(RichTextContentCodec.encode(mutable))
+        let decoded = RichTextContentCodec.decode(
+            richTextData: data,
+            plainText: mutable.string,
+            baseFont: baseFont
+        )
+
+        let boldDecoded = try XCTUnwrap(decoded.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        XCTAssertTrue(boldDecoded.fontDescriptor.symbolicTraits.contains(.traitBold))
+
+        let italicDecoded = try XCTUnwrap(decoded.attribute(.font, at: 2, effectiveRange: nil) as? UIFont)
+        XCTAssertTrue(italicDecoded.fontDescriptor.symbolicTraits.contains(.traitItalic))
+
+        let underline = decoded.attribute(.underlineStyle, at: 4, effectiveRange: nil) as? Int
+        XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)
+
+        let strikethrough = decoded.attribute(.strikethroughStyle, at: 3, effectiveRange: nil) as? Int
+        XCTAssertEqual(strikethrough, NSUnderlineStyle.single.rawValue)
+    }
+
+    func testRichTextDisplayNormalizationKeepsFormattingWhileNormalizingLegacyTextColor() {
+        let baseFont = UIFont.systemFont(ofSize: 17)
+        let mutable = NSMutableAttributedString(
+            string: "Task",
+            attributes: [.font: baseFont]
+        )
+        mutable.addAttribute(.foregroundColor, value: UIColor.black, range: NSRange(location: 0, length: 4))
+        mutable.addAttribute(
+            .underlineStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 0, length: 4)
+        )
+
+        let normalized = RichTextContentCodec.normalizedForDisplay(
+            mutable,
+            traitCollection: UITraitCollection(userInterfaceStyle: .dark)
+        )
+
+        let color = normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor
+        XCTAssertNotNil(color)
+
+        let underline = normalized.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
+        XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)
     }
 
     private func makeContainer(
