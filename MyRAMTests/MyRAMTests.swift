@@ -481,6 +481,57 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(note.photoAttachments.isEmpty)
     }
 
+    func testUpdateNotePersistsRichTextDataAlongsidePlainText() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+
+        let attributedText = NSAttributedString(
+            string: "Styled note",
+            attributes: [.strikethroughStyle: NSUnderlineStyle.single.rawValue]
+        )
+        let richTextData = try XCTUnwrap(RichTextContentCodec.encode(attributedText))
+
+        vm.updateNote(
+            note,
+            title: "Styled",
+            content: attributedText.string,
+            richTextContentData: richTextData
+        )
+
+        XCTAssertEqual(note.title, "Styled")
+        XCTAssertEqual(note.content, "Styled note")
+        XCTAssertEqual(note.richTextContentData, richTextData)
+    }
+
+    func testRichTextCodecFallsBackToPlainTextWhenRichDataMissing() {
+        let decoded = RichTextContentCodec.decode(
+            richTextData: nil,
+            plainText: "Plain body",
+            baseFont: .preferredFont(forTextStyle: .body)
+        )
+
+        XCTAssertEqual(decoded.string, "Plain body")
+    }
+
+    func testRichTextCodecRoundTripPreservesAttributedContent() throws {
+        let mutable = NSMutableAttributedString(string: "Bold Italic")
+        let fullRange = NSRange(location: 0, length: mutable.length)
+        mutable.addAttribute(.font, value: UIFont.boldSystemFont(ofSize: 17), range: fullRange)
+        mutable.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: fullRange)
+        let encoded = try XCTUnwrap(RichTextContentCodec.encode(mutable))
+
+        let decoded = RichTextContentCodec.decode(
+            richTextData: encoded,
+            plainText: "",
+            baseFont: .preferredFont(forTextStyle: .body)
+        )
+
+        XCTAssertEqual(decoded.string, "Bold Italic")
+        let underlineValue = decoded.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
+        XCTAssertEqual(underlineValue, NSUnderlineStyle.single.rawValue)
+    }
+
     func testBuildNoteExportTextIncludesReadableFieldsForSingleNote() throws {
         let note = Note(title: "Trip Plan", content: "Book flights")
         note.createdAt = Date(timeIntervalSince1970: 1000)
