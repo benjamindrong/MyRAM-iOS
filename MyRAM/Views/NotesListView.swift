@@ -386,12 +386,6 @@ struct NotesListView: View {
             compactActionButton(systemImage: "trash", identifier: "notes-topbar-recently-deleted") {
                 showingRecentlyDeleted = true
             }
-        case .exportSelected:
-            compactActionButton(systemImage: "square.and.arrow.up", identifier: "notes-topbar-export-selected") {
-                exportSelectedNotes()
-            }
-            .opacity(selectedNoteIDs.isEmpty ? 0.4 : 1)
-            .disabled(selectedNoteIDs.isEmpty)
         }
     }
 
@@ -431,13 +425,6 @@ struct NotesListView: View {
             } label: {
                 Label("Recently Deleted", systemImage: "trash")
             }
-        case .exportSelected:
-            Button {
-                exportSelectedNotes()
-            } label: {
-                Label("Export Selected Notes", systemImage: "square.and.arrow.up")
-            }
-            .disabled(selectedNoteIDs.isEmpty)
         }
     }
 
@@ -768,15 +755,13 @@ private enum NotesListTopBarAction: String, CaseIterable {
     case newNote
     case newFolder
     case recentlyDeleted
-    case exportSelected
 
     static let priorityOrder: [NotesListTopBarAction] = [
         .undo,
         .redo,
         .newNote,
         .newFolder,
-        .recentlyDeleted,
-        .exportSelected
+        .recentlyDeleted
     ]
 }
 
