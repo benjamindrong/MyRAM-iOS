@@ -4,6 +4,9 @@ import SwiftData
 import UIKit
 
 struct NotesListView: View {
+    private let topBarControlSize: CGFloat = 44
+    private let topBarIconSize: CGFloat = 20
+    private let topBarHeight: CGFloat = 44
     @StateObject private var vm: NotesViewModel
     @State private var editMode: EditMode = .inactive
     @State private var selectedNote: Note? = nil
@@ -249,14 +252,17 @@ struct NotesListView: View {
                     }
                 } label: {
                     Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 17, weight: .semibold))
-                        .frame(width: 28, height: 28)
+                        .font(.system(size: topBarIconSize, weight: .semibold))
+                        .frame(width: topBarControlSize, height: topBarControlSize)
+                        .symbolRenderingMode(.monochrome)
+                        .foregroundStyle(.primary)
                 }
+                .tint(.primary)
                 .accessibilityIdentifier("notes-list-more")
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
         }
-        .frame(height: 42)
+        .frame(height: topBarHeight)
     }
 
     @ViewBuilder
@@ -268,25 +274,38 @@ struct NotesListView: View {
             } label: {
                 HStack(spacing: 6) {
                     Text(mainListTitle)
-                        .font(.headline.weight(.semibold))
+                        .font(.title3.weight(.semibold))
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.45)
                         .allowsTightening(true)
                     Image(systemName: "pencil")
-                        .font(.caption.weight(.semibold))
+                        .font(.callout.weight(.semibold))
                         .foregroundStyle(.secondary)
                 }
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("edit-main-list-title")
         } else {
-            Text(vm.currentFolder?.name ?? mainListTitle)
-                .font(.headline.weight(.semibold))
-                .foregroundStyle(.primary)
-                .lineLimit(1)
-                .minimumScaleFactor(0.45)
-                .allowsTightening(true)
+            Button {
+                guard let folder = vm.currentFolder else { return }
+                folderAwaitingRename = folder
+                renameFolderName = folder.name
+            } label: {
+                HStack(spacing: 6) {
+                    Text(vm.currentFolder?.name ?? mainListTitle)
+                        .font(.title3.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.45)
+                        .allowsTightening(true)
+                    Image(systemName: "pencil")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("edit-folder-title")
         }
     }
 
@@ -307,8 +326,8 @@ struct NotesListView: View {
     ) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 15, weight: .semibold))
-                .frame(width: 28, height: 28)
+                .font(.system(size: topBarIconSize, weight: .semibold))
+                .frame(width: topBarControlSize, height: topBarControlSize)
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
@@ -318,10 +337,10 @@ struct NotesListView: View {
     private func topBarActionLayout(totalWidth: CGFloat) -> TopBarActionLayout {
         let minimumTitleWidth: CGFloat = 56
         let titleWidth = max(minimumTitleWidth, estimatedTitleWidth)
-        let selectControlWidth: CGFloat = 28
-        let backButtonWidth: CGFloat = vm.currentFolder == nil ? 0 : 28
-        let overflowButtonWidth: CGFloat = 28
-        let actionButtonWidth: CGFloat = 28
+        let selectControlWidth: CGFloat = topBarControlSize
+        let backButtonWidth: CGFloat = vm.currentFolder == nil ? 0 : topBarControlSize
+        let overflowButtonWidth: CGFloat = topBarControlSize
+        let actionButtonWidth: CGFloat = topBarControlSize
         let interItemSpacing: CGFloat = 8
         let horizontalPadding: CGFloat = 20
 
@@ -353,9 +372,10 @@ struct NotesListView: View {
 
     private var estimatedTitleWidth: CGFloat {
         let displayTitle = vm.currentFolder?.name ?? mainListTitle
-        let titleFont = UIFont.preferredFont(forTextStyle: .headline)
+        let titleFont = UIFont.preferredFont(forTextStyle: .title3)
         let textWidth = (displayTitle as NSString).size(withAttributes: [.font: titleFont]).width
-        return ceil(textWidth) + 26
+        let editAffordanceWidth: CGFloat = vm.currentFolder == nil ? 30 : 0
+        return ceil(textWidth) + 16 + editAffordanceWidth
     }
 
     @ViewBuilder
@@ -398,6 +418,7 @@ struct NotesListView: View {
             } label: {
                 Label("Undo", systemImage: "arrow.uturn.backward")
             }
+            .foregroundStyle(.primary)
             .disabled(!canPerformListUndo)
         case .redo:
             Button {
@@ -405,6 +426,7 @@ struct NotesListView: View {
             } label: {
                 Label("Redo", systemImage: "arrow.uturn.forward")
             }
+            .foregroundStyle(.primary)
             .disabled(!canPerformListRedo)
         case .newNote:
             Button {
@@ -412,6 +434,7 @@ struct NotesListView: View {
             } label: {
                 Label("New Note", systemImage: "square.and.pencil")
             }
+            .foregroundStyle(.primary)
         case .newFolder:
             Button {
                 newFolderName = ""
@@ -419,12 +442,14 @@ struct NotesListView: View {
             } label: {
                 Label("New Folder", systemImage: "folder.badge.plus")
             }
+            .foregroundStyle(.primary)
         case .recentlyDeleted:
             Button {
                 showingRecentlyDeleted = true
             } label: {
                 Label("Recently Deleted", systemImage: "trash")
             }
+            .foregroundStyle(.primary)
         }
     }
 
@@ -453,7 +478,7 @@ struct NotesListView: View {
             HStack(spacing: 10) {
                 Image(systemName: "folder")
                     .font(.headline)
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(.primary)
                 Text(folder.name)
                     .font(.headline)
                     .foregroundStyle(.primary)
