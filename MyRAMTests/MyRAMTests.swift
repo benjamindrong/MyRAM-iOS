@@ -955,6 +955,83 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)
     }
 
+    func testChecklistActionCreatesUncheckedItemAtCurrentLine() {
+        let mutable = NSMutableAttributedString(string: "Buy milk")
+
+        let updatedSelection = ChecklistItemEditor.applyChecklistAction(
+            in: mutable,
+            selection: NSRange(location: 0, length: 0)
+        )
+
+        XCTAssertEqual(mutable.string, "☐ Buy milk")
+        XCTAssertEqual(updatedSelection.location, ChecklistItemEditor.uncheckedPrefix.utf16.count)
+        XCTAssertEqual(updatedSelection.length, 0)
+    }
+
+    func testChecklistActionTogglesUncheckedAndCheckedState() {
+        let mutable = NSMutableAttributedString(string: "☐ Buy milk")
+
+        _ = ChecklistItemEditor.applyChecklistAction(
+            in: mutable,
+            selection: NSRange(location: 0, length: 0)
+        )
+        XCTAssertEqual(mutable.string, "☑︎ Buy milk")
+
+        _ = ChecklistItemEditor.applyChecklistAction(
+            in: mutable,
+            selection: NSRange(location: 0, length: 0)
+        )
+        XCTAssertEqual(mutable.string, "☐ Buy milk")
+    }
+
+    func testChecklistRenderingAppliesStrikethroughOnlyToCheckedItemText() {
+        let mutable = NSMutableAttributedString(string: "☑︎ Done\n☐ Pending")
+
+        XCTAssertTrue(ChecklistItemEditor.applyCheckedItemRendering(in: mutable))
+
+        let checkedTextStart = ChecklistItemEditor.checkedPrefix.utf16.count
+        let checkedStyle = mutable.attribute(.strikethroughStyle, at: checkedTextStart, effectiveRange: nil) as? Int
+        XCTAssertEqual(checkedStyle, NSUnderlineStyle.single.rawValue)
+
+        let prefixStyle = mutable.attribute(.strikethroughStyle, at: 0, effectiveRange: nil) as? Int
+        XCTAssertNil(prefixStyle)
+
+        let nsText = mutable.string as NSString
+        let uncheckedLineLocation = nsText.range(of: "☐ Pending").location
+        let uncheckedTextStart = uncheckedLineLocation + ChecklistItemEditor.uncheckedPrefix.utf16.count
+        let uncheckedStyle = mutable.attribute(.strikethroughStyle, at: uncheckedTextStart, effectiveRange: nil) as? Int
+        XCTAssertNil(uncheckedStyle)
+    }
+
+    func testChecklistCheckedItemRemainsEditableAfterRendering() {
+        let mutable = NSMutableAttributedString(string: "☑︎ Done")
+        _ = ChecklistItemEditor.applyCheckedItemRendering(in: mutable)
+
+        mutable.replaceCharacters(in: NSRange(location: mutable.length, length: 0), with: " now")
+        _ = ChecklistItemEditor.applyCheckedItemRendering(in: mutable)
+
+        XCTAssertEqual(mutable.string, "☑︎ Done now")
+        let lastCharacterIndex = max(mutable.length - 1, 0)
+        let style = mutable.attribute(.strikethroughStyle, at: lastCharacterIndex, effectiveRange: nil) as? Int
+        XCTAssertEqual(style, NSUnderlineStyle.single.rawValue)
+    }
+
+    func testChecklistRenderingMigratesLegacyMarkersToIcons() {
+        let mutable = NSMutableAttributedString(string: "- [x] Done\n- [ ] Pending")
+
+        _ = ChecklistItemEditor.applyCheckedItemRendering(in: mutable)
+
+        XCTAssertEqual(mutable.string, "☑︎ Done\n☐ Pending")
+    }
+
+    func testChecklistIconDetectionMatchesIconPrefixRange() {
+        let text = "☐ Buy milk" as NSString
+
+        XCTAssertTrue(ChecklistItemEditor.isChecklistIcon(at: 0, in: text))
+        XCTAssertTrue(ChecklistItemEditor.isChecklistIcon(at: 1, in: text))
+        XCTAssertFalse(ChecklistItemEditor.isChecklistIcon(at: 2, in: text))
+    }
+
     private func makeContainer(
         isStoredInMemoryOnly: Bool,
         configurationName: String = "MyRAMTests"
