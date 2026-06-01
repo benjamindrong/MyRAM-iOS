@@ -55,15 +55,8 @@ final class MyRAMUITests: XCTestCase {
         let app = makeApp()
         app.launch()
 
-        let overflowButton = app.buttons["notes-list-more"]
-        XCTAssertTrue(overflowButton.waitForExistence(timeout: 5))
-        overflowButton.tap()
+        openNewNote(in: app)
 
-        let newNoteButton = app.buttons["New Note"]
-        XCTAssertTrue(newNoteButton.waitForExistence(timeout: 5))
-        newNoteButton.tap()
-
-        XCTAssertTrue(app.navigationBars["Note"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.buttons["edit-note-title"].waitForExistence(timeout: 5))
 //        XCTAssertTrue(app.buttons["keyboard-control-copy"].waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Untitled"].exists)
@@ -75,13 +68,7 @@ final class MyRAMUITests: XCTestCase {
         let app = makeApp()
         app.launch()
 
-        let overflowButton = app.buttons["notes-list-more"]
-        XCTAssertTrue(overflowButton.waitForExistence(timeout: 5))
-        overflowButton.tap()
-
-        let newNoteButton = app.buttons["New Note"]
-        XCTAssertTrue(newNoteButton.waitForExistence(timeout: 5))
-        newNoteButton.tap()
+        openNewNote(in: app)
 
         let editTitleButton = app.buttons["edit-note-title"]
         XCTAssertTrue(editTitleButton.waitForExistence(timeout: 5))
@@ -99,6 +86,22 @@ final class MyRAMUITests: XCTestCase {
             app.launchEnvironment["UITEST_FORCE_APPEARANCE"] = forcedAppearanceRaw
         }
         return app
+    }
+
+    private func openNewNote(in app: XCUIApplication) {
+        let quickActionButton = app.buttons["notes-topbar-new-note"]
+        if quickActionButton.waitForExistence(timeout: 2) {
+            quickActionButton.tap()
+            return
+        }
+
+        let overflowButton = app.buttons["notes-list-more"]
+        XCTAssertTrue(overflowButton.waitForExistence(timeout: 5))
+        overflowButton.tap()
+
+        let menuNewNoteButton = app.buttons["New Note"]
+        XCTAssertTrue(menuNewNoteButton.waitForExistence(timeout: 5))
+        menuNewNoteButton.tap()
     }
 
     private func currentAppearanceRaw(in app: XCUIApplication) -> String? {

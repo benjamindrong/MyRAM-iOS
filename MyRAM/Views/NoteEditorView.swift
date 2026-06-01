@@ -22,6 +22,7 @@ struct NoteEditorView: View {
     @State private var italicToggleToken = 0
     @State private var underlineToggleToken = 0
     @State private var strikethroughToggleToken = 0
+    @State private var checklistToggleToken = 0
     @State private var increaseFontSizeToggleToken = 0
     @State private var decreaseFontSizeToggleToken = 0
     @State private var selectedTextUIColor: UIColor?
@@ -67,6 +68,7 @@ struct NoteEditorView: View {
                         italicToggleToken: italicToggleToken,
                         underlineToggleToken: underlineToggleToken,
                         strikethroughToggleToken: strikethroughToggleToken,
+                        checklistToggleToken: checklistToggleToken,
                         increaseFontSizeToggleToken: increaseFontSizeToggleToken,
                         decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
                         formattingController: formattingController,
@@ -744,6 +746,17 @@ struct NoteEditorView: View {
                 ) {
                     strikethroughToggleToken += 1
                 }
+                Button {
+                    checklistToggleToken += 1
+                } label: {
+                    Image(systemName: "checkmark.square")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .background(Color(.tertiarySystemFill))
+                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("format-checklist-toggle")
             }
 
             HStack(spacing: 14) {
@@ -1216,6 +1229,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let italicToggleToken: Int
     let underlineToggleToken: Int
     let strikethroughToggleToken: Int
+    let checklistToggleToken: Int
     let increaseFontSizeToggleToken: Int
     let decreaseFontSizeToggleToken: Int
     let formattingController: TextFormattingController
@@ -1227,6 +1241,7 @@ private struct SelectableTextView: UIViewRepresentable {
         let textView = UITextView()
         context.coordinator.textView = textView
         context.coordinator.installFormattingControllerHandler()
+        context.coordinator.installChecklistTapRecognizer(on: textView)
         textView.delegate = context.coordinator
         textView.font = .preferredFont(forTextStyle: .body)
         textView.textColor = .label
@@ -1254,6 +1269,7 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.formattingController = formattingController
         context.coordinator.installFormattingControllerHandler()
+        context.coordinator.installChecklistTapRecognizer(on: textView)
         context.coordinator.isUpdatingUIView = true
         defer {
             context.coordinator.isUpdatingUIView = false
@@ -1280,6 +1296,7 @@ private struct SelectableTextView: UIViewRepresentable {
             italicToggleToken: italicToggleToken,
             underlineToggleToken: underlineToggleToken,
             strikethroughToggleToken: strikethroughToggleToken,
+            checklistToggleToken: checklistToggleToken,
             increaseFontSizeToggleToken: increaseFontSizeToggleToken,
             decreaseFontSizeToggleToken: decreaseFontSizeToggleToken
         )
@@ -1301,6 +1318,7 @@ private struct SelectableTextView: UIViewRepresentable {
             if !textView.attributedText.isEqual(to: normalizedAttributedText) {
                 let selectedRange = textView.selectedRange
                 textView.attributedText = normalizedAttributedText
+                context.coordinator.applyChecklistRendering(in: textView)
                 let newLength = (textView.text as NSString).length
                 textView.selectedRange = selectedRange.location <= newLength
                     ? selectedRange
@@ -1353,6 +1371,12 @@ private struct SelectableTextView: UIViewRepresentable {
             context.coordinator.reportUndoManagerChanged(textView.undoManager)
         }
 
+        if context.coordinator.checklistToggleToken != checklistToggleToken {
+            context.coordinator.checklistToggleToken = checklistToggleToken
+            context.coordinator.toggleChecklistItem(in: textView)
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
+        }
+
         if context.coordinator.increaseFontSizeToggleToken != increaseFontSizeToggleToken {
             context.coordinator.increaseFontSizeToggleToken = increaseFontSizeToggleToken
             context.coordinator.adjustFontSize(in: textView, by: 1)
@@ -1380,7 +1404,7 @@ private struct SelectableTextView: UIViewRepresentable {
         )
     }
 
-    final class Coordinator: NSObject, UITextViewDelegate {
+    final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
         var formattingController: TextFormattingController
         var text: Binding<String>
         var richTextContentData: Binding<Data?>
@@ -1394,12 +1418,14 @@ private struct SelectableTextView: UIViewRepresentable {
         var italicToggleToken = 0
         var underlineToggleToken = 0
         var strikethroughToggleToken = 0
+        var checklistToggleToken = 0
         var increaseFontSizeToggleToken = 0
         var decreaseFontSizeToggleToken = 0
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
         var isUpdatingUIView = false
         private var appliedPlainTextAwaitingBinding: String?
         private var appliedRichTextDataAwaitingBinding: Data?
+        private weak var checklistTapRecognizer: UITapGestureRecognizer?
 
         init(
             formattingController: TextFormattingController,
@@ -1429,7 +1455,70 @@ private struct SelectableTextView: UIViewRepresentable {
             }
         }
 
+        func installChecklistTapRecognizer(on textView: UITextView) {
+            if checklistTapRecognizer?.view === textView {
+                return
+            }
+
+            if let previous = checklistTapRecognizer {
+                previous.view?.removeGestureRecognizer(previous)
+            }
+
+            let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleChecklistTap(_:)))
+            recognizer.cancelsTouchesInView = false
+            recognizer.delegate = self
+            textView.addGestureRecognizer(recognizer)
+            checklistTapRecognizer = recognizer
+        }
+
+        @objc
+        private func handleChecklistTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended,
+                  let textView = textView else { return }
+
+            let locationInView = recognizer.location(in: textView)
+            let location = CGPoint(
+                x: locationInView.x - textView.textContainerInset.left,
+                y: locationInView.y - textView.textContainerInset.top
+            )
+
+            let layoutManager = textView.layoutManager
+            let container = textView.textContainer
+            let glyphIndex = layoutManager.glyphIndex(for: location, in: container)
+            let glyphRect = layoutManager.boundingRect(
+                forGlyphRange: NSRange(location: glyphIndex, length: 1),
+                in: container
+            )
+            guard glyphRect.contains(location) else { return }
+
+            let characterIndex = layoutManager.characterIndex(
+                for: location,
+                in: container,
+                fractionOfDistanceBetweenInsertionPoints: nil
+            )
+            guard characterIndex < textView.attributedText.length else { return }
+            guard ChecklistItemEditor.isChecklistIcon(
+                at: characterIndex,
+                in: textView.attributedText.string as NSString
+            ) else { return }
+
+            toggleChecklistItem(
+                in: textView,
+                selection: NSRange(location: characterIndex, length: 0),
+                animated: true
+            )
+            reportUndoManagerChanged(textView.undoManager)
+        }
+
+        func gestureRecognizer(
+            _ gestureRecognizer: UIGestureRecognizer,
+            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
+        ) -> Bool {
+            true
+        }
+
         func textViewDidChange(_ textView: UITextView) {
+            applyChecklistRendering(in: textView)
             syncContent(from: textView)
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
@@ -1467,6 +1556,7 @@ private struct SelectableTextView: UIViewRepresentable {
             italicToggleToken: Int,
             underlineToggleToken: Int,
             strikethroughToggleToken: Int,
+            checklistToggleToken: Int,
             increaseFontSizeToggleToken: Int,
             decreaseFontSizeToggleToken: Int
         ) -> Bool {
@@ -1474,6 +1564,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 || self.italicToggleToken != italicToggleToken
                 || self.underlineToggleToken != underlineToggleToken
                 || self.strikethroughToggleToken != strikethroughToggleToken
+                || self.checklistToggleToken != checklistToggleToken
                 || self.increaseFontSizeToggleToken != increaseFontSizeToggleToken
                 || self.decreaseFontSizeToggleToken != decreaseFontSizeToggleToken
         }
@@ -1492,6 +1583,19 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func toggleStrikethrough(in textView: UITextView) {
             toggleTextDecoration(in: textView, key: .strikethroughStyle)
+        }
+
+        func toggleChecklistItem(in textView: UITextView) {
+            toggleChecklistItem(in: textView, selection: textView.selectedRange, animated: false)
+        }
+
+        private func toggleChecklistItem(in textView: UITextView, selection: NSRange, animated: Bool) {
+            let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
+            let updatedSelection = ChecklistItemEditor.applyChecklistAction(
+                in: mutable,
+                selection: selection
+            )
+            applyAttributedText(mutable, in: textView, selectedRange: updatedSelection, animated: animated)
         }
 
         func adjustFontSize(in textView: UITextView, by delta: CGFloat) {
@@ -1977,13 +2081,43 @@ private struct SelectableTextView: UIViewRepresentable {
         private func applyAttributedText(
             _ attributedText: NSAttributedString,
             in textView: UITextView,
-            selectedRange: NSRange
+            selectedRange: NSRange,
+            animated: Bool = false
         ) {
-            textView.attributedText = attributedText
-            textView.selectedRange = selectedRange
+            let applyUpdates = {
+                textView.attributedText = attributedText
+                textView.selectedRange = selectedRange
+            }
+
+            if animated {
+                UIView.transition(
+                    with: textView,
+                    duration: 0.16,
+                    options: [.transitionCrossDissolve, .allowUserInteraction]
+                ) {
+                    applyUpdates()
+                }
+            } else {
+                applyUpdates()
+            }
+
             lastKnownSelectionRange = selectedRange
             syncContent(from: textView)
             reportFormattingState(from: textView)
+        }
+
+        func applyChecklistRendering(in textView: UITextView) {
+            let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
+            guard ChecklistItemEditor.applyCheckedItemRendering(in: mutable) else { return }
+
+            let selectedRange = textView.selectedRange
+            textView.attributedText = mutable
+            let newLength = (textView.text as NSString).length
+            let safeLocation = min(selectedRange.location, newLength)
+            let safeLength = min(selectedRange.length, newLength - safeLocation)
+            let safeRange = NSRange(location: safeLocation, length: safeLength)
+            textView.selectedRange = safeRange
+            lastKnownSelectionRange = safeRange
         }
 
         private func effectiveSelectionRange(in textView: UITextView) -> NSRange {
@@ -2020,6 +2154,197 @@ private struct SelectableTextView: UIViewRepresentable {
 
             return currentRange
         }
+    }
+}
+
+enum ChecklistItemEditor {
+    static let uncheckedPrefix = "☐ "
+    static let checkedPrefix = "☑︎ "
+    static let checkedPrefixVariant = "☑ "
+    static let legacyUncheckedPrefix = "- [ ] "
+    static let legacyCheckedPrefix = "- [x] "
+    static let legacyShortUncheckedPrefix = "[ ] "
+    static let legacyShortCheckedPrefix = "[x] "
+
+    private static let autoChecklistStrikethroughKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-strikethrough")
+
+    static func applyChecklistAction(
+        in attributedText: NSMutableAttributedString,
+        selection: NSRange
+    ) -> NSRange {
+        let text = attributedText.string as NSString
+        let clampedSelectionLocation = min(max(selection.location, 0), text.length)
+        let lineRangeWithNewline = text.lineRange(for: NSRange(location: clampedSelectionLocation, length: 0))
+        let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
+        let line = text.substring(with: lineRange)
+
+        let replacement: (range: NSRange, prefix: String)
+        if line.hasPrefix(checkedPrefix) {
+            replacement = (NSRange(location: lineRange.location, length: checkedPrefix.utf16.count), uncheckedPrefix)
+        } else if line.hasPrefix(checkedPrefixVariant) {
+            replacement = (NSRange(location: lineRange.location, length: checkedPrefixVariant.utf16.count), uncheckedPrefix)
+        } else if line.hasPrefix(uncheckedPrefix) {
+            replacement = (NSRange(location: lineRange.location, length: uncheckedPrefix.utf16.count), checkedPrefix)
+        } else if line.hasPrefix(legacyCheckedPrefix) {
+            replacement = (NSRange(location: lineRange.location, length: legacyCheckedPrefix.utf16.count), uncheckedPrefix)
+        } else if line.hasPrefix(legacyUncheckedPrefix) {
+            replacement = (NSRange(location: lineRange.location, length: legacyUncheckedPrefix.utf16.count), checkedPrefix)
+        } else if line.hasPrefix(legacyShortCheckedPrefix) {
+            replacement = (NSRange(location: lineRange.location, length: legacyShortCheckedPrefix.utf16.count), uncheckedPrefix)
+        } else if line.hasPrefix(legacyShortUncheckedPrefix) {
+            replacement = (NSRange(location: lineRange.location, length: legacyShortUncheckedPrefix.utf16.count), checkedPrefix)
+        } else {
+            replacement = (NSRange(location: lineRange.location, length: 0), uncheckedPrefix)
+        }
+
+        let delta = replacement.prefix.utf16.count - replacement.range.length
+        attributedText.replaceCharacters(in: replacement.range, with: replacement.prefix)
+        _ = applyCheckedItemRendering(in: attributedText)
+
+        let oldLocation = clampedSelectionLocation
+        let adjustedLocation: Int
+        if oldLocation < replacement.range.location {
+            adjustedLocation = oldLocation
+        } else if oldLocation <= replacement.range.location + replacement.range.length {
+            adjustedLocation = replacement.range.location + replacement.prefix.utf16.count
+        } else {
+            adjustedLocation = oldLocation + delta
+        }
+
+        let newLength = attributedText.length
+        return NSRange(location: min(max(adjustedLocation, 0), newLength), length: 0)
+    }
+
+    @discardableResult
+    static func applyCheckedItemRendering(in attributedText: NSMutableAttributedString) -> Bool {
+        let previous = attributedText.copy() as? NSAttributedString
+        normalizeLegacyPrefixes(in: attributedText)
+        let fullRange = NSRange(location: 0, length: attributedText.length)
+
+        var autoRanges: [NSRange] = []
+        attributedText.enumerateAttribute(autoChecklistStrikethroughKey, in: fullRange) { value, range, _ in
+            if (value as? Bool) == true {
+                autoRanges.append(range)
+            }
+        }
+
+        autoRanges.forEach { range in
+            attributedText.removeAttribute(.strikethroughStyle, range: range)
+            attributedText.removeAttribute(.strikethroughColor, range: range)
+            attributedText.removeAttribute(autoChecklistStrikethroughKey, range: range)
+        }
+
+        checkedContentRanges(in: attributedText.string as NSString).forEach { range in
+            guard range.length > 0 else { return }
+            attributedText.addAttribute(
+                .strikethroughStyle,
+                value: NSUnderlineStyle.single.rawValue,
+                range: range
+            )
+            attributedText.addAttribute(
+                autoChecklistStrikethroughKey,
+                value: true,
+                range: range
+            )
+        }
+
+        return previous?.isEqual(to: attributedText) == false
+    }
+
+    static func checkedContentRanges(in text: NSString) -> [NSRange] {
+        guard text.length > 0 else { return [] }
+
+        var ranges: [NSRange] = []
+        var cursor = 0
+        while cursor < text.length {
+            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
+            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
+            let line = text.substring(with: lineRange)
+
+            let prefixLength: Int?
+            if line.hasPrefix(checkedPrefix) {
+                prefixLength = checkedPrefix.utf16.count
+            } else if line.hasPrefix(checkedPrefixVariant) {
+                prefixLength = checkedPrefixVariant.utf16.count
+            } else {
+                prefixLength = nil
+            }
+
+            if let prefixLength {
+                let start = lineRange.location + prefixLength
+                let length = max(lineRange.length - prefixLength, 0)
+                ranges.append(NSRange(location: start, length: length))
+            }
+
+            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
+            if nextCursor <= cursor { break }
+            cursor = nextCursor
+        }
+        return ranges
+    }
+
+    static func isChecklistIcon(at characterIndex: Int, in text: NSString) -> Bool {
+        guard text.length > 0 else { return false }
+        let clampedLocation = min(max(characterIndex, 0), max(text.length - 1, 0))
+        let lineRangeWithNewline = text.lineRange(for: NSRange(location: clampedLocation, length: 0))
+        let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
+        guard lineRange.length > 0 else { return false }
+
+        let line = text.substring(with: lineRange)
+        let prefixLength: Int
+        if line.hasPrefix(uncheckedPrefix) {
+            prefixLength = uncheckedPrefix.utf16.count
+        } else if line.hasPrefix(checkedPrefix) {
+            prefixLength = checkedPrefix.utf16.count
+        } else if line.hasPrefix(checkedPrefixVariant) {
+            prefixLength = checkedPrefixVariant.utf16.count
+        } else {
+            return false
+        }
+
+        let prefixRange = NSRange(location: lineRange.location, length: prefixLength)
+        return NSLocationInRange(clampedLocation, prefixRange)
+    }
+
+    private static func normalizeLegacyPrefixes(in attributedText: NSMutableAttributedString) {
+        let text = attributedText.string as NSString
+        guard text.length > 0 else { return }
+
+        var replacements: [(range: NSRange, replacement: String)] = []
+        var cursor = 0
+        while cursor < text.length {
+            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
+            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
+            let line = text.substring(with: lineRange)
+
+            if line.hasPrefix(legacyCheckedPrefix) {
+                replacements.append((NSRange(location: lineRange.location, length: legacyCheckedPrefix.utf16.count), checkedPrefix))
+            } else if line.hasPrefix(legacyUncheckedPrefix) {
+                replacements.append((NSRange(location: lineRange.location, length: legacyUncheckedPrefix.utf16.count), uncheckedPrefix))
+            } else if line.hasPrefix(legacyShortCheckedPrefix) {
+                replacements.append((NSRange(location: lineRange.location, length: legacyShortCheckedPrefix.utf16.count), checkedPrefix))
+            } else if line.hasPrefix(legacyShortUncheckedPrefix) {
+                replacements.append((NSRange(location: lineRange.location, length: legacyShortUncheckedPrefix.utf16.count), uncheckedPrefix))
+            }
+
+            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
+            if nextCursor <= cursor { break }
+            cursor = nextCursor
+        }
+
+        replacements.reversed().forEach { replacement in
+            attributedText.replaceCharacters(in: replacement.range, with: replacement.replacement)
+        }
+    }
+
+    private static func normalizedLineRange(from lineRange: NSRange, in text: NSString) -> NSRange {
+        guard lineRange.length > 0 else { return lineRange }
+        var length = lineRange.length
+        let lastIndex = lineRange.location + lineRange.length - 1
+        if lastIndex >= 0, lastIndex < text.length, text.character(at: lastIndex) == 10 {
+            length -= 1
+        }
+        return NSRange(location: lineRange.location, length: max(length, 0))
     }
 }
 
