@@ -28,6 +28,8 @@ struct NoteEditorView: View {
     @State private var selectedTextUIColor: UIColor?
     @State private var formattingState = EditorFormattingState()
     @State private var showingFormattingControls = false
+    @State private var isKeyboardVisible = false
+    @State private var keyboardFocusToggleToken = 0
     @State private var activeUndoManager: UndoManager?
     @State private var canUndo = false
     @State private var canRedo = false
@@ -50,18 +52,17 @@ struct NoteEditorView: View {
     @State private var keyboardToast: KeyboardToast?
     @State private var keyboardToastTask: Task<Void, Never>?
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
-    private let editorBottomInset: CGFloat = 58
     
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
                 editorTopBar
 
-                ZStack(alignment: .bottomTrailing) {
+                VStack(spacing: 8) {
                     SelectableTextView(
                         text: $content,
                         richTextContentData: $richTextContentData,
-                        bottomContentInset: editorBottomInset,
+                        keyboardFocusToggleToken: keyboardFocusToggleToken,
                         captureSelectionToggleToken: captureSelectionToggleToken,
                         selectAllToggleToken: selectAllToggleToken,
                         boldToggleToken: boldToggleToken,
@@ -78,25 +79,21 @@ struct NoteEditorView: View {
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-                    VStack(alignment: .trailing, spacing: 8) {
-                        if let keyboardToast {
-                            Text(keyboardToast.message)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(.ultraThinMaterial, in: Capsule())
-                                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        }
-
-                        if showingFormattingControls {
-                            inlineFormattingControls
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-
-                        attachmentInlineActions
+                    if showingFormattingControls {
+                        overflowFormattingControls
+                            .transition(.move(edge: .bottom).combined(with: .opacity))
                     }
-                    .padding(.trailing, 8)
-                    .padding(.bottom, 8)
+
+                    if let keyboardToast {
+                        Text(keyboardToast.message)
+                            .font(.caption.weight(.semibold))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(.ultraThinMaterial, in: Capsule())
+                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    }
+
+                    collapsedEditorControls
                 }
 
                 if !sortedAttachments.isEmpty {
@@ -185,6 +182,12 @@ struct NoteEditorView: View {
                 refreshSuggestionLabels()
             }
             .onChange(of: title) { handleEditorChange() }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                isKeyboardVisible = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                isKeyboardVisible = false
+            }
             .onChange(of: selectedPickerItems) { _, newItems in
                 guard !newItems.isEmpty else { return }
                 Task {
@@ -277,7 +280,10 @@ struct NoteEditorView: View {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: 17, weight: .semibold))
                         .frame(width: 28, height: 28)
+                        .symbolRenderingMode(.monochrome)
+                        .foregroundStyle(.primary)
                 }
+                .tint(.primary)
                 .accessibilityIdentifier("note-editor-more")
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
@@ -373,7 +379,10 @@ struct NoteEditorView: View {
                 Image(systemName: "paperclip")
                     .font(.system(size: 15, weight: .semibold))
                     .frame(width: 28, height: 28)
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(.primary)
             }
+            .tint(.primary)
             .accessibilityIdentifier("topbar-attachments")
         case .deleteNote:
             EmptyView()
@@ -392,6 +401,7 @@ struct NoteEditorView: View {
                 .frame(width: 28, height: 28)
         }
         .buttonStyle(.plain)
+        .foregroundStyle(.primary)
         .opacity(isDisabled ? 0.4 : 1)
         .disabled(isDisabled)
         .accessibilityIdentifier(identifier)
@@ -637,31 +647,30 @@ struct NoteEditorView: View {
         return image.jpegData(compressionQuality: 0.85) ?? data
     }
 
-    private var attachmentInlineActions: some View {
+    private var collapsedEditorControls: some View {
         HStack(spacing: 8) {
             inlineActionButton(
-                systemImage: "keyboard.chevron.compact.down",
-                identifier: "keyboard-control-dismiss"
+                systemImage: isKeyboardVisible ? "keyboard.chevron.compact.down" : "keyboard",
+                identifier: "keyboard-control-toggle"
             ) {
-                dismissKeyboard()
+                if isKeyboardVisible {
+                    dismissKeyboard()
+                } else {
+                    keyboardFocusToggleToken += 1
+                }
             }
-            inlineActionButton(
-                systemImage: "arrow.uturn.backward",
-                identifier: "keyboard-control-undo"
-            ) {
+            inlineActionButton(systemImage: "arrow.uturn.backward", identifier: "keyboard-control-undo") {
                 performUndo()
             }
             .opacity(canPerformUndo ? 1 : 0.4)
             .disabled(!canPerformUndo)
 
-            inlineActionButton(
-                systemImage: "arrow.uturn.forward",
-                identifier: "keyboard-control-redo"
-            ) {
+            inlineActionButton(systemImage: "arrow.uturn.forward", identifier: "keyboard-control-redo") {
                 performRedo()
             }
             .opacity(canPerformRedo ? 1 : 0.4)
             .disabled(!canPerformRedo)
+
             inlineActionButton(systemImage: "scissors", identifier: "keyboard-control-cut") {
                 performResponderAction(#selector(UIResponder.cut(_:)))
             }
@@ -671,18 +680,16 @@ struct NoteEditorView: View {
                     toast: KeyboardToast(message: "Copied")
                 )
             }
-            inlineActionButton(
-                systemImage: "doc.on.clipboard",
-                identifier: "keyboard-control-paste"
-            ) {
+            inlineActionButton(systemImage: "doc.on.clipboard", identifier: "keyboard-control-paste") {
                 performResponderAction(#selector(UIResponder.paste(_:)))
             }
-            inlineActionButton(
-                systemImage: "selection.pin.in.out",
-                identifier: "keyboard-control-select-all"
-            ) {
+            inlineActionButton(systemImage: "selection.pin.in.out", identifier: "keyboard-control-select-all") {
                 selectAllToggleToken += 1
             }
+            inlineActionButton(systemImage: "checkmark.square", identifier: "keyboard-control-checklist") {
+                checklistToggleToken += 1
+            }
+
             Button {
                 captureSelectionToggleToken += 1
                 withAnimation(.easeInOut(duration: 0.2)) {
@@ -694,7 +701,7 @@ struct NoteEditorView: View {
                     .frame(width: 26, height: 26)
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier("keyboard-control-formatting-menu")
+            .accessibilityIdentifier("keyboard-control-overflow-toggle")
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
@@ -714,7 +721,7 @@ struct NoteEditorView: View {
         .accessibilityIdentifier("keyboard-control-bar")
     }
 
-    private var inlineFormattingControls: some View {
+    private var overflowFormattingControls: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
                 formattingToggleButton(
@@ -826,7 +833,13 @@ struct NoteEditorView: View {
                 .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
         )
         .frame(maxWidth: min(UIScreen.main.bounds.width * 0.82, 320))
+        .accessibilityIdentifier("keyboard-control-overflow-panel")
     }
+    
+    private func dismissKeyboard() {
+        performResponderAction(#selector(UIResponder.resignFirstResponder))
+    }
+
 
     private func formattingToggleButton(
         label: String,
@@ -840,7 +853,7 @@ struct NoteEditorView: View {
                 .font(.headline.weight(.semibold))
                 .strikethrough(isStrikethroughLabel)
                 .frame(width: 34, height: 34)
-                .background(isActive ? Color.accentColor.opacity(0.2) : Color(.tertiarySystemFill))
+                .background(isActive ? Color.primary.opacity(0.16) : Color(.tertiarySystemFill))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -919,10 +932,6 @@ struct NoteEditorView: View {
         }
     }
 
-    private func dismissKeyboard() {
-        performResponderAction(#selector(UIResponder.resignFirstResponder))
-    }
-
     private func exportCurrentNote() {
         do {
             let exportURLs = try vm.exportNotesForSharing([note])
@@ -942,18 +951,21 @@ struct NoteEditorView: View {
             } label: {
                 Label("Export Note", systemImage: "square.and.arrow.up")
             }
+            .foregroundStyle(.primary)
         case .attachments:
             Menu {
                 attachmentImportMenuItems
             } label: {
                 Label("Attachments", systemImage: "paperclip")
             }
+            .foregroundStyle(.primary)
         case .newNote:
             Button {
                 onNewNote(vm.createNewNote())
             } label: {
                 Label("New Note", systemImage: "square.and.pencil")
             }
+            .foregroundStyle(.primary)
         case .newFolder:
             Button {
                 newFolderName = ""
@@ -961,6 +973,7 @@ struct NoteEditorView: View {
             } label: {
                 Label("New Folder", systemImage: "folder.badge.plus")
             }
+            .foregroundStyle(.primary)
         case .deleteNote:
             Button(role: .destructive) {
                 vm.deleteNote(note)
@@ -978,12 +991,14 @@ struct NoteEditorView: View {
         } label: {
             Label("Photo Library", systemImage: "photo")
         }
+        .foregroundStyle(.primary)
 
         Button {
             showingFileImporter = true
         } label: {
             Label("Import Image", systemImage: "square.and.arrow.down")
         }
+        .foregroundStyle(.primary)
     }
 }
 
@@ -1222,7 +1237,7 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
 private struct SelectableTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var richTextContentData: Data?
-    let bottomContentInset: CGFloat
+    let keyboardFocusToggleToken: Int
     let captureSelectionToggleToken: Int
     let selectAllToggleToken: Int
     let boldToggleToken: Int
@@ -1256,12 +1271,11 @@ private struct SelectableTextView: UIViewRepresentable {
         textView.textContainerInset = UIEdgeInsets(
             top: 12,
             left: 8,
-            bottom: 12 + bottomContentInset,
+            bottom: 12,
             right: 8
         )
         textView.keyboardDismissMode = .interactive
         textView.alwaysBounceVertical = true
-        textView.scrollIndicatorInsets = UIEdgeInsets(top: 0, left: 0, bottom: bottomContentInset, right: 0)
         return textView
     }
 
@@ -1275,20 +1289,9 @@ private struct SelectableTextView: UIViewRepresentable {
             context.coordinator.isUpdatingUIView = false
         }
 
-        let desiredInsets = UIEdgeInsets(
-            top: 12,
-            left: 8,
-            bottom: 12 + bottomContentInset,
-            right: 8
-        )
+        let desiredInsets = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
         if textView.textContainerInset != desiredInsets {
             textView.textContainerInset = desiredInsets
-            textView.scrollIndicatorInsets = UIEdgeInsets(
-                top: 0,
-                left: 0,
-                bottom: bottomContentInset,
-                right: 0
-            )
         }
 
         let hasPendingFormattingMutation = context.coordinator.hasPendingFormattingMutation(
@@ -1334,6 +1337,13 @@ private struct SelectableTextView: UIViewRepresentable {
         if context.coordinator.captureSelectionToggleToken != captureSelectionToggleToken {
             context.coordinator.captureSelectionToggleToken = captureSelectionToggleToken
             context.coordinator.captureCurrentSelection(in: textView)
+        }
+
+        if context.coordinator.keyboardFocusToggleToken != keyboardFocusToggleToken {
+            context.coordinator.keyboardFocusToggleToken = keyboardFocusToggleToken
+            if !textView.isFirstResponder {
+                textView.becomeFirstResponder()
+            }
         }
 
         if context.coordinator.selectAllToggleToken != selectAllToggleToken {
@@ -1413,6 +1423,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var onFormattingStateChanged: (EditorFormattingState) -> Void
         weak var textView: UITextView?
         var captureSelectionToggleToken = 0
+        var keyboardFocusToggleToken = 0
         var selectAllToggleToken = 0
         var boldToggleToken = 0
         var italicToggleToken = 0
