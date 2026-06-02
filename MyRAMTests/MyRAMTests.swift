@@ -805,6 +805,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(exported.contains("Title: Trip Plan"))
         XCTAssertTrue(exported.contains("Created: TS-1000"))
         XCTAssertTrue(exported.contains("Modified: TS-2000"))
+        XCTAssertTrue(exported.contains("Pinned:\n(None)"))
         XCTAssertTrue(exported.contains("Body:\nBook flights"))
     }
 

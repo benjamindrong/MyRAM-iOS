@@ -31,7 +31,6 @@ struct NotesListView: View {
     @AppStorage("mainListTitle") private var mainListTitle = "My Notes"
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
-    @AppStorage("showOptionalRecommendations") private var showOptionalRecommendations = true
     
     init(context: ModelContext) {
         _vm = StateObject(wrappedValue: NotesViewModel(context: context))
@@ -235,19 +234,6 @@ struct NotesListView: View {
                     ForEach(layout.overflowActions, id: \.self) { action in
                         overflowMenuItem(for: action)
                     }
-
-                    Divider()
-
-                    Button {
-                        showOptionalRecommendations.toggle()
-                    } label: {
-                        Label(
-                            showOptionalRecommendations ? "Hide Recommendations" : "Show Recommendations",
-                            systemImage: showOptionalRecommendations ? "checkmark.circle" : "circle"
-                        )
-                    }
-                    .foregroundStyle(.primary)
-                    .accessibilityIdentifier("toggle-optional-recommendations")
 
                     Menu("Appearance") {
                         Picker("Mode", selection: $appearanceSettingRaw) {
