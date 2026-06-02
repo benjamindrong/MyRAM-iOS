@@ -383,6 +383,30 @@ final class NotesViewModel: ObservableObject {
         refreshCurrentFolderContent()
     }
 
+    func movePinnedThought(_ thought: PinnedThought, toIndex targetIndex: Int) {
+        guard let note = thought.note else { return }
+        var orderedThoughts = sortedPinnedThoughts(for: note)
+        guard let currentIndex = orderedThoughts.firstIndex(where: { $0.id == thought.id }) else { return }
+        let clampedTargetIndex = min(max(targetIndex, 0), orderedThoughts.count)
+        guard clampedTargetIndex != currentIndex,
+              clampedTargetIndex != currentIndex + 1 else { return }
+
+        let movedThought = orderedThoughts.remove(at: currentIndex)
+        let adjustedTargetIndex = clampedTargetIndex > currentIndex
+            ? clampedTargetIndex - 1
+            : clampedTargetIndex
+
+        orderedThoughts.insert(movedThought, at: adjustedTargetIndex)
+        for (index, orderedThought) in orderedThoughts.enumerated() {
+            orderedThought.order = index
+            orderedThought.modifiedAt = .now
+        }
+        note.modifiedAt = .now
+        note.folder?.modifiedAt = .now
+        try? context.save()
+        refreshCurrentFolderContent()
+    }
+
     func unpinThought(_ thought: PinnedThought) {
         let note = thought.note
         note?.pinnedThoughts.removeAll { $0.id == thought.id }
@@ -869,8 +893,8 @@ final class NotesViewModel: ObservableObject {
             .map(\.text)
             .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
         let pinnedThoughtLines = pinnedThoughts.isEmpty
-            ? ["Pinned Thoughts:", "(None)"]
-            : ["Pinned Thoughts:"] + pinnedThoughts.map { "- \($0)" }
+            ? ["Pinned:", "(None)"]
+            : ["Pinned:"] + pinnedThoughts.map { "- \($0)" }
 
         let exportLines: [String] = [
             "MyRAM Notes Export",

@@ -56,6 +56,10 @@ struct NoteEditorView: View {
     @State private var titleDraft = ""
     @State private var arePinnedThoughtsExpanded = true
     @State private var editingPinnedThoughtID: UUID?
+    @State private var activeReorderPayload: String?
+    @State private var activeReorderOffset: CGSize = .zero
+    @State private var pendingReorderInsertionIndex: Int?
+    @State private var reorderItemFrames: [String: CGRect] = [:]
     @State private var keyboardToast: KeyboardToast?
     @State private var keyboardToastTask: Task<Void, Never>?
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
@@ -302,7 +306,7 @@ struct NoteEditorView: View {
                         HStack(spacing: 6) {
                             Image(systemName: arePinnedThoughtsExpanded ? "chevron.down" : "chevron.right")
                                 .font(.caption.weight(.semibold))
-                            Text("Pinned Thoughts")
+                            Text("Pinned")
                                 .font(.subheadline.weight(.semibold))
                             Text("\(sortedPinnedThoughts.count)")
                                 .font(.caption2.weight(.semibold))
@@ -320,20 +324,27 @@ struct NoteEditorView: View {
                 }
 
                 if arePinnedThoughtsExpanded {
-                    ForEach(Array(sortedPinnedThoughts.enumerated()), id: \.element.id) { index, thought in
-                        pinnedThoughtRow(thought, index: index, count: sortedPinnedThoughts.count)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(Array(sortedPinnedThoughts.enumerated()), id: \.element.id) { index, thought in
+                                if shouldShowReorderIndicator(at: index) {
+                                    ReorderInsertionIndicator()
+                                }
+                                pinnedThoughtRow(thought, index: index, count: sortedPinnedThoughts.count)
+                            }
+                            if shouldShowReorderIndicator(at: sortedPinnedThoughts.count) {
+                                ReorderInsertionIndicator()
+                            }
+                        }
                     }
+                    .scrollIndicators(.visible)
+                    .frame(maxHeight: 180)
                 } else {
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(sortedPinnedThoughts.prefix(3), id: \.id) { thought in
-                            Text(thought.text.isEmpty ? "Pinned thought" : thought.text)
+                        ForEach(sortedPinnedThoughts.prefix(1), id: \.id) { thought in
+                            Text(thought.text.isEmpty ? "Pinned" : thought.text)
                                 .font(.caption)
                                 .lineLimit(1)
-                                .foregroundStyle(.secondary)
-                        }
-                        if sortedPinnedThoughts.count > 3 {
-                            Text("+\(sortedPinnedThoughts.count - 3) more")
-                                .font(.caption2.weight(.semibold))
                                 .foregroundStyle(.secondary)
                         }
                     }
@@ -344,20 +355,34 @@ struct NoteEditorView: View {
             .background(Color(.secondarySystemBackground))
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .accessibilityIdentifier("pinned-thoughts-section")
+            .onPreferenceChange(ReorderItemFramePreferenceKey.self) { frames in
+                reorderItemFrames = frames
+            }
         }
     }
 
     private func pinnedThoughtRow(_ thought: PinnedThought, index: Int, count: Int) -> some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "circle.grid.2x3.fill")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 24, height: 30)
-                .draggable(thought.id.uuidString)
-                .accessibilityIdentifier("pinned-thought-drag-handle")
+            ReorderDragHandle(
+                payload: thought.id.uuidString,
+                activePayload: $activeReorderPayload,
+                accessibilityIdentifier: "pinned-thought-drag-handle",
+                onChanged: { location, translation in
+                    activeReorderOffset = translation
+                    if let insertionIndex = reorderInsertionIndex(for: location) {
+                        pendingReorderInsertionIndex = insertionIndex
+                    }
+                },
+                onEnded: {
+                    commitPendingPinnedThoughtMove()
+                    activeReorderPayload = nil
+                    activeReorderOffset = .zero
+                    pendingReorderInsertionIndex = nil
+                }
+            )
 
             if editingPinnedThoughtID == thought.id {
-                TextField("Pinned thought", text: Binding(
+                TextField("Pinned", text: Binding(
                     get: { thought.text },
                     set: { vm.updatePinnedThought(thought, text: $0) }
                 ), axis: .vertical)
@@ -367,7 +392,7 @@ struct NoteEditorView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("pinned-thought-text")
             } else {
-                Text(thought.text.isEmpty ? "Pinned thought" : thought.text)
+                Text(thought.text.isEmpty ? "Pinned" : thought.text)
                     .font(.subheadline)
                     .foregroundStyle(thought.text.isEmpty ? .secondary : .primary)
                     .lineLimit(3)
@@ -394,15 +419,52 @@ struct NoteEditorView: View {
                 unpinThoughtToBody(thought)
             }
         }
-        .dropDestination(for: String.self) { droppedIDs, _ in
-            guard let draggedID = droppedIDs.compactMap(UUID.init(uuidString:)).first,
-                  let draggedThought = note.pinnedThoughts.first(where: { $0.id == draggedID }) else {
-                return false
-            }
-            vm.movePinnedThought(draggedThought, before: thought)
-            return true
-        }
+        .reorderItemFrame(payload: thought.id.uuidString)
+        .offset(activeReorderPayload == thought.id.uuidString ? activeReorderOffset : .zero)
+        .zIndex(activeReorderPayload == thought.id.uuidString ? 1 : 0)
         .accessibilityElement(children: .contain)
+    }
+
+    private func reorderInsertionIndex(for location: CGPoint) -> Int? {
+        let orderedThoughts = sortedPinnedThoughts
+        guard !orderedThoughts.isEmpty,
+              let activeReorderPayload,
+              orderedThoughts.contains(where: { $0.id.uuidString == activeReorderPayload }) else { return nil }
+
+        for (index, thought) in orderedThoughts.enumerated() {
+            let payload = thought.id.uuidString
+            guard payload != activeReorderPayload,
+                  let frame = reorderItemFrames[payload] else { continue }
+            if location.y <= frame.midY {
+                return index
+            }
+        }
+
+        return orderedThoughts.count
+    }
+
+    private func shouldShowReorderIndicator(at insertionIndex: Int) -> Bool {
+        guard let activeReorderPayload,
+              let pendingReorderInsertionIndex,
+              let currentIndex = sortedPinnedThoughts.firstIndex(where: { $0.id.uuidString == activeReorderPayload }) else {
+            return false
+        }
+
+        return pendingReorderInsertionIndex == insertionIndex
+            && insertionIndex != currentIndex
+            && insertionIndex != currentIndex + 1
+    }
+
+    private func commitPendingPinnedThoughtMove() {
+        guard let activeReorderPayload,
+              let pendingReorderInsertionIndex,
+              shouldShowReorderIndicator(at: pendingReorderInsertionIndex),
+              let draggedID = UUID(uuidString: activeReorderPayload),
+              let draggedThought = note.pinnedThoughts.first(where: { $0.id == draggedID }) else {
+            return
+        }
+
+        vm.movePinnedThought(draggedThought, toIndex: pendingReorderInsertionIndex)
     }
 
     private func pinSelectedText(_ selectedText: String) -> Bool {
@@ -1262,6 +1324,84 @@ private struct PinnedThoughtSnapshot: Equatable {
 
 private struct KeyboardToast: Equatable {
     let message: String
+}
+
+private struct ReorderDragHandle: View {
+    let payload: String
+    @Binding var activePayload: String?
+    let accessibilityIdentifier: String
+    let onChanged: (CGPoint, CGSize) -> Void
+    let onEnded: () -> Void
+
+    var body: some View {
+        ReorderGripDots()
+            .frame(width: 24, height: 30)
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0, coordinateSpace: .global)
+                    .onChanged { value in
+                        if activePayload == nil {
+                            activePayload = payload
+                        }
+                        onChanged(value.location, value.translation)
+                    }
+                    .onEnded { _ in
+                        onEnded()
+                    }
+            )
+            .accessibilityIdentifier(accessibilityIdentifier)
+            .accessibilityLabel("Reorder")
+    }
+}
+
+private struct ReorderGripDots: View {
+    var body: some View {
+        HStack(spacing: 3) {
+            ForEach(0..<2, id: \.self) { _ in
+                VStack(spacing: 3) {
+                    ForEach(0..<3, id: \.self) { _ in
+                        Circle()
+                            .fill(Color.primary.opacity(0.45))
+                            .frame(width: 4, height: 4)
+                    }
+                }
+            }
+        }
+        .frame(width: 24, height: 30)
+    }
+}
+
+private struct ReorderInsertionIndicator: View {
+    var body: some View {
+        Capsule()
+            .fill(Color.accentColor)
+            .frame(height: 3)
+            .padding(.leading, 32)
+            .padding(.trailing, 8)
+            .padding(.vertical, 2)
+            .accessibilityHidden(true)
+    }
+}
+
+private extension View {
+    func reorderItemFrame(payload: String) -> some View {
+        background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: ReorderItemFramePreferenceKey.self,
+                    value: [payload: proxy.frame(in: .global)]
+                )
+            }
+        }
+    }
+}
+
+private struct ReorderItemFramePreferenceKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
 }
 
 private struct AttachmentThumbnail: View {

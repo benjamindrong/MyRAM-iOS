@@ -528,6 +528,9 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(first.isCollapsed)
         XCTAssertEqual(reordered.map(\.order), [0, 1])
 
+        vm.movePinnedThought(second, toIndex: 2)
+        XCTAssertEqual(vm.sortedPinnedThoughts(for: note).map(\.text), ["Updated first", "Second thought"])
+
         vm.unpinThought(first)
 
         XCTAssertEqual(vm.sortedPinnedThoughts(for: note).map(\.text), ["Second thought"])
