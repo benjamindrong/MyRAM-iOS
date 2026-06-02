@@ -12,12 +12,12 @@ final class PersistenceManager {
         do {
             let configuration = ModelConfiguration(
                 "MyRAM_Main",
-                schema: Schema([Folder.self, Note.self, NotePhotoAttachment.self]),
+                schema: Schema([Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self]),
                 isStoredInMemoryOnly: false
             )
             
             container = try ModelContainer(
-                for: Folder.self, Note.self, NotePhotoAttachment.self,
+                for: Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self,
                 configurations: configuration
             )
             

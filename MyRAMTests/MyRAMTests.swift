@@ -14,9 +14,19 @@ final class MyRAMTests: XCTestCase {
                 let filename: String
             }
 
+            struct PinnedThoughtRecord: Decodable {
+                let id: String
+                let text: String
+                let order: Int
+                let isCollapsed: Bool
+                let createdAt: String
+                let modifiedAt: String
+            }
+
             let id: String
             let title: String
             let content: String
+            let pinnedThoughts: [PinnedThoughtRecord]
             let createdAt: String
             let modifiedAt: String
             let deletedAt: String?
@@ -495,6 +505,74 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(note.photoAttachments.count, 1)
         XCTAssertFalse(note.photoAttachments.contains { $0.id == attachmentToRemove.id })
+    }
+
+    func testPinnedThoughtsCanBeAddedEditedDraggedAndUnpinnedWithoutChangingBody() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+        note.content = "Body text"
+        note.richTextContentData = Data("rich body".utf8)
+
+        let first = try XCTUnwrap(vm.addPinnedThought(to: note, text: "First thought"))
+        let second = try XCTUnwrap(vm.addPinnedThought(to: note, text: "Second thought"))
+
+        XCTAssertEqual(vm.sortedPinnedThoughts(for: note).map(\.text), ["First thought", "Second thought"])
+
+        vm.updatePinnedThought(first, text: "  Updated first  ")
+        vm.setPinnedThoughtCollapsed(first, isCollapsed: true)
+        vm.movePinnedThought(second, before: first)
+
+        let reordered = vm.sortedPinnedThoughts(for: note)
+        XCTAssertEqual(reordered.map(\.text), ["Second thought", "Updated first"])
+        XCTAssertTrue(first.isCollapsed)
+        XCTAssertEqual(reordered.map(\.order), [0, 1])
+
+        vm.unpinThought(first)
+
+        XCTAssertEqual(vm.sortedPinnedThoughts(for: note).map(\.text), ["Second thought"])
+        XCTAssertEqual(note.content, "Body text")
+        XCTAssertEqual(note.richTextContentData, Data("rich body".utf8))
+    }
+
+    func testChecklistPinCandidateExtractsThoughtAndSourceLineForMove() throws {
+        let sourceText = "Before\n☐ Follow up on pinned thought\nAfter" as NSString
+        let selection = NSRange(location: sourceText.range(of: "Follow up").location, length: 6)
+
+        let candidate = try XCTUnwrap(ChecklistItemEditor.pinCandidate(
+            in: sourceText,
+            selection: selection
+        ))
+
+        XCTAssertEqual(candidate.text, "Follow up on pinned thought")
+        XCTAssertEqual(sourceText.substring(with: candidate.sourceRange), "☐ Follow up on pinned thought\n")
+    }
+
+    func testPinnedThoughtsPersistAcrossContainerReinit() throws {
+        let storeName = "MyRAMPinnedThoughtTests-\(UUID().uuidString)"
+        let noteID: UUID
+
+        do {
+            let container = try makeContainer(
+                isStoredInMemoryOnly: false,
+                configurationName: storeName
+            )
+            let vm = NotesViewModel(context: container.mainContext)
+            let note = vm.createNewNote()
+            noteID = note.id
+
+            _ = vm.addPinnedThought(to: note, text: "Remember this")
+        }
+
+        let reopenedContainer = try makeContainer(
+            isStoredInMemoryOnly: false,
+            configurationName: storeName
+        )
+        let reopenedContext = reopenedContainer.mainContext
+        let reopenedNotes = try reopenedContext.fetch(FetchDescriptor<Note>())
+        let reopenedNote = try XCTUnwrap(reopenedNotes.first { $0.id == noteID })
+
+        XCTAssertEqual(reopenedNote.pinnedThoughts.map(\.text), ["Remember this"])
     }
 
     func testAttachmentsPersistAcrossContainerReinit() throws {
@@ -1036,7 +1114,7 @@ final class MyRAMTests: XCTestCase {
         isStoredInMemoryOnly: Bool,
         configurationName: String = "MyRAMTests"
     ) throws -> ModelContainer {
-        let schema = Schema([Folder.self, Note.self, NotePhotoAttachment.self])
+        let schema = Schema([Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self])
         let configuration = ModelConfiguration(
             configurationName,
             schema: schema,
@@ -1044,7 +1122,7 @@ final class MyRAMTests: XCTestCase {
         )
 
         return try ModelContainer(
-            for: Folder.self, Note.self, NotePhotoAttachment.self,
+            for: Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self,
             configurations: configuration
         )
     }

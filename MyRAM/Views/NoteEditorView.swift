@@ -17,6 +17,10 @@ struct NoteEditorView: View {
     @State private var content: String = ""
     @State private var richTextContentData: Data?
     @State private var selectAllToggleToken = 0
+    @State private var pinSelectionToggleToken = 0
+    @State private var appendUnpinnedThoughtToggleToken = 0
+    @State private var pendingUnpinnedThoughtText = ""
+    @State private var restoreContentToggleToken = 0
     @State private var captureSelectionToggleToken = 0
     @State private var boldToggleToken = 0
     @State private var italicToggleToken = 0
@@ -28,6 +32,7 @@ struct NoteEditorView: View {
     @State private var selectedTextUIColor: UIColor?
     @State private var formattingState = EditorFormattingState()
     @State private var showingFormattingControls = false
+    @State private var showingUndoRedoActions = false
     @State private var isKeyboardVisible = false
     @State private var keyboardFocusToggleToken = 0
     @State private var activeUndoManager: UndoManager?
@@ -49,14 +54,19 @@ struct NoteEditorView: View {
     @State private var suggestionLabels: [String] = []
     @State private var showingTitleEditor = false
     @State private var titleDraft = ""
+    @State private var arePinnedThoughtsExpanded = true
+    @State private var editingPinnedThoughtID: UUID?
     @State private var keyboardToast: KeyboardToast?
     @State private var keyboardToastTask: Task<Void, Never>?
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
+    @AppStorage("showOptionalRecommendations") private var showOptionalRecommendations = true
     
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
                 editorTopBar
+
+                pinnedThoughtsSection
 
                 VStack(spacing: 8) {
                     SelectableTextView(
@@ -65,6 +75,10 @@ struct NoteEditorView: View {
                         keyboardFocusToggleToken: keyboardFocusToggleToken,
                         captureSelectionToggleToken: captureSelectionToggleToken,
                         selectAllToggleToken: selectAllToggleToken,
+                        pinSelectionToggleToken: pinSelectionToggleToken,
+                        appendUnpinnedThoughtToggleToken: appendUnpinnedThoughtToggleToken,
+                        pendingUnpinnedThoughtText: pendingUnpinnedThoughtText,
+                        restoreContentToggleToken: restoreContentToggleToken,
                         boldToggleToken: boldToggleToken,
                         italicToggleToken: italicToggleToken,
                         underlineToggleToken: underlineToggleToken,
@@ -75,7 +89,8 @@ struct NoteEditorView: View {
                         formattingController: formattingController,
                         onContentChanged: handleContentChanged,
                         onUndoManagerChanged: updateActiveUndoManager,
-                        onFormattingStateChanged: handleFormattingStateChanged
+                        onFormattingStateChanged: handleFormattingStateChanged,
+                        onPinSelection: pinSelectedText
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -140,7 +155,7 @@ struct NoteEditorView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
 
-                if !suggestionLabels.isEmpty {
+                if showOptionalRecommendations && !suggestionLabels.isEmpty {
                     VStack(alignment: .leading, spacing: 8) {
                         Text("Optional recommendations")
                             .font(.subheadline.weight(.semibold))
@@ -173,13 +188,10 @@ struct NoteEditorView: View {
                 title = note.title
                 content = note.content
                 richTextContentData = note.richTextContentData
-                lastSnapshot = NoteSnapshot(
-                    title: title,
-                    content: content,
-                    richTextContentData: richTextContentData
-                )
+                lastSnapshot = currentNoteSnapshot()
                 vm.recordNoteOpened(note)
                 refreshSuggestionLabels()
+                arePinnedThoughtsExpanded = sortedPinnedThoughts.count <= 3
             }
             .onChange(of: title) { handleEditorChange() }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
@@ -214,6 +226,17 @@ struct NoteEditorView: View {
             }
             .sheet(item: $sharePayload) { payload in
                 ActivityShareSheet(activityItems: payload.urls)
+            }
+            .confirmationDialog("Edit History", isPresented: $showingUndoRedoActions, titleVisibility: .visible) {
+                Button("Undo") {
+                    performUndo()
+                }
+                .disabled(!canPerformUndo)
+
+                Button("Redo") {
+                    performRedo()
+                }
+                .disabled(!canPerformRedo)
             }
             .alert("Unable to Export Note", isPresented: Binding(
                 get: { exportErrorMessage != nil },
@@ -252,12 +275,154 @@ struct NoteEditorView: View {
         note.photoAttachments.sorted { $0.createdAt < $1.createdAt }
     }
 
+    private var sortedPinnedThoughts: [PinnedThought] {
+        vm.sortedPinnedThoughts(for: note)
+    }
+
     private var canPerformUndo: Bool {
         canUndo || vm.hasUndoableAction
     }
 
     private var canPerformRedo: Bool {
         canRedo
+    }
+
+    @ViewBuilder
+    private var pinnedThoughtsSection: some View {
+        if sortedPinnedThoughts.isEmpty {
+            EmptyView()
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            arePinnedThoughtsExpanded.toggle()
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: arePinnedThoughtsExpanded ? "chevron.down" : "chevron.right")
+                                .font(.caption.weight(.semibold))
+                            Text("Pinned Thoughts")
+                                .font(.subheadline.weight(.semibold))
+                            Text("\(sortedPinnedThoughts.count)")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .background(Color.secondary.opacity(0.18))
+                                .clipShape(Capsule())
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+                    .accessibilityIdentifier("pinned-thoughts-toggle")
+
+                    Spacer()
+                }
+
+                if arePinnedThoughtsExpanded {
+                    ForEach(Array(sortedPinnedThoughts.enumerated()), id: \.element.id) { index, thought in
+                        pinnedThoughtRow(thought, index: index, count: sortedPinnedThoughts.count)
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(sortedPinnedThoughts.prefix(3), id: \.id) { thought in
+                            Text(thought.text.isEmpty ? "Pinned thought" : thought.text)
+                                .font(.caption)
+                                .lineLimit(1)
+                                .foregroundStyle(.secondary)
+                        }
+                        if sortedPinnedThoughts.count > 3 {
+                            Text("+\(sortedPinnedThoughts.count - 3) more")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            .padding(10)
+            .background(Color(.secondarySystemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .accessibilityIdentifier("pinned-thoughts-section")
+        }
+    }
+
+    private func pinnedThoughtRow(_ thought: PinnedThought, index: Int, count: Int) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "circle.grid.2x3.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 24, height: 30)
+                .draggable(thought.id.uuidString)
+                .accessibilityIdentifier("pinned-thought-drag-handle")
+
+            if editingPinnedThoughtID == thought.id {
+                TextField("Pinned thought", text: Binding(
+                    get: { thought.text },
+                    set: { vm.updatePinnedThought(thought, text: $0) }
+                ), axis: .vertical)
+                .lineLimit(1...4)
+                .textFieldStyle(.plain)
+                .font(.subheadline)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("pinned-thought-text")
+            } else {
+                Text(thought.text.isEmpty ? "Pinned thought" : thought.text)
+                    .font(.subheadline)
+                    .foregroundStyle(thought.text.isEmpty ? .secondary : .primary)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+
+                Image(systemName: "pencil")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 6)
+                    .accessibilityIdentifier("pinned-thought-edit-hint")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(Color(.tertiarySystemFill))
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .contentShape(Rectangle())
+        .onTapGesture {
+            editingPinnedThoughtID = thought.id
+        }
+        .contextMenu {
+            Button("Unpin") {
+                unpinThoughtToBody(thought)
+            }
+        }
+        .dropDestination(for: String.self) { droppedIDs, _ in
+            guard let draggedID = droppedIDs.compactMap(UUID.init(uuidString:)).first,
+                  let draggedThought = note.pinnedThoughts.first(where: { $0.id == draggedID }) else {
+                return false
+            }
+            vm.movePinnedThought(draggedThought, before: thought)
+            return true
+        }
+        .accessibilityElement(children: .contain)
+    }
+
+    private func pinSelectedText(_ selectedText: String) -> Bool {
+        let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            showKeyboardToast(KeyboardToast(message: "Select text to pin"))
+            return false
+        }
+        arePinnedThoughtsExpanded = true
+        guard let pinnedThought = vm.addPinnedThought(to: note, text: trimmed) else { return false }
+        editingPinnedThoughtID = pinnedThought.id
+        return true
+    }
+
+    private func unpinThoughtToBody(_ thought: PinnedThought) {
+        let unpinnedText = thought.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        vm.unpinThought(thought)
+        guard !unpinnedText.isEmpty else { return }
+        pendingUnpinnedThoughtText = unpinnedText
+        appendUnpinnedThoughtToggleToken += 1
     }
 
     private var editorTopBar: some View {
@@ -419,12 +584,23 @@ struct NoteEditorView: View {
         }
     }
 
-    private func handleEditorChange() {
-        let currentSnapshot = NoteSnapshot(
+    private func currentNoteSnapshot() -> NoteSnapshot {
+        NoteSnapshot(
             title: title,
             content: content,
-            richTextContentData: richTextContentData
+            richTextContentData: richTextContentData,
+            pinnedThoughts: sortedPinnedThoughts.map {
+                PinnedThoughtSnapshot(
+                    text: $0.text,
+                    order: $0.order,
+                    isCollapsed: $0.isCollapsed
+                )
+            }
         )
+    }
+
+    private func handleEditorChange() {
+        let currentSnapshot = currentNoteSnapshot()
         guard currentSnapshot != lastSnapshot else {
             refreshUndoState()
             return
@@ -492,45 +668,37 @@ struct NoteEditorView: View {
     }
 
     private func undoLastEdit() {
+        if !undoHistory.isEmpty {
+            undoSnapshotEdit()
+            return
+        }
+
         if activeUndoManager?.canUndo == true {
             isApplyingUndo = true
             activeUndoManager?.undo()
             DispatchQueue.main.async {
                 isApplyingUndo = false
-                lastSnapshot = NoteSnapshot(
-                    title: title,
-                    content: content,
-                    richTextContentData: richTextContentData
-                )
+                lastSnapshot = currentNoteSnapshot()
                 trimUndoHistory(afterRestoring: lastSnapshot)
                 refreshUndoState()
             }
             return
         }
 
+        undoSnapshotEdit()
+    }
+
+    private func undoSnapshotEdit() {
         guard let snapshot = undoHistory.popLast() else {
             refreshUndoState()
             return
         }
 
-        let currentSnapshot = NoteSnapshot(
-            title: title,
-            content: content,
-            richTextContentData: richTextContentData
-        )
+        let currentSnapshot = currentNoteSnapshot()
         redoHistory.append(currentSnapshot)
 
         isApplyingUndo = true
-        title = snapshot.title
-        content = snapshot.content
-        richTextContentData = snapshot.richTextContentData
-        lastSnapshot = snapshot
-        vm.updateNote(
-            note,
-            title: snapshot.title,
-            content: snapshot.content,
-            richTextContentData: snapshot.richTextContentData
-        )
+        restore(snapshot)
         DispatchQueue.main.async {
             isApplyingUndo = false
             refreshUndoState()
@@ -538,37 +706,48 @@ struct NoteEditorView: View {
     }
 
     private func redoLastEdit() {
+        if !redoHistory.isEmpty {
+            redoSnapshotEdit()
+            return
+        }
+
         if activeUndoManager?.canRedo == true {
             isApplyingUndo = true
             activeUndoManager?.redo()
             DispatchQueue.main.async {
                 isApplyingUndo = false
-                lastSnapshot = NoteSnapshot(
-                    title: title,
-                    content: content,
-                    richTextContentData: richTextContentData
-                )
+                lastSnapshot = currentNoteSnapshot()
                 refreshUndoState()
             }
             return
         }
 
+        redoSnapshotEdit()
+    }
+
+    private func redoSnapshotEdit() {
         guard let snapshot = redoHistory.popLast() else {
             refreshUndoState()
             return
         }
 
-        let currentSnapshot = NoteSnapshot(
-            title: title,
-            content: content,
-            richTextContentData: richTextContentData
-        )
+        let currentSnapshot = currentNoteSnapshot()
         undoHistory.append(currentSnapshot)
 
         isApplyingUndo = true
+        restore(snapshot)
+        DispatchQueue.main.async {
+            isApplyingUndo = false
+            refreshUndoState()
+        }
+    }
+
+    private func restore(_ snapshot: NoteSnapshot) {
         title = snapshot.title
         content = snapshot.content
         richTextContentData = snapshot.richTextContentData
+        restoreContentToggleToken += 1
+        restorePinnedThoughts(snapshot.pinnedThoughts)
         lastSnapshot = snapshot
         vm.updateNote(
             note,
@@ -576,10 +755,22 @@ struct NoteEditorView: View {
             content: snapshot.content,
             richTextContentData: snapshot.richTextContentData
         )
-        DispatchQueue.main.async {
-            isApplyingUndo = false
-            refreshUndoState()
+        refreshSuggestionLabels()
+    }
+
+    private func restorePinnedThoughts(_ snapshots: [PinnedThoughtSnapshot]) {
+        for thought in sortedPinnedThoughts {
+            vm.unpinThought(thought)
         }
+
+        for snapshot in snapshots.sorted(by: { $0.order < $1.order }) {
+            guard let thought = vm.addPinnedThought(to: note, text: snapshot.text) else { continue }
+            if snapshot.isCollapsed {
+                vm.setPinnedThoughtCollapsed(thought, isCollapsed: true)
+            }
+        }
+        arePinnedThoughtsExpanded = snapshots.count <= 3
+        editingPinnedThoughtID = nil
     }
 
     private func performUndo() {
@@ -659,17 +850,15 @@ struct NoteEditorView: View {
                     keyboardFocusToggleToken += 1
                 }
             }
-            inlineActionButton(systemImage: "arrow.uturn.backward", identifier: "keyboard-control-undo") {
-                performUndo()
+            inlineActionButton(systemImage: "arrow.uturn.backward.circle", identifier: "keyboard-control-history") {
+                showingUndoRedoActions = true
             }
-            .opacity(canPerformUndo ? 1 : 0.4)
-            .disabled(!canPerformUndo)
+            .opacity((canPerformUndo || canPerformRedo) ? 1 : 0.4)
+            .disabled(!canPerformUndo && !canPerformRedo)
 
-            inlineActionButton(systemImage: "arrow.uturn.forward", identifier: "keyboard-control-redo") {
-                performRedo()
+            inlineActionButton(systemImage: "pin", identifier: "keyboard-control-pin") {
+                pinSelectionToggleToken += 1
             }
-            .opacity(canPerformRedo ? 1 : 0.4)
-            .disabled(!canPerformRedo)
 
             inlineActionButton(systemImage: "scissors", identifier: "keyboard-control-cut") {
                 performResponderAction(#selector(UIResponder.cut(_:)))
@@ -1062,6 +1251,13 @@ private struct NoteSnapshot: Equatable {
     var title: String = ""
     var content: String = ""
     var richTextContentData: Data?
+    var pinnedThoughts: [PinnedThoughtSnapshot] = []
+}
+
+private struct PinnedThoughtSnapshot: Equatable {
+    let text: String
+    let order: Int
+    let isCollapsed: Bool
 }
 
 private struct KeyboardToast: Equatable {
@@ -1240,6 +1436,10 @@ private struct SelectableTextView: UIViewRepresentable {
     let keyboardFocusToggleToken: Int
     let captureSelectionToggleToken: Int
     let selectAllToggleToken: Int
+    let pinSelectionToggleToken: Int
+    let appendUnpinnedThoughtToggleToken: Int
+    let pendingUnpinnedThoughtText: String
+    let restoreContentToggleToken: Int
     let boldToggleToken: Int
     let italicToggleToken: Int
     let underlineToggleToken: Int
@@ -1251,6 +1451,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let onContentChanged: (String, Data?) -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
     let onFormattingStateChanged: (EditorFormattingState) -> Void
+    let onPinSelection: (String) -> Bool
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
@@ -1306,33 +1507,29 @@ private struct SelectableTextView: UIViewRepresentable {
 
         context.coordinator.clearAppliedContentIfSynced()
 
-        if !textView.isFirstResponder
+        if context.coordinator.restoreContentToggleToken != restoreContentToggleToken {
+            context.coordinator.restoreContentToggleToken = restoreContentToggleToken
+            context.coordinator.applyBoundContent(
+                plainText: text,
+                richTextContentData: richTextContentData,
+                in: textView
+            )
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
+        } else if !textView.isFirstResponder
             && !hasPendingFormattingMutation
             && !context.coordinator.hasUnsyncedAppliedContent {
-            let desiredAttributedText = RichTextContentCodec.decode(
-                richTextData: richTextContentData,
+            context.coordinator.applyBoundContent(
                 plainText: text,
-                baseFont: textView.font ?? .preferredFont(forTextStyle: .body)
+                richTextContentData: richTextContentData,
+                in: textView
             )
-            let normalizedAttributedText = RichTextContentCodec.normalizedForDisplay(
-                desiredAttributedText,
-                traitCollection: textView.traitCollection
-            )
-            if !textView.attributedText.isEqual(to: normalizedAttributedText) {
-                let selectedRange = textView.selectedRange
-                textView.attributedText = normalizedAttributedText
-                context.coordinator.applyChecklistRendering(in: textView)
-                let newLength = (textView.text as NSString).length
-                textView.selectedRange = selectedRange.location <= newLength
-                    ? selectedRange
-                    : NSRange(location: newLength, length: 0)
-            }
         }
         context.coordinator.text = $text
         context.coordinator.richTextContentData = $richTextContentData
         context.coordinator.onContentChanged = onContentChanged
         context.coordinator.onUndoManagerChanged = onUndoManagerChanged
         context.coordinator.onFormattingStateChanged = onFormattingStateChanged
+        context.coordinator.onPinSelection = onPinSelection
 
         if context.coordinator.captureSelectionToggleToken != captureSelectionToggleToken {
             context.coordinator.captureSelectionToggleToken = captureSelectionToggleToken
@@ -1354,6 +1551,17 @@ private struct SelectableTextView: UIViewRepresentable {
             } else {
                 textView.selectAll(nil)
             }
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
+        }
+
+        if context.coordinator.pinSelectionToggleToken != pinSelectionToggleToken {
+            context.coordinator.pinSelectionToggleToken = pinSelectionToggleToken
+            context.coordinator.pinCurrentSelection(in: textView)
+        }
+
+        if context.coordinator.appendUnpinnedThoughtToggleToken != appendUnpinnedThoughtToggleToken {
+            context.coordinator.appendUnpinnedThoughtToggleToken = appendUnpinnedThoughtToggleToken
+            context.coordinator.appendUnpinnedThought(pendingUnpinnedThoughtText, in: textView)
             context.coordinator.reportUndoManagerChanged(textView.undoManager)
         }
 
@@ -1410,7 +1618,8 @@ private struct SelectableTextView: UIViewRepresentable {
             richTextContentData: $richTextContentData,
             onContentChanged: onContentChanged,
             onUndoManagerChanged: onUndoManagerChanged,
-            onFormattingStateChanged: onFormattingStateChanged
+            onFormattingStateChanged: onFormattingStateChanged,
+            onPinSelection: onPinSelection
         )
     }
 
@@ -1421,10 +1630,14 @@ private struct SelectableTextView: UIViewRepresentable {
         var onContentChanged: (String, Data?) -> Void
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
+        var onPinSelection: (String) -> Bool
         weak var textView: UITextView?
         var captureSelectionToggleToken = 0
         var keyboardFocusToggleToken = 0
         var selectAllToggleToken = 0
+        var pinSelectionToggleToken = 0
+        var appendUnpinnedThoughtToggleToken = 0
+        var restoreContentToggleToken = 0
         var boldToggleToken = 0
         var italicToggleToken = 0
         var underlineToggleToken = 0
@@ -1444,7 +1657,8 @@ private struct SelectableTextView: UIViewRepresentable {
             richTextContentData: Binding<Data?>,
             onContentChanged: @escaping (String, Data?) -> Void,
             onUndoManagerChanged: @escaping (UndoManager?) -> Void,
-            onFormattingStateChanged: @escaping (EditorFormattingState) -> Void
+            onFormattingStateChanged: @escaping (EditorFormattingState) -> Void,
+            onPinSelection: @escaping (String) -> Bool
         ) {
             self.formattingController = formattingController
             self.text = text
@@ -1452,6 +1666,7 @@ private struct SelectableTextView: UIViewRepresentable {
             self.onContentChanged = onContentChanged
             self.onUndoManagerChanged = onUndoManagerChanged
             self.onFormattingStateChanged = onFormattingStateChanged
+            self.onPinSelection = onPinSelection
         }
 
         deinit {
@@ -1752,11 +1967,96 @@ private struct SelectableTextView: UIViewRepresentable {
             onUndoManagerChanged(undoManager)
         }
 
+        func applyBoundContent(
+            plainText: String,
+            richTextContentData: Data?,
+            in textView: UITextView
+        ) {
+            let desiredAttributedText = RichTextContentCodec.decode(
+                richTextData: richTextContentData,
+                plainText: plainText,
+                baseFont: textView.font ?? .preferredFont(forTextStyle: .body)
+            )
+            let normalizedAttributedText = RichTextContentCodec.normalizedForDisplay(
+                desiredAttributedText,
+                traitCollection: textView.traitCollection
+            )
+            guard !textView.attributedText.isEqual(to: normalizedAttributedText) else { return }
+
+            let selectedRange = textView.selectedRange
+            textView.attributedText = normalizedAttributedText
+            applyChecklistRendering(in: textView)
+            let newLength = (textView.text as NSString).length
+            let clampedLocation = min(max(selectedRange.location, 0), newLength)
+            let clampedLength = min(selectedRange.length, max(newLength - clampedLocation, 0))
+            let restoredRange = NSRange(location: clampedLocation, length: clampedLength)
+            textView.selectedRange = restoredRange
+            lastKnownSelectionRange = restoredRange
+            reportFormattingState(from: textView)
+        }
+
         func captureCurrentSelection(in textView: UITextView) {
             let selectedRange = textView.selectedRange
             guard selectedRange.length > 0 else { return }
             lastKnownSelectionRange = selectedRange
             reportFormattingState(from: textView)
+        }
+
+        func pinCurrentSelection(in textView: UITextView) {
+            let selectedRange = textView.selectedRange.length > 0
+                ? textView.selectedRange
+                : lastKnownSelectionRange
+            let fullText = textView.text as NSString
+            guard selectedRange.length > 0,
+                  selectedRange.location != NSNotFound,
+                  NSMaxRange(selectedRange) <= fullText.length else {
+                _ = onPinSelection("")
+                return
+            }
+
+            lastKnownSelectionRange = selectedRange
+            let pinCandidate = ChecklistItemEditor.pinCandidate(in: fullText, selection: selectedRange)
+            let textToPin = pinCandidate?.text ?? fullText.substring(with: selectedRange)
+            let deletionRange = pinCandidate?.sourceRange ?? selectedRange
+            guard onPinSelection(textToPin) else {
+                textView.selectedRange = selectedRange
+                textView.becomeFirstResponder()
+                reportFormattingState(from: textView)
+                return
+            }
+
+            let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
+            mutable.deleteCharacters(in: deletionRange)
+            let caretLocation = min(deletionRange.location, mutable.length)
+            applyAttributedText(mutable, in: textView, selectedRange: NSRange(location: caretLocation, length: 0))
+            textView.becomeFirstResponder()
+            reportUndoManagerChanged(textView.undoManager)
+        }
+
+        func appendUnpinnedThought(_ thoughtText: String, in textView: UITextView) {
+            let trimmedThought = thoughtText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedThought.isEmpty else { return }
+
+            let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
+            let needsSeparator = mutable.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+            let appendedText = needsSeparator ? "\n\n\(trimmedThought)" : trimmedThought
+            let appendRange = NSRange(location: mutable.length, length: appendedText.utf16.count)
+            mutable.append(NSAttributedString(
+                string: appendedText,
+                attributes: defaultTextAttributes(for: textView)
+            ))
+            applyAttributedText(
+                mutable,
+                in: textView,
+                selectedRange: NSRange(location: NSMaxRange(appendRange), length: 0)
+            )
+        }
+
+        private func defaultTextAttributes(for textView: UITextView) -> [NSAttributedString.Key: Any] {
+            [
+                .font: textView.font ?? .preferredFont(forTextStyle: .body),
+                .foregroundColor: UIColor.label
+            ]
         }
 
         private func formattingState(from textView: UITextView) -> EditorFormattingState {
@@ -2294,6 +2594,28 @@ enum ChecklistItemEditor {
         return ranges
     }
 
+    static func pinCandidate(in text: NSString, selection: NSRange) -> (text: String, sourceRange: NSRange)? {
+        guard text.length > 0,
+              selection.location != NSNotFound,
+              selection.location < text.length else { return nil }
+
+        let lineRangeWithNewline = text.lineRange(for: NSRange(location: selection.location, length: 0))
+        let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
+        let line = text.substring(with: lineRange)
+        guard let prefixLength = checklistPrefixLength(in: line),
+              lineRange.length >= prefixLength else { return nil }
+
+        let contentRange = NSRange(
+            location: lineRange.location + prefixLength,
+            length: lineRange.length - prefixLength
+        )
+        let pinnedText = text.substring(with: contentRange)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !pinnedText.isEmpty else { return nil }
+
+        return (pinnedText, lineRangeWithNewline)
+    }
+
     static func isChecklistIcon(at characterIndex: Int, in text: NSString) -> Bool {
         guard text.length > 0 else { return false }
         let clampedLocation = min(max(characterIndex, 0), max(text.length - 1, 0))
@@ -2356,6 +2678,31 @@ enum ChecklistItemEditor {
             length -= 1
         }
         return NSRange(location: lineRange.location, length: max(length, 0))
+    }
+
+    private static func checklistPrefixLength(in line: String) -> Int? {
+        if line.hasPrefix(checkedPrefix) {
+            return checkedPrefix.utf16.count
+        }
+        if line.hasPrefix(checkedPrefixVariant) {
+            return checkedPrefixVariant.utf16.count
+        }
+        if line.hasPrefix(uncheckedPrefix) {
+            return uncheckedPrefix.utf16.count
+        }
+        if line.hasPrefix(legacyCheckedPrefix) {
+            return legacyCheckedPrefix.utf16.count
+        }
+        if line.hasPrefix(legacyUncheckedPrefix) {
+            return legacyUncheckedPrefix.utf16.count
+        }
+        if line.hasPrefix(legacyShortCheckedPrefix) {
+            return legacyShortCheckedPrefix.utf16.count
+        }
+        if line.hasPrefix(legacyShortUncheckedPrefix) {
+            return legacyShortUncheckedPrefix.utf16.count
+        }
+        return nil
     }
 }
 

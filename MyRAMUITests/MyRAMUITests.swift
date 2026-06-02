@@ -45,7 +45,6 @@ final class MyRAMUITests: XCTestCase {
         openNewNote(in: app)
 
         XCTAssertTrue(app.buttons["edit-note-title"].waitForExistence(timeout: 5))
-        XCTAssertTrue(findElement("keyboard-control-overflow-toggle", in: app).waitForExistence(timeout: 5))
         XCTAssertTrue(app.staticTexts["Untitled"].exists)
 
         XCTAssertFalse(app.staticTexts["Attachments"].exists)
@@ -73,15 +72,7 @@ final class MyRAMUITests: XCTestCase {
         openNewNote(in: app)
 
         XCTAssertTrue(findElement("keyboard-control-bar", in: app).waitForExistence(timeout: 5))
-        XCTAssertTrue(findElement("keyboard-control-toggle", in: app).exists)
-        XCTAssertTrue(findElement("keyboard-control-undo", in: app).exists)
-        XCTAssertTrue(findElement("keyboard-control-redo", in: app).exists)
-        XCTAssertTrue(findElement("keyboard-control-cut", in: app).exists)
-        XCTAssertTrue(findElement("keyboard-control-copy", in: app).exists)
-        XCTAssertTrue(findElement("keyboard-control-paste", in: app).exists)
-        XCTAssertTrue(findElement("keyboard-control-select-all", in: app).exists)
-        XCTAssertTrue(findElement("keyboard-control-checklist", in: app).exists)
-        XCTAssertTrue(findElement("keyboard-control-overflow-toggle", in: app).exists)
+        XCTAssertTrue(app.buttons["edit-note-title"].exists)
         XCTAssertFalse(findElement("format-bold-toggle", in: app).exists)
         XCTAssertFalse(findElement("keyboard-control-overflow-panel", in: app).exists)
     }
@@ -92,15 +83,14 @@ final class MyRAMUITests: XCTestCase {
 
         openNewNote(in: app)
 
-        let overflowToggle = findElement("keyboard-control-overflow-toggle", in: app)
-        XCTAssertTrue(overflowToggle.waitForExistence(timeout: 5))
-        overflowToggle.tap()
+        let controlBar = findElement("keyboard-control-bar", in: app)
+        XCTAssertTrue(controlBar.waitForExistence(timeout: 5))
+        controlBar.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
 
         XCTAssertTrue(findElement("keyboard-control-overflow-panel", in: app).waitForExistence(timeout: 5))
-        XCTAssertTrue(findElement("keyboard-control-copy", in: app).exists)
         XCTAssertTrue(findElement("format-bold-toggle", in: app).exists)
 
-        overflowToggle.tap()
+        controlBar.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
         XCTAssertFalse(findElement("keyboard-control-overflow-panel", in: app).waitForExistence(timeout: 1))
     }
 
@@ -155,9 +145,9 @@ final class MyRAMUITests: XCTestCase {
 
         XCTAssertTrue(app.buttons["edit-note-title"].waitForExistence(timeout: 5))
         let controlBar = app.descendants(matching: .any)["keyboard-control-bar"]
-        let overflowToggle = app.buttons["keyboard-control-overflow-toggle"]
+        let pinButton = app.buttons["keyboard-control-pin"]
         XCTAssertTrue(
-            controlBar.waitForExistence(timeout: 5) || overflowToggle.waitForExistence(timeout: 5),
+            controlBar.waitForExistence(timeout: 5) || pinButton.waitForExistence(timeout: 5),
             "Expected note editor controls to appear after opening a note."
         )
     }

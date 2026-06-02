@@ -306,6 +306,103 @@ final class NotesViewModel: ObservableObject {
         refreshCurrentFolderContent()
     }
 
+    func addPinnedThought(to note: Note, text: String = "") -> PinnedThought? {
+        guard note.deletedAt == nil else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextOrder = ((note.pinnedThoughts.map(\.order).max()) ?? -1) + 1
+        let thought = PinnedThought(text: trimmed, order: nextOrder, note: note)
+        context.insert(thought)
+        note.pinnedThoughts.append(thought)
+        note.modifiedAt = .now
+        note.folder?.modifiedAt = .now
+        try? context.save()
+        refreshCurrentFolderContent()
+        return thought
+    }
+
+    func updatePinnedThought(_ thought: PinnedThought, text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard thought.text != trimmed else { return }
+        thought.text = trimmed
+        thought.modifiedAt = .now
+        thought.note?.modifiedAt = .now
+        thought.note?.folder?.modifiedAt = .now
+        try? context.save()
+        refreshCurrentFolderContent()
+    }
+
+    func setPinnedThoughtCollapsed(_ thought: PinnedThought, isCollapsed: Bool) {
+        guard thought.isCollapsed != isCollapsed else { return }
+        thought.isCollapsed = isCollapsed
+        thought.modifiedAt = .now
+        thought.note?.modifiedAt = .now
+        try? context.save()
+        refreshCurrentFolderContent()
+    }
+
+    func movePinnedThought(_ thought: PinnedThought, direction: PinnedThoughtMoveDirection) {
+        guard let note = thought.note else { return }
+        var orderedThoughts = sortedPinnedThoughts(for: note)
+        guard let currentIndex = orderedThoughts.firstIndex(where: { $0.id == thought.id }) else { return }
+        let targetIndex: Int
+        switch direction {
+        case .up:
+            targetIndex = currentIndex - 1
+        case .down:
+            targetIndex = currentIndex + 1
+        }
+        guard orderedThoughts.indices.contains(targetIndex) else { return }
+        orderedThoughts.swapAt(currentIndex, targetIndex)
+        for (index, orderedThought) in orderedThoughts.enumerated() {
+            orderedThought.order = index
+            orderedThought.modifiedAt = .now
+        }
+        note.modifiedAt = .now
+        note.folder?.modifiedAt = .now
+        try? context.save()
+        refreshCurrentFolderContent()
+    }
+
+    func movePinnedThought(_ thought: PinnedThought, before targetThought: PinnedThought) {
+        guard let note = thought.note,
+              targetThought.note?.id == note.id,
+              thought.id != targetThought.id else { return }
+        var orderedThoughts = sortedPinnedThoughts(for: note)
+        guard let currentIndex = orderedThoughts.firstIndex(where: { $0.id == thought.id }),
+              let targetIndex = orderedThoughts.firstIndex(where: { $0.id == targetThought.id }) else { return }
+        let movedThought = orderedThoughts.remove(at: currentIndex)
+        let adjustedTargetIndex = currentIndex < targetIndex ? targetIndex - 1 : targetIndex
+        orderedThoughts.insert(movedThought, at: adjustedTargetIndex)
+        for (index, orderedThought) in orderedThoughts.enumerated() {
+            orderedThought.order = index
+            orderedThought.modifiedAt = .now
+        }
+        note.modifiedAt = .now
+        note.folder?.modifiedAt = .now
+        try? context.save()
+        refreshCurrentFolderContent()
+    }
+
+    func unpinThought(_ thought: PinnedThought) {
+        let note = thought.note
+        note?.pinnedThoughts.removeAll { $0.id == thought.id }
+        context.delete(thought)
+        reorderPinnedThoughts(for: note)
+        note?.modifiedAt = .now
+        note?.folder?.modifiedAt = .now
+        try? context.save()
+        refreshCurrentFolderContent()
+    }
+
+    func sortedPinnedThoughts(for note: Note) -> [PinnedThought] {
+        note.pinnedThoughts.sorted {
+            if $0.order != $1.order {
+                return $0.order < $1.order
+            }
+            return $0.createdAt < $1.createdAt
+        }
+    }
+
     func addPhotoAttachment(to note: Note, imageData: Data) {
         guard note.deletedAt == nil else { return }
         let attachment = NotePhotoAttachment(imageData: imageData, note: note)
@@ -315,6 +412,14 @@ final class NotesViewModel: ObservableObject {
         note.folder?.modifiedAt = .now
         try? context.save()
         refreshCurrentFolderContent()
+    }
+
+    private func reorderPinnedThoughts(for note: Note?) {
+        guard let note else { return }
+        let orderedThoughts = sortedPinnedThoughts(for: note)
+        for (index, thought) in orderedThoughts.enumerated() {
+            thought.order = index
+        }
     }
 
     func removePhotoAttachment(_ attachment: NotePhotoAttachment, from note: Note) {
@@ -754,18 +859,34 @@ final class NotesViewModel: ObservableObject {
             ? "Untitled"
             : note.title
         let body = note.content.isEmpty ? "(No content)" : note.content
+        let pinnedThoughts = note.pinnedThoughts
+            .sorted {
+                if $0.order != $1.order {
+                    return $0.order < $1.order
+                }
+                return $0.createdAt < $1.createdAt
+            }
+            .map(\.text)
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let pinnedThoughtLines = pinnedThoughts.isEmpty
+            ? ["Pinned Thoughts:", "(None)"]
+            : ["Pinned Thoughts:"] + pinnedThoughts.map { "- \($0)" }
 
-        return [
+        let exportLines: [String] = [
             "MyRAM Notes Export",
             "Exported: \(dateFormatter(exportedAt))",
             "",
             "Title: \(title)",
             "Created: \(dateFormatter(note.createdAt))",
             "Modified: \(dateFormatter(note.modifiedAt))",
+            ""
+        ] + pinnedThoughtLines + [
+            "",
             "Body:",
             body,
             ""
-        ].joined(separator: "\n")
+        ]
+        return exportLines.joined(separator: "\n")
     }
 
     nonisolated static func makeExportFilename(notes: [Note], now: Date) -> String {
@@ -818,6 +939,7 @@ final class NotesViewModel: ObservableObject {
                     id: note.id.uuidString,
                     title: note.title,
                     content: note.content,
+                    pinnedThoughts: sortedPinnedThoughtExportItems(for: note),
                     createdAt: iso8601Timestamp(from: note.createdAt),
                     modifiedAt: iso8601Timestamp(from: note.modifiedAt),
                     deletedAt: note.deletedAt.map(iso8601Timestamp(from:)),
@@ -847,6 +969,26 @@ final class NotesViewModel: ObservableObject {
         }
         try manifestData.write(to: exportURL, options: .atomic)
         return [exportURL] + attachmentURLs.sorted { $0.lastPathComponent < $1.lastPathComponent }
+    }
+
+    nonisolated private static func sortedPinnedThoughtExportItems(for note: Note) -> [ExportManifestPinnedThought] {
+        note.pinnedThoughts
+            .sorted {
+                if $0.order != $1.order {
+                    return $0.order < $1.order
+                }
+                return $0.createdAt < $1.createdAt
+            }
+            .map {
+                ExportManifestPinnedThought(
+                    id: $0.id.uuidString,
+                    text: $0.text,
+                    order: $0.order,
+                    isCollapsed: $0.isCollapsed,
+                    createdAt: iso8601Timestamp(from: $0.createdAt),
+                    modifiedAt: iso8601Timestamp(from: $0.modifiedAt)
+                )
+            }
     }
 
     nonisolated private static func writeSingleNoteExport(note: Note, exportedAt: Date) throws -> URL {
@@ -1145,6 +1287,11 @@ final class NotesViewModel: ObservableObject {
     }
 }
 
+enum PinnedThoughtMoveDirection {
+    case up
+    case down
+}
+
 private enum UndoAction {
     case noteCreation(NoteCreationUndoSnapshot)
     case folderCreation(FolderCreationUndoSnapshot)
@@ -1210,11 +1357,21 @@ private struct ExportManifestNote: Codable {
     let id: String
     let title: String
     let content: String
+    let pinnedThoughts: [ExportManifestPinnedThought]
     let createdAt: String
     let modifiedAt: String
     let deletedAt: String?
     let folderPath: [String]
     let attachments: [ExportManifestAttachment]
+}
+
+private struct ExportManifestPinnedThought: Codable {
+    let id: String
+    let text: String
+    let order: Int
+    let isCollapsed: Bool
+    let createdAt: String
+    let modifiedAt: String
 }
 
 private struct ExportManifestAttachment: Codable {
