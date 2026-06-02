@@ -31,6 +31,7 @@ struct NotesListView: View {
     @AppStorage("mainListTitle") private var mainListTitle = "My Notes"
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
+    @AppStorage("showOptionalRecommendations") private var showOptionalRecommendations = true
     
     init(context: ModelContext) {
         _vm = StateObject(wrappedValue: NotesViewModel(context: context))
@@ -236,6 +237,17 @@ struct NotesListView: View {
                     }
 
                     Divider()
+
+                    Button {
+                        showOptionalRecommendations.toggle()
+                    } label: {
+                        Label(
+                            showOptionalRecommendations ? "Hide Recommendations" : "Show Recommendations",
+                            systemImage: showOptionalRecommendations ? "checkmark.circle" : "circle"
+                        )
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityIdentifier("toggle-optional-recommendations")
 
                     Menu("Appearance") {
                         Picker("Mode", selection: $appearanceSettingRaw) {
@@ -558,6 +570,13 @@ struct NotesListView: View {
                     .lineLimit(2)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                let pinnedThoughtPreview = pinnedThoughtPreviewText(for: note)
+                if !pinnedThoughtPreview.isEmpty {
+                    Text(pinnedThoughtPreview)
+                        .lineLimit(1)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Spacer()
@@ -746,6 +765,15 @@ private struct NoteContextPreview: View {
                 .lineLimit(3)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
+            let pinnedThoughtPreview = pinnedThoughtPreviewText(for: note)
+            if !pinnedThoughtPreview.isEmpty {
+                Text(pinnedThoughtPreview)
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(3)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             Text(note.content.isEmpty ? "No content yet" : note.content)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -758,6 +786,20 @@ private struct NoteContextPreview: View {
         .padding(14)
         .background(Color.clear)
     }
+}
+
+private func pinnedThoughtPreviewText(for note: Note) -> String {
+    let thoughts = note.pinnedThoughts
+        .sorted {
+            if $0.order != $1.order {
+                return $0.order < $1.order
+            }
+            return $0.createdAt < $1.createdAt
+        }
+        .map(\.text)
+        .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    guard !thoughts.isEmpty else { return "" }
+    return thoughts.prefix(2).joined(separator: " • ")
 }
 
 private enum NotesListItem: Identifiable {

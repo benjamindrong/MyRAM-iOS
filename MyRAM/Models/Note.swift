@@ -15,6 +15,8 @@ final class Note {
     var folder: Folder?
     @Relationship(deleteRule: .cascade, inverse: \NotePhotoAttachment.note)
     var photoAttachments: [NotePhotoAttachment] = []
+    @Relationship(deleteRule: .cascade, inverse: \PinnedThought.note)
+    var pinnedThoughts: [PinnedThought] = []
 
     init(title: String = "", content: String = "", folder: Folder? = nil) {
         self.title = title
@@ -25,6 +27,26 @@ final class Note {
         self.modifiedAt = .now
         self.deletedAt = nil
         self.folder = folder
+    }
+}
+
+@Model
+final class PinnedThought {
+    @Attribute(.unique) var id: UUID = UUID()
+    var text: String
+    var order: Int
+    var isCollapsed: Bool
+    var createdAt: Date
+    var modifiedAt: Date
+    var note: Note?
+
+    init(text: String, order: Int, note: Note? = nil) {
+        self.text = text
+        self.order = order
+        self.isCollapsed = false
+        self.createdAt = .now
+        self.modifiedAt = .now
+        self.note = note
     }
 }
 
