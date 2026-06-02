@@ -1551,7 +1551,8 @@ private struct SelectableTextView: UIViewRepresentable {
         textView.backgroundColor = .secondarySystemBackground
         textView.layer.cornerRadius = 8
         textView.typingAttributes = [
-            .font: textView.font ?? .preferredFont(forTextStyle: .body)
+            .font: textView.font ?? .preferredFont(forTextStyle: .body),
+            .foregroundColor: UIColor.label
         ]
         textView.textContainerInset = UIEdgeInsets(
             top: 12,
@@ -1938,27 +1939,20 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func applyTextColor(in textView: UITextView, color: UIColor?) {
             let selectedRange = formattingActionRange(in: textView)
+            let resolvedColor = color ?? textView.textColor ?? UIColor.label
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
-                if color == nil {
-                    typingAttributes.removeValue(forKey: .foregroundColor)
-                } else {
-                    typingAttributes[.foregroundColor] = color
-                }
-                syncDecorationColorsWithForeground(in: &typingAttributes, color: color)
+                typingAttributes[.foregroundColor] = resolvedColor
+                syncDecorationColorsWithForeground(in: &typingAttributes, color: resolvedColor)
                 textView.typingAttributes = typingAttributes
                 reportFormattingState(from: textView)
                 return
             }
 
             textView.textStorage.beginEditing()
-            if color == nil {
-                textView.textStorage.removeAttribute(.foregroundColor, range: selectedRange)
-            } else if let color {
-                textView.textStorage.addAttribute(.foregroundColor, value: color, range: selectedRange)
-            }
-            syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: color)
+            textView.textStorage.addAttribute(.foregroundColor, value: resolvedColor, range: selectedRange)
+            syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: resolvedColor)
             textView.textStorage.endEditing()
 
             textView.selectedRange = selectedRange
@@ -1973,11 +1967,11 @@ private struct SelectableTextView: UIViewRepresentable {
                 let resolvedColor = color.resolvedColor(with: textView.traitCollection)
                 if textView.traitCollection.userInterfaceStyle == .dark
                     && resolvedColor.isPrimaryTextCandidate(in: .dark) {
-                    typingAttributes.removeValue(forKey: .foregroundColor)
+                    typingAttributes[.foregroundColor] = UIColor.label
                 }
                 if textView.traitCollection.userInterfaceStyle == .light
                     && resolvedColor.isPrimaryTextCandidate(in: .light) {
-                    typingAttributes.removeValue(forKey: .foregroundColor)
+                    typingAttributes[.foregroundColor] = UIColor.label
                 }
             }
             textView.typingAttributes = typingAttributes
@@ -2138,7 +2132,8 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func defaultTextAttributes(for textView: UITextView) -> [NSAttributedString.Key: Any] {
             [
-                .font: textView.font ?? .preferredFont(forTextStyle: .body)
+                .font: textView.font ?? .preferredFont(forTextStyle: .body),
+                .foregroundColor: UIColor.label
             ]
         }
 
@@ -2829,11 +2824,11 @@ enum RichTextContentCodec {
             let resolvedColor = color.resolvedColor(with: traitCollection)
             if traitCollection.userInterfaceStyle == .dark
                 && resolvedColor.isPrimaryTextCandidate(in: .dark) {
-                mutable.removeAttribute(.foregroundColor, range: range)
+                mutable.addAttribute(.foregroundColor, value: UIColor.label, range: range)
             }
             if traitCollection.userInterfaceStyle == .light
                 && resolvedColor.isPrimaryTextCandidate(in: .light) {
-                mutable.removeAttribute(.foregroundColor, range: range)
+                mutable.addAttribute(.foregroundColor, value: UIColor.label, range: range)
             }
         }
 
