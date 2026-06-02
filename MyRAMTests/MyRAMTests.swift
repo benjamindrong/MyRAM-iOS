@@ -709,7 +709,7 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
-            UIColor.label
+            nil
         )
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
@@ -729,7 +729,7 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
-            UIColor.label
+            nil
         )
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
@@ -753,7 +753,7 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
-            UIColor.label
+            nil
         )
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
@@ -1031,7 +1031,7 @@ final class MyRAMTests: XCTestCase {
         )
 
         let color = normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor
-        XCTAssertNotNil(color)
+        XCTAssertNil(color)
 
         let underline = normalized.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
         XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)

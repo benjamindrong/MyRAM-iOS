@@ -1017,7 +1017,7 @@ struct NoteEditorView: View {
             }
             .accessibilityIdentifier("format-color-swatches")
 
-            Button("Use Default Text Color") {
+            Button("Auto Text Color") {
                 applyDefaultTextColor()
             }
             .accessibilityIdentifier("format-color-default")
@@ -1551,8 +1551,7 @@ private struct SelectableTextView: UIViewRepresentable {
         textView.backgroundColor = .secondarySystemBackground
         textView.layer.cornerRadius = 8
         textView.typingAttributes = [
-            .font: textView.font ?? .preferredFont(forTextStyle: .body),
-            .foregroundColor: UIColor.label
+            .font: textView.font ?? .preferredFont(forTextStyle: .body)
         ]
         textView.textContainerInset = UIEdgeInsets(
             top: 12,
@@ -1974,11 +1973,11 @@ private struct SelectableTextView: UIViewRepresentable {
                 let resolvedColor = color.resolvedColor(with: textView.traitCollection)
                 if textView.traitCollection.userInterfaceStyle == .dark
                     && resolvedColor.isPrimaryTextCandidate(in: .dark) {
-                    typingAttributes[.foregroundColor] = UIColor.label
+                    typingAttributes.removeValue(forKey: .foregroundColor)
                 }
                 if textView.traitCollection.userInterfaceStyle == .light
                     && resolvedColor.isPrimaryTextCandidate(in: .light) {
-                    typingAttributes[.foregroundColor] = UIColor.label
+                    typingAttributes.removeValue(forKey: .foregroundColor)
                 }
             }
             textView.typingAttributes = typingAttributes
@@ -2139,8 +2138,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func defaultTextAttributes(for textView: UITextView) -> [NSAttributedString.Key: Any] {
             [
-                .font: textView.font ?? .preferredFont(forTextStyle: .body),
-                .foregroundColor: UIColor.label
+                .font: textView.font ?? .preferredFont(forTextStyle: .body)
             ]
         }
 
@@ -2831,11 +2829,11 @@ enum RichTextContentCodec {
             let resolvedColor = color.resolvedColor(with: traitCollection)
             if traitCollection.userInterfaceStyle == .dark
                 && resolvedColor.isPrimaryTextCandidate(in: .dark) {
-                mutable.addAttribute(.foregroundColor, value: UIColor.label, range: range)
+                mutable.removeAttribute(.foregroundColor, range: range)
             }
             if traitCollection.userInterfaceStyle == .light
                 && resolvedColor.isPrimaryTextCandidate(in: .light) {
-                mutable.addAttribute(.foregroundColor, value: UIColor.label, range: range)
+                mutable.removeAttribute(.foregroundColor, range: range)
             }
         }
 
