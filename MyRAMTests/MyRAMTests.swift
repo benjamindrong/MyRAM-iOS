@@ -334,6 +334,51 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(deletedNotes.contains(where: { $0.id == recentDeletedNote.id }))
     }
 
+#if DEBUG
+    func testDebugDemoDataGeneratorCreatesExpectedNotesAndPinnedThoughts() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+
+        DebugDemoDataGenerator.generateDemoNotes(in: container.mainContext)
+
+        let notes = try container.mainContext.fetch(FetchDescriptor<Note>())
+        let demoNotes = notes.filter { DebugDemoDataGenerator.demoNoteIDs.contains($0.id) }
+        XCTAssertEqual(demoNotes.count, 8)
+
+        let todayNote = try XCTUnwrap(demoNotes.first { $0.title == "TODAY - Jun 3, 2026" })
+        XCTAssertFalse(todayNote.content.contains("Ask landlord about garage opener"))
+        XCTAssertEqual(todayNote.pinnedThoughts.map(\.text), ["Ask landlord about garage opener"])
+        XCTAssertTrue(todayNote.content.contains("Need to remember to move the laundry before bed."))
+
+        let noPinnedThoughtsNote = try XCTUnwrap(demoNotes.first { $0.title == "Stuff To Figure Out" })
+        XCTAssertTrue(noPinnedThoughtsNote.pinnedThoughts.isEmpty)
+    }
+
+    func testDebugDemoDataGeneratorIsSafeToRunRepeatedly() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+
+        DebugDemoDataGenerator.generateDemoNotes(in: container.mainContext)
+        DebugDemoDataGenerator.generateDemoNotes(in: container.mainContext)
+
+        let notes = try container.mainContext.fetch(FetchDescriptor<Note>())
+        let demoNotes = notes.filter { DebugDemoDataGenerator.demoNoteIDs.contains($0.id) }
+        XCTAssertEqual(demoNotes.count, 8)
+        XCTAssertEqual(Set(demoNotes.map(\.id)).count, 8)
+    }
+
+    func testDebugDemoDataGeneratorClearPreservesUserNotes() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let userNote = Note(title: "User Note", content: "Keep this")
+        container.mainContext.insert(userNote)
+
+        DebugDemoDataGenerator.generateDemoNotes(in: container.mainContext)
+        DebugDemoDataGenerator.clearDemoNotes(in: container.mainContext)
+
+        let notes = try container.mainContext.fetch(FetchDescriptor<Note>())
+        XCTAssertEqual(notes.map(\.id), [userNote.id])
+        XCTAssertEqual(notes.first?.title, "User Note")
+    }
+#endif
+
     func testDeleteFolderPreservingNotesMovesNotesToTopLevel() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
