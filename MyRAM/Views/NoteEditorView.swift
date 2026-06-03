@@ -2081,21 +2081,22 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func pinCurrentSelection(in textView: UITextView) {
-            let selectedRange = textView.selectedRange.length > 0
-                ? textView.selectedRange
-                : lastKnownSelectionRange
+            let selectedRange = textView.selectedRange
             let fullText = textView.text as NSString
-            guard selectedRange.length > 0,
-                  selectedRange.location != NSNotFound,
-                  NSMaxRange(selectedRange) <= fullText.length else {
+            guard selectedRange.location != NSNotFound,
+                  selectedRange.location <= fullText.length else {
                 _ = onPinSelection("")
                 return
             }
 
             lastKnownSelectionRange = selectedRange
-            let pinCandidate = ChecklistItemEditor.pinCandidate(in: fullText, selection: selectedRange)
-            let textToPin = pinCandidate?.text ?? fullText.substring(with: selectedRange)
-            let deletionRange = pinCandidate?.sourceRange ?? selectedRange
+            guard let pinCandidate = ChecklistItemEditor.pinCandidate(in: fullText, selection: selectedRange) else {
+                _ = onPinSelection("")
+                return
+            }
+
+            let textToPin = pinCandidate.text
+            let deletionRange = pinCandidate.sourceRange
             guard onPinSelection(textToPin) else {
                 textView.selectedRange = selectedRange
                 textView.becomeFirstResponder()
@@ -2675,13 +2676,14 @@ enum ChecklistItemEditor {
     static func pinCandidate(in text: NSString, selection: NSRange) -> (text: String, sourceRange: NSRange)? {
         guard text.length > 0,
               selection.location != NSNotFound,
-              selection.location < text.length else { return nil }
+              selection.location <= text.length else { return nil }
 
-        let lineRangeWithNewline = text.lineRange(for: NSRange(location: selection.location, length: 0))
+        let lineLocation = min(max(selection.location, 0), max(text.length - 1, 0))
+        let lineRangeWithNewline = text.lineRange(for: NSRange(location: lineLocation, length: 0))
         let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
         let line = text.substring(with: lineRange)
-        guard let prefixLength = checklistPrefixLength(in: line),
-              lineRange.length >= prefixLength else { return nil }
+        let prefixLength = checklistPrefixLength(in: line) ?? 0
+        guard lineRange.length >= prefixLength else { return nil }
 
         let contentRange = NSRange(
             location: lineRange.location + prefixLength,

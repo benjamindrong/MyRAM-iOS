@@ -596,6 +596,32 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(sourceText.substring(with: candidate.sourceRange), "☐ Follow up on pinned thought\n")
     }
 
+    func testPinCandidateIgnoresSelectionAndUsesEntireCursorLine() throws {
+        let sourceText = "Before\nPin this entire line please\nAfter" as NSString
+        let selectedWordRange = sourceText.range(of: "entire")
+
+        let candidate = try XCTUnwrap(ChecklistItemEditor.pinCandidate(
+            in: sourceText,
+            selection: selectedWordRange
+        ))
+
+        XCTAssertEqual(candidate.text, "Pin this entire line please")
+        XCTAssertEqual(sourceText.substring(with: candidate.sourceRange), "Pin this entire line please\n")
+    }
+
+    func testPinCandidateUsesCursorLineWhenSelectionIsCollapsed() throws {
+        let sourceText = "Before\nPin this line from cursor\nAfter" as NSString
+        let cursorLocation = sourceText.range(of: "from").location
+
+        let candidate = try XCTUnwrap(ChecklistItemEditor.pinCandidate(
+            in: sourceText,
+            selection: NSRange(location: cursorLocation, length: 0)
+        ))
+
+        XCTAssertEqual(candidate.text, "Pin this line from cursor")
+        XCTAssertEqual(sourceText.substring(with: candidate.sourceRange), "Pin this line from cursor\n")
+    }
+
     func testPinnedThoughtsPersistAcrossContainerReinit() throws {
         let storeName = "MyRAMPinnedThoughtTests-\(UUID().uuidString)"
         let noteID: UUID
