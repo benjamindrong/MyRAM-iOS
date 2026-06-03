@@ -315,9 +315,9 @@ struct NoteEditorView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(sortedPinnedThoughts.prefix(1), id: \.id) { thought in
                             Text(thought.text.isEmpty ? "Pinned" : thought.text)
-                                .font(.caption)
+                                .font(.subheadline.weight(.medium))
                                 .lineLimit(1)
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(thought.text.isEmpty ? .secondary : .primary)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
