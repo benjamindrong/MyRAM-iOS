@@ -1222,6 +1222,22 @@ final class MyRAMTests: XCTestCase {
         XCTAssertFalse(ChecklistItemEditor.isChecklistIcon(at: textLocation, in: text))
     }
 
+    func testNoteContentPreviewOmitsCompletedChecklistLines() {
+        let note = Note(title: "Preview", content: "☑︎ Done\n☐ Pending\nRegular detail")
+
+        let preview = noteContentPreviewText(for: note)
+
+        XCTAssertEqual(preview, "☐ Pending\nRegular detail")
+    }
+
+    func testNoteContentPreviewOmitsLegacyCompletedChecklistLines() {
+        let note = Note(title: "Preview", content: "- [x] Done\n[X] Also done\n- [ ] Pending")
+
+        let preview = noteContentPreviewText(for: note)
+
+        XCTAssertEqual(preview, "- [ ] Pending")
+    }
+
     private func makeContainer(
         isStoredInMemoryOnly: Bool,
         configurationName: String = "MyRAMTests"

@@ -316,8 +316,13 @@ struct NoteEditorView: View {
                         ForEach(sortedPinnedThoughts.prefix(1), id: \.id) { thought in
                             Text(thought.text.isEmpty ? "Pinned" : thought.text)
                                 .font(.subheadline.weight(.medium))
-                                .lineLimit(1)
-                                .foregroundStyle(thought.text.isEmpty ? .secondary : .primary)
+                                .lineLimit(nil)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .foregroundStyle(thought.text.isEmpty ? .secondary : Color.accentColor)
+                                .padding(.horizontal, 8)
+                                .padding(.vertical, 5)
+                                .background(Color.accentColor.opacity(0.12))
+                                .clipShape(RoundedRectangle(cornerRadius: 6))
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)

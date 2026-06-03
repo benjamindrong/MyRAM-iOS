@@ -588,15 +588,22 @@ struct NotesListView: View {
                 Text(note.title.isEmpty ? "Untitled" : note.title)
                     .font(.headline)
                     .foregroundStyle(.primary)
-                Text(note.content.isEmpty ? "No content yet" : note.content)
-                    .lineLimit(2)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
                 let pinnedThoughtPreview = pinnedThoughtPreviewText(for: note)
                 if !pinnedThoughtPreview.isEmpty {
                     Text(pinnedThoughtPreview)
                         .lineLimit(1)
-                        .font(.caption.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.accentColor.opacity(0.12))
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                let contentPreview = noteContentPreviewText(for: note)
+                if !contentPreview.isEmpty {
+                    Text(contentPreview)
+                        .lineLimit(2)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -791,18 +798,25 @@ private struct NoteContextPreview: View {
             if !pinnedThoughtPreview.isEmpty {
                 Text(pinnedThoughtPreview)
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Color.accentColor)
                     .lineLimit(3)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(Color.accentColor.opacity(0.12))
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
             }
-            Text(note.content.isEmpty ? "No content yet" : note.content)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(12)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+            let contentPreview = noteContentPreviewText(for: note)
+            if !contentPreview.isEmpty {
+                Text(contentPreview)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(12)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
         }
         .frame(width: 320, height: 320, alignment: .topLeading)
         .padding(14)
@@ -822,6 +836,31 @@ private func pinnedThoughtPreviewText(for note: Note) -> String {
         .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     guard !thoughts.isEmpty else { return "" }
     return thoughts.prefix(2).joined(separator: " • ")
+}
+
+func noteContentPreviewText(for note: Note) -> String {
+    let previewLines = note.content
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .map(String.init)
+        .filter { !isCompletedChecklistPreviewLine($0) }
+        .joined(separator: "\n")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    return previewLines
+}
+
+func isCompletedChecklistPreviewLine(_ line: String) -> Bool {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    return trimmed.hasPrefix(ChecklistItemEditor.checkedPrefix)
+        || trimmed.hasPrefix(ChecklistItemEditor.checkedPrefixVariant)
+        || trimmed.range(
+            of: #"^\[[xX]\]\s+"#,
+            options: .regularExpression
+        ) != nil
+        || trimmed.range(
+            of: #"^-\s+\[[xX]\]\s+"#,
+            options: .regularExpression
+        ) != nil
 }
 
 private enum NotesListItem: Identifiable {
