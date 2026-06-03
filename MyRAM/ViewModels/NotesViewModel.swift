@@ -501,6 +501,28 @@ final class NotesViewModel: ObservableObject {
         refreshCurrentFolderContent()
     }
 
+#if DEBUG
+    func generateDemoNotes() {
+        let selectedDemoNoteID = currentNote?.id
+        DebugDemoDataGenerator.generateDemoNotes(in: context)
+        currentFolder = nil
+        if let selectedDemoNoteID, DebugDemoDataGenerator.demoNoteIDs.contains(selectedDemoNoteID) {
+            currentNote = nil
+            UserDefaults.standard.removeObject(forKey: "lastNoteID")
+        }
+        refreshCurrentFolderContent()
+    }
+
+    func clearDemoNotes() {
+        DebugDemoDataGenerator.clearDemoNotes(in: context)
+        if let currentNote, DebugDemoDataGenerator.demoNoteIDs.contains(currentNote.id) {
+            self.currentNote = nil
+            UserDefaults.standard.removeObject(forKey: "lastNoteID")
+        }
+        refreshCurrentFolderContent()
+    }
+#endif
+
     func permanentlyDeleteNote(_ note: Note) {
         removeUndoHistoryReferencingDeletedNote(noteID: note.id)
         context.delete(note)

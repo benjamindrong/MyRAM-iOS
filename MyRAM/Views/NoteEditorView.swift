@@ -51,7 +51,6 @@ struct NoteEditorView: View {
     @State private var exportErrorMessage: String?
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
-    @State private var suggestionLabels: [String] = []
     @State private var showingTitleEditor = false
     @State private var titleDraft = ""
     @State private var arePinnedThoughtsExpanded = true
@@ -63,7 +62,6 @@ struct NoteEditorView: View {
     @State private var keyboardToast: KeyboardToast?
     @State private var keyboardToastTask: Task<Void, Never>?
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
-    @AppStorage("showOptionalRecommendations") private var showOptionalRecommendations = true
     
     var body: some View {
         NavigationStack {
@@ -159,31 +157,6 @@ struct NoteEditorView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
 
-                if showOptionalRecommendations && !suggestionLabels.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Optional recommendations")
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.secondary)
-
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(suggestionLabels, id: \.self) { label in
-                                    Text(displayName(for: label))
-                                        .font(.caption.weight(.semibold))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 6)
-                                        .background(Color.accentColor.opacity(0.15))
-                                        .foregroundStyle(Color.accentColor)
-                                        .clipShape(Capsule())
-                                }
-                            }
-                        }
-                    }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(10)
-                    .background(Color(.secondarySystemBackground))
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
             }
             .padding()
             .toolbar(.hidden, for: .navigationBar)
@@ -194,7 +167,6 @@ struct NoteEditorView: View {
                 richTextContentData = note.richTextContentData
                 lastSnapshot = currentNoteSnapshot()
                 vm.recordNoteOpened(note)
-                refreshSuggestionLabels()
                 arePinnedThoughtsExpanded = sortedPinnedThoughts.count <= 3
             }
             .onChange(of: title) { handleEditorChange() }
@@ -683,7 +655,6 @@ struct NoteEditorView: View {
             richTextContentData: richTextContentData
         )
         vm.recordNoteEdited(note)
-        refreshSuggestionLabels()
         refreshUndoState()
     }
 
@@ -701,31 +672,6 @@ struct NoteEditorView: View {
             selectedTextUIColor = color
         } else {
             selectedTextUIColor = nil
-        }
-    }
-
-    private func refreshSuggestionLabels() {
-        suggestionLabels = vm.noteSuggestionLabels(for: note)
-    }
-
-    private func displayName(for label: String) -> String {
-        switch label {
-        case "possible_task":
-            return "Possible Task"
-        case "possible_event":
-            return "Possible Event"
-        case "reminder_candidate":
-            return "Reminder Candidate"
-        case "idea":
-            return "Idea"
-        case "journal_entry":
-            return "Journal Entry"
-        case "high_revisit_value":
-            return "High Revisit Value"
-        case "merge_candidate":
-            return "Merge Candidate"
-        default:
-            return label
         }
     }
 
@@ -817,7 +763,6 @@ struct NoteEditorView: View {
             content: snapshot.content,
             richTextContentData: snapshot.richTextContentData
         )
-        refreshSuggestionLabels()
     }
 
     private func restorePinnedThoughts(_ snapshots: [PinnedThoughtSnapshot]) {
@@ -1072,7 +1017,7 @@ struct NoteEditorView: View {
             }
             .accessibilityIdentifier("format-color-swatches")
 
-            Button("Use Default Text Color") {
+            Button("Auto Text Color") {
                 applyDefaultTextColor()
             }
             .accessibilityIdentifier("format-color-default")
@@ -1994,27 +1939,20 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func applyTextColor(in textView: UITextView, color: UIColor?) {
             let selectedRange = formattingActionRange(in: textView)
+            let resolvedColor = color ?? textView.textColor ?? UIColor.label
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
-                if color == nil {
-                    typingAttributes.removeValue(forKey: .foregroundColor)
-                } else {
-                    typingAttributes[.foregroundColor] = color
-                }
-                syncDecorationColorsWithForeground(in: &typingAttributes, color: color)
+                typingAttributes[.foregroundColor] = resolvedColor
+                syncDecorationColorsWithForeground(in: &typingAttributes, color: resolvedColor)
                 textView.typingAttributes = typingAttributes
                 reportFormattingState(from: textView)
                 return
             }
 
             textView.textStorage.beginEditing()
-            if color == nil {
-                textView.textStorage.removeAttribute(.foregroundColor, range: selectedRange)
-            } else if let color {
-                textView.textStorage.addAttribute(.foregroundColor, value: color, range: selectedRange)
-            }
-            syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: color)
+            textView.textStorage.addAttribute(.foregroundColor, value: resolvedColor, range: selectedRange)
+            syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: resolvedColor)
             textView.textStorage.endEditing()
 
             textView.selectedRange = selectedRange

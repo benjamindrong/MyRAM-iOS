@@ -28,10 +28,12 @@ struct NotesListView: View {
     @State private var rootTitleUndoHistory: [String] = []
     @State private var rootTitleRedoHistory: [String] = []
     @State private var noteActionDialogContext: NoteActionDialogContext?
+#if DEBUG
+    @State private var showingClearDemoNotesConfirmation = false
+#endif
     @AppStorage("mainListTitle") private var mainListTitle = "My Notes"
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
-    @AppStorage("showOptionalRecommendations") private var showOptionalRecommendations = true
     
     init(context: ModelContext) {
         _vm = StateObject(wrappedValue: NotesViewModel(context: context))
@@ -199,6 +201,20 @@ struct NotesListView: View {
                     noteActionButtons(for: context)
                 }
             }
+#if DEBUG
+            .confirmationDialog(
+                "Clear Demo Notes?",
+                isPresented: $showingClearDemoNotesConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button("Clear Demo Notes", role: .destructive) {
+                    vm.clearDemoNotes()
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Only notes created by the demo data generator will be removed.")
+            }
+#endif
         }
         .onChange(of: vm.notes) { _, updatedNotes in
             let currentIDs = Set(updatedNotes.map(\.id))
@@ -236,19 +252,6 @@ struct NotesListView: View {
                         overflowMenuItem(for: action)
                     }
 
-                    Divider()
-
-                    Button {
-                        showOptionalRecommendations.toggle()
-                    } label: {
-                        Label(
-                            showOptionalRecommendations ? "Hide Recommendations" : "Show Recommendations",
-                            systemImage: showOptionalRecommendations ? "checkmark.circle" : "circle"
-                        )
-                    }
-                    .foregroundStyle(.primary)
-                    .accessibilityIdentifier("toggle-optional-recommendations")
-
                     Menu("Appearance") {
                         Picker("Mode", selection: $appearanceSettingRaw) {
                             ForEach(AppearanceSetting.allCases) { appearanceSetting in
@@ -262,6 +265,25 @@ struct NotesListView: View {
                             }
                         }
                     }
+
+#if DEBUG
+                    Divider()
+
+                    Button {
+                        vm.generateDemoNotes()
+                    } label: {
+                        Label("Generate Demo Notes", systemImage: "wand.and.stars")
+                    }
+                    .foregroundStyle(.primary)
+                    .accessibilityIdentifier("generate-demo-notes")
+
+                    Button(role: .destructive) {
+                        showingClearDemoNotesConfirmation = true
+                    } label: {
+                        Label("Clear Demo Notes", systemImage: "trash")
+                    }
+                    .accessibilityIdentifier("clear-demo-notes")
+#endif
                 } label: {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: topBarIconSize, weight: .semibold))
