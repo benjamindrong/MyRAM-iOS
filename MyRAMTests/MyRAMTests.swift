@@ -1156,6 +1156,27 @@ final class MyRAMTests: XCTestCase {
         XCTAssertNil(uncheckedStyle)
     }
 
+    func testChecklistRenderingIncreasesCheckboxGlyphSize() throws {
+        let bodyFont = UIFont.systemFont(ofSize: 17)
+        let mutable = NSMutableAttributedString(
+            string: "☐ Pending",
+            attributes: [.font: bodyFont]
+        )
+
+        XCTAssertTrue(ChecklistItemEditor.applyCheckedItemRendering(in: mutable))
+
+        let checkboxFont = try XCTUnwrap(mutable.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        let textFont = try XCTUnwrap(
+            mutable.attribute(
+                .font,
+                at: ChecklistItemEditor.uncheckedPrefix.utf16.count,
+                effectiveRange: nil
+            ) as? UIFont
+        )
+        XCTAssertGreaterThan(checkboxFont.pointSize, bodyFont.pointSize)
+        XCTAssertEqual(textFont.pointSize, bodyFont.pointSize)
+    }
+
     func testChecklistCheckedItemRemainsEditableAfterRendering() {
         let mutable = NSMutableAttributedString(string: "☑︎ Done")
         _ = ChecklistItemEditor.applyCheckedItemRendering(in: mutable)
@@ -1183,6 +1204,22 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(ChecklistItemEditor.isChecklistIcon(at: 0, in: text))
         XCTAssertTrue(ChecklistItemEditor.isChecklistIcon(at: 1, in: text))
         XCTAssertFalse(ChecklistItemEditor.isChecklistIcon(at: 2, in: text))
+    }
+
+    func testChecklistIconRangeReturnsPrefixForContainingLine() throws {
+        let text = "Before\n☐ Buy milk\nAfter" as NSString
+        let textLocation = text.range(of: "Buy").location
+
+        let iconRange = try XCTUnwrap(ChecklistItemEditor.checklistIconRange(containing: textLocation, in: text))
+
+        XCTAssertEqual(text.substring(with: iconRange), "☐ ")
+    }
+
+    func testChecklistIconExactDetectionStaysLimitedToPrefix() {
+        let text = "Before\n☐ Buy milk\nAfter" as NSString
+        let textLocation = text.range(of: "Buy").location
+
+        XCTAssertFalse(ChecklistItemEditor.isChecklistIcon(at: textLocation, in: text))
     }
 
     private func makeContainer(
