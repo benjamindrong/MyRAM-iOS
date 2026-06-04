@@ -315,14 +315,9 @@ struct NoteEditorView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(sortedPinnedThoughts.prefix(1), id: \.id) { thought in
                             Text(thought.text.isEmpty ? "Pinned" : thought.text)
-                                .font(.subheadline.weight(.medium))
-                                .lineLimit(nil)
-                                .fixedSize(horizontal: false, vertical: true)
-                                .foregroundStyle(thought.text.isEmpty ? .secondary : Color.accentColor)
-                                .padding(.horizontal, 8)
-                                .padding(.vertical, 5)
-                                .background(Color.accentColor.opacity(0.12))
-                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                .font(.caption)
+                                .lineLimit(1)
+                                .foregroundStyle(.secondary)
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1557,7 +1552,8 @@ private struct SelectableTextView: UIViewRepresentable {
         textView.layer.cornerRadius = 8
         textView.typingAttributes = [
             .font: textView.font ?? .preferredFont(forTextStyle: .body),
-            .foregroundColor: UIColor.label
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: ChecklistItemEditor.editorParagraphStyle
         ]
         textView.textContainerInset = UIEdgeInsets(
             top: 12,
@@ -1584,6 +1580,7 @@ private struct SelectableTextView: UIViewRepresentable {
         if textView.textContainerInset != desiredInsets {
             textView.textContainerInset = desiredInsets
         }
+        context.coordinator.ensureEditorTypingParagraphStyle(in: textView)
 
         let hasPendingFormattingMutation = context.coordinator.hasPendingFormattingMutation(
             boldToggleToken: boldToggleToken,
@@ -1798,41 +1795,28 @@ private struct SelectableTextView: UIViewRepresentable {
                 y: locationInView.y - textView.textContainerInset.top
             )
 
+            guard location.x >= 0,
+                  location.x <= ChecklistItemEditor.gutterTapWidth else { return }
+
             let layoutManager = textView.layoutManager
             let container = textView.textContainer
-            let glyphIndex = layoutManager.glyphIndex(for: location, in: container)
             let characterIndex = layoutManager.characterIndex(
                 for: location,
                 in: container,
                 fractionOfDistanceBetweenInsertionPoints: nil
             )
             guard characterIndex < textView.attributedText.length else { return }
-            let text = textView.attributedText.string as NSString
-            guard let iconRange = ChecklistItemEditor.checklistIconRange(containing: characterIndex, in: text) else { return }
-            let iconGlyphRange = layoutManager.glyphRange(forCharacterRange: iconRange, actualCharacterRange: nil)
-            let iconRect = layoutManager.boundingRect(forGlyphRange: iconGlyphRange, in: container)
-            let lineRect = layoutManager.lineFragmentUsedRect(forGlyphAt: glyphIndex, effectiveRange: nil)
-            let targetRect = expandedChecklistHitRect(for: iconRect, lineRect: lineRect)
-            guard targetRect.contains(location) else { return }
+            guard ChecklistItemEditor.isChecklistLine(
+                at: characterIndex,
+                in: textView.attributedText.string as NSString
+            ) else { return }
 
             toggleChecklistItem(
                 in: textView,
-                selection: NSRange(location: iconRange.location, length: 0),
+                selection: NSRange(location: characterIndex, length: 0),
                 animated: true
             )
             reportUndoManagerChanged(textView.undoManager)
-        }
-
-        private func expandedChecklistHitRect(for iconRect: CGRect, lineRect: CGRect) -> CGRect {
-            let minimumTargetSize: CGFloat = 44
-            let width = max(minimumTargetSize, iconRect.width)
-            let height = max(minimumTargetSize, lineRect.height)
-            return CGRect(
-                x: iconRect.midX - width / 2,
-                y: lineRect.midY - height / 2,
-                width: width,
-                height: height
-            )
         }
 
         func gestureRecognizer(
@@ -1977,6 +1961,8 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func normalizeTypingAttributes(in textView: UITextView) {
             var typingAttributes = textView.typingAttributes
+            typingAttributes[.paragraphStyle] = ChecklistItemEditor.editorParagraphStyle
+
             if let color = typingAttributes[.foregroundColor] as? UIColor {
                 let resolvedColor = color.resolvedColor(with: textView.traitCollection)
                 if textView.traitCollection.userInterfaceStyle == .dark
@@ -2095,22 +2081,21 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func pinCurrentSelection(in textView: UITextView) {
-            let selectedRange = textView.selectedRange
+            let selectedRange = textView.selectedRange.length > 0
+                ? textView.selectedRange
+                : lastKnownSelectionRange
             let fullText = textView.text as NSString
-            guard selectedRange.location != NSNotFound,
-                  selectedRange.location <= fullText.length else {
+            guard selectedRange.length > 0,
+                  selectedRange.location != NSNotFound,
+                  NSMaxRange(selectedRange) <= fullText.length else {
                 _ = onPinSelection("")
                 return
             }
 
             lastKnownSelectionRange = selectedRange
-            guard let pinCandidate = ChecklistItemEditor.pinCandidate(in: fullText, selection: selectedRange) else {
-                _ = onPinSelection("")
-                return
-            }
-
-            let textToPin = pinCandidate.text
-            let deletionRange = pinCandidate.sourceRange
+            let pinCandidate = ChecklistItemEditor.pinCandidate(in: fullText, selection: selectedRange)
+            let textToPin = pinCandidate?.text ?? fullText.substring(with: selectedRange)
+            let deletionRange = pinCandidate?.sourceRange ?? selectedRange
             guard onPinSelection(textToPin) else {
                 textView.selectedRange = selectedRange
                 textView.becomeFirstResponder()
@@ -2145,10 +2130,18 @@ private struct SelectableTextView: UIViewRepresentable {
             )
         }
 
+        func ensureEditorTypingParagraphStyle(in textView: UITextView) {
+            guard textView.typingAttributes[.paragraphStyle] == nil else { return }
+            var typingAttributes = textView.typingAttributes
+            typingAttributes[.paragraphStyle] = ChecklistItemEditor.editorParagraphStyle
+            textView.typingAttributes = typingAttributes
+        }
+
         private func defaultTextAttributes(for textView: UITextView) -> [NSAttributedString.Key: Any] {
             [
                 .font: textView.font ?? .preferredFont(forTextStyle: .body),
-                .foregroundColor: UIColor.label
+                .foregroundColor: UIColor.label,
+                .paragraphStyle: ChecklistItemEditor.editorParagraphStyle
             ]
         }
 
@@ -2488,8 +2481,11 @@ private struct SelectableTextView: UIViewRepresentable {
             selectedRange: NSRange,
             animated: Bool = false
         ) {
+            let styledText = NSMutableAttributedString(attributedString: attributedText)
+            _ = ChecklistItemEditor.applyEditorRendering(in: styledText)
+
             let applyUpdates = {
-                textView.attributedText = attributedText
+                textView.attributedText = styledText
                 textView.selectedRange = selectedRange
             }
 
@@ -2512,7 +2508,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func applyChecklistRendering(in textView: UITextView) {
             let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
-            guard ChecklistItemEditor.applyCheckedItemRendering(in: mutable) else { return }
+            guard ChecklistItemEditor.applyEditorRendering(in: mutable) else { return }
 
             let selectedRange = textView.selectedRange
             textView.attributedText = mutable
@@ -2562,19 +2558,41 @@ private struct SelectableTextView: UIViewRepresentable {
 }
 
 enum ChecklistItemEditor {
-    static let uncheckedPrefix = "☐ "
-    static let checkedPrefix = "☑︎ "
-    static let checkedPrefixVariant = "☑ "
+    static let uncheckedPrefix = "☐\t"
+    static let checkedPrefix = "☑︎\t"
+    static let checkedPrefixVariant = "☑\t"
+    static let legacyUncheckedGlyphPrefix = "☐ "
+    static let legacyCheckedGlyphPrefix = "☑︎ "
+    static let legacyCheckedGlyphPrefixVariant = "☑ "
     static let legacyUncheckedPrefix = "- [ ] "
     static let legacyCheckedPrefix = "- [x] "
     static let legacyShortUncheckedPrefix = "[ ] "
     static let legacyShortCheckedPrefix = "[x] "
 
     private static let autoChecklistStrikethroughKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-strikethrough")
-    private static let autoChecklistIconFontKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-icon-font")
-    private static let autoChecklistParagraphStyleKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-paragraph-style")
-    private static let checklistIconFontSize: CGFloat = 28
-    private static let checklistContinuationIndent: CGFloat = 28
+    private static let editorTextIndent: CGFloat = 28
+    private static let checklistIconFontSize: CGFloat = 20
+    static let gutterTapWidth: CGFloat = 44
+
+    static var editorParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.firstLineHeadIndent = editorTextIndent
+        style.headIndent = editorTextIndent
+        style.tabStops = [NSTextTab(textAlignment: .left, location: editorTextIndent)]
+        style.defaultTabInterval = editorTextIndent
+        style.lineBreakMode = .byWordWrapping
+        return style
+    }
+
+    private static var checklistParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.firstLineHeadIndent = 0
+        style.headIndent = editorTextIndent
+        style.tabStops = [NSTextTab(textAlignment: .left, location: editorTextIndent)]
+        style.defaultTabInterval = editorTextIndent
+        style.lineBreakMode = .byWordWrapping
+        return style
+    }
 
     static func applyChecklistAction(
         in attributedText: NSMutableAttributedString,
@@ -2593,6 +2611,12 @@ enum ChecklistItemEditor {
             replacement = (NSRange(location: lineRange.location, length: checkedPrefixVariant.utf16.count), uncheckedPrefix)
         } else if line.hasPrefix(uncheckedPrefix) {
             replacement = (NSRange(location: lineRange.location, length: uncheckedPrefix.utf16.count), checkedPrefix)
+        } else if line.hasPrefix(legacyCheckedGlyphPrefix) {
+            replacement = (NSRange(location: lineRange.location, length: legacyCheckedGlyphPrefix.utf16.count), uncheckedPrefix)
+        } else if line.hasPrefix(legacyCheckedGlyphPrefixVariant) {
+            replacement = (NSRange(location: lineRange.location, length: legacyCheckedGlyphPrefixVariant.utf16.count), uncheckedPrefix)
+        } else if line.hasPrefix(legacyUncheckedGlyphPrefix) {
+            replacement = (NSRange(location: lineRange.location, length: legacyUncheckedGlyphPrefix.utf16.count), checkedPrefix)
         } else if line.hasPrefix(legacyCheckedPrefix) {
             replacement = (NSRange(location: lineRange.location, length: legacyCheckedPrefix.utf16.count), uncheckedPrefix)
         } else if line.hasPrefix(legacyUncheckedPrefix) {
@@ -2607,7 +2631,7 @@ enum ChecklistItemEditor {
 
         let delta = replacement.prefix.utf16.count - replacement.range.length
         attributedText.replaceCharacters(in: replacement.range, with: replacement.prefix)
-        _ = applyCheckedItemRendering(in: attributedText)
+        _ = applyEditorRendering(in: attributedText)
 
         let oldLocation = clampedSelectionLocation
         let adjustedLocation: Int
@@ -2624,9 +2648,11 @@ enum ChecklistItemEditor {
     }
 
     @discardableResult
-    static func applyCheckedItemRendering(in attributedText: NSMutableAttributedString) -> Bool {
+    static func applyEditorRendering(in attributedText: NSMutableAttributedString) -> Bool {
         let previous = attributedText.copy() as? NSAttributedString
         normalizeLegacyPrefixes(in: attributedText)
+        applyEditorParagraphStyles(in: attributedText)
+        applyChecklistPrefixRendering(in: attributedText)
         let fullRange = NSRange(location: 0, length: attributedText.length)
 
         var autoRanges: [NSRange] = []
@@ -2642,30 +2668,6 @@ enum ChecklistItemEditor {
             attributedText.removeAttribute(autoChecklistStrikethroughKey, range: range)
         }
 
-        var iconFontRanges: [NSRange] = []
-        attributedText.enumerateAttribute(autoChecklistIconFontKey, in: fullRange) { value, range, _ in
-            if (value as? Bool) == true {
-                iconFontRanges.append(range)
-            }
-        }
-
-        iconFontRanges.forEach { range in
-            attributedText.removeAttribute(.font, range: range)
-            attributedText.removeAttribute(autoChecklistIconFontKey, range: range)
-        }
-
-        var paragraphStyleRanges: [NSRange] = []
-        attributedText.enumerateAttribute(autoChecklistParagraphStyleKey, in: fullRange) { value, range, _ in
-            if (value as? Bool) == true {
-                paragraphStyleRanges.append(range)
-            }
-        }
-
-        paragraphStyleRanges.forEach { range in
-            attributedText.removeAttribute(.paragraphStyle, range: range)
-            attributedText.removeAttribute(autoChecklistParagraphStyleKey, range: range)
-        }
-
         checkedContentRanges(in: attributedText.string as NSString).forEach { range in
             guard range.length > 0 else { return }
             attributedText.addAttribute(
@@ -2675,27 +2677,6 @@ enum ChecklistItemEditor {
             )
             attributedText.addAttribute(
                 autoChecklistStrikethroughKey,
-                value: true,
-                range: range
-            )
-        }
-
-        checklistLineRanges(in: attributedText.string as NSString).forEach { range in
-            let style = NSMutableParagraphStyle()
-            style.firstLineHeadIndent = 0
-            style.headIndent = checklistContinuationIndent
-            attributedText.addAttribute(.paragraphStyle, value: style, range: range)
-            attributedText.addAttribute(autoChecklistParagraphStyleKey, value: true, range: range)
-        }
-
-        checklistIconRanges(in: attributedText.string as NSString).forEach { range in
-            attributedText.addAttribute(
-                .font,
-                value: UIFont.systemFont(ofSize: checklistIconFontSize),
-                range: range
-            )
-            attributedText.addAttribute(
-                autoChecklistIconFontKey,
                 value: true,
                 range: range
             )
@@ -2719,6 +2700,10 @@ enum ChecklistItemEditor {
                 prefixLength = checkedPrefix.utf16.count
             } else if line.hasPrefix(checkedPrefixVariant) {
                 prefixLength = checkedPrefixVariant.utf16.count
+            } else if line.hasPrefix(legacyCheckedGlyphPrefix) {
+                prefixLength = legacyCheckedGlyphPrefix.utf16.count
+            } else if line.hasPrefix(legacyCheckedGlyphPrefixVariant) {
+                prefixLength = legacyCheckedGlyphPrefixVariant.utf16.count
             } else {
                 prefixLength = nil
             }
@@ -2736,69 +2721,16 @@ enum ChecklistItemEditor {
         return ranges
     }
 
-    static func checklistLineRanges(in text: NSString) -> [NSRange] {
-        guard text.length > 0 else { return [] }
-
-        var ranges: [NSRange] = []
-        var cursor = 0
-        while cursor < text.length {
-            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
-            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-            let line = text.substring(with: lineRange)
-            if checklistPrefixLength(in: line) != nil {
-                ranges.append(lineRangeWithNewline)
-            }
-
-            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
-            if nextCursor <= cursor { break }
-            cursor = nextCursor
-        }
-        return ranges
-    }
-
-    static func checklistIconRanges(in text: NSString) -> [NSRange] {
-        guard text.length > 0 else { return [] }
-
-        var ranges: [NSRange] = []
-        var cursor = 0
-        while cursor < text.length {
-            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
-            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-            let line = text.substring(with: lineRange)
-
-            let prefixLength: Int?
-            if line.hasPrefix(uncheckedPrefix) {
-                prefixLength = uncheckedPrefix.utf16.count
-            } else if line.hasPrefix(checkedPrefix) {
-                prefixLength = checkedPrefix.utf16.count
-            } else if line.hasPrefix(checkedPrefixVariant) {
-                prefixLength = checkedPrefixVariant.utf16.count
-            } else {
-                prefixLength = nil
-            }
-
-            if let prefixLength {
-                ranges.append(NSRange(location: lineRange.location, length: prefixLength))
-            }
-
-            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
-            if nextCursor <= cursor { break }
-            cursor = nextCursor
-        }
-        return ranges
-    }
-
     static func pinCandidate(in text: NSString, selection: NSRange) -> (text: String, sourceRange: NSRange)? {
         guard text.length > 0,
               selection.location != NSNotFound,
-              selection.location <= text.length else { return nil }
+              selection.location < text.length else { return nil }
 
-        let lineLocation = min(max(selection.location, 0), max(text.length - 1, 0))
-        let lineRangeWithNewline = text.lineRange(for: NSRange(location: lineLocation, length: 0))
+        let lineRangeWithNewline = text.lineRange(for: NSRange(location: selection.location, length: 0))
         let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
         let line = text.substring(with: lineRange)
-        let prefixLength = checklistPrefixLength(in: line) ?? 0
-        guard lineRange.length >= prefixLength else { return nil }
+        guard let prefixLength = checklistPrefixLength(in: line),
+              lineRange.length >= prefixLength else { return nil }
 
         let contentRange = NSRange(
             location: lineRange.location + prefixLength,
@@ -2812,31 +2744,54 @@ enum ChecklistItemEditor {
     }
 
     static func isChecklistIcon(at characterIndex: Int, in text: NSString) -> Bool {
-        guard let prefixRange = checklistIconRange(containing: characterIndex, in: text) else { return false }
-        let clampedLocation = min(max(characterIndex, 0), max(text.length - 1, 0))
-        return NSLocationInRange(clampedLocation, prefixRange)
-    }
-
-    static func checklistIconRange(containing characterIndex: Int, in text: NSString) -> NSRange? {
-        guard text.length > 0 else { return nil }
+        guard text.length > 0 else { return false }
         let clampedLocation = min(max(characterIndex, 0), max(text.length - 1, 0))
         let lineRangeWithNewline = text.lineRange(for: NSRange(location: clampedLocation, length: 0))
         let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-        guard lineRange.length > 0 else { return nil }
+        guard lineRange.length > 0 else { return false }
 
         let line = text.substring(with: lineRange)
-        let prefixLength: Int
-        if line.hasPrefix(uncheckedPrefix) {
-            prefixLength = uncheckedPrefix.utf16.count
-        } else if line.hasPrefix(checkedPrefix) {
-            prefixLength = checkedPrefix.utf16.count
-        } else if line.hasPrefix(checkedPrefixVariant) {
-            prefixLength = checkedPrefixVariant.utf16.count
-        } else {
-            return nil
+        guard let glyphRange = checklistGlyphRange(in: line, lineLocation: lineRange.location) else {
+            return false
         }
 
-        return NSRange(location: lineRange.location, length: prefixLength)
+        return NSLocationInRange(clampedLocation, glyphRange)
+    }
+
+
+    static func isChecklistLine(at characterIndex: Int, in text: NSString) -> Bool {
+        guard text.length > 0 else { return false }
+        let clampedLocation = min(max(characterIndex, 0), max(text.length - 1, 0))
+        let lineRangeWithNewline = text.lineRange(for: NSRange(location: clampedLocation, length: 0))
+        let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
+        guard lineRange.length > 0 else { return false }
+        let line = text.substring(with: lineRange)
+        return checklistPrefixLength(in: line) != nil
+    }
+
+    private static func applyChecklistPrefixRendering(in attributedText: NSMutableAttributedString) {
+        let text = attributedText.string as NSString
+        guard text.length > 0 else { return }
+
+        var cursor = 0
+        while cursor < text.length {
+            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
+            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
+            let line = text.substring(with: lineRange)
+            if let glyphRange = checklistGlyphRange(in: line, lineLocation: lineRange.location) {
+                attributedText.addAttribute(
+                    .font,
+                    value: UIFont.systemFont(ofSize: checklistIconFontSize, weight: .regular),
+                    range: glyphRange
+                )
+                attributedText.addAttribute(.baselineOffset, value: -1, range: glyphRange)
+                attributedText.addAttribute(.foregroundColor, value: UIColor.label, range: glyphRange)
+            }
+
+            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
+            if nextCursor <= cursor { break }
+            cursor = nextCursor
+        }
     }
 
     private static func normalizeLegacyPrefixes(in attributedText: NSMutableAttributedString) {
@@ -2850,7 +2805,13 @@ enum ChecklistItemEditor {
             let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
             let line = text.substring(with: lineRange)
 
-            if line.hasPrefix(legacyCheckedPrefix) {
+            if line.hasPrefix(legacyCheckedGlyphPrefix) {
+                replacements.append((NSRange(location: lineRange.location, length: legacyCheckedGlyphPrefix.utf16.count), checkedPrefix))
+            } else if line.hasPrefix(legacyCheckedGlyphPrefixVariant) {
+                replacements.append((NSRange(location: lineRange.location, length: legacyCheckedGlyphPrefixVariant.utf16.count), checkedPrefix))
+            } else if line.hasPrefix(legacyUncheckedGlyphPrefix) {
+                replacements.append((NSRange(location: lineRange.location, length: legacyUncheckedGlyphPrefix.utf16.count), uncheckedPrefix))
+            } else if line.hasPrefix(legacyCheckedPrefix) {
                 replacements.append((NSRange(location: lineRange.location, length: legacyCheckedPrefix.utf16.count), checkedPrefix))
             } else if line.hasPrefix(legacyUncheckedPrefix) {
                 replacements.append((NSRange(location: lineRange.location, length: legacyUncheckedPrefix.utf16.count), uncheckedPrefix))
@@ -2867,6 +2828,28 @@ enum ChecklistItemEditor {
 
         replacements.reversed().forEach { replacement in
             attributedText.replaceCharacters(in: replacement.range, with: replacement.replacement)
+        }
+    }
+
+    private static func applyEditorParagraphStyles(in attributedText: NSMutableAttributedString) {
+        let text = attributedText.string as NSString
+        guard text.length > 0 else { return }
+
+        var cursor = 0
+        while cursor < text.length {
+            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
+            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
+            let line = text.substring(with: lineRange)
+
+            attributedText.addAttribute(
+                .paragraphStyle,
+                value: checklistPrefixLength(in: line) == nil ? editorParagraphStyle : checklistParagraphStyle,
+                range: lineRangeWithNewline
+            )
+
+            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
+            if nextCursor <= cursor { break }
+            cursor = nextCursor
         }
     }
 
@@ -2890,6 +2873,15 @@ enum ChecklistItemEditor {
         if line.hasPrefix(uncheckedPrefix) {
             return uncheckedPrefix.utf16.count
         }
+        if line.hasPrefix(legacyCheckedGlyphPrefix) {
+            return legacyCheckedGlyphPrefix.utf16.count
+        }
+        if line.hasPrefix(legacyCheckedGlyphPrefixVariant) {
+            return legacyCheckedGlyphPrefixVariant.utf16.count
+        }
+        if line.hasPrefix(legacyUncheckedGlyphPrefix) {
+            return legacyUncheckedGlyphPrefix.utf16.count
+        }
         if line.hasPrefix(legacyCheckedPrefix) {
             return legacyCheckedPrefix.utf16.count
         }
@@ -2903,6 +2895,37 @@ enum ChecklistItemEditor {
             return legacyShortUncheckedPrefix.utf16.count
         }
         return nil
+    }
+
+    private static func checklistGlyphRange(in line: String, lineLocation: Int) -> NSRange? {
+        let prefixLength: Int
+        let delimiterLength: Int
+        if line.hasPrefix(checkedPrefix) {
+            prefixLength = checkedPrefix.utf16.count
+            delimiterLength = "\t".utf16.count
+        } else if line.hasPrefix(checkedPrefixVariant) {
+            prefixLength = checkedPrefixVariant.utf16.count
+            delimiterLength = "\t".utf16.count
+        } else if line.hasPrefix(uncheckedPrefix) {
+            prefixLength = uncheckedPrefix.utf16.count
+            delimiterLength = "\t".utf16.count
+        } else if line.hasPrefix(legacyCheckedGlyphPrefix) {
+            prefixLength = legacyCheckedGlyphPrefix.utf16.count
+            delimiterLength = " ".utf16.count
+        } else if line.hasPrefix(legacyCheckedGlyphPrefixVariant) {
+            prefixLength = legacyCheckedGlyphPrefixVariant.utf16.count
+            delimiterLength = " ".utf16.count
+        } else if line.hasPrefix(legacyUncheckedGlyphPrefix) {
+            prefixLength = legacyUncheckedGlyphPrefix.utf16.count
+            delimiterLength = " ".utf16.count
+        } else {
+            return nil
+        }
+
+        return NSRange(
+            location: lineLocation,
+            length: max(prefixLength - delimiterLength, 0)
+        )
     }
 }
 

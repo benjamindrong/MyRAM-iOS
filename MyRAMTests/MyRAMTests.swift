@@ -1138,9 +1138,9 @@ final class MyRAMTests: XCTestCase {
     }
 
     func testChecklistRenderingAppliesStrikethroughOnlyToCheckedItemText() {
-        let mutable = NSMutableAttributedString(string: "☑︎ Done\n☐ Pending")
+        let mutable = NSMutableAttributedString(string: "☑︎\tDone\n☐\tPending")
 
-        XCTAssertTrue(ChecklistItemEditor.applyCheckedItemRendering(in: mutable))
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
 
         let checkedTextStart = ChecklistItemEditor.checkedPrefix.utf16.count
         let checkedStyle = mutable.attribute(.strikethroughStyle, at: checkedTextStart, effectiveRange: nil) as? Int
@@ -1150,7 +1150,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertNil(prefixStyle)
 
         let nsText = mutable.string as NSString
-        let uncheckedLineLocation = nsText.range(of: "☐ Pending").location
+        let uncheckedLineLocation = nsText.range(of: "☐\tPending").location
         let uncheckedTextStart = uncheckedLineLocation + ChecklistItemEditor.uncheckedPrefix.utf16.count
         let uncheckedStyle = mutable.attribute(.strikethroughStyle, at: uncheckedTextStart, effectiveRange: nil) as? Int
         XCTAssertNil(uncheckedStyle)
@@ -1159,13 +1159,16 @@ final class MyRAMTests: XCTestCase {
     func testChecklistRenderingIncreasesCheckboxGlyphSize() throws {
         let bodyFont = UIFont.systemFont(ofSize: 17)
         let mutable = NSMutableAttributedString(
-            string: "☐ Pending",
+            string: "☐\tPending",
             attributes: [.font: bodyFont]
         )
 
-        XCTAssertTrue(ChecklistItemEditor.applyCheckedItemRendering(in: mutable))
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
 
         let checkboxFont = try XCTUnwrap(mutable.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        let delimiterFont = try XCTUnwrap(
+            mutable.attribute(.font, at: ChecklistItemEditor.uncheckedPrefix.utf16.count - 1, effectiveRange: nil) as? UIFont
+        )
         let textFont = try XCTUnwrap(
             mutable.attribute(
                 .font,
@@ -1174,13 +1177,28 @@ final class MyRAMTests: XCTestCase {
             ) as? UIFont
         )
         XCTAssertGreaterThan(checkboxFont.pointSize, bodyFont.pointSize)
+        XCTAssertEqual(delimiterFont.pointSize, bodyFont.pointSize)
         XCTAssertEqual(textFont.pointSize, bodyFont.pointSize)
     }
 
-    func testChecklistRenderingAppliesContinuationIndentToChecklistLines() throws {
-        let mutable = NSMutableAttributedString(string: "☐ This is a long checklist item")
+    func testChecklistRenderingKeepsBlankItemTypingBoundaryAtBodyFont() throws {
+        let bodyFont = UIFont.systemFont(ofSize: 17)
+        let mutable = NSMutableAttributedString(
+            string: ChecklistItemEditor.uncheckedPrefix,
+            attributes: [.font: bodyFont]
+        )
 
-        XCTAssertTrue(ChecklistItemEditor.applyCheckedItemRendering(in: mutable))
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let typingBoundaryIndex = ChecklistItemEditor.uncheckedPrefix.utf16.count - 1
+        let boundaryFont = try XCTUnwrap(mutable.attribute(.font, at: typingBoundaryIndex, effectiveRange: nil) as? UIFont)
+        XCTAssertEqual(boundaryFont.pointSize, bodyFont.pointSize)
+    }
+
+    func testChecklistRenderingAppliesContinuationIndentToChecklistLines() throws {
+        let mutable = NSMutableAttributedString(string: "☐\tThis is a long checklist item")
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
 
         let paragraphStyle = try XCTUnwrap(
             mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
@@ -1189,22 +1207,14 @@ final class MyRAMTests: XCTestCase {
         XCTAssertGreaterThan(paragraphStyle.headIndent, paragraphStyle.firstLineHeadIndent)
     }
 
-    func testChecklistLineRangesExcludeRegularLines() {
-        let text = "Regular\n☐ Pending\n☑︎ Done" as NSString
-
-        let ranges = ChecklistItemEditor.checklistLineRanges(in: text)
-
-        XCTAssertEqual(ranges.map { text.substring(with: $0) }, ["☐ Pending\n", "☑︎ Done"])
-    }
-
     func testChecklistCheckedItemRemainsEditableAfterRendering() {
-        let mutable = NSMutableAttributedString(string: "☑︎ Done")
-        _ = ChecklistItemEditor.applyCheckedItemRendering(in: mutable)
+        let mutable = NSMutableAttributedString(string: "☑︎\tDone")
+        _ = ChecklistItemEditor.applyEditorRendering(in: mutable)
 
         mutable.replaceCharacters(in: NSRange(location: mutable.length, length: 0), with: " now")
-        _ = ChecklistItemEditor.applyCheckedItemRendering(in: mutable)
+        _ = ChecklistItemEditor.applyEditorRendering(in: mutable)
 
-        XCTAssertEqual(mutable.string, "☑︎ Done now")
+        XCTAssertEqual(mutable.string, "☑︎\tDone now")
         let lastCharacterIndex = max(mutable.length - 1, 0)
         let style = mutable.attribute(.strikethroughStyle, at: lastCharacterIndex, effectiveRange: nil) as? Int
         XCTAssertEqual(style, NSUnderlineStyle.single.rawValue)
@@ -1213,30 +1223,21 @@ final class MyRAMTests: XCTestCase {
     func testChecklistRenderingMigratesLegacyMarkersToIcons() {
         let mutable = NSMutableAttributedString(string: "- [x] Done\n- [ ] Pending")
 
-        _ = ChecklistItemEditor.applyCheckedItemRendering(in: mutable)
+        _ = ChecklistItemEditor.applyEditorRendering(in: mutable)
 
-        XCTAssertEqual(mutable.string, "☑︎ Done\n☐ Pending")
+        XCTAssertEqual(mutable.string, "☑︎\tDone\n☐\tPending")
     }
 
     func testChecklistIconDetectionMatchesIconPrefixRange() {
-        let text = "☐ Buy milk" as NSString
+        let text = "☐\tBuy milk" as NSString
 
         XCTAssertTrue(ChecklistItemEditor.isChecklistIcon(at: 0, in: text))
-        XCTAssertTrue(ChecklistItemEditor.isChecklistIcon(at: 1, in: text))
+        XCTAssertFalse(ChecklistItemEditor.isChecklistIcon(at: 1, in: text))
         XCTAssertFalse(ChecklistItemEditor.isChecklistIcon(at: 2, in: text))
     }
 
-    func testChecklistIconRangeReturnsPrefixForContainingLine() throws {
-        let text = "Before\n☐ Buy milk\nAfter" as NSString
-        let textLocation = text.range(of: "Buy").location
-
-        let iconRange = try XCTUnwrap(ChecklistItemEditor.checklistIconRange(containing: textLocation, in: text))
-
-        XCTAssertEqual(text.substring(with: iconRange), "☐ ")
-    }
-
     func testChecklistIconExactDetectionStaysLimitedToPrefix() {
-        let text = "Before\n☐ Buy milk\nAfter" as NSString
+        let text = "Before\n☐\tBuy milk\nAfter" as NSString
         let textLocation = text.range(of: "Buy").location
 
         XCTAssertFalse(ChecklistItemEditor.isChecklistIcon(at: textLocation, in: text))
