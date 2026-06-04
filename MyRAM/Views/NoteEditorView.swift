@@ -390,6 +390,10 @@ struct NoteEditorView: View {
             Button("Unpin") {
                 unpinThoughtToBody(thought)
             }
+
+            Button("Delete", role: .destructive) {
+                deletePinnedParagraph(thought)
+            }
         }
         .reorderItemFrame(payload: thought.id.uuidString)
         .offset(activeReorderPayload == thought.id.uuidString ? activeReorderOffset : .zero)
@@ -457,6 +461,13 @@ struct NoteEditorView: View {
         guard !unpinnedText.isEmpty else { return }
         pendingUnpinnedThoughtText = unpinnedText
         appendUnpinnedThoughtToggleToken += 1
+    }
+
+    private func deletePinnedParagraph(_ thought: PinnedThought) {
+        if editingPinnedThoughtID == thought.id {
+            editingPinnedThoughtID = nil
+        }
+        vm.deletePinnedParagraph(thought)
     }
 
     private var editorTopBar: some View {

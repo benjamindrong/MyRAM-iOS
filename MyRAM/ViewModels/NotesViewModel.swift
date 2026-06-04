@@ -408,6 +408,10 @@ final class NotesViewModel: ObservableObject {
     }
 
     func unpinThought(_ thought: PinnedThought) {
+        deletePinnedParagraph(thought)
+    }
+
+    func deletePinnedParagraph(_ thought: PinnedThought) {
         let note = thought.note
         note?.pinnedThoughts.removeAll { $0.id == thought.id }
         context.delete(thought)

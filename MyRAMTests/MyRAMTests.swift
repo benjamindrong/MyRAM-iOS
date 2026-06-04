@@ -583,6 +583,22 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.richTextContentData, Data("rich body".utf8))
     }
 
+    func testPinnedParagraphCanBeDeletedWithoutRestoringToBody() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+        note.content = "Body text"
+        note.richTextContentData = Data("rich body".utf8)
+
+        let paragraph = try XCTUnwrap(vm.addPinnedThought(to: note, text: "Delete this"))
+
+        vm.deletePinnedParagraph(paragraph)
+
+        XCTAssertTrue(vm.sortedPinnedThoughts(for: note).isEmpty)
+        XCTAssertEqual(note.content, "Body text")
+        XCTAssertEqual(note.richTextContentData, Data("rich body".utf8))
+    }
+
     func testChecklistPinCandidateExtractsThoughtAndSourceLineForMove() throws {
         let sourceText = "Before\n☐ Follow up on pinned thought\nAfter" as NSString
         let selection = NSRange(location: sourceText.range(of: "Follow up").location, length: 6)
