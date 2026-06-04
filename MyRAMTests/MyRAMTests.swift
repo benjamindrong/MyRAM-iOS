@@ -609,6 +609,21 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(sourceText.substring(with: candidate.sourceRange), "Pin this entire line please\n")
     }
 
+    func testPinCandidateIgnoresMultiLineSelectionAndUsesStartLine() throws {
+        let sourceText = "Before\nPin this first selected line\nDo not pin this line\nAfter" as NSString
+        let selectionStart = sourceText.range(of: "first").location
+        let selectionEnd = sourceText.range(of: "Do not pin this line").location + "Do not pin this line".utf16.count
+        let multiLineSelection = NSRange(location: selectionStart, length: selectionEnd - selectionStart)
+
+        let candidate = try XCTUnwrap(ChecklistItemEditor.pinCandidate(
+            in: sourceText,
+            selection: multiLineSelection
+        ))
+
+        XCTAssertEqual(candidate.text, "Pin this first selected line")
+        XCTAssertEqual(sourceText.substring(with: candidate.sourceRange), "Pin this first selected line\n")
+    }
+
     func testPinCandidateUsesCursorLineWhenSelectionIsCollapsed() throws {
         let sourceText = "Before\nPin this line from cursor\nAfter" as NSString
         let cursorLocation = sourceText.range(of: "from").location
