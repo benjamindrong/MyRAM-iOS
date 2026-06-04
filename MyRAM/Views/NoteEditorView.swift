@@ -2582,8 +2582,19 @@ enum ChecklistItemEditor {
     static let legacyShortCheckedPrefix = "[x] "
 
     private static let autoChecklistStrikethroughKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-strikethrough")
-    private static let editorTextIndent: CGFloat = 28
+    private static let minimumChecklistGutterWidth: CGFloat = 28
     private static let checklistIconFontSize: CGFloat = 20
+    private static let checklistGutterWidth: CGFloat = {
+        let iconFont = UIFont.systemFont(ofSize: checklistIconFontSize, weight: .regular)
+        let uncheckedWidth = (uncheckedPrefix.trimmingCharacters(in: .whitespacesAndNewlines) as NSString)
+            .size(withAttributes: [.font: iconFont])
+            .width
+        let checkedWidth = (checkedPrefix.trimmingCharacters(in: .whitespacesAndNewlines) as NSString)
+            .size(withAttributes: [.font: iconFont])
+            .width
+        return max(minimumChecklistGutterWidth, ceil(max(uncheckedWidth, checkedWidth)) + 12)
+    }()
+    private static let paragraphSpacing: CGFloat = UIFont.preferredFont(forTextStyle: .body).lineHeight * 0.5
     private static let compactTextInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
     static let gutterTapWidth: CGFloat = 44
 
@@ -2592,6 +2603,7 @@ enum ChecklistItemEditor {
         style.firstLineHeadIndent = 0
         style.headIndent = 0
         style.lineBreakMode = .byWordWrapping
+        applyParagraphSpacing(to: style)
         return style
     }
 
@@ -2599,11 +2611,12 @@ enum ChecklistItemEditor {
         guard hasChecklistItems else { return editorParagraphStyle }
 
         let style = NSMutableParagraphStyle()
-        style.firstLineHeadIndent = editorTextIndent
-        style.headIndent = editorTextIndent
-        style.tabStops = [NSTextTab(textAlignment: .left, location: editorTextIndent)]
-        style.defaultTabInterval = editorTextIndent
+        style.firstLineHeadIndent = checklistGutterWidth
+        style.headIndent = checklistGutterWidth
+        style.tabStops = [NSTextTab(textAlignment: .left, location: checklistGutterWidth)]
+        style.defaultTabInterval = checklistGutterWidth
         style.lineBreakMode = .byWordWrapping
+        applyParagraphSpacing(to: style)
         return style
     }
 
@@ -2613,18 +2626,24 @@ enum ChecklistItemEditor {
             top: compactTextInset.top,
             left: compactTextInset.left,
             bottom: compactTextInset.bottom,
-            right: compactTextInset.right + editorTextIndent
+            right: compactTextInset.right + checklistGutterWidth
         )
     }
 
     private static var checklistParagraphStyle: NSParagraphStyle {
         let style = NSMutableParagraphStyle()
         style.firstLineHeadIndent = 0
-        style.headIndent = editorTextIndent
-        style.tabStops = [NSTextTab(textAlignment: .left, location: editorTextIndent)]
-        style.defaultTabInterval = editorTextIndent
+        style.headIndent = checklistGutterWidth
+        style.tabStops = [NSTextTab(textAlignment: .left, location: checklistGutterWidth)]
+        style.defaultTabInterval = checklistGutterWidth
         style.lineBreakMode = .byWordWrapping
+        applyParagraphSpacing(to: style)
         return style
+    }
+
+    private static func applyParagraphSpacing(to style: NSMutableParagraphStyle) {
+        style.lineSpacing = 0
+        style.paragraphSpacing = paragraphSpacing
     }
 
     static func applyChecklistAction(

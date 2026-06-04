@@ -1205,6 +1205,22 @@ final class MyRAMTests: XCTestCase {
         )
         XCTAssertEqual(paragraphStyle.firstLineHeadIndent, 0)
         XCTAssertGreaterThan(paragraphStyle.headIndent, paragraphStyle.firstLineHeadIndent)
+        XCTAssertEqual(paragraphStyle.lineSpacing, 0)
+        XCTAssertGreaterThan(paragraphStyle.paragraphSpacing, 0)
+    }
+
+    func testChecklistRenderingKeepsTabStopBeyondCheckboxGlyph() throws {
+        let mutable = NSMutableAttributedString(string: "☐\tThis checklist item is long enough to wrap onto another visual line")
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let paragraphStyle = try XCTUnwrap(
+            mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        let checkboxFont = try XCTUnwrap(mutable.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        let checkboxWidth = ("☐" as NSString).size(withAttributes: [.font: checkboxFont]).width
+        XCTAssertGreaterThan(paragraphStyle.headIndent, checkboxWidth)
+        XCTAssertEqual(paragraphStyle.tabStops.first?.location, paragraphStyle.headIndent)
     }
 
     func testChecklistRenderingKeepsPlainNotesCompactWithoutGutters() throws {
@@ -1217,6 +1233,8 @@ final class MyRAMTests: XCTestCase {
         )
         XCTAssertEqual(paragraphStyle.firstLineHeadIndent, 0)
         XCTAssertEqual(paragraphStyle.headIndent, 0)
+        XCTAssertEqual(paragraphStyle.lineSpacing, 0)
+        XCTAssertGreaterThan(paragraphStyle.paragraphSpacing, 0)
         XCTAssertEqual(
             ChecklistItemEditor.textContainerInsets(hasChecklistItems: false).right,
             ChecklistItemEditor.textContainerInsets(hasChecklistItems: false).left
@@ -1233,6 +1251,8 @@ final class MyRAMTests: XCTestCase {
         )
         XCTAssertGreaterThan(regularStyle.firstLineHeadIndent, 0)
         XCTAssertEqual(regularStyle.headIndent, regularStyle.firstLineHeadIndent)
+        XCTAssertEqual(regularStyle.lineSpacing, 0)
+        XCTAssertGreaterThan(regularStyle.paragraphSpacing, 0)
 
         let compactInsets = ChecklistItemEditor.textContainerInsets(hasChecklistItems: false)
         let checklistInsets = ChecklistItemEditor.textContainerInsets(hasChecklistItems: true)
