@@ -315,12 +315,16 @@ struct NoteEditorView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(sortedPinnedThoughts.prefix(1), id: \.id) { thought in
                             Text(thought.text.isEmpty ? "Pinned" : thought.text)
-                                .font(.caption)
-                                .lineLimit(1)
-                                .foregroundStyle(.secondary)
+                                .font(.body)
+                                .foregroundStyle(.primary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(PinnedHighlightPalette.highlight)
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
                 }
             }
             .padding(10)
@@ -380,7 +384,7 @@ struct NoteEditorView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(Color(.tertiarySystemFill))
+        .background(PinnedHighlightPalette.highlight)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .contentShape(Rectangle())
         .onTapGesture {
@@ -1276,6 +1280,11 @@ private struct PinnedThoughtSnapshot: Equatable {
     let text: String
     let order: Int
     let isCollapsed: Bool
+}
+
+private enum PinnedHighlightPalette {
+    static let appIconOrange = Color(red: 249 / 255, green: 167 / 255, blue: 19 / 255)
+    static let highlight = Color(red: 250 / 255, green: 185 / 255, blue: 66 / 255)
 }
 
 private struct KeyboardToast: Equatable {
