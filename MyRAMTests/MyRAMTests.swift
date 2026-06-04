@@ -1223,6 +1223,20 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(paragraphStyle.tabStops.first?.location, paragraphStyle.headIndent)
     }
 
+    func testChecklistRenderingKeepsCheckedWrappedLinesSingleSpaced() throws {
+        let mutable = NSMutableAttributedString(string: "☑︎\tThis checked checklist item is long enough to wrap onto another visual line")
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let paragraphStyle = try XCTUnwrap(
+            mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        let checkboxFont = try XCTUnwrap(mutable.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        XCTAssertEqual(checkboxFont.pointSize, 20)
+        XCTAssertEqual(paragraphStyle.lineSpacing, 0)
+        XCTAssertEqual(paragraphStyle.tabStops.first?.location, paragraphStyle.headIndent)
+    }
+
     func testChecklistRenderingKeepsPlainNotesCompactWithoutGutters() throws {
         let mutable = NSMutableAttributedString(string: "Regular note without checklist items")
 

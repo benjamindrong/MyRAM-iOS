@@ -2584,7 +2584,8 @@ enum ChecklistItemEditor {
     private static let autoChecklistStrikethroughKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-strikethrough")
     private static let minimumChecklistGutterWidth: CGFloat = 28
     private static let checklistGutterReferenceFontSize: CGFloat = 20
-    private static let checklistIconFontSize: CGFloat = 24
+    private static let uncheckedChecklistIconFontSize: CGFloat = 24
+    private static let checkedChecklistIconFontSize = checklistGutterReferenceFontSize
     private static let checklistGutterWidth: CGFloat = {
         let iconFont = UIFont.systemFont(ofSize: checklistGutterReferenceFontSize, weight: .regular)
         let uncheckedWidth = (uncheckedPrefix.trimmingCharacters(in: .whitespacesAndNewlines) as NSString)
@@ -2842,6 +2843,13 @@ enum ChecklistItemEditor {
         return false
     }
 
+    private static func checklistIconFontSize(for line: String) -> CGFloat {
+        if line.hasPrefix(uncheckedPrefix) || line.hasPrefix(legacyUncheckedGlyphPrefix) {
+            return uncheckedChecklistIconFontSize
+        }
+        return checkedChecklistIconFontSize
+    }
+
     private static func applyChecklistPrefixRendering(in attributedText: NSMutableAttributedString) {
         let text = attributedText.string as NSString
         guard text.length > 0 else { return }
@@ -2854,7 +2862,7 @@ enum ChecklistItemEditor {
             if let glyphRange = checklistGlyphRange(in: line, lineLocation: lineRange.location) {
                 attributedText.addAttribute(
                     .font,
-                    value: UIFont.systemFont(ofSize: checklistIconFontSize, weight: .regular),
+                    value: UIFont.systemFont(ofSize: checklistIconFontSize(for: line), weight: .regular),
                     range: glyphRange
                 )
                 attributedText.addAttribute(.baselineOffset, value: -1, range: glyphRange)
