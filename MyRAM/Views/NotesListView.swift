@@ -27,6 +27,7 @@ struct NotesListView: View {
     @State private var rootTitleDraft = ""
     @State private var rootTitleUndoHistory: [String] = []
     @State private var rootTitleRedoHistory: [String] = []
+    @State private var showingListUndoRedoActions = false
     @State private var noteActionDialogContext: NoteActionDialogContext?
 #if DEBUG
     @State private var showingClearDemoNotesConfirmation = false
@@ -139,6 +140,17 @@ struct NotesListView: View {
                 }
             } message: {
                 Text("Set the title shown on the top-level notes list.")
+            }
+            .confirmationDialog("Edit History", isPresented: $showingListUndoRedoActions, titleVisibility: .visible) {
+                Button("Undo") {
+                    performListUndo()
+                }
+                .disabled(!canPerformListUndo)
+
+                Button("Redo") {
+                    performListRedo()
+                }
+                .disabled(!canPerformListRedo)
             }
             .confirmationDialog(
                 "Delete folder \"\(folderAwaitingDeleteDecision?.name ?? "")\"?",
@@ -415,18 +427,12 @@ struct NotesListView: View {
     @ViewBuilder
     private func topBarVisibleAction(for action: NotesListTopBarAction) -> some View {
         switch action {
-        case .undo:
-            compactActionButton(systemImage: "arrow.uturn.backward", identifier: "notes-topbar-undo") {
-                performListUndo()
+        case .history:
+            compactActionButton(systemImage: "arrow.uturn.backward.circle", identifier: "notes-topbar-history") {
+                showingListUndoRedoActions = true
             }
-            .opacity(canPerformListUndo ? 1 : 0.4)
-            .disabled(!canPerformListUndo)
-        case .redo:
-            compactActionButton(systemImage: "arrow.uturn.forward", identifier: "notes-topbar-redo") {
-                performListRedo()
-            }
-            .opacity(canPerformListRedo ? 1 : 0.4)
-            .disabled(!canPerformListRedo)
+            .opacity((canPerformListUndo || canPerformListRedo) ? 1 : 0.4)
+            .disabled(!canPerformListUndo && !canPerformListRedo)
         case .newNote:
             compactActionButton(systemImage: "square.and.pencil", identifier: "notes-topbar-new-note") {
                 selectedNote = vm.createNewNote()
@@ -446,22 +452,14 @@ struct NotesListView: View {
     @ViewBuilder
     private func overflowMenuItem(for action: NotesListTopBarAction) -> some View {
         switch action {
-        case .undo:
+        case .history:
             Button {
-                performListUndo()
+                showingListUndoRedoActions = true
             } label: {
-                Label("Undo", systemImage: "arrow.uturn.backward")
+                Label("Edit History", systemImage: "arrow.uturn.backward.circle")
             }
             .foregroundStyle(.primary)
-            .disabled(!canPerformListUndo)
-        case .redo:
-            Button {
-                performListRedo()
-            } label: {
-                Label("Redo", systemImage: "arrow.uturn.forward")
-            }
-            .foregroundStyle(.primary)
-            .disabled(!canPerformListRedo)
+            .disabled(!canPerformListUndo && !canPerformListRedo)
         case .newNote:
             Button {
                 selectedNote = vm.createNewNote()
@@ -878,15 +876,13 @@ private enum NotesListItem: Identifiable {
 }
 
 private enum NotesListTopBarAction: String, CaseIterable {
-    case undo
-    case redo
+    case history
     case newNote
     case newFolder
     case recentlyDeleted
 
     static let priorityOrder: [NotesListTopBarAction] = [
-        .undo,
-        .redo,
+        .history,
         .newNote,
         .newFolder,
         .recentlyDeleted
