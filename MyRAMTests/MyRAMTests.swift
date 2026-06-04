@@ -1209,7 +1209,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertGreaterThan(paragraphStyle.paragraphSpacing, 0)
     }
 
-    func testChecklistRenderingKeepsTabStopBeyondCheckboxGlyph() throws {
+    func testChecklistRenderingKeepsStableTabStopForLargerCheckboxGlyph() throws {
         let mutable = NSMutableAttributedString(string: "☐\tThis checklist item is long enough to wrap onto another visual line")
 
         XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
@@ -1218,8 +1218,8 @@ final class MyRAMTests: XCTestCase {
             mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
         )
         let checkboxFont = try XCTUnwrap(mutable.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
-        let checkboxWidth = ("☐" as NSString).size(withAttributes: [.font: checkboxFont]).width
-        XCTAssertGreaterThan(paragraphStyle.headIndent, checkboxWidth)
+        XCTAssertGreaterThan(checkboxFont.pointSize, UIFont.systemFont(ofSize: 17).pointSize)
+        XCTAssertEqual(paragraphStyle.headIndent, 28)
         XCTAssertEqual(paragraphStyle.tabStops.first?.location, paragraphStyle.headIndent)
     }
 

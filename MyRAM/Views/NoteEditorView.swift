@@ -2583,9 +2583,10 @@ enum ChecklistItemEditor {
 
     private static let autoChecklistStrikethroughKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-strikethrough")
     private static let minimumChecklistGutterWidth: CGFloat = 28
-    private static let checklistIconFontSize: CGFloat = 20
+    private static let checklistGutterReferenceFontSize: CGFloat = 20
+    private static let checklistIconFontSize: CGFloat = 24
     private static let checklistGutterWidth: CGFloat = {
-        let iconFont = UIFont.systemFont(ofSize: checklistIconFontSize, weight: .regular)
+        let iconFont = UIFont.systemFont(ofSize: checklistGutterReferenceFontSize, weight: .regular)
         let uncheckedWidth = (uncheckedPrefix.trimmingCharacters(in: .whitespacesAndNewlines) as NSString)
             .size(withAttributes: [.font: iconFont])
             .width
