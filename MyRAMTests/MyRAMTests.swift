@@ -1207,6 +1207,40 @@ final class MyRAMTests: XCTestCase {
         XCTAssertGreaterThan(paragraphStyle.headIndent, paragraphStyle.firstLineHeadIndent)
     }
 
+    func testChecklistRenderingKeepsPlainNotesCompactWithoutGutters() throws {
+        let mutable = NSMutableAttributedString(string: "Regular note without checklist items")
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let paragraphStyle = try XCTUnwrap(
+            mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertEqual(paragraphStyle.firstLineHeadIndent, 0)
+        XCTAssertEqual(paragraphStyle.headIndent, 0)
+        XCTAssertEqual(
+            ChecklistItemEditor.textContainerInsets(hasChecklistItems: false).right,
+            ChecklistItemEditor.textContainerInsets(hasChecklistItems: false).left
+        )
+    }
+
+    func testChecklistRenderingIndentsBodyLinesWhenAnyChecklistExists() throws {
+        let mutable = NSMutableAttributedString(string: "Regular line\n☐\tChecklist line")
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let regularStyle = try XCTUnwrap(
+            mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertGreaterThan(regularStyle.firstLineHeadIndent, 0)
+        XCTAssertEqual(regularStyle.headIndent, regularStyle.firstLineHeadIndent)
+
+        let compactInsets = ChecklistItemEditor.textContainerInsets(hasChecklistItems: false)
+        let checklistInsets = ChecklistItemEditor.textContainerInsets(hasChecklistItems: true)
+        XCTAssertEqual(checklistInsets.left, compactInsets.left)
+        XCTAssertGreaterThan(checklistInsets.right, compactInsets.right)
+        XCTAssertEqual(checklistInsets.right - compactInsets.right, regularStyle.firstLineHeadIndent)
+    }
+
     func testChecklistCheckedItemRemainsEditableAfterRendering() {
         let mutable = NSMutableAttributedString(string: "☑︎\tDone")
         _ = ChecklistItemEditor.applyEditorRendering(in: mutable)

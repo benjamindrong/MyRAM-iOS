@@ -1555,12 +1555,7 @@ private struct SelectableTextView: UIViewRepresentable {
             .foregroundColor: UIColor.label,
             .paragraphStyle: ChecklistItemEditor.editorParagraphStyle
         ]
-        textView.textContainerInset = UIEdgeInsets(
-            top: 12,
-            left: 8,
-            bottom: 12,
-            right: 8
-        )
+        textView.textContainerInset = ChecklistItemEditor.textContainerInsets(hasChecklistItems: false)
         textView.keyboardDismissMode = .interactive
         textView.alwaysBounceVertical = true
         return textView
@@ -1576,10 +1571,7 @@ private struct SelectableTextView: UIViewRepresentable {
             context.coordinator.isUpdatingUIView = false
         }
 
-        let desiredInsets = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
-        if textView.textContainerInset != desiredInsets {
-            textView.textContainerInset = desiredInsets
-        }
+        context.coordinator.updateEditorLayout(in: textView)
         context.coordinator.ensureEditorTypingParagraphStyle(in: textView)
 
         let hasPendingFormattingMutation = context.coordinator.hasPendingFormattingMutation(
@@ -1828,6 +1820,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func textViewDidChange(_ textView: UITextView) {
             applyChecklistRendering(in: textView)
+            updateEditorLayout(in: textView)
             syncContent(from: textView)
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
@@ -1961,7 +1954,9 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func normalizeTypingAttributes(in textView: UITextView) {
             var typingAttributes = textView.typingAttributes
-            typingAttributes[.paragraphStyle] = ChecklistItemEditor.editorParagraphStyle
+            typingAttributes[.paragraphStyle] = ChecklistItemEditor.bodyParagraphStyle(
+                hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
+            )
 
             if let color = typingAttributes[.foregroundColor] as? UIColor {
                 let resolvedColor = color.resolvedColor(with: textView.traitCollection)
@@ -2133,7 +2128,9 @@ private struct SelectableTextView: UIViewRepresentable {
         func ensureEditorTypingParagraphStyle(in textView: UITextView) {
             guard textView.typingAttributes[.paragraphStyle] == nil else { return }
             var typingAttributes = textView.typingAttributes
-            typingAttributes[.paragraphStyle] = ChecklistItemEditor.editorParagraphStyle
+            typingAttributes[.paragraphStyle] = ChecklistItemEditor.bodyParagraphStyle(
+                hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
+            )
             textView.typingAttributes = typingAttributes
         }
 
@@ -2141,7 +2138,9 @@ private struct SelectableTextView: UIViewRepresentable {
             [
                 .font: textView.font ?? .preferredFont(forTextStyle: .body),
                 .foregroundColor: UIColor.label,
-                .paragraphStyle: ChecklistItemEditor.editorParagraphStyle
+                .paragraphStyle: ChecklistItemEditor.bodyParagraphStyle(
+                    hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
+                )
             ]
         }
 
@@ -2487,6 +2486,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let applyUpdates = {
                 textView.attributedText = styledText
                 textView.selectedRange = selectedRange
+                self.updateEditorLayout(in: textView)
             }
 
             if animated {
@@ -2508,16 +2508,28 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func applyChecklistRendering(in textView: UITextView) {
             let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
-            guard ChecklistItemEditor.applyEditorRendering(in: mutable) else { return }
+            guard ChecklistItemEditor.applyEditorRendering(in: mutable) else {
+                updateEditorLayout(in: textView)
+                return
+            }
 
             let selectedRange = textView.selectedRange
             textView.attributedText = mutable
+            updateEditorLayout(in: textView)
             let newLength = (textView.text as NSString).length
             let safeLocation = min(selectedRange.location, newLength)
             let safeLength = min(selectedRange.length, newLength - safeLocation)
             let safeRange = NSRange(location: safeLocation, length: safeLength)
             textView.selectedRange = safeRange
             lastKnownSelectionRange = safeRange
+        }
+
+        func updateEditorLayout(in textView: UITextView) {
+            let hasChecklistItems = ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
+            let desiredInsets = ChecklistItemEditor.textContainerInsets(hasChecklistItems: hasChecklistItems)
+            if textView.textContainerInset != desiredInsets {
+                textView.textContainerInset = desiredInsets
+            }
         }
 
         private func effectiveSelectionRange(in textView: UITextView) -> NSRange {
@@ -2572,9 +2584,20 @@ enum ChecklistItemEditor {
     private static let autoChecklistStrikethroughKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-strikethrough")
     private static let editorTextIndent: CGFloat = 28
     private static let checklistIconFontSize: CGFloat = 20
+    private static let compactTextInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
     static let gutterTapWidth: CGFloat = 44
 
     static var editorParagraphStyle: NSParagraphStyle {
+        let style = NSMutableParagraphStyle()
+        style.firstLineHeadIndent = 0
+        style.headIndent = 0
+        style.lineBreakMode = .byWordWrapping
+        return style
+    }
+
+    static func bodyParagraphStyle(hasChecklistItems: Bool) -> NSParagraphStyle {
+        guard hasChecklistItems else { return editorParagraphStyle }
+
         let style = NSMutableParagraphStyle()
         style.firstLineHeadIndent = editorTextIndent
         style.headIndent = editorTextIndent
@@ -2582,6 +2605,16 @@ enum ChecklistItemEditor {
         style.defaultTabInterval = editorTextIndent
         style.lineBreakMode = .byWordWrapping
         return style
+    }
+
+    static func textContainerInsets(hasChecklistItems: Bool) -> UIEdgeInsets {
+        guard hasChecklistItems else { return compactTextInset }
+        return UIEdgeInsets(
+            top: compactTextInset.top,
+            left: compactTextInset.left,
+            bottom: compactTextInset.bottom,
+            right: compactTextInset.right + editorTextIndent
+        )
     }
 
     private static var checklistParagraphStyle: NSParagraphStyle {
@@ -2769,6 +2802,26 @@ enum ChecklistItemEditor {
         return checklistPrefixLength(in: line) != nil
     }
 
+    static func containsChecklistItems(in text: NSString) -> Bool {
+        guard text.length > 0 else { return false }
+
+        var cursor = 0
+        while cursor < text.length {
+            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
+            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
+            let line = text.substring(with: lineRange)
+            if checklistPrefixLength(in: line) != nil {
+                return true
+            }
+
+            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
+            if nextCursor <= cursor { break }
+            cursor = nextCursor
+        }
+
+        return false
+    }
+
     private static func applyChecklistPrefixRendering(in attributedText: NSMutableAttributedString) {
         let text = attributedText.string as NSString
         guard text.length > 0 else { return }
@@ -2834,16 +2887,20 @@ enum ChecklistItemEditor {
     private static func applyEditorParagraphStyles(in attributedText: NSMutableAttributedString) {
         let text = attributedText.string as NSString
         guard text.length > 0 else { return }
+        let hasChecklistItems = containsChecklistItems(in: text)
 
         var cursor = 0
         while cursor < text.length {
             let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
             let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
             let line = text.substring(with: lineRange)
+            let paragraphStyle = checklistPrefixLength(in: line) == nil
+                ? bodyParagraphStyle(hasChecklistItems: hasChecklistItems)
+                : checklistParagraphStyle
 
             attributedText.addAttribute(
                 .paragraphStyle,
-                value: checklistPrefixLength(in: line) == nil ? editorParagraphStyle : checklistParagraphStyle,
+                value: paragraphStyle,
                 range: lineRangeWithNewline
             )
 
