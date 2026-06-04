@@ -2572,7 +2572,9 @@ enum ChecklistItemEditor {
 
     private static let autoChecklistStrikethroughKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-strikethrough")
     private static let autoChecklistIconFontKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-icon-font")
+    private static let autoChecklistParagraphStyleKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-paragraph-style")
     private static let checklistIconFontSize: CGFloat = 28
+    private static let checklistContinuationIndent: CGFloat = 28
 
     static func applyChecklistAction(
         in attributedText: NSMutableAttributedString,
@@ -2652,6 +2654,18 @@ enum ChecklistItemEditor {
             attributedText.removeAttribute(autoChecklistIconFontKey, range: range)
         }
 
+        var paragraphStyleRanges: [NSRange] = []
+        attributedText.enumerateAttribute(autoChecklistParagraphStyleKey, in: fullRange) { value, range, _ in
+            if (value as? Bool) == true {
+                paragraphStyleRanges.append(range)
+            }
+        }
+
+        paragraphStyleRanges.forEach { range in
+            attributedText.removeAttribute(.paragraphStyle, range: range)
+            attributedText.removeAttribute(autoChecklistParagraphStyleKey, range: range)
+        }
+
         checkedContentRanges(in: attributedText.string as NSString).forEach { range in
             guard range.length > 0 else { return }
             attributedText.addAttribute(
@@ -2664,6 +2678,14 @@ enum ChecklistItemEditor {
                 value: true,
                 range: range
             )
+        }
+
+        checklistLineRanges(in: attributedText.string as NSString).forEach { range in
+            let style = NSMutableParagraphStyle()
+            style.firstLineHeadIndent = 0
+            style.headIndent = checklistContinuationIndent
+            attributedText.addAttribute(.paragraphStyle, value: style, range: range)
+            attributedText.addAttribute(autoChecklistParagraphStyleKey, value: true, range: range)
         }
 
         checklistIconRanges(in: attributedText.string as NSString).forEach { range in
@@ -2705,6 +2727,26 @@ enum ChecklistItemEditor {
                 let start = lineRange.location + prefixLength
                 let length = max(lineRange.length - prefixLength, 0)
                 ranges.append(NSRange(location: start, length: length))
+            }
+
+            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
+            if nextCursor <= cursor { break }
+            cursor = nextCursor
+        }
+        return ranges
+    }
+
+    static func checklistLineRanges(in text: NSString) -> [NSRange] {
+        guard text.length > 0 else { return [] }
+
+        var ranges: [NSRange] = []
+        var cursor = 0
+        while cursor < text.length {
+            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
+            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
+            let line = text.substring(with: lineRange)
+            if checklistPrefixLength(in: line) != nil {
+                ranges.append(lineRangeWithNewline)
             }
 
             let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length

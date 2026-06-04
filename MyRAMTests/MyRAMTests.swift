@@ -1177,6 +1177,26 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(textFont.pointSize, bodyFont.pointSize)
     }
 
+    func testChecklistRenderingAppliesContinuationIndentToChecklistLines() throws {
+        let mutable = NSMutableAttributedString(string: "☐ This is a long checklist item")
+
+        XCTAssertTrue(ChecklistItemEditor.applyCheckedItemRendering(in: mutable))
+
+        let paragraphStyle = try XCTUnwrap(
+            mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertEqual(paragraphStyle.firstLineHeadIndent, 0)
+        XCTAssertGreaterThan(paragraphStyle.headIndent, paragraphStyle.firstLineHeadIndent)
+    }
+
+    func testChecklistLineRangesExcludeRegularLines() {
+        let text = "Regular\n☐ Pending\n☑︎ Done" as NSString
+
+        let ranges = ChecklistItemEditor.checklistLineRanges(in: text)
+
+        XCTAssertEqual(ranges.map { text.substring(with: $0) }, ["☐ Pending\n", "☑︎ Done"])
+    }
+
     func testChecklistCheckedItemRemainsEditableAfterRendering() {
         let mutable = NSMutableAttributedString(string: "☑︎ Done")
         _ = ChecklistItemEditor.applyCheckedItemRendering(in: mutable)
