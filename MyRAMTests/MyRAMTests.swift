@@ -1158,6 +1158,56 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)
     }
 
+    func testPasteMatcherUsesTypingAttributesOverDefaults() throws {
+        let defaultFont = UIFont.systemFont(ofSize: 17)
+        let typingFont = UIFont.boldSystemFont(ofSize: 22)
+        let attributedPaste = EditorPasteFormatter.attributedString(
+            matchingDestinationFormattingFor: "Pasted text",
+            typingAttributes: [
+                .font: typingFont,
+                .foregroundColor: UIColor.systemBlue,
+                .underlineStyle: NSUnderlineStyle.single.rawValue
+            ],
+            defaultAttributes: [
+                .font: defaultFont,
+                .foregroundColor: UIColor.label
+            ]
+        )
+
+        XCTAssertEqual(attributedPaste.string, "Pasted text")
+        let pastedFont = try XCTUnwrap(attributedPaste.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        XCTAssertEqual(pastedFont.pointSize, typingFont.pointSize)
+        XCTAssertTrue(pastedFont.fontDescriptor.symbolicTraits.contains(.traitBold))
+
+        let pastedColor = try XCTUnwrap(
+            attributedPaste.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor
+        ).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        XCTAssertTrue(pastedColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+        let expectedColor = UIColor.systemBlue.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        var expectedRed: CGFloat = 0
+        var expectedGreen: CGFloat = 0
+        var expectedBlue: CGFloat = 0
+        var expectedAlpha: CGFloat = 0
+        XCTAssertTrue(expectedColor.getRed(
+            &expectedRed,
+            green: &expectedGreen,
+            blue: &expectedBlue,
+            alpha: &expectedAlpha
+        ))
+        XCTAssertEqual(red, expectedRed, accuracy: 0.02)
+        XCTAssertEqual(green, expectedGreen, accuracy: 0.02)
+        XCTAssertEqual(blue, expectedBlue, accuracy: 0.02)
+        XCTAssertEqual(alpha, expectedAlpha, accuracy: 0.02)
+        XCTAssertEqual(
+            attributedPaste.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int,
+            NSUnderlineStyle.single.rawValue
+        )
+    }
+
     func testChecklistActionCreatesUncheckedItemAtCurrentLine() {
         let mutable = NSMutableAttributedString(string: "Buy milk")
 

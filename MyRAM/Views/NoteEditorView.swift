@@ -27,6 +27,7 @@ struct NoteEditorView: View {
     @State private var underlineToggleToken = 0
     @State private var strikethroughToggleToken = 0
     @State private var checklistToggleToken = 0
+    @State private var pasteAndMatchFormattingToggleToken = 0
     @State private var increaseFontSizeToggleToken = 0
     @State private var decreaseFontSizeToggleToken = 0
     @State private var selectedTextUIColor: UIColor?
@@ -86,6 +87,7 @@ struct NoteEditorView: View {
                         underlineToggleToken: underlineToggleToken,
                         strikethroughToggleToken: strikethroughToggleToken,
                         checklistToggleToken: checklistToggleToken,
+                        pasteAndMatchFormattingToggleToken: pasteAndMatchFormattingToggleToken,
                         increaseFontSizeToggleToken: increaseFontSizeToggleToken,
                         decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
                         formattingController: formattingController,
@@ -892,9 +894,7 @@ struct NoteEditorView: View {
                     toast: KeyboardToast(message: "Copied")
                 )
             }
-            inlineActionButton(systemImage: "doc.on.clipboard", identifier: "keyboard-control-paste") {
-                performResponderAction(#selector(UIResponder.paste(_:)))
-            }
+            inlinePasteMenu
             inlineActionButton(systemImage: "selection.pin.in.out", identifier: "keyboard-control-select-all") {
                 selectAllToggleToken += 1
             }
@@ -1102,6 +1102,31 @@ struct NoteEditorView: View {
     private func isSelectedTextColor(_ color: UIColor) -> Bool {
         guard let selectedTextUIColor else { return false }
         return selectedTextUIColor.isApproximatelyEqual(to: color)
+    }
+
+    private var inlinePasteMenu: some View {
+        Menu {
+            Button {
+                performResponderAction(#selector(UIResponder.paste(_:)))
+            } label: {
+                Label("Paste", systemImage: "doc.on.clipboard")
+            }
+            .accessibilityIdentifier("keyboard-control-paste-standard")
+
+            Button {
+                pasteAndMatchFormattingToggleToken += 1
+            } label: {
+                Label("Paste and Match Destination Formatting", systemImage: "paintbrush")
+            }
+            .accessibilityIdentifier("keyboard-control-paste-match-formatting")
+        } label: {
+            Image(systemName: "doc.on.clipboard")
+                .font(.system(size: 15, weight: .semibold))
+                .frame(width: 26, height: 26)
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.primary)
+        .accessibilityIdentifier("keyboard-control-paste")
     }
 
     private func inlineActionButton(
@@ -1551,6 +1576,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let underlineToggleToken: Int
     let strikethroughToggleToken: Int
     let checklistToggleToken: Int
+    let pasteAndMatchFormattingToggleToken: Int
     let increaseFontSizeToggleToken: Int
     let decreaseFontSizeToggleToken: Int
     let formattingController: TextFormattingController
@@ -1601,6 +1627,7 @@ private struct SelectableTextView: UIViewRepresentable {
             underlineToggleToken: underlineToggleToken,
             strikethroughToggleToken: strikethroughToggleToken,
             checklistToggleToken: checklistToggleToken,
+            pasteAndMatchFormattingToggleToken: pasteAndMatchFormattingToggleToken,
             increaseFontSizeToggleToken: increaseFontSizeToggleToken,
             decreaseFontSizeToggleToken: decreaseFontSizeToggleToken
         )
@@ -1695,6 +1722,12 @@ private struct SelectableTextView: UIViewRepresentable {
             context.coordinator.reportUndoManagerChanged(textView.undoManager)
         }
 
+        if context.coordinator.pasteAndMatchFormattingToggleToken != pasteAndMatchFormattingToggleToken {
+            context.coordinator.pasteAndMatchFormattingToggleToken = pasteAndMatchFormattingToggleToken
+            context.coordinator.pasteAndMatchDestinationFormatting(in: textView)
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
+        }
+
         if context.coordinator.increaseFontSizeToggleToken != increaseFontSizeToggleToken {
             context.coordinator.increaseFontSizeToggleToken = increaseFontSizeToggleToken
             context.coordinator.adjustFontSize(in: textView, by: 1)
@@ -1743,6 +1776,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var underlineToggleToken = 0
         var strikethroughToggleToken = 0
         var checklistToggleToken = 0
+        var pasteAndMatchFormattingToggleToken = 0
         var increaseFontSizeToggleToken = 0
         var decreaseFontSizeToggleToken = 0
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
@@ -1880,6 +1914,7 @@ private struct SelectableTextView: UIViewRepresentable {
             underlineToggleToken: Int,
             strikethroughToggleToken: Int,
             checklistToggleToken: Int,
+            pasteAndMatchFormattingToggleToken: Int,
             increaseFontSizeToggleToken: Int,
             decreaseFontSizeToggleToken: Int
         ) -> Bool {
@@ -1888,6 +1923,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 || self.underlineToggleToken != underlineToggleToken
                 || self.strikethroughToggleToken != strikethroughToggleToken
                 || self.checklistToggleToken != checklistToggleToken
+                || self.pasteAndMatchFormattingToggleToken != pasteAndMatchFormattingToggleToken
                 || self.increaseFontSizeToggleToken != increaseFontSizeToggleToken
                 || self.decreaseFontSizeToggleToken != decreaseFontSizeToggleToken
         }
@@ -1910,6 +1946,26 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func toggleChecklistItem(in textView: UITextView) {
             toggleChecklistItem(in: textView, selection: textView.selectedRange, animated: false)
+        }
+
+        func pasteAndMatchDestinationFormatting(in textView: UITextView) {
+            guard let pastedText = UIPasteboard.general.string,
+                  !pastedText.isEmpty else { return }
+
+            let selectedRange = safeSelectedRange(in: textView)
+            let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
+            let replacement = EditorPasteFormatter.attributedString(
+                matchingDestinationFormattingFor: pastedText,
+                typingAttributes: textView.typingAttributes,
+                defaultAttributes: defaultTextAttributes(for: textView)
+            )
+            mutable.replaceCharacters(in: selectedRange, with: replacement)
+            applyAttributedText(
+                mutable,
+                in: textView,
+                selectedRange: NSRange(location: selectedRange.location + replacement.length, length: 0)
+            )
+            textView.becomeFirstResponder()
         }
 
         private func toggleChecklistItem(in textView: UITextView, selection: NSRange, animated: Bool) {
@@ -2591,6 +2647,32 @@ private struct SelectableTextView: UIViewRepresentable {
 
             return currentRange
         }
+
+        private func safeSelectedRange(in textView: UITextView) -> NSRange {
+            let textLength = (textView.text as NSString).length
+            let selectedRange = textView.selectedRange
+            guard selectedRange.location != NSNotFound else {
+                return NSRange(location: textLength, length: 0)
+            }
+
+            let safeLocation = min(max(selectedRange.location, 0), textLength)
+            let safeLength = min(selectedRange.length, max(textLength - safeLocation, 0))
+            return NSRange(location: safeLocation, length: safeLength)
+        }
+    }
+}
+
+enum EditorPasteFormatter {
+    static func attributedString(
+        matchingDestinationFormattingFor text: String,
+        typingAttributes: [NSAttributedString.Key: Any],
+        defaultAttributes: [NSAttributedString.Key: Any]
+    ) -> NSAttributedString {
+        var attributes = defaultAttributes
+        typingAttributes.forEach { key, value in
+            attributes[key] = value
+        }
+        return NSAttributedString(string: text, attributes: attributes)
     }
 }
 
