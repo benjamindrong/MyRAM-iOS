@@ -40,6 +40,16 @@ final class MyRAMTests: XCTestCase {
         let notes: [NoteRecord]
     }
 
+    func testPinnedHighlightPaletteUsesReadableTextColor() {
+        XCTAssertGreaterThan(
+            contrastRatio(
+                foreground: PinnedHighlightPalette.textUIColor,
+                background: PinnedHighlightPalette.highlightUIColor
+            ),
+            4.5
+        )
+    }
+
     private struct NoteIntelligenceRuleSpec: Decodable {
         struct Rule: Decodable {
             let id: String
@@ -1534,4 +1544,28 @@ final class MyRAMTests: XCTestCase {
             ]
         )
     }
+}
+
+private func contrastRatio(foreground: UIColor, background: UIColor) -> CGFloat {
+    let foregroundLuminance = relativeLuminance(for: foreground)
+    let backgroundLuminance = relativeLuminance(for: background)
+    let lighter = max(foregroundLuminance, backgroundLuminance)
+    let darker = min(foregroundLuminance, backgroundLuminance)
+    return (lighter + 0.05) / (darker + 0.05)
+}
+
+private func relativeLuminance(for color: UIColor) -> CGFloat {
+    var red: CGFloat = 0
+    var green: CGFloat = 0
+    var blue: CGFloat = 0
+    var alpha: CGFloat = 0
+    color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+
+    func adjusted(_ component: CGFloat) -> CGFloat {
+        component <= 0.03928
+            ? component / 12.92
+            : pow((component + 0.055) / 1.055, 2.4)
+    }
+
+    return 0.2126 * adjusted(red) + 0.7152 * adjusted(green) + 0.0722 * adjusted(blue)
 }

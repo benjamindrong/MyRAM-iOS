@@ -319,7 +319,7 @@ struct NoteEditorView: View {
                         ForEach(sortedPinnedThoughts.prefix(1), id: \.id) { thought in
                             Text(thought.text.isEmpty ? "Pinned" : thought.text)
                                 .font(.body)
-                                .foregroundStyle(.primary)
+                                .foregroundStyle(PinnedHighlightPalette.text)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
@@ -373,7 +373,7 @@ struct NoteEditorView: View {
             } else {
                 Text(thought.text.isEmpty ? "Pinned" : thought.text)
                     .font(.subheadline)
-                    .foregroundStyle(thought.text.isEmpty ? .secondary : .primary)
+                    .foregroundStyle(thought.text.isEmpty ? PinnedHighlightPalette.placeholderText : PinnedHighlightPalette.text)
                     .lineLimit(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
@@ -1308,9 +1308,14 @@ private struct PinnedThoughtSnapshot: Equatable {
     let isCollapsed: Bool
 }
 
-private enum PinnedHighlightPalette {
+enum PinnedHighlightPalette {
     static let appIconOrange = Color(red: 249 / 255, green: 167 / 255, blue: 19 / 255)
-    static let highlight = Color(red: 250 / 255, green: 185 / 255, blue: 66 / 255)
+    static let highlightUIColor = UIColor(red: 250 / 255, green: 185 / 255, blue: 66 / 255, alpha: 1)
+    static let textUIColor = UIColor(red: 28 / 255, green: 28 / 255, blue: 30 / 255, alpha: 1)
+
+    static let highlight = Color(uiColor: highlightUIColor)
+    static let text = Color(uiColor: textUIColor)
+    static let placeholderText = Color(uiColor: textUIColor.withAlphaComponent(0.68))
 }
 
 private struct KeyboardToast: Equatable {

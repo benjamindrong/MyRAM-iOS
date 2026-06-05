@@ -591,7 +591,7 @@ struct NotesListView: View {
                     Text(pinnedThoughtPreview)
                         .lineLimit(1)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .foregroundStyle(PinnedHighlightPalette.text)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(PinnedHighlightPalette.highlight)
@@ -796,7 +796,7 @@ private struct NoteContextPreview: View {
             if !pinnedThoughtPreview.isEmpty {
                 Text(pinnedThoughtPreview)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
+                    .foregroundStyle(PinnedHighlightPalette.text)
                     .lineLimit(3)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1041,11 +1041,6 @@ struct ActivityShareSheet: UIViewControllerRepresentable {
     }
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
-}
-
-private enum PinnedHighlightPalette {
-    static let appIconOrange = Color(red: 249 / 255, green: 167 / 255, blue: 19 / 255)
-    static let highlight = Color(red: 250 / 255, green: 185 / 255, blue: 66 / 255)
 }
 
 private struct RecentlyDeletedView: View {
