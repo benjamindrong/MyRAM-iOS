@@ -14,6 +14,7 @@ final class NotesViewModel: ObservableObject {
     private static let recentlyDeletedRetention: TimeInterval = 7 * 24 * 60 * 60
     private let context: ModelContext
     private let noteIntelligenceService = NoteIntelligenceService()
+    private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
     private var undoStack: [UndoAction] = [] {
         didSet {
             hasUndoableAction = !undoStack.isEmpty
@@ -338,6 +339,14 @@ final class NotesViewModel: ObservableObject {
         thought.note?.modifiedAt = .now
         try? context.save()
         refreshCurrentFolderContent()
+    }
+
+    func isPinnedThoughtsSectionExpanded(for note: Note) -> Bool {
+        pinnedThoughtExpansionByNoteID[note.id] ?? false
+    }
+
+    func setPinnedThoughtsSectionExpanded(_ isExpanded: Bool, for note: Note) {
+        pinnedThoughtExpansionByNoteID[note.id] = isExpanded
     }
 
     func movePinnedThought(_ thought: PinnedThought, direction: PinnedThoughtMoveDirection) {

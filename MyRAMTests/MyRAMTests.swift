@@ -583,6 +583,25 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.richTextContentData, Data("rich body".utf8))
     }
 
+    func testPinnedThoughtExpansionStateDefaultsCollapsedAndPersistsPerSessionNote() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let firstNote = vm.createNewNote()
+        let secondNote = vm.createNewNote()
+
+        XCTAssertFalse(vm.isPinnedThoughtsSectionExpanded(for: firstNote))
+        XCTAssertFalse(vm.isPinnedThoughtsSectionExpanded(for: secondNote))
+
+        vm.setPinnedThoughtsSectionExpanded(true, for: firstNote)
+
+        XCTAssertTrue(vm.isPinnedThoughtsSectionExpanded(for: firstNote))
+        XCTAssertFalse(vm.isPinnedThoughtsSectionExpanded(for: secondNote))
+
+        vm.setPinnedThoughtsSectionExpanded(false, for: firstNote)
+
+        XCTAssertFalse(vm.isPinnedThoughtsSectionExpanded(for: firstNote))
+    }
+
     func testPinnedParagraphCanBeDeletedWithoutRestoringToBody() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)

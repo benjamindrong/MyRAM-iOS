@@ -53,7 +53,7 @@ struct NoteEditorView: View {
     @State private var newFolderName = ""
     @State private var showingTitleEditor = false
     @State private var titleDraft = ""
-    @State private var arePinnedThoughtsExpanded = true
+    @State private var arePinnedThoughtsExpanded = false
     @State private var editingPinnedThoughtID: UUID?
     @State private var activeReorderPayload: String?
     @State private var activeReorderOffset: CGSize = .zero
@@ -167,7 +167,7 @@ struct NoteEditorView: View {
                 richTextContentData = note.richTextContentData
                 lastSnapshot = currentNoteSnapshot()
                 vm.recordNoteOpened(note)
-                arePinnedThoughtsExpanded = sortedPinnedThoughts.count <= 3
+                arePinnedThoughtsExpanded = vm.isPinnedThoughtsSectionExpanded(for: note)
             }
             .onChange(of: title) { handleEditorChange() }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
@@ -273,6 +273,7 @@ struct NoteEditorView: View {
                     Button {
                         withAnimation(.easeInOut(duration: 0.18)) {
                             arePinnedThoughtsExpanded.toggle()
+                            vm.setPinnedThoughtsSectionExpanded(arePinnedThoughtsExpanded, for: note)
                         }
                     } label: {
                         HStack(spacing: 6) {
@@ -454,6 +455,7 @@ struct NoteEditorView: View {
             return false
         }
         arePinnedThoughtsExpanded = true
+        vm.setPinnedThoughtsSectionExpanded(true, for: note)
         guard let pinnedThought = vm.addPinnedThought(to: note, text: trimmed) else { return false }
         editingPinnedThoughtID = pinnedThought.id
         return true
@@ -791,7 +793,6 @@ struct NoteEditorView: View {
                 vm.setPinnedThoughtCollapsed(thought, isCollapsed: true)
             }
         }
-        arePinnedThoughtsExpanded = snapshots.count <= 3
         editingPinnedThoughtID = nil
     }
 
