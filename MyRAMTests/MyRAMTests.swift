@@ -947,6 +947,7 @@ final class MyRAMTests: XCTestCase {
         vm.updateNote(note, title: "Daily Log", content: "UTF-8 test ✅")
         note.createdAt = Date(timeIntervalSince1970: 1000)
         note.modifiedAt = Date(timeIntervalSince1970: 2000)
+        _ = vm.addPinnedThought(to: note, text: "Review receipt")
         let imageData = try makeJPEGData()
         vm.addPhotoAttachment(to: note, imageData: imageData)
         note.photoAttachments[0].createdAt = Date(timeIntervalSince1970: 3000)
@@ -954,11 +955,13 @@ final class MyRAMTests: XCTestCase {
         let exportedAt = Date(timeIntervalSince1970: 4000)
         let exportURLs = try vm.exportNotesForSharing([note], nowProvider: { exportedAt })
         let exportURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "json" }))
+        let textURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "txt" }))
         let imageURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "jpg" }))
         let exportData = try Data(contentsOf: exportURL)
         let manifest = try JSONDecoder().decode(DecodedExportManifest.self, from: exportData)
         let noteRecord = try XCTUnwrap(manifest.notes.first)
         let attachmentRecord = try XCTUnwrap(noteRecord.attachments.first)
+        let noteText = try String(contentsOf: textURL, encoding: .utf8)
 
         XCTAssertEqual(manifest.format, "myram-note-export")
         XCTAssertEqual(manifest.exportedAt, iso8601String(exportedAt))
@@ -969,6 +972,9 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(attachmentRecord.mimeType, "image/jpeg")
         XCTAssertEqual(attachmentRecord.filename, imageURL.lastPathComponent)
         XCTAssertEqual(try Data(contentsOf: imageURL), imageData)
+        XCTAssertTrue(noteText.contains("Title: Daily Log"))
+        XCTAssertTrue(noteText.contains("Pinned:\n- Review receipt"))
+        XCTAssertTrue(noteText.contains("Body:\nUTF-8 test ✅"))
     }
 
     func testExportNotesForSharingMultipleNotesIncludesFolderPathsAndPhotos() throws {
@@ -988,7 +994,9 @@ final class MyRAMTests: XCTestCase {
         let exportURLs = try vm.exportNotesForSharing([note1, note2])
         let exportURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "json" }))
         let jpgURLs = exportURLs.filter { $0.pathExtension.lowercased() == "jpg" }
+        let textURLs = exportURLs.filter { $0.pathExtension.lowercased() == "txt" }
         XCTAssertEqual(jpgURLs.count, 1)
+        XCTAssertEqual(textURLs.count, 2)
         let exportData = try Data(contentsOf: exportURL)
         let manifest = try JSONDecoder().decode(DecodedExportManifest.self, from: exportData)
         XCTAssertEqual(manifest.notes.count, 2)

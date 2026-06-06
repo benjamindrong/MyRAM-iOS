@@ -968,10 +968,21 @@ final class NotesViewModel: ObservableObject {
         var manifestNotes: [ExportManifestNote] = []
         var attachmentURLs: [URL] = []
         var usedAttachmentFilenames: Set<String> = []
+        var textURLs: [URL] = []
+        var usedTextFilenames: Set<String> = []
 
-        for note in notes {
+        for (index, note) in notes.enumerated() {
             let sortedAttachments = note.photoAttachments.sorted { $0.createdAt < $1.createdAt }
             var manifestAttachments: [ExportManifestAttachment] = []
+            let textBaseName = makeSafeFileStem(from: note.title, fallback: "Note-\(index + 1)")
+            let textFilename = "\(uniqueFilename(baseName: textBaseName, used: &usedTextFilenames)).txt"
+            let textURL = exportRoot.appendingPathComponent(textFilename)
+            let noteText = buildNoteExportText(for: note, exportedAt: exportedAt)
+            guard let noteTextData = noteText.data(using: .utf8) else {
+                throw NoteExportError.failedToEncodeText
+            }
+            try noteTextData.write(to: textURL, options: .atomic)
+            textURLs.append(textURL)
 
             for attachment in sortedAttachments {
                 let mimeType = inferredMimeType(for: attachment.imageData)
@@ -1027,7 +1038,9 @@ final class NotesViewModel: ObservableObject {
             try fileManager.removeItem(at: exportURL)
         }
         try manifestData.write(to: exportURL, options: .atomic)
-        return [exportURL] + attachmentURLs.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        return [exportURL]
+            + textURLs.sorted { $0.lastPathComponent < $1.lastPathComponent }
+            + attachmentURLs.sorted { $0.lastPathComponent < $1.lastPathComponent }
     }
 
     nonisolated private static func sortedPinnedThoughtExportItems(for note: Note) -> [ExportManifestPinnedThought] {
