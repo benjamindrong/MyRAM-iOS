@@ -268,7 +268,22 @@ struct NoteEditorView: View {
     @ViewBuilder
     private var pinnedThoughtsSection: some View {
         if sortedPinnedThoughts.isEmpty {
-            EmptyView()
+            HStack {
+                Spacer()
+                Button {
+                    addPinnedThoughtFromSection()
+                } label: {
+                    Text("Pinned (0)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(PinnedHighlightPalette.text)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(PinnedHighlightPalette.highlight)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("pinned-thoughts-add")
+            }
         } else {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
@@ -296,6 +311,14 @@ struct NoteEditorView: View {
                     .accessibilityIdentifier("pinned-thoughts-toggle")
 
                     Spacer()
+
+                    Button("Add") {
+                        addPinnedThoughtFromSection()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+                    .accessibilityIdentifier("pinned-thoughts-add")
                 }
 
                 if arePinnedThoughtsExpanded {
@@ -368,6 +391,8 @@ struct NoteEditorView: View {
                 .lineLimit(1...4)
                 .textFieldStyle(.plain)
                 .font(.subheadline)
+                .foregroundStyle(PinnedHighlightPalette.text)
+                .tint(PinnedHighlightPalette.text)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("pinned-thought-text")
             } else {
@@ -461,6 +486,13 @@ struct NoteEditorView: View {
         guard let pinnedThought = vm.addPinnedThought(to: note, text: trimmed) else { return false }
         editingPinnedThoughtID = pinnedThought.id
         return true
+    }
+
+    private func addPinnedThoughtFromSection() {
+        arePinnedThoughtsExpanded = true
+        vm.setPinnedThoughtsSectionExpanded(true, for: note)
+        guard let pinnedThought = vm.addPinnedThought(to: note) else { return }
+        editingPinnedThoughtID = pinnedThought.id
     }
 
     private func unpinThoughtToBody(_ thought: PinnedThought) {
