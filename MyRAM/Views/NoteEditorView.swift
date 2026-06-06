@@ -143,17 +143,17 @@ struct NoteEditorView: View {
                         HStack(spacing: 8) {
                             Label("Attachments", systemImage: "paperclip")
                                 .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.primary)
                             Text("\(sortedAttachments.count)")
                                 .font(.caption2.weight(.semibold))
+                                .foregroundStyle(.primary)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
                                 .background(Color.secondary.opacity(0.2))
                                 .clipShape(Capsule())
-                            Image(systemName: areAttachmentsExpanded ? "chevron.up" : "chevron.down")
-                                .font(.caption.weight(.semibold))
-                                .foregroundStyle(.secondary)
                         }
                     }
+                    .tint(.primary)
                     .padding(10)
                     .background(Color(.secondarySystemBackground))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
