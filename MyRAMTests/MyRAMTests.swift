@@ -40,6 +40,16 @@ final class MyRAMTests: XCTestCase {
         let notes: [NoteRecord]
     }
 
+    func testPinnedHighlightPaletteUsesReadableTextColor() {
+        XCTAssertGreaterThan(
+            contrastRatio(
+                foreground: PinnedHighlightPalette.textUIColor,
+                background: PinnedHighlightPalette.highlightUIColor
+            ),
+            4.5
+        )
+    }
+
     private struct NoteIntelligenceRuleSpec: Decodable {
         struct Rule: Decodable {
             let id: String
@@ -583,6 +593,41 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.richTextContentData, Data("rich body".utf8))
     }
 
+    func testPinnedThoughtExpansionStateDefaultsCollapsedAndPersistsPerSessionNote() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let firstNote = vm.createNewNote()
+        let secondNote = vm.createNewNote()
+
+        XCTAssertFalse(vm.isPinnedThoughtsSectionExpanded(for: firstNote))
+        XCTAssertFalse(vm.isPinnedThoughtsSectionExpanded(for: secondNote))
+
+        vm.setPinnedThoughtsSectionExpanded(true, for: firstNote)
+
+        XCTAssertTrue(vm.isPinnedThoughtsSectionExpanded(for: firstNote))
+        XCTAssertFalse(vm.isPinnedThoughtsSectionExpanded(for: secondNote))
+
+        vm.setPinnedThoughtsSectionExpanded(false, for: firstNote)
+
+        XCTAssertFalse(vm.isPinnedThoughtsSectionExpanded(for: firstNote))
+    }
+
+    func testPinnedParagraphCanBeDeletedWithoutRestoringToBody() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+        note.content = "Body text"
+        note.richTextContentData = Data("rich body".utf8)
+
+        let paragraph = try XCTUnwrap(vm.addPinnedThought(to: note, text: "Delete this"))
+
+        vm.deletePinnedParagraph(paragraph)
+
+        XCTAssertTrue(vm.sortedPinnedThoughts(for: note).isEmpty)
+        XCTAssertEqual(note.content, "Body text")
+        XCTAssertEqual(note.richTextContentData, Data("rich body".utf8))
+    }
+
     func testChecklistPinCandidateExtractsThoughtAndSourceLineForMove() throws {
         let sourceText = "Before\n☐ Follow up on pinned thought\nAfter" as NSString
         let selection = NSRange(location: sourceText.range(of: "Follow up").location, length: 6)
@@ -594,6 +639,47 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(candidate.text, "Follow up on pinned thought")
         XCTAssertEqual(sourceText.substring(with: candidate.sourceRange), "☐ Follow up on pinned thought\n")
+    }
+
+    func testPinCandidateIgnoresSelectionAndUsesEntireCursorLine() throws {
+        let sourceText = "Before\nPin this entire line please\nAfter" as NSString
+        let selectedWordRange = sourceText.range(of: "entire")
+
+        let candidate = try XCTUnwrap(ChecklistItemEditor.pinCandidate(
+            in: sourceText,
+            selection: selectedWordRange
+        ))
+
+        XCTAssertEqual(candidate.text, "Pin this entire line please")
+        XCTAssertEqual(sourceText.substring(with: candidate.sourceRange), "Pin this entire line please\n")
+    }
+
+    func testPinCandidateIgnoresMultiLineSelectionAndUsesStartLine() throws {
+        let sourceText = "Before\nPin this first selected line\nDo not pin this line\nAfter" as NSString
+        let selectionStart = sourceText.range(of: "first").location
+        let selectionEnd = sourceText.range(of: "Do not pin this line").location + "Do not pin this line".utf16.count
+        let multiLineSelection = NSRange(location: selectionStart, length: selectionEnd - selectionStart)
+
+        let candidate = try XCTUnwrap(ChecklistItemEditor.pinCandidate(
+            in: sourceText,
+            selection: multiLineSelection
+        ))
+
+        XCTAssertEqual(candidate.text, "Pin this first selected line")
+        XCTAssertEqual(sourceText.substring(with: candidate.sourceRange), "Pin this first selected line\n")
+    }
+
+    func testPinCandidateUsesCursorLineWhenSelectionIsCollapsed() throws {
+        let sourceText = "Before\nPin this line from cursor\nAfter" as NSString
+        let cursorLocation = sourceText.range(of: "from").location
+
+        let candidate = try XCTUnwrap(ChecklistItemEditor.pinCandidate(
+            in: sourceText,
+            selection: NSRange(location: cursorLocation, length: 0)
+        ))
+
+        XCTAssertEqual(candidate.text, "Pin this line from cursor")
+        XCTAssertEqual(sourceText.substring(with: candidate.sourceRange), "Pin this line from cursor\n")
     }
 
     func testPinnedThoughtsPersistAcrossContainerReinit() throws {
@@ -861,6 +947,7 @@ final class MyRAMTests: XCTestCase {
         vm.updateNote(note, title: "Daily Log", content: "UTF-8 test ✅")
         note.createdAt = Date(timeIntervalSince1970: 1000)
         note.modifiedAt = Date(timeIntervalSince1970: 2000)
+        _ = vm.addPinnedThought(to: note, text: "Review receipt")
         let imageData = try makeJPEGData()
         vm.addPhotoAttachment(to: note, imageData: imageData)
         note.photoAttachments[0].createdAt = Date(timeIntervalSince1970: 3000)
@@ -868,11 +955,13 @@ final class MyRAMTests: XCTestCase {
         let exportedAt = Date(timeIntervalSince1970: 4000)
         let exportURLs = try vm.exportNotesForSharing([note], nowProvider: { exportedAt })
         let exportURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "json" }))
+        let textURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "txt" }))
         let imageURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "jpg" }))
         let exportData = try Data(contentsOf: exportURL)
         let manifest = try JSONDecoder().decode(DecodedExportManifest.self, from: exportData)
         let noteRecord = try XCTUnwrap(manifest.notes.first)
         let attachmentRecord = try XCTUnwrap(noteRecord.attachments.first)
+        let noteText = try String(contentsOf: textURL, encoding: .utf8)
 
         XCTAssertEqual(manifest.format, "myram-note-export")
         XCTAssertEqual(manifest.exportedAt, iso8601String(exportedAt))
@@ -883,6 +972,9 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(attachmentRecord.mimeType, "image/jpeg")
         XCTAssertEqual(attachmentRecord.filename, imageURL.lastPathComponent)
         XCTAssertEqual(try Data(contentsOf: imageURL), imageData)
+        XCTAssertTrue(noteText.contains("Title: Daily Log"))
+        XCTAssertTrue(noteText.contains("Pinned:\n- Review receipt"))
+        XCTAssertTrue(noteText.contains("Body:\nUTF-8 test ✅"))
     }
 
     func testExportNotesForSharingMultipleNotesIncludesFolderPathsAndPhotos() throws {
@@ -902,7 +994,9 @@ final class MyRAMTests: XCTestCase {
         let exportURLs = try vm.exportNotesForSharing([note1, note2])
         let exportURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "json" }))
         let jpgURLs = exportURLs.filter { $0.pathExtension.lowercased() == "jpg" }
+        let textURLs = exportURLs.filter { $0.pathExtension.lowercased() == "txt" }
         XCTAssertEqual(jpgURLs.count, 1)
+        XCTAssertEqual(textURLs.count, 2)
         let exportData = try Data(contentsOf: exportURL)
         let manifest = try JSONDecoder().decode(DecodedExportManifest.self, from: exportData)
         XCTAssertEqual(manifest.notes.count, 2)
@@ -1082,6 +1176,56 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)
     }
 
+    func testPasteMatcherUsesTypingAttributesOverDefaults() throws {
+        let defaultFont = UIFont.systemFont(ofSize: 17)
+        let typingFont = UIFont.boldSystemFont(ofSize: 22)
+        let attributedPaste = EditorPasteFormatter.attributedString(
+            matchingDestinationFormattingFor: "Pasted text",
+            typingAttributes: [
+                .font: typingFont,
+                .foregroundColor: UIColor.systemBlue,
+                .underlineStyle: NSUnderlineStyle.single.rawValue
+            ],
+            defaultAttributes: [
+                .font: defaultFont,
+                .foregroundColor: UIColor.label
+            ]
+        )
+
+        XCTAssertEqual(attributedPaste.string, "Pasted text")
+        let pastedFont = try XCTUnwrap(attributedPaste.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        XCTAssertEqual(pastedFont.pointSize, typingFont.pointSize)
+        XCTAssertTrue(pastedFont.fontDescriptor.symbolicTraits.contains(.traitBold))
+
+        let pastedColor = try XCTUnwrap(
+            attributedPaste.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor
+        ).resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        XCTAssertTrue(pastedColor.getRed(&red, green: &green, blue: &blue, alpha: &alpha))
+        let expectedColor = UIColor.systemBlue.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        var expectedRed: CGFloat = 0
+        var expectedGreen: CGFloat = 0
+        var expectedBlue: CGFloat = 0
+        var expectedAlpha: CGFloat = 0
+        XCTAssertTrue(expectedColor.getRed(
+            &expectedRed,
+            green: &expectedGreen,
+            blue: &expectedBlue,
+            alpha: &expectedAlpha
+        ))
+        XCTAssertEqual(red, expectedRed, accuracy: 0.02)
+        XCTAssertEqual(green, expectedGreen, accuracy: 0.02)
+        XCTAssertEqual(blue, expectedBlue, accuracy: 0.02)
+        XCTAssertEqual(alpha, expectedAlpha, accuracy: 0.02)
+        XCTAssertEqual(
+            attributedPaste.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int,
+            NSUnderlineStyle.single.rawValue
+        )
+    }
+
     func testChecklistActionCreatesUncheckedItemAtCurrentLine() {
         let mutable = NSMutableAttributedString(string: "Buy milk")
 
@@ -1112,9 +1256,9 @@ final class MyRAMTests: XCTestCase {
     }
 
     func testChecklistRenderingAppliesStrikethroughOnlyToCheckedItemText() {
-        let mutable = NSMutableAttributedString(string: "☑︎ Done\n☐ Pending")
+        let mutable = NSMutableAttributedString(string: "☑︎\tDone\n☐\tPending")
 
-        XCTAssertTrue(ChecklistItemEditor.applyCheckedItemRendering(in: mutable))
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
 
         let checkedTextStart = ChecklistItemEditor.checkedPrefix.utf16.count
         let checkedStyle = mutable.attribute(.strikethroughStyle, at: checkedTextStart, effectiveRange: nil) as? Int
@@ -1124,20 +1268,139 @@ final class MyRAMTests: XCTestCase {
         XCTAssertNil(prefixStyle)
 
         let nsText = mutable.string as NSString
-        let uncheckedLineLocation = nsText.range(of: "☐ Pending").location
+        let uncheckedLineLocation = nsText.range(of: "☐\tPending").location
         let uncheckedTextStart = uncheckedLineLocation + ChecklistItemEditor.uncheckedPrefix.utf16.count
         let uncheckedStyle = mutable.attribute(.strikethroughStyle, at: uncheckedTextStart, effectiveRange: nil) as? Int
         XCTAssertNil(uncheckedStyle)
     }
 
+    func testChecklistRenderingIncreasesCheckboxGlyphSize() throws {
+        let bodyFont = UIFont.systemFont(ofSize: 17)
+        let mutable = NSMutableAttributedString(
+            string: "☐\tPending",
+            attributes: [.font: bodyFont]
+        )
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let checkboxFont = try XCTUnwrap(mutable.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        let delimiterFont = try XCTUnwrap(
+            mutable.attribute(.font, at: ChecklistItemEditor.uncheckedPrefix.utf16.count - 1, effectiveRange: nil) as? UIFont
+        )
+        let textFont = try XCTUnwrap(
+            mutable.attribute(
+                .font,
+                at: ChecklistItemEditor.uncheckedPrefix.utf16.count,
+                effectiveRange: nil
+            ) as? UIFont
+        )
+        XCTAssertGreaterThan(checkboxFont.pointSize, bodyFont.pointSize)
+        XCTAssertEqual(delimiterFont.pointSize, bodyFont.pointSize)
+        XCTAssertEqual(textFont.pointSize, bodyFont.pointSize)
+    }
+
+    func testChecklistRenderingKeepsBlankItemTypingBoundaryAtBodyFont() throws {
+        let bodyFont = UIFont.systemFont(ofSize: 17)
+        let mutable = NSMutableAttributedString(
+            string: ChecklistItemEditor.uncheckedPrefix,
+            attributes: [.font: bodyFont]
+        )
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let typingBoundaryIndex = ChecklistItemEditor.uncheckedPrefix.utf16.count - 1
+        let boundaryFont = try XCTUnwrap(mutable.attribute(.font, at: typingBoundaryIndex, effectiveRange: nil) as? UIFont)
+        XCTAssertEqual(boundaryFont.pointSize, bodyFont.pointSize)
+    }
+
+    func testChecklistRenderingAppliesContinuationIndentToChecklistLines() throws {
+        let mutable = NSMutableAttributedString(string: "☐\tThis is a long checklist item")
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let paragraphStyle = try XCTUnwrap(
+            mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertEqual(paragraphStyle.firstLineHeadIndent, 0)
+        XCTAssertGreaterThan(paragraphStyle.headIndent, paragraphStyle.firstLineHeadIndent)
+        XCTAssertEqual(paragraphStyle.lineSpacing, 0)
+        XCTAssertGreaterThan(paragraphStyle.paragraphSpacing, 0)
+    }
+
+    func testChecklistRenderingKeepsStableTabStopForLargerCheckboxGlyph() throws {
+        let mutable = NSMutableAttributedString(string: "☐\tThis checklist item is long enough to wrap onto another visual line")
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let paragraphStyle = try XCTUnwrap(
+            mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        let checkboxFont = try XCTUnwrap(mutable.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        XCTAssertGreaterThan(checkboxFont.pointSize, UIFont.systemFont(ofSize: 17).pointSize)
+        XCTAssertEqual(paragraphStyle.headIndent, 28)
+        XCTAssertEqual(paragraphStyle.tabStops.first?.location, paragraphStyle.headIndent)
+    }
+
+    func testChecklistRenderingKeepsCheckedWrappedLinesSingleSpaced() throws {
+        let mutable = NSMutableAttributedString(string: "☑︎\tThis checked checklist item is long enough to wrap onto another visual line")
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let paragraphStyle = try XCTUnwrap(
+            mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        let checkboxFont = try XCTUnwrap(mutable.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        XCTAssertEqual(checkboxFont.pointSize, 20)
+        XCTAssertEqual(paragraphStyle.lineSpacing, 0)
+        XCTAssertEqual(paragraphStyle.tabStops.first?.location, paragraphStyle.headIndent)
+    }
+
+    func testChecklistRenderingKeepsPlainNotesCompactWithoutGutters() throws {
+        let mutable = NSMutableAttributedString(string: "Regular note without checklist items")
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let paragraphStyle = try XCTUnwrap(
+            mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertEqual(paragraphStyle.firstLineHeadIndent, 0)
+        XCTAssertEqual(paragraphStyle.headIndent, 0)
+        XCTAssertEqual(paragraphStyle.lineSpacing, 0)
+        XCTAssertGreaterThan(paragraphStyle.paragraphSpacing, 0)
+        XCTAssertEqual(
+            ChecklistItemEditor.textContainerInsets(hasChecklistItems: false).right,
+            ChecklistItemEditor.textContainerInsets(hasChecklistItems: false).left
+        )
+    }
+
+    func testChecklistRenderingIndentsBodyLinesWhenAnyChecklistExists() throws {
+        let mutable = NSMutableAttributedString(string: "Regular line\n☐\tChecklist line")
+
+        XCTAssertTrue(ChecklistItemEditor.applyEditorRendering(in: mutable))
+
+        let regularStyle = try XCTUnwrap(
+            mutable.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle
+        )
+        XCTAssertGreaterThan(regularStyle.firstLineHeadIndent, 0)
+        XCTAssertEqual(regularStyle.headIndent, regularStyle.firstLineHeadIndent)
+        XCTAssertEqual(regularStyle.lineSpacing, 0)
+        XCTAssertGreaterThan(regularStyle.paragraphSpacing, 0)
+
+        let compactInsets = ChecklistItemEditor.textContainerInsets(hasChecklistItems: false)
+        let checklistInsets = ChecklistItemEditor.textContainerInsets(hasChecklistItems: true)
+        XCTAssertEqual(checklistInsets.left, compactInsets.left)
+        XCTAssertGreaterThan(checklistInsets.right, compactInsets.right)
+        XCTAssertEqual(checklistInsets.right - compactInsets.right, regularStyle.firstLineHeadIndent)
+    }
+
     func testChecklistCheckedItemRemainsEditableAfterRendering() {
-        let mutable = NSMutableAttributedString(string: "☑︎ Done")
-        _ = ChecklistItemEditor.applyCheckedItemRendering(in: mutable)
+        let mutable = NSMutableAttributedString(string: "☑︎\tDone")
+        _ = ChecklistItemEditor.applyEditorRendering(in: mutable)
 
         mutable.replaceCharacters(in: NSRange(location: mutable.length, length: 0), with: " now")
-        _ = ChecklistItemEditor.applyCheckedItemRendering(in: mutable)
+        _ = ChecklistItemEditor.applyEditorRendering(in: mutable)
 
-        XCTAssertEqual(mutable.string, "☑︎ Done now")
+        XCTAssertEqual(mutable.string, "☑︎\tDone now")
         let lastCharacterIndex = max(mutable.length - 1, 0)
         let style = mutable.attribute(.strikethroughStyle, at: lastCharacterIndex, effectiveRange: nil) as? Int
         XCTAssertEqual(style, NSUnderlineStyle.single.rawValue)
@@ -1146,17 +1409,40 @@ final class MyRAMTests: XCTestCase {
     func testChecklistRenderingMigratesLegacyMarkersToIcons() {
         let mutable = NSMutableAttributedString(string: "- [x] Done\n- [ ] Pending")
 
-        _ = ChecklistItemEditor.applyCheckedItemRendering(in: mutable)
+        _ = ChecklistItemEditor.applyEditorRendering(in: mutable)
 
-        XCTAssertEqual(mutable.string, "☑︎ Done\n☐ Pending")
+        XCTAssertEqual(mutable.string, "☑︎\tDone\n☐\tPending")
     }
 
     func testChecklistIconDetectionMatchesIconPrefixRange() {
-        let text = "☐ Buy milk" as NSString
+        let text = "☐\tBuy milk" as NSString
 
         XCTAssertTrue(ChecklistItemEditor.isChecklistIcon(at: 0, in: text))
-        XCTAssertTrue(ChecklistItemEditor.isChecklistIcon(at: 1, in: text))
+        XCTAssertFalse(ChecklistItemEditor.isChecklistIcon(at: 1, in: text))
         XCTAssertFalse(ChecklistItemEditor.isChecklistIcon(at: 2, in: text))
+    }
+
+    func testChecklistIconExactDetectionStaysLimitedToPrefix() {
+        let text = "Before\n☐\tBuy milk\nAfter" as NSString
+        let textLocation = text.range(of: "Buy").location
+
+        XCTAssertFalse(ChecklistItemEditor.isChecklistIcon(at: textLocation, in: text))
+    }
+
+    func testNoteContentPreviewOmitsCompletedChecklistLines() {
+        let note = Note(title: "Preview", content: "☑︎ Done\n☐ Pending\nRegular detail")
+
+        let preview = noteContentPreviewText(for: note)
+
+        XCTAssertEqual(preview, "☐ Pending\nRegular detail")
+    }
+
+    func testNoteContentPreviewOmitsLegacyCompletedChecklistLines() {
+        let note = Note(title: "Preview", content: "- [x] Done\n[X] Also done\n- [ ] Pending")
+
+        let preview = noteContentPreviewText(for: note)
+
+        XCTAssertEqual(preview, "- [ ] Pending")
     }
 
     private func makeContainer(
@@ -1266,4 +1552,28 @@ final class MyRAMTests: XCTestCase {
             ]
         )
     }
+}
+
+private func contrastRatio(foreground: UIColor, background: UIColor) -> CGFloat {
+    let foregroundLuminance = relativeLuminance(for: foreground)
+    let backgroundLuminance = relativeLuminance(for: background)
+    let lighter = max(foregroundLuminance, backgroundLuminance)
+    let darker = min(foregroundLuminance, backgroundLuminance)
+    return (lighter + 0.05) / (darker + 0.05)
+}
+
+private func relativeLuminance(for color: UIColor) -> CGFloat {
+    var red: CGFloat = 0
+    var green: CGFloat = 0
+    var blue: CGFloat = 0
+    var alpha: CGFloat = 0
+    color.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
+
+    func adjusted(_ component: CGFloat) -> CGFloat {
+        component <= 0.03928
+            ? component / 12.92
+            : pow((component + 0.055) / 1.055, 2.4)
+    }
+
+    return 0.2126 * adjusted(red) + 0.7152 * adjusted(green) + 0.0722 * adjusted(blue)
 }

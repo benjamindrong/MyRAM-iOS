@@ -27,6 +27,7 @@ struct NotesListView: View {
     @State private var rootTitleDraft = ""
     @State private var rootTitleUndoHistory: [String] = []
     @State private var rootTitleRedoHistory: [String] = []
+    @State private var showingListUndoRedoActions = false
     @State private var noteActionDialogContext: NoteActionDialogContext?
 #if DEBUG
     @State private var showingClearDemoNotesConfirmation = false
@@ -139,6 +140,17 @@ struct NotesListView: View {
                 }
             } message: {
                 Text("Set the title shown on the top-level notes list.")
+            }
+            .confirmationDialog("Edit History", isPresented: $showingListUndoRedoActions, titleVisibility: .visible) {
+                Button("Undo") {
+                    performListUndo()
+                }
+                .disabled(!canPerformListUndo)
+
+                Button("Redo") {
+                    performListRedo()
+                }
+                .disabled(!canPerformListRedo)
             }
             .confirmationDialog(
                 "Delete folder \"\(folderAwaitingDeleteDecision?.name ?? "")\"?",
@@ -415,18 +427,12 @@ struct NotesListView: View {
     @ViewBuilder
     private func topBarVisibleAction(for action: NotesListTopBarAction) -> some View {
         switch action {
-        case .undo:
-            compactActionButton(systemImage: "arrow.uturn.backward", identifier: "notes-topbar-undo") {
-                performListUndo()
+        case .history:
+            compactActionButton(systemImage: "arrow.uturn.backward.circle", identifier: "notes-topbar-history") {
+                showingListUndoRedoActions = true
             }
-            .opacity(canPerformListUndo ? 1 : 0.4)
-            .disabled(!canPerformListUndo)
-        case .redo:
-            compactActionButton(systemImage: "arrow.uturn.forward", identifier: "notes-topbar-redo") {
-                performListRedo()
-            }
-            .opacity(canPerformListRedo ? 1 : 0.4)
-            .disabled(!canPerformListRedo)
+            .opacity((canPerformListUndo || canPerformListRedo) ? 1 : 0.4)
+            .disabled(!canPerformListUndo && !canPerformListRedo)
         case .newNote:
             compactActionButton(systemImage: "square.and.pencil", identifier: "notes-topbar-new-note") {
                 selectedNote = vm.createNewNote()
@@ -446,22 +452,14 @@ struct NotesListView: View {
     @ViewBuilder
     private func overflowMenuItem(for action: NotesListTopBarAction) -> some View {
         switch action {
-        case .undo:
+        case .history:
             Button {
-                performListUndo()
+                showingListUndoRedoActions = true
             } label: {
-                Label("Undo", systemImage: "arrow.uturn.backward")
+                Label("Edit History", systemImage: "arrow.uturn.backward.circle")
             }
             .foregroundStyle(.primary)
-            .disabled(!canPerformListUndo)
-        case .redo:
-            Button {
-                performListRedo()
-            } label: {
-                Label("Redo", systemImage: "arrow.uturn.forward")
-            }
-            .foregroundStyle(.primary)
-            .disabled(!canPerformListRedo)
+            .disabled(!canPerformListUndo && !canPerformListRedo)
         case .newNote:
             Button {
                 selectedNote = vm.createNewNote()
@@ -588,15 +586,22 @@ struct NotesListView: View {
                 Text(note.title.isEmpty ? "Untitled" : note.title)
                     .font(.headline)
                     .foregroundStyle(.primary)
-                Text(note.content.isEmpty ? "No content yet" : note.content)
-                    .lineLimit(2)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
                 let pinnedThoughtPreview = pinnedThoughtPreviewText(for: note)
                 if !pinnedThoughtPreview.isEmpty {
                     Text(pinnedThoughtPreview)
                         .lineLimit(1)
-                        .font(.caption.weight(.semibold))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(PinnedHighlightPalette.text)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(PinnedHighlightPalette.highlight)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                }
+                let contentPreview = noteContentPreviewText(for: note)
+                if !contentPreview.isEmpty {
+                    Text(contentPreview)
+                        .lineLimit(2)
+                        .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -790,19 +795,26 @@ private struct NoteContextPreview: View {
             let pinnedThoughtPreview = pinnedThoughtPreviewText(for: note)
             if !pinnedThoughtPreview.isEmpty {
                 Text(pinnedThoughtPreview)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(PinnedHighlightPalette.text)
                     .lineLimit(3)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 5)
+                    .background(PinnedHighlightPalette.highlight)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
             }
-            Text(note.content.isEmpty ? "No content yet" : note.content)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(12)
-                .multilineTextAlignment(.leading)
-                .fixedSize(horizontal: false, vertical: true)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+            let contentPreview = noteContentPreviewText(for: note)
+            if !contentPreview.isEmpty {
+                Text(contentPreview)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(12)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
         }
         .frame(width: 320, height: 320, alignment: .topLeading)
         .padding(14)
@@ -824,6 +836,31 @@ private func pinnedThoughtPreviewText(for note: Note) -> String {
     return thoughts.prefix(2).joined(separator: " • ")
 }
 
+func noteContentPreviewText(for note: Note) -> String {
+    let previewLines = note.content
+        .split(separator: "\n", omittingEmptySubsequences: false)
+        .map(String.init)
+        .filter { !isCompletedChecklistPreviewLine($0) }
+        .joined(separator: "\n")
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+
+    return previewLines
+}
+
+func isCompletedChecklistPreviewLine(_ line: String) -> Bool {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    return trimmed.hasPrefix(ChecklistItemEditor.checkedPrefix)
+        || trimmed.hasPrefix(ChecklistItemEditor.checkedPrefixVariant)
+        || trimmed.range(
+            of: #"^\[[xX]\]\s+"#,
+            options: .regularExpression
+        ) != nil
+        || trimmed.range(
+            of: #"^-\s+\[[xX]\]\s+"#,
+            options: .regularExpression
+        ) != nil
+}
+
 private enum NotesListItem: Identifiable {
     case folder(Folder)
     case note(Note)
@@ -839,15 +876,13 @@ private enum NotesListItem: Identifiable {
 }
 
 private enum NotesListTopBarAction: String, CaseIterable {
-    case undo
-    case redo
+    case history
     case newNote
     case newFolder
     case recentlyDeleted
 
     static let priorityOrder: [NotesListTopBarAction] = [
-        .undo,
-        .redo,
+        .history,
         .newNote,
         .newFolder,
         .recentlyDeleted
