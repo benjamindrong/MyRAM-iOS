@@ -91,6 +91,8 @@ struct NoteEditorView: View {
                         increaseFontSizeToggleToken: increaseFontSizeToggleToken,
                         decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
                         formattingController: formattingController,
+                        backgroundColor: editorChromeStyle.editorSurfaceUIColor,
+                        tintColor: editorChromeStyle.editorTintUIColor,
                         onContentChanged: handleContentChanged,
                         onUndoManagerChanged: updateActiveUndoManager,
                         onFormattingStateChanged: handleFormattingStateChanged,
@@ -155,12 +157,13 @@ struct NoteEditorView: View {
                     }
                     .tint(.primary)
                     .padding(10)
-                    .background(Color(.secondarySystemBackground))
+                    .background(editorChromeStyle.editorSurfaceColor)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
 
             }
             .padding()
+            .background(editorChromeStyle.editorBackgroundColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .presentationDragIndicator(.visible)
             .onAppear {
@@ -953,13 +956,16 @@ struct NoteEditorView: View {
             if editorChromeStyle == .chromeAccent {
                 Capsule().fill(chromeAccentGradient(for: colorScheme))
             } else {
-                Capsule().fill(.ultraThinMaterial)
+                Capsule().fill(editorChromeStyle.toolbarFillColor)
             }
         }
         .overlay {
             if editorChromeStyle == .chromeAccent {
                 Capsule()
                     .stroke(Color.white.opacity(colorScheme == .dark ? 0.22 : 0.44), lineWidth: 0.9)
+            } else {
+                Capsule()
+                    .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
             }
         }
         .accessibilityIdentifier("keyboard-control-bar")
@@ -1003,7 +1009,7 @@ struct NoteEditorView: View {
                     Image(systemName: "checkmark.square")
                         .font(.system(size: 16, weight: .semibold))
                         .frame(width: 34, height: 34)
-                        .background(Color(.tertiarySystemFill))
+                        .background(editorChromeStyle.toolbarControlFillColor)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
                 .buttonStyle(.plain)
@@ -1071,10 +1077,10 @@ struct NoteEditorView: View {
             .accessibilityIdentifier("format-color-default")
         }
         .padding(12)
-        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(editorChromeStyle.toolbarFillColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.secondary.opacity(0.2), lineWidth: 1)
+                .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
         )
         .frame(maxWidth: min(UIScreen.main.bounds.width * 0.82, 320))
         .accessibilityIdentifier("keyboard-control-overflow-panel")
@@ -1097,7 +1103,7 @@ struct NoteEditorView: View {
                 .font(.headline.weight(.semibold))
                 .strikethrough(isStrikethroughLabel)
                 .frame(width: 34, height: 34)
-                .background(isActive ? Color.primary.opacity(0.16) : Color(.tertiarySystemFill))
+                .background(isActive ? Color.primary.opacity(0.18) : editorChromeStyle.toolbarControlFillColor)
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
         .buttonStyle(.plain)
@@ -1617,6 +1623,8 @@ private struct SelectableTextView: UIViewRepresentable {
     let increaseFontSizeToggleToken: Int
     let decreaseFontSizeToggleToken: Int
     let formattingController: TextFormattingController
+    let backgroundColor: UIColor
+    let tintColor: UIColor?
     let onContentChanged: (String, Data?) -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
     let onFormattingStateChanged: (EditorFormattingState) -> Void
@@ -1632,7 +1640,8 @@ private struct SelectableTextView: UIViewRepresentable {
         textView.textColor = .label
         textView.adjustsFontForContentSizeCategory = true
         textView.allowsEditingTextAttributes = true
-        textView.backgroundColor = .secondarySystemBackground
+        textView.backgroundColor = backgroundColor
+        textView.tintColor = tintColor
         textView.layer.cornerRadius = 8
         textView.typingAttributes = [
             .font: textView.font ?? .preferredFont(forTextStyle: .body),
@@ -1657,6 +1666,8 @@ private struct SelectableTextView: UIViewRepresentable {
 
         context.coordinator.updateEditorLayout(in: textView)
         context.coordinator.ensureEditorTypingParagraphStyle(in: textView)
+        textView.backgroundColor = backgroundColor
+        textView.tintColor = tintColor
 
         let hasPendingFormattingMutation = context.coordinator.hasPendingFormattingMutation(
             boldToggleToken: boldToggleToken,
@@ -3305,13 +3316,16 @@ struct ChromeActionBar<Content: View>: View {
                     .fill(chromeAccentGradient(for: colorScheme))
             } else {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .fill(.ultraThinMaterial)
+                    .fill(style.toolbarFillColor)
             }
         }
         .overlay {
             if style == .chromeAccent {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(Color.white.opacity(colorScheme == .dark ? 0.22 : 0.44), lineWidth: 0.9)
+            } else {
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                    .stroke(style.toolbarStrokeColor, lineWidth: 1)
             }
         }
     }

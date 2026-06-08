@@ -54,7 +54,9 @@ struct NotesListView: View {
                 }
                 .listStyle(.insetGrouped)
                 .environment(\.editMode, $editMode)
+                .scrollContentBackground(editorChromeStyle.isWarmPaper ? .hidden : .automatic)
             }
+            .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .sheet(item: $selectedNote) { note in
                 NoteEditorView(vm: vm, note: note) { newNote in
@@ -528,7 +530,7 @@ struct NotesListView: View {
         }
         .buttonStyle(.plain)
         .listRowSeparatorTint(.secondary.opacity(0.35))
-        .listRowBackground(Color(.secondarySystemGroupedBackground))
+        .listRowBackground(editorChromeStyle.listRowBackgroundColor)
         .contextMenu {
             Button("Rename") {
                 folderAwaitingRename = folder
@@ -577,7 +579,7 @@ struct NotesListView: View {
         }
         .tag(note.id)
         .listRowSeparatorTint(.secondary.opacity(0.3))
-        .listRowBackground(Color(.secondarySystemGroupedBackground))
+        .listRowBackground(editorChromeStyle.listRowBackgroundColor)
     }
 
     private func noteRowContent(_ note: Note) -> some View {

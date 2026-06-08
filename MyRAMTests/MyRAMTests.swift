@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import SwiftUI
 import UIKit
 @testable import MyRAM
 
@@ -47,6 +48,37 @@ final class MyRAMTests: XCTestCase {
                 background: PinnedHighlightPalette.highlightUIColor
             ),
             4.5
+        )
+    }
+
+    func testWarmPaperAppearanceUsesIconPalette() {
+        XCTAssertFalse(AppearanceSetting.allCases.map(\.title).contains("Warm Paper"))
+        XCTAssertEqual(EditorChromeStyle.warmPaper.title, "Warm Paper")
+        XCTAssertTrue(EditorChromeStyle.warmPaper.isWarmPaper)
+        XCTAssertTrue(EditorChromeStyle.allCases.contains(.warmPaper))
+        XCTAssertEqual(EditorChromeStyle.warmPaper.colorSchemeOverride, .light)
+        XCTAssertNil(EditorChromeStyle.standard.editorTintUIColor)
+        XCTAssertEqual(EditorChromeStyle.warmPaper.editorTintUIColor, WarmPaperPalette.accentUIColor)
+        XCTAssertGreaterThan(
+            contrastRatio(
+                foreground: UIColor.label.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)),
+                background: WarmPaperPalette.surfaceUIColor
+            ),
+            4.5
+        )
+        XCTAssertGreaterThan(
+            contrastRatio(
+                foreground: WarmPaperPalette.toolbarUIColor,
+                background: WarmPaperPalette.backgroundUIColor
+            ),
+            1.1
+        )
+        XCTAssertGreaterThan(
+            contrastRatio(
+                foreground: WarmPaperPalette.controlUIColor,
+                background: WarmPaperPalette.toolbarUIColor
+            ),
+            1.1
         )
     }
 
