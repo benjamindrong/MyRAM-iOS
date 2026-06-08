@@ -18,6 +18,7 @@ struct NoteEditorView: View {
     @State private var richTextContentData: Data?
     @State private var selectAllToggleToken = 0
     @State private var pinSelectionToggleToken = 0
+    @State private var lookupSelectionToggleToken = 0
     @State private var appendUnpinnedThoughtToggleToken = 0
     @State private var pendingUnpinnedThoughtText = ""
     @State private var restoreContentToggleToken = 0
@@ -51,6 +52,7 @@ struct NoteEditorView: View {
     @State private var showingFileImporter = false
     @State private var expandedAttachment: NotePhotoAttachment?
     @State private var areAttachmentsExpanded = false
+    @State private var lookupRequest: LookupRequest?
     @State private var sharePayload: NoteSharePayload?
     @State private var exportErrorMessage: String?
     @State private var showingCreateFolderPrompt = false
@@ -83,6 +85,7 @@ struct NoteEditorView: View {
                         captureSelectionToggleToken: captureSelectionToggleToken,
                         selectAllToggleToken: selectAllToggleToken,
                         pinSelectionToggleToken: pinSelectionToggleToken,
+                        lookupSelectionToggleToken: lookupSelectionToggleToken,
                         appendUnpinnedThoughtToggleToken: appendUnpinnedThoughtToggleToken,
                         pendingUnpinnedThoughtText: pendingUnpinnedThoughtText,
                         restoreContentToggleToken: restoreContentToggleToken,
@@ -104,7 +107,8 @@ struct NoteEditorView: View {
                         onContentChanged: handleContentChanged,
                         onUndoManagerChanged: updateActiveUndoManager,
                         onFormattingStateChanged: handleFormattingStateChanged,
-                        onPinSelection: pinSelectedText
+                        onPinSelection: pinSelectedText,
+                        onLookupSelection: presentLookup
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
@@ -219,6 +223,9 @@ struct NoteEditorView: View {
             }
             .sheet(item: $expandedAttachment) { attachment in
                 ExpandedPhotoView(attachment: attachment)
+            }
+            .sheet(item: $lookupRequest) { request in
+                ReferenceLookupView(term: request.term)
             }
             .sheet(item: $sharePayload) { payload in
                 ActivityShareSheet(activityItems: payload.urls)
@@ -938,6 +945,9 @@ struct NoteEditorView: View {
             inlineActionButton(systemImage: "pin", identifier: "keyboard-control-pin") {
                 pinSelectionToggleToken += 1
             }
+            inlineActionButton(systemImage: "book", identifier: "keyboard-control-define") {
+                lookupSelectionToggleToken += 1
+            }
 
             inlineActionButton(systemImage: "scissors", identifier: "keyboard-control-cut") {
                 performResponderAction(#selector(UIResponder.cut(_:)))
@@ -1242,6 +1252,15 @@ struct NoteEditorView: View {
         }
     }
 
+    private func presentLookup(for selectedText: String) {
+        let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            showKeyboardToast(KeyboardToast(message: "Select text to define"))
+            return
+        }
+        lookupRequest = LookupRequest(term: trimmed)
+    }
+
     private func exportCurrentNote() {
         do {
             let exportURLs = try vm.exportNotesForSharing([note])
@@ -1345,6 +1364,11 @@ struct EditorFormattingState {
 private struct NoteSharePayload: Identifiable {
     let id = UUID()
     let urls: [URL]
+}
+
+private struct LookupRequest: Identifiable {
+    let id = UUID()
+    let term: String
 }
 
 private struct TextColorSwatch: Identifiable {
@@ -1533,6 +1557,19 @@ private struct ExpandedPhotoView: View {
     }
 }
 
+private struct ReferenceLookupView: UIViewControllerRepresentable {
+    let term: String
+
+    func makeUIViewController(context: Context) -> UIReferenceLibraryViewController {
+        UIReferenceLibraryViewController(term: term)
+    }
+
+    func updateUIViewController(
+        _ uiViewController: UIReferenceLibraryViewController,
+        context: Context
+    ) {}
+}
+
 @MainActor
 private struct LiveTextImageView: UIViewRepresentable {
     let image: UIImage
@@ -1646,6 +1683,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let captureSelectionToggleToken: Int
     let selectAllToggleToken: Int
     let pinSelectionToggleToken: Int
+    let lookupSelectionToggleToken: Int
     let appendUnpinnedThoughtToggleToken: Int
     let pendingUnpinnedThoughtText: String
     let restoreContentToggleToken: Int
@@ -1668,6 +1706,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let onUndoManagerChanged: (UndoManager?) -> Void
     let onFormattingStateChanged: (EditorFormattingState) -> Void
     let onPinSelection: (String) -> Bool
+    let onLookupSelection: (String) -> Void
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
@@ -1746,6 +1785,7 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.onUndoManagerChanged = onUndoManagerChanged
         context.coordinator.onFormattingStateChanged = onFormattingStateChanged
         context.coordinator.onPinSelection = onPinSelection
+        context.coordinator.onLookupSelection = onLookupSelection
 
         if context.coordinator.captureSelectionToggleToken != captureSelectionToggleToken {
             context.coordinator.captureSelectionToggleToken = captureSelectionToggleToken
@@ -1773,6 +1813,11 @@ private struct SelectableTextView: UIViewRepresentable {
         if context.coordinator.pinSelectionToggleToken != pinSelectionToggleToken {
             context.coordinator.pinSelectionToggleToken = pinSelectionToggleToken
             context.coordinator.pinCurrentSelection(in: textView)
+        }
+
+        if context.coordinator.lookupSelectionToggleToken != lookupSelectionToggleToken {
+            context.coordinator.lookupSelectionToggleToken = lookupSelectionToggleToken
+            context.coordinator.lookupCurrentSelection(in: textView)
         }
 
         if context.coordinator.appendUnpinnedThoughtToggleToken != appendUnpinnedThoughtToggleToken {
@@ -1851,7 +1896,8 @@ private struct SelectableTextView: UIViewRepresentable {
             onContentChanged: onContentChanged,
             onUndoManagerChanged: onUndoManagerChanged,
             onFormattingStateChanged: onFormattingStateChanged,
-            onPinSelection: onPinSelection
+            onPinSelection: onPinSelection,
+            onLookupSelection: onLookupSelection
         )
     }
 
@@ -1863,12 +1909,14 @@ private struct SelectableTextView: UIViewRepresentable {
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
         var onPinSelection: (String) -> Bool
+        var onLookupSelection: (String) -> Void
         var defaultTextColor: UIColor = .label
         weak var textView: UITextView?
         var captureSelectionToggleToken = 0
         var keyboardFocusToggleToken = 0
         var selectAllToggleToken = 0
         var pinSelectionToggleToken = 0
+        var lookupSelectionToggleToken = 0
         var appendUnpinnedThoughtToggleToken = 0
         var restoreContentToggleToken = 0
         var boldToggleToken = 0
@@ -1893,7 +1941,8 @@ private struct SelectableTextView: UIViewRepresentable {
             onContentChanged: @escaping (String, Data?) -> Void,
             onUndoManagerChanged: @escaping (UndoManager?) -> Void,
             onFormattingStateChanged: @escaping (EditorFormattingState) -> Void,
-            onPinSelection: @escaping (String) -> Bool
+            onPinSelection: @escaping (String) -> Bool,
+            onLookupSelection: @escaping (String) -> Void
         ) {
             self.formattingController = formattingController
             self.text = text
@@ -1902,6 +1951,7 @@ private struct SelectableTextView: UIViewRepresentable {
             self.onUndoManagerChanged = onUndoManagerChanged
             self.onFormattingStateChanged = onFormattingStateChanged
             self.onPinSelection = onPinSelection
+            self.onLookupSelection = onLookupSelection
         }
 
         deinit {
@@ -2264,6 +2314,22 @@ private struct SelectableTextView: UIViewRepresentable {
             reportFormattingState(from: textView)
         }
 
+        func lookupCurrentSelection(in textView: UITextView) {
+            let selectedText = selectedPlainText(in: textView)
+
+            // This function is triggered from updateUIView after SwiftUI sees
+            // lookupSelectionToggleToken change. Do not mutate parent @State
+            // synchronously during updateUIView; defer so the sheet presentation
+            // is scheduled after the representable update completes.
+            RunLoop.main.perform { [weak self] in
+                self?.onLookupSelection(selectedText)
+            }
+
+            // Do not immediately refocus the editor here. Refocusing can fight
+            // SwiftUI sheet presentation for the dictionary controller.
+            reportFormattingState(from: textView)
+        }
+
         func pinCurrentSelection(in textView: UITextView) {
             let cursorRange = textView.selectedRange.location != NSNotFound
                 ? textView.selectedRange
@@ -2297,6 +2363,26 @@ private struct SelectableTextView: UIViewRepresentable {
             applyAttributedText(mutable, in: textView, selectedRange: NSRange(location: caretLocation, length: 0))
             textView.becomeFirstResponder()
             reportUndoManagerChanged(textView.undoManager)
+        }
+
+        private func selectedPlainText(in textView: UITextView) -> String {
+            let fullText = textView.text as NSString
+            let currentRange = safeSelectedRange(in: textView)
+            if currentRange.length > 0,
+               NSMaxRange(currentRange) <= fullText.length {
+                lastKnownSelectionRange = currentRange
+                return fullText.substring(with: currentRange)
+            }
+
+            let cachedRange = lastKnownSelectionRange
+            if cachedRange.length > 0,
+               cachedRange.location != NSNotFound,
+               NSMaxRange(cachedRange) <= fullText.length {
+                textView.selectedRange = cachedRange
+                return fullText.substring(with: cachedRange)
+            }
+
+            return ""
         }
 
         func appendUnpinnedThought(_ thoughtText: String, in textView: UITextView) {
