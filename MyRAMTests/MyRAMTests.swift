@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import SwiftUI
 import UIKit
 @testable import MyRAM
 
@@ -47,6 +48,56 @@ final class MyRAMTests: XCTestCase {
                 background: PinnedHighlightPalette.highlightUIColor
             ),
             4.5
+        )
+    }
+
+    func testWarmPaperAppearanceUsesIconPalette() {
+        XCTAssertFalse(AppearanceSetting.allCases.map(\.title).contains("Warm Paper"))
+        XCTAssertFalse(EditorChromeStyle.allCases.map(\.title).contains("Standard"))
+        XCTAssertEqual(EditorChromeStyle.standard.title, "None")
+        XCTAssertEqual(EditorChromeStyle.warmPaper.title, "Warm Paper")
+        XCTAssertTrue(EditorChromeStyle.warmPaper.isWarmPaper)
+        XCTAssertTrue(EditorChromeStyle.allCases.contains(.warmPaper))
+        XCTAssertNil(EditorChromeStyle.warmPaper.colorSchemeOverride)
+        XCTAssertNil(EditorChromeStyle.standard.editorTintUIColor)
+        XCTAssertEqual(
+            EditorChromeStyle.warmPaper.editorTintUIColor?.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)),
+            WarmPaperPalette.accentUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+        )
+        XCTAssertGreaterThan(
+            contrastRatio(
+                foreground: UIColor.label.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)),
+                background: WarmPaperPalette.surfaceUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+            ),
+            4.5
+        )
+        XCTAssertGreaterThan(
+            contrastRatio(
+                foreground: UIColor.label.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)),
+                background: WarmPaperPalette.surfaceUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+            ),
+            4.5
+        )
+        XCTAssertGreaterThan(
+            contrastRatio(
+                foreground: WarmPaperPalette.toolbarUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)),
+                background: WarmPaperPalette.backgroundUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+            ),
+            1.1
+        )
+        XCTAssertGreaterThan(
+            contrastRatio(
+                foreground: WarmPaperPalette.controlUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)),
+                background: WarmPaperPalette.toolbarUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
+            ),
+            1.1
+        )
+        XCTAssertGreaterThan(
+            contrastRatio(
+                foreground: WarmPaperPalette.controlUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark)),
+                background: WarmPaperPalette.toolbarUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .dark))
+            ),
+            1.1
         )
     }
 

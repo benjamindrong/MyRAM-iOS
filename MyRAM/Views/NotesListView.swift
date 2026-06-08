@@ -4,6 +4,7 @@ import SwiftData
 import UIKit
 
 struct NotesListView: View {
+    @Environment(\.colorScheme) private var colorScheme
     private let topBarControlSize: CGFloat = 44
     private let topBarIconSize: CGFloat = 20
     private let topBarHeight: CGFloat = 44
@@ -54,7 +55,9 @@ struct NotesListView: View {
                 }
                 .listStyle(.insetGrouped)
                 .environment(\.editMode, $editMode)
+                .scrollContentBackground(editorChromeStyle.isWarmPaper ? .hidden : .automatic)
             }
+            .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
             .sheet(item: $selectedNote) { note in
                 NoteEditorView(vm: vm, note: note) { newNote in
@@ -201,16 +204,30 @@ struct NotesListView: View {
                     }
                 )
             }
-            .confirmationDialog(
-                noteActionDialogTitle,
-                isPresented: Binding(
-                    get: { noteActionDialogContext != nil },
-                    set: { if !$0 { noteActionDialogContext = nil } }
-                ),
-                titleVisibility: .visible
-            ) {
+            .overlay {
                 if let context = noteActionDialogContext {
-                    noteActionButtons(for: context)
+                    NoteActionSheetOverlay(
+                        context: context,
+                        selectedCount: selectedNotes.count,
+                        pinActionTitle: pinActionTitle(for: context),
+                        onDismiss: { noteActionDialogContext = nil },
+                        onPin: {
+                            performPinAction(for: context)
+                            noteActionDialogContext = nil
+                        },
+                        onMove: {
+                            performMoveAction(for: context)
+                            noteActionDialogContext = nil
+                        },
+                        onExport: {
+                            performExportAction(for: context)
+                            noteActionDialogContext = nil
+                        },
+                        onDelete: {
+                            performDeleteAction(for: context)
+                            noteActionDialogContext = nil
+                        }
+                    )
                 }
             }
 #if DEBUG
@@ -528,7 +545,7 @@ struct NotesListView: View {
         }
         .buttonStyle(.plain)
         .listRowSeparatorTint(.secondary.opacity(0.35))
-        .listRowBackground(Color(.secondarySystemGroupedBackground))
+        .listRowBackground(editorChromeStyle.listRowBackgroundColor)
         .contextMenu {
             Button("Rename") {
                 folderAwaitingRename = folder
@@ -554,11 +571,7 @@ struct NotesListView: View {
                         )
                 } else {
                     noteRowContent(note)
-                        .contextMenu {
-                            noteActionButtons(for: .single(note))
-                        } preview: {
-                            NoteContextPreview(note: note)
-                        }
+                        .highPriorityGesture(noteLongPressGesture(for: note))
                 }
             } else {
                 Button {
@@ -568,16 +581,12 @@ struct NotesListView: View {
                     noteRowContent(note)
                 }
                 .buttonStyle(.plain)
-                .contextMenu {
-                    noteActionButtons(for: .single(note))
-                } preview: {
-                    NoteContextPreview(note: note)
-                }
+                .highPriorityGesture(noteLongPressGesture(for: note))
             }
         }
         .tag(note.id)
         .listRowSeparatorTint(.secondary.opacity(0.3))
-        .listRowBackground(Color(.secondarySystemGroupedBackground))
+        .listRowBackground(editorChromeStyle.listRowBackgroundColor)
     }
 
     private func noteRowContent(_ note: Note) -> some View {
@@ -602,7 +611,7 @@ struct NotesListView: View {
                     Text(contentPreview)
                         .lineLimit(2)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(notePreviewContentTextColor)
                 }
             }
 
@@ -665,6 +674,15 @@ struct NotesListView: View {
             : "Unpin \(selectedNotes.count) Selected"
     }
 
+    private func pinActionTitle(for context: NoteActionDialogContext) -> String {
+        switch context {
+        case .single(let note):
+            return (note.isPinned ?? false) ? "Unpin" : "Pin"
+        case .bulk:
+            return bulkPinActionTitleWithCount
+        }
+    }
+
     private var noteActionDialogTitle: String {
         guard let context = noteActionDialogContext else { return "" }
         switch context {
@@ -707,6 +725,42 @@ struct NotesListView: View {
         }
     }
 
+    private func performPinAction(for context: NoteActionDialogContext) {
+        switch context {
+        case .single(let note):
+            vm.setNotePinned(note, isPinned: !(note.isPinned ?? false))
+        case .bulk:
+            setPinnedStateForSelectedNotes(isPinned: shouldPinSelectedNotes)
+        }
+    }
+
+    private func performMoveAction(for context: NoteActionDialogContext) {
+        switch context {
+        case .single(let note):
+            noteMoveRequest = NoteMoveRequest(note: note)
+        case .bulk:
+            bulkNoteMoveRequest = BulkNoteMoveRequest(notes: selectedNotes)
+        }
+    }
+
+    private func performExportAction(for context: NoteActionDialogContext) {
+        switch context {
+        case .single(let note):
+            exportSingleNote(note)
+        case .bulk:
+            exportSelectedNotes()
+        }
+    }
+
+    private func performDeleteAction(for context: NoteActionDialogContext) {
+        switch context {
+        case .single(let note):
+            vm.deleteNote(note)
+        case .bulk:
+            deleteSelectedNotes()
+        }
+    }
+
     private func deleteSelectedNotes() {
         for selectedNote in selectedNotes {
             vm.deleteNote(selectedNote)
@@ -734,6 +788,14 @@ struct NotesListView: View {
         }
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         noteActionDialogContext = .bulk
+    }
+
+    private func noteLongPressGesture(for note: Note) -> some Gesture {
+        LongPressGesture(minimumDuration: 0.35)
+            .onEnded { _ in
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                noteActionDialogContext = .single(note)
+            }
     }
 
     private func presentNextFolderDeletionPromptIfNeeded() {
@@ -775,6 +837,10 @@ struct NotesListView: View {
         }
     }
 
+    private var notePreviewContentTextColor: Color {
+        colorScheme == .dark ? .primary : .secondary
+    }
+
 }
 
 private struct SharePayload: Identifiable {
@@ -783,6 +849,7 @@ private struct SharePayload: Identifiable {
 }
 
 private struct NoteContextPreview: View {
+    @Environment(\.colorScheme) private var colorScheme
     let note: Note
 
     var body: some View {
@@ -809,7 +876,7 @@ private struct NoteContextPreview: View {
             if !contentPreview.isEmpty {
                 Text(contentPreview)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(notePreviewContentTextColor)
                     .lineLimit(12)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -819,6 +886,95 @@ private struct NoteContextPreview: View {
         .frame(width: 320, height: 320, alignment: .topLeading)
         .padding(14)
         .background(Color.clear)
+    }
+
+    private var notePreviewContentTextColor: Color {
+        colorScheme == .dark ? .primary : .secondary
+    }
+}
+
+private struct NoteActionSheetOverlay: View {
+    let context: NoteActionDialogContext
+    let selectedCount: Int
+    let pinActionTitle: String
+    let onDismiss: () -> Void
+    let onPin: () -> Void
+    let onMove: () -> Void
+    let onExport: () -> Void
+    let onDelete: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.22)
+                .ignoresSafeArea()
+                .onTapGesture(perform: onDismiss)
+
+            VStack(spacing: 10) {
+                switch context {
+                case .single(let note):
+                    NoteContextPreview(note: note)
+                        .background(.regularMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                        .shadow(color: .black.opacity(0.22), radius: 24, y: 10)
+                case .bulk:
+                    Text("\(selectedCount) Notes Selected")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 16)
+                        .background(.regularMaterial)
+                        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                }
+
+                VStack(spacing: 0) {
+                    NoteActionSheetRow(title: pinActionTitle, action: onPin)
+                    NoteActionSheetRow(title: moveTitle, action: onMove)
+                    NoteActionSheetRow(title: exportTitle, action: onExport)
+                    NoteActionSheetRow(title: deleteTitle, role: .destructive, showDivider: false, action: onDelete)
+                }
+                .background(.regularMaterial)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .shadow(color: .black.opacity(0.22), radius: 24, y: 10)
+            }
+            .frame(maxWidth: 320)
+            .padding(.horizontal, 28)
+        }
+    }
+
+    private var moveTitle: String {
+        selectedCount > 1 ? "Move \(selectedCount) to Folder" : "Move to Folder"
+    }
+
+    private var exportTitle: String {
+        selectedCount > 1 ? "Export \(selectedCount) Selected" : "Export"
+    }
+
+    private var deleteTitle: String {
+        selectedCount > 1 ? "Delete \(selectedCount) Selected" : "Delete"
+    }
+}
+
+private struct NoteActionSheetRow: View {
+    let title: String
+    var role: ButtonRole?
+    var showDivider = true
+    let action: () -> Void
+
+    var body: some View {
+        Button(role: role, action: action) {
+            Text(title)
+                .font(.body)
+                .frame(maxWidth: .infinity)
+                .frame(height: 52)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(role == .destructive ? Color.red : Color.accentColor)
+        .overlay(alignment: .bottom) {
+            if showDivider {
+                Divider()
+                    .padding(.horizontal, 18)
+            }
+        }
     }
 }
 
