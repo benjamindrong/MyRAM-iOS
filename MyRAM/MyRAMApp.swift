@@ -72,17 +72,38 @@ enum AppearanceSetting: String, CaseIterable, Identifiable {
 }
 
 enum WarmPaperPalette {
-    static let backgroundUIColor = UIColor(red: 240 / 255, green: 229 / 255, blue: 211 / 255, alpha: 1)
-    static let surfaceUIColor = UIColor(red: 255 / 255, green: 250 / 255, blue: 241 / 255, alpha: 1)
-    static let toolbarUIColor = UIColor(red: 250 / 255, green: 239 / 255, blue: 219 / 255, alpha: 1)
-    static let controlUIColor = UIColor(red: 236 / 255, green: 218 / 255, blue: 187 / 255, alpha: 1)
-    static let accentUIColor = UIColor(red: 199 / 255, green: 109 / 255, blue: 0 / 255, alpha: 1)
+    static let backgroundUIColor = dynamicColor(
+        light: UIColor(red: 240 / 255, green: 229 / 255, blue: 211 / 255, alpha: 1),
+        dark: UIColor(red: 34 / 255, green: 29 / 255, blue: 23 / 255, alpha: 1)
+    )
+    static let surfaceUIColor = dynamicColor(
+        light: UIColor(red: 255 / 255, green: 250 / 255, blue: 241 / 255, alpha: 1),
+        dark: UIColor(red: 46 / 255, green: 39 / 255, blue: 31 / 255, alpha: 1)
+    )
+    static let toolbarUIColor = dynamicColor(
+        light: UIColor(red: 250 / 255, green: 239 / 255, blue: 219 / 255, alpha: 1),
+        dark: UIColor(red: 57 / 255, green: 47 / 255, blue: 36 / 255, alpha: 1)
+    )
+    static let controlUIColor = dynamicColor(
+        light: UIColor(red: 236 / 255, green: 218 / 255, blue: 187 / 255, alpha: 1),
+        dark: UIColor(red: 73 / 255, green: 58 / 255, blue: 43 / 255, alpha: 1)
+    )
+    static let accentUIColor = dynamicColor(
+        light: UIColor(red: 199 / 255, green: 109 / 255, blue: 0 / 255, alpha: 1),
+        dark: UIColor(red: 235 / 255, green: 159 / 255, blue: 66 / 255, alpha: 1)
+    )
 
     static let background = Color(uiColor: backgroundUIColor)
     static let surface = Color(uiColor: surfaceUIColor)
     static let toolbar = Color(uiColor: toolbarUIColor)
     static let control = Color(uiColor: controlUIColor)
     static let accent = Color(uiColor: accentUIColor)
+
+    private static func dynamicColor(light: UIColor, dark: UIColor) -> UIColor {
+        UIColor { traits in
+            traits.userInterfaceStyle == .dark ? dark : light
+        }
+    }
 }
 
 enum EditorChromeStyle: String, CaseIterable, Identifiable {
@@ -95,7 +116,7 @@ enum EditorChromeStyle: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .standard:
-            "Standard"
+            "None"
         case .chromeAccent:
             "Chrome Accent"
         case .warmPaper:
@@ -151,7 +172,11 @@ enum EditorChromeStyle: String, CaseIterable, Identifiable {
         isWarmPaper ? WarmPaperPalette.accentUIColor : nil
     }
 
+    var editorTextUIColor: UIColor {
+        .label
+    }
+
     var colorSchemeOverride: ColorScheme? {
-        isWarmPaper ? .light : nil
+        nil
     }
 }

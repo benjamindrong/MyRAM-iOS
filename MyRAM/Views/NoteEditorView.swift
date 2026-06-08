@@ -92,6 +92,7 @@ struct NoteEditorView: View {
                         decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
                         formattingController: formattingController,
                         backgroundColor: editorChromeStyle.editorSurfaceUIColor,
+                        textColor: editorChromeStyle.editorTextUIColor,
                         tintColor: editorChromeStyle.editorTintUIColor,
                         onContentChanged: handleContentChanged,
                         onUndoManagerChanged: updateActiveUndoManager,
@@ -1624,6 +1625,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let decreaseFontSizeToggleToken: Int
     let formattingController: TextFormattingController
     let backgroundColor: UIColor
+    let textColor: UIColor
     let tintColor: UIColor?
     let onContentChanged: (String, Data?) -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
@@ -1637,7 +1639,7 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.installChecklistTapRecognizer(on: textView)
         textView.delegate = context.coordinator
         textView.font = .preferredFont(forTextStyle: .body)
-        textView.textColor = .label
+        textView.textColor = textColor
         textView.adjustsFontForContentSizeCategory = true
         textView.allowsEditingTextAttributes = true
         textView.backgroundColor = backgroundColor
@@ -1645,7 +1647,7 @@ private struct SelectableTextView: UIViewRepresentable {
         textView.layer.cornerRadius = 8
         textView.typingAttributes = [
             .font: textView.font ?? .preferredFont(forTextStyle: .body),
-            .foregroundColor: UIColor.label,
+            .foregroundColor: textColor,
             .paragraphStyle: ChecklistItemEditor.editorParagraphStyle
         ]
         textView.textContainerInset = ChecklistItemEditor.textContainerInsets(hasChecklistItems: false)
@@ -1667,7 +1669,9 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.updateEditorLayout(in: textView)
         context.coordinator.ensureEditorTypingParagraphStyle(in: textView)
         textView.backgroundColor = backgroundColor
+        textView.textColor = textColor
         textView.tintColor = tintColor
+        context.coordinator.defaultTextColor = textColor
 
         let hasPendingFormattingMutation = context.coordinator.hasPendingFormattingMutation(
             boldToggleToken: boldToggleToken,
@@ -1812,6 +1816,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
         var onPinSelection: (String) -> Bool
+        var defaultTextColor: UIColor = .label
         weak var textView: UITextView?
         var captureSelectionToggleToken = 0
         var keyboardFocusToggleToken = 0
@@ -2087,11 +2092,11 @@ private struct SelectableTextView: UIViewRepresentable {
                 let resolvedColor = color.resolvedColor(with: textView.traitCollection)
                 if textView.traitCollection.userInterfaceStyle == .dark
                     && resolvedColor.isPrimaryTextCandidate(in: .dark) {
-                    typingAttributes[.foregroundColor] = UIColor.label
+                    typingAttributes[.foregroundColor] = defaultTextColor
                 }
                 if textView.traitCollection.userInterfaceStyle == .light
                     && resolvedColor.isPrimaryTextCandidate(in: .light) {
-                    typingAttributes[.foregroundColor] = UIColor.label
+                    typingAttributes[.foregroundColor] = defaultTextColor
                 }
             }
             textView.typingAttributes = typingAttributes
@@ -2177,7 +2182,8 @@ private struct SelectableTextView: UIViewRepresentable {
             )
             let normalizedAttributedText = RichTextContentCodec.normalizedForDisplay(
                 desiredAttributedText,
-                traitCollection: textView.traitCollection
+                traitCollection: textView.traitCollection,
+                defaultTextColor: defaultTextColor
             )
             guard !textView.attributedText.isEqual(to: normalizedAttributedText) else { return }
 
@@ -2266,7 +2272,7 @@ private struct SelectableTextView: UIViewRepresentable {
         private func defaultTextAttributes(for textView: UITextView) -> [NSAttributedString.Key: Any] {
             [
                 .font: textView.font ?? .preferredFont(forTextStyle: .body),
-                .foregroundColor: UIColor.label,
+                .foregroundColor: defaultTextColor,
                 .paragraphStyle: ChecklistItemEditor.bodyParagraphStyle(
                     hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
                 )
@@ -3200,7 +3206,8 @@ enum RichTextContentCodec {
 
     static func normalizedForDisplay(
         _ attributedText: NSAttributedString,
-        traitCollection: UITraitCollection
+        traitCollection: UITraitCollection,
+        defaultTextColor: UIColor = .label
     ) -> NSAttributedString {
         let mutable = NSMutableAttributedString(attributedString: attributedText)
         let fullRange = NSRange(location: 0, length: mutable.length)
@@ -3210,11 +3217,11 @@ enum RichTextContentCodec {
             let resolvedColor = color.resolvedColor(with: traitCollection)
             if traitCollection.userInterfaceStyle == .dark
                 && resolvedColor.isPrimaryTextCandidate(in: .dark) {
-                mutable.addAttribute(.foregroundColor, value: UIColor.label, range: range)
+                mutable.addAttribute(.foregroundColor, value: defaultTextColor, range: range)
             }
             if traitCollection.userInterfaceStyle == .light
                 && resolvedColor.isPrimaryTextCandidate(in: .light) {
-                mutable.addAttribute(.foregroundColor, value: UIColor.label, range: range)
+                mutable.addAttribute(.foregroundColor, value: defaultTextColor, range: range)
             }
         }
 

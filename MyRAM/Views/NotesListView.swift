@@ -4,6 +4,7 @@ import SwiftData
 import UIKit
 
 struct NotesListView: View {
+    @Environment(\.colorScheme) private var colorScheme
     private let topBarControlSize: CGFloat = 44
     private let topBarIconSize: CGFloat = 20
     private let topBarHeight: CGFloat = 44
@@ -604,7 +605,7 @@ struct NotesListView: View {
                     Text(contentPreview)
                         .lineLimit(2)
                         .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(notePreviewContentTextColor)
                 }
             }
 
@@ -777,6 +778,10 @@ struct NotesListView: View {
         }
     }
 
+    private var notePreviewContentTextColor: Color {
+        colorScheme == .dark ? .primary : .secondary
+    }
+
 }
 
 private struct SharePayload: Identifiable {
@@ -785,6 +790,7 @@ private struct SharePayload: Identifiable {
 }
 
 private struct NoteContextPreview: View {
+    @Environment(\.colorScheme) private var colorScheme
     let note: Note
 
     var body: some View {
@@ -811,7 +817,7 @@ private struct NoteContextPreview: View {
             if !contentPreview.isEmpty {
                 Text(contentPreview)
                     .font(.caption)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(notePreviewContentTextColor)
                     .lineLimit(12)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
@@ -821,6 +827,10 @@ private struct NoteContextPreview: View {
         .frame(width: 320, height: 320, alignment: .topLeading)
         .padding(14)
         .background(Color.clear)
+    }
+
+    private var notePreviewContentTextColor: Color {
+        colorScheme == .dark ? .primary : .secondary
     }
 }
 
