@@ -30,6 +30,9 @@ struct NoteEditorView: View {
     @State private var pasteAndMatchFormattingToggleToken = 0
     @State private var increaseFontSizeToggleToken = 0
     @State private var decreaseFontSizeToggleToken = 0
+    @State private var textColorToggleToken = 0
+    @State private var pendingTextUIColor: UIColor?
+    @State private var pendingTextColorUsesDefault = false
     @State private var selectedTextUIColor: UIColor?
     @State private var formattingState = EditorFormattingState()
     @State private var showingFormattingControls = false
@@ -69,12 +72,13 @@ struct NoteEditorView: View {
             VStack(spacing: 12) {
                 editorTopBar
 
-                pinnedThoughtsSection
+                ZStack(alignment: .bottom) {
+                    VStack(spacing: 12) {
+                        pinnedThoughtsSection
 
-                VStack(spacing: 8) {
-                    SelectableTextView(
-                        text: $content,
-                        richTextContentData: $richTextContentData,
+                        SelectableTextView(
+                            text: $content,
+                            richTextContentData: $richTextContentData,
                         keyboardFocusToggleToken: keyboardFocusToggleToken,
                         captureSelectionToggleToken: captureSelectionToggleToken,
                         selectAllToggleToken: selectAllToggleToken,
@@ -87,36 +91,46 @@ struct NoteEditorView: View {
                         underlineToggleToken: underlineToggleToken,
                         strikethroughToggleToken: strikethroughToggleToken,
                         checklistToggleToken: checklistToggleToken,
-                        pasteAndMatchFormattingToggleToken: pasteAndMatchFormattingToggleToken,
-                        increaseFontSizeToggleToken: increaseFontSizeToggleToken,
-                        decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
-                        formattingController: formattingController,
-                        backgroundColor: editorChromeStyle.editorSurfaceUIColor,
-                        textColor: editorChromeStyle.editorTextUIColor,
+                            pasteAndMatchFormattingToggleToken: pasteAndMatchFormattingToggleToken,
+                            increaseFontSizeToggleToken: increaseFontSizeToggleToken,
+                            decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
+                            textColorToggleToken: textColorToggleToken,
+                            pendingTextUIColor: pendingTextUIColor,
+                            pendingTextColorUsesDefault: pendingTextColorUsesDefault,
+                            formattingController: formattingController,
+                            backgroundColor: editorChromeStyle.editorSurfaceUIColor,
+                            textColor: editorChromeStyle.editorTextUIColor,
                         tintColor: editorChromeStyle.editorTintUIColor,
                         onContentChanged: handleContentChanged,
                         onUndoManagerChanged: updateActiveUndoManager,
                         onFormattingStateChanged: handleFormattingStateChanged,
                         onPinSelection: pinSelectedText
-                    )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                    if showingFormattingControls {
-                        overflowFormattingControls
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                        )
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
+                    .padding(.bottom, editorControlOverlayBottomPadding)
 
-                    if let keyboardToast {
-                        Text(keyboardToast.message)
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 10)
-                            .padding(.vertical, 6)
-                            .background(.ultraThinMaterial, in: Capsule())
-                            .transition(.opacity.combined(with: .move(edge: .bottom)))
+                    VStack(spacing: 8) {
+                        if showingFormattingControls {
+                            overflowFormattingControls
+                                .transition(.move(edge: .bottom).combined(with: .opacity))
+                        }
+
+                        if let keyboardToast {
+                            Text(keyboardToast.message)
+                                .font(.caption.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 6)
+                                .background(.ultraThinMaterial, in: Capsule())
+                                .transition(.opacity.combined(with: .move(edge: .bottom)))
+                        }
+
+                        collapsedEditorControls
                     }
-
-                    collapsedEditorControls
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .zIndex(1)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
 
                 if !sortedAttachments.isEmpty {
                     DisclosureGroup(isExpanded: $areAttachmentsExpanded) {
@@ -267,6 +281,10 @@ struct NoteEditorView: View {
 
     private var canPerformRedo: Bool {
         canRedo
+    }
+
+    private var editorControlOverlayBottomPadding: CGFloat {
+        showingFormattingControls ? 136 : 54
     }
 
     @ViewBuilder
@@ -973,7 +991,7 @@ struct NoteEditorView: View {
     }
 
     private var overflowFormattingControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 10) {
                 formattingToggleButton(
                     label: "B",
@@ -1004,6 +1022,7 @@ struct NoteEditorView: View {
                 ) {
                     strikethroughToggleToken += 1
                 }
+
                 Button {
                     checklistToggleToken += 1
                 } label: {
@@ -1015,75 +1034,86 @@ struct NoteEditorView: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("format-checklist-toggle")
-            }
 
-            HStack(spacing: 14) {
                 Button {
                     decreaseFontSizeToggleToken += 1
                 } label: {
                     Image(systemName: "minus.circle.fill")
-                        .font(.title3)
+                        .font(.system(size: 19, weight: .semibold))
+                        .frame(width: 26, height: 34)
                 }
                 .accessibilityIdentifier("format-font-smaller")
 
                 Text("\(Int(formattingState.fontSize.rounded()))")
-                    .font(.headline.monospacedDigit())
-                    .frame(minWidth: 38)
+                    .font(.subheadline.weight(.semibold).monospacedDigit())
+                    .frame(width: 30, height: 34)
 
                 Button {
                     increaseFontSizeToggleToken += 1
                 } label: {
                     Image(systemName: "plus.circle.fill")
-                        .font(.title3)
+                        .font(.system(size: 19, weight: .semibold))
+                        .frame(width: 26, height: 34)
                 }
                 .accessibilityIdentifier("format-font-larger")
             }
 
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Text Color")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                LazyVGrid(columns: Array(repeating: GridItem(.fixed(28), spacing: 8), count: 8), spacing: 8) {
-                    ForEach(textColorSwatches) { swatch in
-                        Button {
-                            applyTextColor(swatch.uiColor)
-                        } label: {
-                            Circle()
-                                .fill(swatch.color)
-                                .frame(width: 26, height: 26)
-                                .overlay {
-                                    if isSelectedTextColor(swatch.uiColor) {
-                                        Circle()
-                                            .stroke(Color.primary, lineWidth: 2)
-                                            .padding(-3)
-                                    }
-                                }
-                                .overlay {
-                                    Circle()
-                                        .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                                }
+            HStack(spacing: 5) {
+                Button {
+                    applyDefaultTextColor()
+                } label: {
+                    Circle()
+                        .fill(Color(uiColor: editorChromeStyle.editorTextUIColor))
+                        .frame(width: 22, height: 22)
+                        .overlay {
+                            Text("A")
+                                .font(.caption2.weight(.bold))
+                                .foregroundStyle(editorChromeStyle.editorSurfaceColor)
                         }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("format-color-\(swatch.id)")
-                        .accessibilityLabel(swatch.name)
+                        .overlay {
+                            Circle()
+                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("format-color-default")
+                .accessibilityLabel("Auto Text Color")
+
+                ForEach(textColorSwatches) { swatch in
+                    Button {
+                        applyTextColor(swatch.uiColor)
+                    } label: {
+                        Circle()
+                            .fill(swatch.color)
+                            .frame(width: isSelectedTextColor(swatch.uiColor) ? 20 : 18, height: isSelectedTextColor(swatch.uiColor) ? 20 : 18)
+                            .frame(width: 20, height: 22)
+                            .overlay {
+                                if isSelectedTextColor(swatch.uiColor) {
+                                    Circle()
+                                        .stroke(Color.primary, lineWidth: 2)
+                                        .padding(-2)
+                                }
+                            }
+                            .overlay {
+                                Circle()
+                                    .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                            }
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityIdentifier("format-color-\(swatch.id)")
+                    .accessibilityLabel(swatch.name)
                 }
             }
             .accessibilityIdentifier("format-color-swatches")
-
-            Button("Auto Text Color") {
-                applyDefaultTextColor()
-            }
-            .accessibilityIdentifier("format-color-default")
         }
-        .padding(12)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
         .background(editorChromeStyle.toolbarFillColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
         )
-        .frame(maxWidth: min(UIScreen.main.bounds.width * 0.82, 320))
+        .frame(maxWidth: min(UIScreen.main.bounds.width * 0.9, 340))
         .accessibilityIdentifier("keyboard-control-overflow-panel")
     }
     
@@ -1129,13 +1159,17 @@ struct NoteEditorView: View {
     }
 
     private func applyTextColor(_ color: UIColor) {
+        pendingTextUIColor = color
+        pendingTextColorUsesDefault = false
         selectedTextUIColor = color
-        formattingController.applyTextColor(color)
+        textColorToggleToken += 1
     }
 
     private func applyDefaultTextColor() {
+        pendingTextUIColor = nil
+        pendingTextColorUsesDefault = true
         selectedTextUIColor = nil
-        formattingController.applyTextColor(nil)
+        textColorToggleToken += 1
     }
 
     private func isSelectedTextColor(_ color: UIColor) -> Bool {
@@ -1623,6 +1657,9 @@ private struct SelectableTextView: UIViewRepresentable {
     let pasteAndMatchFormattingToggleToken: Int
     let increaseFontSizeToggleToken: Int
     let decreaseFontSizeToggleToken: Int
+    let textColorToggleToken: Int
+    let pendingTextUIColor: UIColor?
+    let pendingTextColorUsesDefault: Bool
     let formattingController: TextFormattingController
     let backgroundColor: UIColor
     let textColor: UIColor
@@ -1669,7 +1706,6 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.updateEditorLayout(in: textView)
         context.coordinator.ensureEditorTypingParagraphStyle(in: textView)
         textView.backgroundColor = backgroundColor
-        textView.textColor = textColor
         textView.tintColor = tintColor
         context.coordinator.defaultTextColor = textColor
 
@@ -1681,7 +1717,8 @@ private struct SelectableTextView: UIViewRepresentable {
             checklistToggleToken: checklistToggleToken,
             pasteAndMatchFormattingToggleToken: pasteAndMatchFormattingToggleToken,
             increaseFontSizeToggleToken: increaseFontSizeToggleToken,
-            decreaseFontSizeToggleToken: decreaseFontSizeToggleToken
+            decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
+            textColorToggleToken: textColorToggleToken
         )
 
         context.coordinator.clearAppliedContentIfSynced()
@@ -1792,6 +1829,16 @@ private struct SelectableTextView: UIViewRepresentable {
             context.coordinator.reportUndoManagerChanged(textView.undoManager)
         }
 
+        if context.coordinator.textColorToggleToken != textColorToggleToken {
+            context.coordinator.textColorToggleToken = textColorToggleToken
+            context.coordinator.applyTextColor(
+                in: textView,
+                color: pendingTextUIColor,
+                usesDefaultColor: pendingTextColorUsesDefault
+            )
+            context.coordinator.reportUndoManagerChanged(textView.undoManager)
+        }
+
         context.coordinator.normalizeTypingAttributes(in: textView)
         context.coordinator.reportFormattingState(from: textView)
     }
@@ -1832,6 +1879,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var pasteAndMatchFormattingToggleToken = 0
         var increaseFontSizeToggleToken = 0
         var decreaseFontSizeToggleToken = 0
+        var textColorToggleToken = 0
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
         var isUpdatingUIView = false
         private var appliedPlainTextAwaitingBinding: String?
@@ -1969,7 +2017,8 @@ private struct SelectableTextView: UIViewRepresentable {
             checklistToggleToken: Int,
             pasteAndMatchFormattingToggleToken: Int,
             increaseFontSizeToggleToken: Int,
-            decreaseFontSizeToggleToken: Int
+            decreaseFontSizeToggleToken: Int,
+            textColorToggleToken: Int
         ) -> Bool {
             self.boldToggleToken != boldToggleToken
                 || self.italicToggleToken != italicToggleToken
@@ -1979,6 +2028,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 || self.pasteAndMatchFormattingToggleToken != pasteAndMatchFormattingToggleToken
                 || self.increaseFontSizeToggleToken != increaseFontSizeToggleToken
                 || self.decreaseFontSizeToggleToken != decreaseFontSizeToggleToken
+                || self.textColorToggleToken != textColorToggleToken
         }
 
         func toggleBold(in textView: UITextView) {
@@ -2058,15 +2108,22 @@ private struct SelectableTextView: UIViewRepresentable {
             applyAttributedText(mutable, in: textView, selectedRange: selectedRange)
         }
 
-        func applyTextColor(in textView: UITextView, color: UIColor?) {
+        func applyTextColor(
+            in textView: UITextView,
+            color: UIColor?,
+            usesDefaultColor: Bool = false
+        ) {
             let selectedRange = formattingActionRange(in: textView)
-            let resolvedColor = color ?? textView.textColor ?? UIColor.label
+            let resolvedColor = usesDefaultColor
+                ? defaultTextColor
+                : color ?? textView.textColor ?? defaultTextColor
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
                 typingAttributes[.foregroundColor] = resolvedColor
                 syncDecorationColorsWithForeground(in: &typingAttributes, color: resolvedColor)
                 textView.typingAttributes = typingAttributes
+                textView.becomeFirstResponder()
                 reportFormattingState(from: textView)
                 return
             }
@@ -2078,6 +2135,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
             textView.selectedRange = selectedRange
             lastKnownSelectionRange = selectedRange
+            textView.becomeFirstResponder()
             syncContent(from: textView)
             reportFormattingState(from: textView)
         }
@@ -2745,7 +2803,7 @@ enum ChecklistItemEditor {
     private static let autoChecklistStrikethroughKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-strikethrough")
     private static let minimumChecklistGutterWidth: CGFloat = 28
     private static let checklistGutterReferenceFontSize: CGFloat = 20
-    private static let uncheckedChecklistIconFontSize: CGFloat = 24
+    private static let uncheckedChecklistIconFontSize = checklistGutterReferenceFontSize
     private static let checkedChecklistIconFontSize = checklistGutterReferenceFontSize
     private static let checklistGutterWidth: CGFloat = {
         let iconFont = UIFont.systemFont(ofSize: checklistGutterReferenceFontSize, weight: .regular)
