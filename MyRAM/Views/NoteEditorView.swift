@@ -68,6 +68,7 @@ struct NoteEditorView: View {
     @State private var keyboardToast: KeyboardToast?
     @State private var keyboardToastTask: Task<Void, Never>?
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
+    @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
     
     var body: some View {
         NavigationStack {
@@ -305,10 +306,10 @@ struct NoteEditorView: View {
                 } label: {
                     Text("Pinned (0)")
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(PinnedHighlightPalette.text)
+                        .foregroundStyle(pinnedHighlightText)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .modifier(ChromePinnedBadge(style: editorChromeStyle))
+                        .modifier(ChromePinnedBadge(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("pinned-thoughts-add")
@@ -374,14 +375,14 @@ struct NoteEditorView: View {
                         ForEach(sortedPinnedThoughts.prefix(1), id: \.id) { thought in
                             Text(thought.text.isEmpty ? "Pinned" : thought.text)
                                 .font(.body)
-                                .foregroundStyle(PinnedHighlightPalette.text)
+                                .foregroundStyle(pinnedHighlightText)
                                 .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .modifier(ChromePinnedSurface(style: editorChromeStyle))
+                    .modifier(ChromePinnedSurface(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
                 }
             }
             .padding(10)
@@ -421,14 +422,14 @@ struct NoteEditorView: View {
                 .lineLimit(1...4)
                 .textFieldStyle(.plain)
                 .font(.subheadline)
-                .foregroundStyle(PinnedHighlightPalette.text)
-                .tint(PinnedHighlightPalette.text)
+                .foregroundStyle(pinnedHighlightText)
+                .tint(pinnedHighlightText)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .accessibilityIdentifier("pinned-thought-text")
             } else {
                 Text(thought.text.isEmpty ? "Pinned" : thought.text)
                     .font(.subheadline)
-                    .foregroundStyle(thought.text.isEmpty ? PinnedHighlightPalette.placeholderText : PinnedHighlightPalette.text)
+                    .foregroundStyle(thought.text.isEmpty ? pinnedHighlightPlaceholderText : pinnedHighlightText)
                     .lineLimit(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.vertical, 4)
@@ -442,7 +443,7 @@ struct NoteEditorView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .modifier(ChromePinnedSurface(style: editorChromeStyle))
+        .modifier(ChromePinnedSurface(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
         .contentShape(Rectangle())
         .onTapGesture {
             editingPinnedThoughtID = thought.id
@@ -596,6 +597,18 @@ struct NoteEditorView: View {
 
     private var editorChromeStyle: EditorChromeStyle {
         EditorChromeStyle(rawValue: editorChromeStyleRaw) ?? .standard
+    }
+
+    private var pinnedHighlightColor: PinnedHighlightColor {
+        PinnedHighlightColor(rawValue: pinnedHighlightColorRaw) ?? .yellow
+    }
+
+    private var pinnedHighlightText: Color {
+        PinnedHighlightPalette.text(for: pinnedHighlightColor)
+    }
+
+    private var pinnedHighlightPlaceholderText: Color {
+        PinnedHighlightPalette.placeholderText(for: pinnedHighlightColor)
     }
 
     private func topBarActionLayout(totalWidth: CGFloat) -> TopBarActionLayout {
@@ -1424,6 +1437,31 @@ private struct PinnedThoughtSnapshot: Equatable {
     let isCollapsed: Bool
 }
 
+enum PinnedHighlightColor: String, CaseIterable, Identifiable {
+    case yellow
+    case mint
+    case blue
+    case purple
+    case slate
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .yellow:
+            "Yellow"
+        case .mint:
+            "Mint"
+        case .blue:
+            "Blue"
+        case .purple:
+            "Purple"
+        case .slate:
+            "Slate"
+        }
+    }
+}
+
 enum PinnedHighlightPalette {
     static let appIconOrange = Color(red: 249 / 255, green: 167 / 255, blue: 19 / 255)
     static let highlightUIColor = UIColor(red: 250 / 255, green: 185 / 255, blue: 66 / 255, alpha: 1)
@@ -1432,6 +1470,87 @@ enum PinnedHighlightPalette {
     static let highlight = Color(uiColor: highlightUIColor)
     static let text = Color(uiColor: textUIColor)
     static let placeholderText = Color(uiColor: textUIColor.withAlphaComponent(0.68))
+
+    static func highlightUIColor(for color: PinnedHighlightColor) -> UIColor {
+        switch color {
+        case .yellow:
+            highlightUIColor
+        case .mint:
+            UIColor(red: 122 / 255, green: 225 / 255, blue: 191 / 255, alpha: 1)
+        case .blue:
+            UIColor(red: 85 / 255, green: 161 / 255, blue: 238 / 255, alpha: 1)
+        case .purple:
+            UIColor(red: 173 / 255, green: 136 / 255, blue: 232 / 255, alpha: 1)
+        case .slate:
+            UIColor(red: 65 / 255, green: 78 / 255, blue: 96 / 255, alpha: 1)
+        }
+    }
+
+    static func textUIColor(for color: PinnedHighlightColor) -> UIColor {
+        readableTextUIColor(on: highlightUIColor(for: color))
+    }
+
+    static func placeholderTextUIColor(for color: PinnedHighlightColor) -> UIColor {
+        textUIColor(for: color).withAlphaComponent(0.68)
+    }
+
+    static func highlight(for color: PinnedHighlightColor) -> Color {
+        Color(uiColor: highlightUIColor(for: color))
+    }
+
+    static func text(for color: PinnedHighlightColor) -> Color {
+        Color(uiColor: textUIColor(for: color))
+    }
+
+    static func placeholderText(for color: PinnedHighlightColor) -> Color {
+        Color(uiColor: placeholderTextUIColor(for: color))
+    }
+
+    private static func readableTextUIColor(on background: UIColor) -> UIColor {
+        let whiteContrast = contrastRatio(foreground: .white, background: background)
+        let darkContrast = contrastRatio(foreground: textUIColor, background: background)
+        if max(whiteContrast, darkContrast) >= 4.5 {
+            return whiteContrast > darkContrast ? .white : textUIColor
+        }
+        let components = rgbaComponents(from: background)
+        return components.luminance < 0.5 ? .white : textUIColor
+    }
+
+    private static func contrastRatio(foreground: UIColor, background: UIColor) -> CGFloat {
+        let lighter = max(relativeLuminance(foreground), relativeLuminance(background))
+        let darker = min(relativeLuminance(foreground), relativeLuminance(background))
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    private static func relativeLuminance(_ color: UIColor) -> CGFloat {
+        let components = rgbaComponents(from: color)
+        func convert(_ component: CGFloat) -> CGFloat {
+            component <= 0.03928
+                ? component / 12.92
+                : pow((component + 0.055) / 1.055, 2.4)
+        }
+        return (0.2126 * convert(components.red))
+            + (0.7152 * convert(components.green))
+            + (0.0722 * convert(components.blue))
+    }
+
+    private static func rgbaComponents(from color: UIColor) -> RGBAComponents {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        if color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
+            return RGBAComponents(red: red, green: green, blue: blue, alpha: alpha)
+        }
+
+        var white: CGFloat = 0
+        if color.getWhite(&white, alpha: &alpha) {
+            return RGBAComponents(red: white, green: white, blue: white, alpha: alpha)
+        }
+
+        let ciColor = CIColor(color: color)
+        return RGBAComponents(red: ciColor.red, green: ciColor.green, blue: ciColor.blue, alpha: ciColor.alpha)
+    }
 }
 
 private struct KeyboardToast: Equatable {
@@ -3607,12 +3726,13 @@ private struct ChromePinnedPanel: ViewModifier {
 private struct ChromePinnedSurface: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     let style: EditorChromeStyle
+    let pinnedColor: PinnedHighlightColor
 
     func body(content: Content) -> some View {
         content
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(PinnedHighlightPalette.highlight)
+                    .fill(PinnedHighlightPalette.highlight(for: pinnedColor))
                     .overlay {
                         if style.isChromeAccent {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -3635,12 +3755,13 @@ private struct ChromePinnedSurface: ViewModifier {
 private struct ChromePinnedBadge: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     let style: EditorChromeStyle
+    let pinnedColor: PinnedHighlightColor
 
     func body(content: Content) -> some View {
         content
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(PinnedHighlightPalette.highlight)
+                    .fill(PinnedHighlightPalette.highlight(for: pinnedColor))
                     .overlay {
                         if style.isChromeAccent {
                             RoundedRectangle(cornerRadius: 8, style: .continuous)

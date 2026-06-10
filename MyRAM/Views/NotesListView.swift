@@ -36,6 +36,7 @@ struct NotesListView: View {
     @AppStorage("mainListTitle") private var mainListTitle = "My Notes"
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
+    @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
     
     init(context: ModelContext) {
         _vm = StateObject(wrappedValue: NotesViewModel(context: context))
@@ -255,6 +256,14 @@ struct NotesListView: View {
         EditorChromeStyle(rawValue: editorChromeStyleRaw) ?? .standard
     }
 
+    private var pinnedHighlightColor: PinnedHighlightColor {
+        PinnedHighlightColor(rawValue: pinnedHighlightColorRaw) ?? .yellow
+    }
+
+    private var pinnedHighlightText: Color {
+        PinnedHighlightPalette.text(for: pinnedHighlightColor)
+    }
+
     private var notesListTopBar: some View {
         GeometryReader { proxy in
             let layout = topBarActionLayout(totalWidth: proxy.size.width)
@@ -291,6 +300,12 @@ struct NotesListView: View {
                         Picker("Style", selection: $editorChromeStyleRaw) {
                             ForEach(EditorChromeStyle.allCases) { style in
                                 Text(style.title).tag(style.rawValue)
+                            }
+                        }
+
+                        Picker("Pinned Color", selection: $pinnedHighlightColorRaw) {
+                            ForEach(PinnedHighlightColor.allCases) { color in
+                                Text(color.title).tag(color.rawValue)
                             }
                         }
                     }
@@ -603,10 +618,10 @@ struct NotesListView: View {
                     Text(pinnedThoughtPreview)
                         .lineLimit(1)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(PinnedHighlightPalette.text)
+                        .foregroundStyle(pinnedHighlightText)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .modifier(ChromeListPinnedPreview(style: editorChromeStyle))
+                        .modifier(ChromeListPinnedPreview(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
                 }
                 let contentPreview = noteContentPreviewText(for: note)
                 if !contentPreview.isEmpty {
@@ -900,12 +915,13 @@ private struct ChromeListRowSurface: ViewModifier {
 private struct ChromeListPinnedPreview: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     let style: EditorChromeStyle
+    let pinnedColor: PinnedHighlightColor
 
     func body(content: Content) -> some View {
         content
             .background {
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(PinnedHighlightPalette.highlight)
+                    .fill(PinnedHighlightPalette.highlight(for: pinnedColor))
                     .overlay {
                         if style.isChromeAccent {
                             RoundedRectangle(cornerRadius: 6, style: .continuous)
@@ -927,6 +943,7 @@ private struct ChromeListPinnedPreview: ViewModifier {
 
 private struct NoteContextPreview: View {
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
     let note: Note
 
     var body: some View {
@@ -940,13 +957,13 @@ private struct NoteContextPreview: View {
             if !pinnedThoughtPreview.isEmpty {
                 Text(pinnedThoughtPreview)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(PinnedHighlightPalette.text)
+                    .foregroundStyle(PinnedHighlightPalette.text(for: pinnedHighlightColor))
                     .lineLimit(3)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
-                    .background(PinnedHighlightPalette.highlight)
+                    .background(PinnedHighlightPalette.highlight(for: pinnedHighlightColor))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             let contentPreview = noteContentPreviewText(for: note)
@@ -967,6 +984,10 @@ private struct NoteContextPreview: View {
 
     private var notePreviewContentTextColor: Color {
         colorScheme == .dark ? .primary : .secondary
+    }
+
+    private var pinnedHighlightColor: PinnedHighlightColor {
+        PinnedHighlightColor(rawValue: pinnedHighlightColorRaw) ?? .yellow
     }
 }
 

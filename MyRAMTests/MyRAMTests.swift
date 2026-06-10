@@ -51,6 +51,22 @@ final class MyRAMTests: XCTestCase {
         )
     }
 
+    func testPinnedHighlightPaletteKeepsSelectableColorsReadable() {
+        XCTAssertEqual(PinnedHighlightColor.yellow.title, "Yellow")
+        XCTAssertTrue(PinnedHighlightColor.allCases.contains(.slate))
+
+        for color in PinnedHighlightColor.allCases {
+            XCTAssertGreaterThanOrEqual(
+                contrastRatio(
+                    foreground: PinnedHighlightPalette.textUIColor(for: color),
+                    background: PinnedHighlightPalette.highlightUIColor(for: color)
+                ),
+                4.5,
+                "\(color.title) pinned color should use readable text"
+            )
+        }
+    }
+
     func testWarmPaperAppearanceUsesIconPalette() {
         XCTAssertFalse(AppearanceSetting.allCases.map(\.title).contains("Warm Paper"))
         XCTAssertFalse(EditorChromeStyle.allCases.map(\.title).contains("Standard"))
