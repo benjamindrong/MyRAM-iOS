@@ -317,6 +317,7 @@ struct NotesListView: View {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: topBarIconSize, weight: .semibold))
                         .frame(width: topBarControlSize, height: topBarControlSize)
+                        .modifier(ChromeListControlPlate(style: editorChromeStyle, cornerRadius: 12))
                         .symbolRenderingMode(.monochrome)
                         .foregroundStyle(.primary)
                 }
@@ -391,6 +392,7 @@ struct NotesListView: View {
             Image(systemName: systemImage)
                 .font(.system(size: topBarIconSize, weight: .semibold))
                 .frame(width: topBarControlSize, height: topBarControlSize)
+                .modifier(ChromeListControlPlate(style: editorChromeStyle, cornerRadius: 12))
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
@@ -541,11 +543,12 @@ struct NotesListView: View {
                     .foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(ChromeListRowSurface(style: editorChromeStyle))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .listRowSeparatorTint(.secondary.opacity(0.35))
-        .listRowBackground(editorChromeStyle.listRowBackgroundColor)
+        .listRowBackground(editorChromeStyle.isChromeAccent ? Color.clear : editorChromeStyle.listRowBackgroundColor)
         .contextMenu {
             Button("Rename") {
                 folderAwaitingRename = folder
@@ -586,7 +589,7 @@ struct NotesListView: View {
         }
         .tag(note.id)
         .listRowSeparatorTint(.secondary.opacity(0.3))
-        .listRowBackground(editorChromeStyle.listRowBackgroundColor)
+        .listRowBackground(editorChromeStyle.isChromeAccent ? Color.clear : editorChromeStyle.listRowBackgroundColor)
     }
 
     private func noteRowContent(_ note: Note) -> some View {
@@ -604,7 +607,7 @@ struct NotesListView: View {
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
                         .background(PinnedHighlightPalette.highlight)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .modifier(ChromeListPinnedPreview(style: editorChromeStyle))
                 }
                 let contentPreview = noteContentPreviewText(for: note)
                 if !contentPreview.isEmpty {
@@ -624,6 +627,7 @@ struct NotesListView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(ChromeListRowSurface(style: editorChromeStyle))
         .contentShape(Rectangle())
     }
 
@@ -848,6 +852,68 @@ private struct SharePayload: Identifiable {
     let urls: [URL]
 }
 
+private struct ChromeListControlPlate: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+    var cornerRadius: CGFloat = 12
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .fill(chromeAccentControlGradient(for: colorScheme))
+                }
+            }
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+                        .stroke(chromeAccentStrokeColor(for: colorScheme), lineWidth: 0.75)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+    }
+}
+
+private struct ChromeListRowSurface: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+
+    func body(content: Content) -> some View {
+        content
+            .padding(style.isChromeAccent ? EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10) : EdgeInsets())
+            .background {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(chromeAccentRowFillColor(for: colorScheme))
+                }
+            }
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(chromeAccentPinnedStrokeColor(for: colorScheme), lineWidth: 0.85)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+}
+
+private struct ChromeListPinnedPreview: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(chromeAccentPinnedStrokeColor(for: colorScheme), lineWidth: 0.8)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
 private struct NoteContextPreview: View {
     @Environment(\.colorScheme) private var colorScheme
     let note: Note
@@ -951,6 +1017,12 @@ private struct NoteActionSheetOverlay: View {
     private var deleteTitle: String {
         selectedCount > 1 ? "Delete \(selectedCount) Selected" : "Delete"
     }
+}
+
+private func chromeAccentRowFillColor(for colorScheme: ColorScheme) -> Color {
+    colorScheme == .dark
+        ? Color(red: 0.20, green: 0.21, blue: 0.24).opacity(0.88)
+        : Color(red: 0.97, green: 0.97, blue: 0.98).opacity(0.96)
 }
 
 private struct NoteActionSheetRow: View {
