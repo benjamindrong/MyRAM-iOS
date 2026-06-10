@@ -560,6 +560,7 @@ struct NoteEditorView: View {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: 17, weight: .semibold))
                         .frame(width: 28, height: 28)
+                        .modifier(ChromeControlPlate(style: editorChromeStyle))
                         .symbolRenderingMode(.monochrome)
                         .foregroundStyle(.primary)
                 }
@@ -659,6 +660,7 @@ struct NoteEditorView: View {
                 Image(systemName: "paperclip")
                     .font(.system(size: 15, weight: .semibold))
                     .frame(width: 28, height: 28)
+                    .modifier(ChromeControlPlate(style: editorChromeStyle))
                     .symbolRenderingMode(.monochrome)
                     .foregroundStyle(.primary)
             }
@@ -679,6 +681,7 @@ struct NoteEditorView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 15, weight: .semibold))
                 .frame(width: 28, height: 28)
+                .modifier(ChromeControlPlate(style: editorChromeStyle))
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
@@ -976,6 +979,7 @@ struct NoteEditorView: View {
                 Image(systemName: showingFormattingControls ? "xmark.circle" : "ellipsis.circle")
                     .font(.system(size: 15, weight: .semibold))
                     .frame(width: 26, height: 26)
+                    .modifier(ChromeControlPlate(style: editorChromeStyle, cornerRadius: 7))
             }
             .buttonStyle(.plain)
             .accessibilityIdentifier("keyboard-control-overflow-toggle")
@@ -1051,6 +1055,7 @@ struct NoteEditorView: View {
                     Image(systemName: "minus.circle.fill")
                         .font(.system(size: 19, weight: .semibold))
                         .frame(width: 26, height: 34)
+                        .modifier(ChromeControlPlate(style: editorChromeStyle, cornerRadius: 7))
                 }
                 .accessibilityIdentifier("format-font-smaller")
 
@@ -1064,6 +1069,7 @@ struct NoteEditorView: View {
                     Image(systemName: "plus.circle.fill")
                         .font(.system(size: 19, weight: .semibold))
                         .frame(width: 26, height: 34)
+                        .modifier(ChromeControlPlate(style: editorChromeStyle, cornerRadius: 7))
                 }
                 .accessibilityIdentifier("format-font-larger")
             }
@@ -1218,6 +1224,7 @@ struct NoteEditorView: View {
             Image(systemName: "doc.on.clipboard")
                 .font(.system(size: 15, weight: .semibold))
                 .frame(width: 26, height: 26)
+                .modifier(ChromeControlPlate(style: editorChromeStyle, cornerRadius: 7))
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
@@ -1233,6 +1240,7 @@ struct NoteEditorView: View {
             Image(systemName: systemImage)
                 .font(.system(size: 15, weight: .semibold))
                 .frame(width: 26, height: 26)
+                .modifier(ChromeControlPlate(style: editorChromeStyle, cornerRadius: 7))
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
@@ -3543,25 +3551,26 @@ private struct ChromeControlPlate: ViewModifier {
     @Environment(\.colorScheme) private var colorScheme
     let style: EditorChromeStyle
     var isActive = false
+    var cornerRadius: CGFloat = 8
 
     func body(content: Content) -> some View {
         content
             .background {
                 if style.isChromeAccent {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .fill(chromeAccentControlGradient(for: colorScheme, isActive: isActive))
                 } else {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .fill(isActive ? Color.primary.opacity(0.18) : style.toolbarControlFillColor)
                 }
             }
             .overlay {
                 if style.isChromeAccent {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .stroke(chromeAccentStrokeColor(for: colorScheme), lineWidth: 0.75)
                 }
             }
-            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
     }
 }
 
