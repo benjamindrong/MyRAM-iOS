@@ -563,7 +563,7 @@ struct NotesListView: View {
         }
         .buttonStyle(.plain)
         .listRowSeparatorTint(.secondary.opacity(0.35))
-        .listRowBackground(editorChromeStyle.isChromeAccent ? Color.clear : editorChromeStyle.listRowBackgroundColor)
+        .listRowBackground(Color.clear)
         .contextMenu {
             Button("Rename") {
                 folderAwaitingRename = folder
@@ -604,7 +604,7 @@ struct NotesListView: View {
         }
         .tag(note.id)
         .listRowSeparatorTint(.secondary.opacity(0.3))
-        .listRowBackground(editorChromeStyle.isChromeAccent ? Color.clear : editorChromeStyle.listRowBackgroundColor)
+        .listRowBackground(Color.clear)
     }
 
     private func noteRowContent(_ note: Note) -> some View {
@@ -895,12 +895,10 @@ private struct ChromeListRowSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .padding(style.isChromeAccent ? EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10) : EdgeInsets())
+            .padding(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
             .background {
-                if style.isChromeAccent {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(chromeAccentRowFillColor(for: colorScheme))
-                }
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(rowFillColor)
             }
             .overlay {
                 if style.isChromeAccent {
@@ -909,6 +907,13 @@ private struct ChromeListRowSurface: ViewModifier {
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var rowFillColor: Color {
+        if style.isChromeAccent {
+            return chromeAccentRowFillColor(for: colorScheme)
+        }
+        return style.listRowBackgroundColor
     }
 }
 
