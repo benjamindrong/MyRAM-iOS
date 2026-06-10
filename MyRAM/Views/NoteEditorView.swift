@@ -2033,14 +2033,12 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
-            if textView.selectedRange.length > 0 {
-                lastKnownSelectionRange = textView.selectedRange
-            }
+            updateLastKnownSelectionRange(from: textView)
             reportFormattingState(from: textView)
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
-            lastKnownSelectionRange = textView.selectedRange
+            lastKnownSelectionRange = safeSelectedRange(in: textView)
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
         }
@@ -2761,10 +2759,14 @@ private struct SelectableTextView: UIViewRepresentable {
         ) {
             let styledText = NSMutableAttributedString(attributedString: attributedText)
             _ = ChecklistItemEditor.applyEditorRendering(in: styledText)
+            let previousTypingAttributes = textView.typingAttributes
 
             let applyUpdates = {
                 textView.attributedText = styledText
                 textView.selectedRange = selectedRange
+                if selectedRange.length == 0 {
+                    textView.typingAttributes = previousTypingAttributes
+                }
                 self.updateEditorLayout(in: textView)
             }
 
@@ -2831,8 +2833,14 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func formattingActionRange(in textView: UITextView) -> NSRange {
-            let currentRange = textView.selectedRange
+            let currentRange = safeSelectedRange(in: textView)
             if currentRange.length > 0 {
+                lastKnownSelectionRange = currentRange
+                return currentRange
+            }
+
+            if textView.isFirstResponder {
+                lastKnownSelectionRange = currentRange
                 return currentRange
             }
 
@@ -2844,6 +2852,13 @@ private struct SelectableTextView: UIViewRepresentable {
             }
 
             return currentRange
+        }
+
+        private func updateLastKnownSelectionRange(from textView: UITextView) {
+            let range = safeSelectedRange(in: textView)
+            if range.length > 0 || textView.isFirstResponder {
+                lastKnownSelectionRange = range
+            }
         }
 
         private func safeSelectedRange(in textView: UITextView) -> NSRange {
