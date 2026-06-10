@@ -135,6 +135,7 @@ struct NoteEditorView: View {
                     .zIndex(1)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .modifier(ChromeEditorTrim(style: editorChromeStyle))
 
                 if !sortedAttachments.isEmpty {
                     DisclosureGroup(isExpanded: $areAttachmentsExpanded) {
@@ -1039,8 +1040,7 @@ struct NoteEditorView: View {
                     Image(systemName: "checkmark.square")
                         .font(.system(size: 16, weight: .semibold))
                         .frame(width: 34, height: 34)
-                        .background(editorChromeStyle.toolbarControlFillColor)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .modifier(ChromeControlPlate(style: editorChromeStyle))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("format-checklist-toggle")
@@ -1118,11 +1118,24 @@ struct NoteEditorView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .background(editorChromeStyle.toolbarFillColor, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
-        )
+        .background {
+            if editorChromeStyle.isChromeAccent {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(chromeAccentGradient(for: colorScheme))
+            } else {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(editorChromeStyle.toolbarFillColor)
+            }
+        }
+        .overlay {
+            if editorChromeStyle.isChromeAccent {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(chromeAccentStrokeColor(for: colorScheme), lineWidth: 0.9)
+            } else {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
+            }
+        }
         .frame(maxWidth: min(UIScreen.main.bounds.width * 0.9, 340))
         .accessibilityIdentifier("keyboard-control-overflow-panel")
     }
@@ -1144,8 +1157,7 @@ struct NoteEditorView: View {
                 .font(.headline.weight(.semibold))
                 .strikethrough(isStrikethroughLabel)
                 .frame(width: 34, height: 34)
-                .background(isActive ? Color.primary.opacity(0.18) : editorChromeStyle.toolbarControlFillColor)
-                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .modifier(ChromeControlPlate(style: editorChromeStyle, isActive: isActive))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(identifier)
@@ -3488,12 +3500,68 @@ struct ChromeActionBar<Content: View>: View {
         .overlay {
             if style == .chromeAccent {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.22 : 0.44), lineWidth: 0.9)
+                    .stroke(chromeAccentStrokeColor(for: colorScheme), lineWidth: 0.9)
             } else {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(style.toolbarStrokeColor, lineWidth: 1)
             }
         }
+    }
+}
+
+private struct ChromeEditorTrim: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(chromeAccentTrimGradient(for: colorScheme), lineWidth: 2)
+                        .allowsHitTesting(false)
+                }
+            }
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .inset(by: 3)
+                        .stroke(Color.white.opacity(colorScheme == .dark ? 0.10 : 0.42), lineWidth: 0.8)
+                        .allowsHitTesting(false)
+                }
+            }
+            .shadow(
+                color: style.isChromeAccent ? Color.black.opacity(colorScheme == .dark ? 0.28 : 0.10) : .clear,
+                radius: style.isChromeAccent ? 12 : 0,
+                x: 0,
+                y: style.isChromeAccent ? 6 : 0
+            )
+    }
+}
+
+private struct ChromeControlPlate: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+    var isActive = false
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(chromeAccentControlGradient(for: colorScheme, isActive: isActive))
+                } else {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(isActive ? Color.primary.opacity(0.18) : style.toolbarControlFillColor)
+                }
+            }
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(chromeAccentStrokeColor(for: colorScheme), lineWidth: 0.75)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
     }
 }
 
@@ -3519,4 +3587,56 @@ func chromeAccentGradient(for colorScheme: ColorScheme) -> LinearGradient {
         startPoint: .topLeading,
         endPoint: .bottomTrailing
     )
+}
+
+func chromeAccentControlGradient(for colorScheme: ColorScheme, isActive: Bool = false) -> LinearGradient {
+    if colorScheme == .dark {
+        return LinearGradient(
+            colors: [
+                Color(red: isActive ? 0.44 : 0.39, green: isActive ? 0.45 : 0.40, blue: isActive ? 0.50 : 0.45),
+                Color(red: isActive ? 0.25 : 0.21, green: isActive ? 0.26 : 0.22, blue: isActive ? 0.30 : 0.26),
+                Color(red: isActive ? 0.38 : 0.33, green: isActive ? 0.39 : 0.34, blue: isActive ? 0.44 : 0.39)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    return LinearGradient(
+        colors: [
+            Color(red: isActive ? 1.00 : 0.98, green: isActive ? 1.00 : 0.98, blue: isActive ? 1.00 : 0.99),
+            Color(red: isActive ? 0.74 : 0.79, green: isActive ? 0.76 : 0.81, blue: isActive ? 0.82 : 0.86),
+            Color(red: isActive ? 0.96 : 0.93, green: isActive ? 0.97 : 0.94, blue: isActive ? 1.00 : 0.96)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+}
+
+func chromeAccentTrimGradient(for colorScheme: ColorScheme) -> LinearGradient {
+    if colorScheme == .dark {
+        return LinearGradient(
+            colors: [
+                Color.white.opacity(0.30),
+                Color(red: 0.36, green: 0.38, blue: 0.43).opacity(0.70),
+                Color.black.opacity(0.35)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    return LinearGradient(
+        colors: [
+            Color.white.opacity(0.92),
+            Color(red: 0.63, green: 0.66, blue: 0.72).opacity(0.82),
+            Color.white.opacity(0.64)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+}
+
+func chromeAccentStrokeColor(for colorScheme: ColorScheme) -> Color {
+    Color.white.opacity(colorScheme == .dark ? 0.22 : 0.44)
 }

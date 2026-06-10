@@ -56,8 +56,12 @@ final class MyRAMTests: XCTestCase {
         XCTAssertFalse(EditorChromeStyle.allCases.map(\.title).contains("Standard"))
         XCTAssertEqual(EditorChromeStyle.standard.title, "None")
         XCTAssertEqual(EditorChromeStyle.warmPaper.title, "Warm Paper")
+        XCTAssertEqual(EditorChromeStyle.chromeAccent.title, "Chrome Accent")
+        XCTAssertTrue(EditorChromeStyle.chromeAccent.isChromeAccent)
+        XCTAssertFalse(EditorChromeStyle.standard.isChromeAccent)
         XCTAssertTrue(EditorChromeStyle.warmPaper.isWarmPaper)
         XCTAssertTrue(EditorChromeStyle.allCases.contains(.warmPaper))
+        XCTAssertTrue(EditorChromeStyle.allCases.contains(.chromeAccent))
         XCTAssertNil(EditorChromeStyle.warmPaper.colorSchemeOverride)
         XCTAssertNil(EditorChromeStyle.standard.editorTintUIColor)
         XCTAssertEqual(
