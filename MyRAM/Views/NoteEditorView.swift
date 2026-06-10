@@ -308,8 +308,7 @@ struct NoteEditorView: View {
                         .foregroundStyle(PinnedHighlightPalette.text)
                         .padding(.horizontal, 10)
                         .padding(.vertical, 6)
-                        .background(PinnedHighlightPalette.highlight)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .modifier(ChromePinnedBadge(style: editorChromeStyle))
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("pinned-thoughts-add")
@@ -332,12 +331,12 @@ struct NoteEditorView: View {
                                 .font(.caption2.weight(.semibold))
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 3)
-                                .background(Color.secondary.opacity(0.18))
-                                .clipShape(Capsule())
+                                .modifier(ChromeCountBadge(style: editorChromeStyle))
                         }
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(.primary)
+                    .modifier(ChromeControlPlate(style: editorChromeStyle, cornerRadius: 8))
                     .accessibilityIdentifier("pinned-thoughts-toggle")
 
                     Spacer()
@@ -348,6 +347,9 @@ struct NoteEditorView: View {
                     .font(.subheadline.weight(.semibold))
                     .buttonStyle(.plain)
                     .foregroundStyle(.primary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .modifier(ChromeControlPlate(style: editorChromeStyle, cornerRadius: 8))
                     .accessibilityIdentifier("pinned-thoughts-add")
                 }
 
@@ -380,12 +382,11 @@ struct NoteEditorView: View {
                     .padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(PinnedHighlightPalette.highlight)
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .modifier(ChromePinnedSurface(style: editorChromeStyle))
                 }
             }
             .padding(10)
-            .background(Color(.secondarySystemBackground))
-            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .modifier(ChromePinnedPanel(style: editorChromeStyle))
             .accessibilityIdentifier("pinned-thoughts-section")
             .onPreferenceChange(ReorderItemFramePreferenceKey.self) { frames in
                 reorderItemFrames = frames
@@ -443,7 +444,7 @@ struct NoteEditorView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .background(PinnedHighlightPalette.highlight)
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .modifier(ChromePinnedSurface(style: editorChromeStyle))
         .contentShape(Rectangle())
         .onTapGesture {
             editingPinnedThoughtID = thought.id
@@ -3574,6 +3575,102 @@ private struct ChromeControlPlate: ViewModifier {
     }
 }
 
+private struct ChromePinnedPanel: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(chromeAccentGradient(for: colorScheme))
+                } else {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .fill(Color(.secondarySystemBackground))
+                }
+            }
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .stroke(chromeAccentStrokeColor(for: colorScheme), lineWidth: 0.9)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .shadow(
+                color: style.isChromeAccent ? Color.black.opacity(colorScheme == .dark ? 0.22 : 0.08) : .clear,
+                radius: style.isChromeAccent ? 8 : 0,
+                x: 0,
+                y: style.isChromeAccent ? 4 : 0
+            )
+    }
+}
+
+private struct ChromePinnedSurface: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+
+    func body(content: Content) -> some View {
+        content
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(chromeAccentPinnedStrokeColor(for: colorScheme), lineWidth: 1)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+    }
+}
+
+private struct ChromePinnedBadge: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(PinnedHighlightPalette.highlight)
+            }
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(chromeAccentPinnedStrokeColor(for: colorScheme), lineWidth: 1)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .shadow(
+                color: style.isChromeAccent ? Color.black.opacity(colorScheme == .dark ? 0.20 : 0.08) : .clear,
+                radius: style.isChromeAccent ? 5 : 0,
+                x: 0,
+                y: style.isChromeAccent ? 2 : 0
+            )
+    }
+}
+
+private struct ChromeCountBadge: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                if style.isChromeAccent {
+                    Capsule().fill(chromeAccentControlGradient(for: colorScheme))
+                } else {
+                    Capsule().fill(Color.secondary.opacity(0.18))
+                }
+            }
+            .overlay {
+                if style.isChromeAccent {
+                    Capsule()
+                        .stroke(chromeAccentStrokeColor(for: colorScheme), lineWidth: 0.7)
+                }
+            }
+            .clipShape(Capsule())
+    }
+}
+
 func chromeAccentGradient(for colorScheme: ColorScheme) -> LinearGradient {
     if colorScheme == .dark {
         return LinearGradient(
@@ -3648,4 +3745,10 @@ func chromeAccentTrimGradient(for colorScheme: ColorScheme) -> LinearGradient {
 
 func chromeAccentStrokeColor(for colorScheme: ColorScheme) -> Color {
     Color.white.opacity(colorScheme == .dark ? 0.22 : 0.44)
+}
+
+func chromeAccentPinnedStrokeColor(for colorScheme: ColorScheme) -> Color {
+    colorScheme == .dark
+        ? Color.white.opacity(0.26)
+        : Color(red: 0.60, green: 0.62, blue: 0.68).opacity(0.78)
 }
