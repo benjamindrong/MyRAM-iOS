@@ -381,7 +381,6 @@ struct NoteEditorView: View {
                     .padding(.horizontal, 8)
                     .padding(.vertical, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(PinnedHighlightPalette.highlight)
                     .modifier(ChromePinnedSurface(style: editorChromeStyle))
                 }
             }
@@ -443,7 +442,6 @@ struct NoteEditorView: View {
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
-        .background(PinnedHighlightPalette.highlight)
         .modifier(ChromePinnedSurface(style: editorChromeStyle))
         .contentShape(Rectangle())
         .onTapGesture {
@@ -3612,13 +3610,18 @@ private struct ChromePinnedSurface: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .overlay {
-                if style.isChromeAccent {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(chromeAccentPinnedShineGradient(for: colorScheme))
-                        .blendMode(.screen)
+            .background {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(PinnedHighlightPalette.highlight)
+                    .overlay {
+                        if style.isChromeAccent {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(chromeAccentPinnedShineGradient(for: colorScheme))
+                                .blendMode(.screen)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 }
-            }
             .overlay {
                 if style.isChromeAccent {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -3638,13 +3641,14 @@ private struct ChromePinnedBadge: ViewModifier {
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(PinnedHighlightPalette.highlight)
-            }
-            .overlay {
-                if style.isChromeAccent {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(chromeAccentPinnedShineGradient(for: colorScheme))
-                        .blendMode(.screen)
-                }
+                    .overlay {
+                        if style.isChromeAccent {
+                            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                                .fill(chromeAccentPinnedShineGradient(for: colorScheme))
+                                .blendMode(.screen)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
             .overlay {
                 if style.isChromeAccent {

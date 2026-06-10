@@ -606,7 +606,6 @@ struct NotesListView: View {
                         .foregroundStyle(PinnedHighlightPalette.text)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(PinnedHighlightPalette.highlight)
                         .modifier(ChromeListPinnedPreview(style: editorChromeStyle))
                 }
                 let contentPreview = noteContentPreviewText(for: note)
@@ -904,13 +903,18 @@ private struct ChromeListPinnedPreview: ViewModifier {
 
     func body(content: Content) -> some View {
         content
-            .overlay {
-                if style.isChromeAccent {
-                    RoundedRectangle(cornerRadius: 6, style: .continuous)
-                        .fill(chromeAccentPinnedShineGradient(for: colorScheme))
-                        .blendMode(.screen)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(PinnedHighlightPalette.highlight)
+                    .overlay {
+                        if style.isChromeAccent {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(chromeAccentPinnedShineGradient(for: colorScheme))
+                                .blendMode(.screen)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
                 }
-            }
             .overlay {
                 if style.isChromeAccent {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
