@@ -907,6 +907,13 @@ private struct ChromeListPinnedPreview: ViewModifier {
             .overlay {
                 if style.isChromeAccent {
                     RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(chromeAccentPinnedShineGradient(for: colorScheme))
+                        .blendMode(.screen)
+                }
+            }
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
                         .stroke(chromeAccentPinnedStrokeColor(for: colorScheme), lineWidth: 0.8)
                 }
             }

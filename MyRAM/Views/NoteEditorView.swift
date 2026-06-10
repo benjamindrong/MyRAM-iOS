@@ -3615,6 +3615,13 @@ private struct ChromePinnedSurface: ViewModifier {
             .overlay {
                 if style.isChromeAccent {
                     RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(chromeAccentPinnedShineGradient(for: colorScheme))
+                        .blendMode(.screen)
+                }
+            }
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
                         .stroke(chromeAccentPinnedStrokeColor(for: colorScheme), lineWidth: 1)
                 }
             }
@@ -3631,6 +3638,13 @@ private struct ChromePinnedBadge: ViewModifier {
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(PinnedHighlightPalette.highlight)
+            }
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(chromeAccentPinnedShineGradient(for: colorScheme))
+                        .blendMode(.screen)
+                }
             }
             .overlay {
                 if style.isChromeAccent {
@@ -3775,4 +3789,16 @@ func chromeAccentPinnedStrokeColor(for colorScheme: ColorScheme) -> Color {
     colorScheme == .dark
         ? Color.white.opacity(0.26)
         : Color(red: 0.60, green: 0.62, blue: 0.68).opacity(0.78)
+}
+
+func chromeAccentPinnedShineGradient(for colorScheme: ColorScheme) -> LinearGradient {
+    LinearGradient(
+        colors: [
+            Color.white.opacity(colorScheme == .dark ? 0.10 : 0.22),
+            Color.white.opacity(colorScheme == .dark ? 0.34 : 0.58),
+            Color.white.opacity(colorScheme == .dark ? 0.04 : 0.12)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
 }
