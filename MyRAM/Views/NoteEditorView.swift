@@ -997,7 +997,7 @@ struct NoteEditorView: View {
         .overlay {
             if editorChromeStyle == .chromeAccent {
                 Capsule()
-                    .stroke(Color.white.opacity(colorScheme == .dark ? 0.22 : 0.44), lineWidth: 0.9)
+                    .stroke(chromeAccentToolbarTrimGradient(for: colorScheme), lineWidth: 0.9)
             } else {
                 Capsule()
                     .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
@@ -1137,7 +1137,7 @@ struct NoteEditorView: View {
         .overlay {
             if editorChromeStyle.isChromeAccent {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .stroke(chromeAccentStrokeColor(for: colorScheme), lineWidth: 0.9)
+                    .stroke(chromeAccentToolbarTrimGradient(for: colorScheme), lineWidth: 0.9)
             } else {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
@@ -3509,7 +3509,7 @@ struct ChromeActionBar<Content: View>: View {
         .overlay {
             if style == .chromeAccent {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                    .stroke(chromeAccentStrokeColor(for: colorScheme), lineWidth: 0.9)
+                    .stroke(chromeAccentToolbarTrimGradient(for: colorScheme), lineWidth: 0.9)
             } else {
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .stroke(style.toolbarStrokeColor, lineWidth: 1)
@@ -3593,7 +3593,7 @@ private struct ChromePinnedPanel: ViewModifier {
             .overlay {
                 if style.isChromeAccent {
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .stroke(chromeAccentStrokeColor(for: colorScheme), lineWidth: 0.9)
+                        .stroke(chromeAccentToolbarTrimGradient(for: colorScheme), lineWidth: 0.9)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
@@ -3737,6 +3737,30 @@ func chromeAccentTrimGradient(for colorScheme: ColorScheme) -> LinearGradient {
             Color.white.opacity(0.92),
             Color(red: 0.63, green: 0.66, blue: 0.72).opacity(0.82),
             Color.white.opacity(0.64)
+        ],
+        startPoint: .topLeading,
+        endPoint: .bottomTrailing
+    )
+}
+
+func chromeAccentToolbarTrimGradient(for colorScheme: ColorScheme) -> LinearGradient {
+    if colorScheme == .dark {
+        return LinearGradient(
+            colors: [
+                Color.black.opacity(0.38),
+                Color.white.opacity(0.32),
+                Color.black.opacity(0.30)
+            ],
+            startPoint: .topLeading,
+            endPoint: .bottomTrailing
+        )
+    }
+
+    return LinearGradient(
+        colors: [
+            Color(red: 0.56, green: 0.58, blue: 0.64).opacity(0.78),
+            Color.white.opacity(0.94),
+            Color(red: 0.62, green: 0.64, blue: 0.70).opacity(0.72)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing

@@ -868,7 +868,7 @@ private struct ChromeListControlPlate: ViewModifier {
             .overlay {
                 if style.isChromeAccent {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .stroke(chromeAccentStrokeColor(for: colorScheme), lineWidth: 0.75)
+                        .stroke(chromeAccentToolbarTrimGradient(for: colorScheme), lineWidth: 0.75)
                 }
             }
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
