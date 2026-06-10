@@ -3798,9 +3798,9 @@ func chromeAccentPinnedStrokeColor(for colorScheme: ColorScheme) -> Color {
 func chromeAccentPinnedShineGradient(for colorScheme: ColorScheme) -> LinearGradient {
     LinearGradient(
         colors: [
-            Color.white.opacity(colorScheme == .dark ? 0.10 : 0.22),
-            Color.white.opacity(colorScheme == .dark ? 0.34 : 0.58),
-            Color.white.opacity(colorScheme == .dark ? 0.04 : 0.12)
+            Color.white.opacity(colorScheme == .dark ? 0.06 : 0.14),
+            Color.white.opacity(colorScheme == .dark ? 0.22 : 0.36),
+            Color.white.opacity(colorScheme == .dark ? 0.02 : 0.07)
         ],
         startPoint: .topLeading,
         endPoint: .bottomTrailing
