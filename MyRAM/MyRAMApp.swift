@@ -128,6 +128,10 @@ enum EditorChromeStyle: String, CaseIterable, Identifiable {
         self == .warmPaper
     }
 
+    var isChromeAccent: Bool {
+        self == .chromeAccent
+    }
+
     var appTintColor: Color {
         isWarmPaper ? WarmPaperPalette.accent : .accentColor
     }
