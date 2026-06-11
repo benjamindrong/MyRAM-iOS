@@ -11,6 +11,8 @@ struct NoteEditorView: View {
     @ObservedObject var vm: NotesViewModel
     let note: Note
     let onNewNote: (Note) -> Void
+    var showsTopBar = true
+    var toolbarBridge: NoteEditorToolbarBridge?
     @StateObject private var formattingController = TextFormattingController()
     
     @State private var title: String = ""
@@ -73,10 +75,14 @@ struct NoteEditorView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
-                editorTopBar
+                if showsTopBar {
+                    editorTopBar
+                }
 
                 ZStack(alignment: .bottom) {
                     VStack(spacing: 12) {
+                        editorTitleHeader
+
                         pinnedThoughtsSection
 
                         SelectableTextView(
@@ -194,6 +200,7 @@ struct NoteEditorView: View {
                 lastSnapshot = currentNoteSnapshot()
                 vm.recordNoteOpened(note)
                 arePinnedThoughtsExpanded = vm.isPinnedThoughtsSectionExpanded(for: note)
+                configureToolbarBridge()
             }
             .onChange(of: title) { handleEditorChange() }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
@@ -523,6 +530,30 @@ struct NoteEditorView: View {
         editingPinnedThoughtID = pinnedThought.id
     }
 
+    private func configureToolbarBridge() {
+        toolbarBridge?.title = title.isEmpty ? "Untitled" : title
+        toolbarBridge?.canUndo = canPerformUndo
+        toolbarBridge?.canRedo = canPerformRedo
+        toolbarBridge?.editTitle = {
+            titleDraft = title
+            showingTitleEditor = true
+        }
+        toolbarBridge?.undo = { performUndo() }
+        toolbarBridge?.redo = { performRedo() }
+        toolbarBridge?.newNote = { onNewNote(vm.createNewNote()) }
+        toolbarBridge?.newFolder = {
+            newFolderName = ""
+            showingCreateFolderPrompt = true
+        }
+        toolbarBridge?.exportNote = { exportCurrentNote() }
+        toolbarBridge?.importFromPhotoLibrary = { showingPhotoPicker = true }
+        toolbarBridge?.importImageFile = { showingFileImporter = true }
+        toolbarBridge?.deleteNote = {
+            vm.deleteNote(note)
+            dismiss()
+        }
+    }
+
     private func unpinThoughtToBody(_ thought: PinnedThought) {
         let unpinnedText = thought.text.trimmingCharacters(in: .whitespacesAndNewlines)
         vm.unpinThought(thought)
@@ -542,8 +573,6 @@ struct NoteEditorView: View {
         GeometryReader { proxy in
             let layout = topBarActionLayout(totalWidth: proxy.size.width)
             ChromeActionBar(style: editorChromeStyle) {
-                titleEditorButton
-
                 Spacer(minLength: 0)
 
                 ForEach(layout.visibleActions, id: \.self) { action in
@@ -567,6 +596,14 @@ struct NoteEditorView: View {
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
         }
         .frame(height: 42)
+    }
+
+    private var editorTitleHeader: some View {
+        HStack {
+            titleEditorButton
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var titleEditorButton: some View {
@@ -706,6 +743,8 @@ struct NoteEditorView: View {
         DispatchQueue.main.async {
             canUndo = (activeUndoManager?.canUndo ?? false) || !undoHistory.isEmpty
             canRedo = (activeUndoManager?.canRedo ?? false) || !redoHistory.isEmpty
+            toolbarBridge?.canUndo = canPerformUndo
+            toolbarBridge?.canRedo = canPerformRedo
         }
     }
 
@@ -746,6 +785,7 @@ struct NoteEditorView: View {
             richTextContentData: richTextContentData
         )
         vm.recordNoteEdited(note)
+        toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
     }
 
@@ -936,6 +976,42 @@ struct NoteEditorView: View {
     }
 
     private var collapsedEditorControls: some View {
+        desktopOrMobileEditorControls
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background {
+                if editorChromeStyle == .chromeAccent {
+                    Capsule().fill(chromeAccentGradient(for: colorScheme))
+                } else {
+                    Capsule().fill(editorChromeStyle.toolbarFillColor)
+                }
+            }
+            .overlay {
+                if editorChromeStyle == .chromeAccent {
+                    Capsule()
+                        .stroke(chromeAccentToolbarTrimGradient(for: colorScheme), lineWidth: 0.9)
+                } else {
+                    Capsule()
+                        .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
+                }
+            }
+            .accessibilityIdentifier("keyboard-control-bar")
+    }
+
+    @ViewBuilder
+    private var desktopOrMobileEditorControls: some View {
+#if targetEnvironment(macCatalyst)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                inlineActionButton(systemImage: "pin", identifier: "keyboard-control-pin") {
+                    pinSelectionToggleToken += 1
+                }
+
+                desktopInlineFormattingControls
+            }
+        }
+        .frame(maxWidth: 560)
+#else
         HStack(spacing: 8) {
             inlineActionButton(
                 systemImage: isKeyboardVisible ? "keyboard.chevron.compact.down" : "keyboard",
@@ -990,25 +1066,108 @@ struct NoteEditorView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("keyboard-control-overflow-toggle")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background {
-            if editorChromeStyle == .chromeAccent {
-                Capsule().fill(chromeAccentGradient(for: colorScheme))
-            } else {
-                Capsule().fill(editorChromeStyle.toolbarFillColor)
+#endif
+    }
+
+    private var desktopInlineFormattingControls: some View {
+        HStack(spacing: 8) {
+            formattingToggleButton(
+                label: "B",
+                isActive: formattingState.bold,
+                identifier: "format-bold-toggle"
+            ) {
+                boldToggleToken += 1
+            }
+            formattingToggleButton(
+                label: "I",
+                isActive: formattingState.italic,
+                identifier: "format-italic-toggle"
+            ) {
+                italicToggleToken += 1
+            }
+            formattingToggleButton(
+                label: "U",
+                isActive: formattingState.underline,
+                identifier: "format-underline-toggle"
+            ) {
+                underlineToggleToken += 1
+            }
+            formattingToggleButton(
+                label: "S",
+                isActive: formattingState.strikethrough,
+                identifier: "format-strikethrough-toggle",
+                isStrikethroughLabel: true
+            ) {
+                strikethroughToggleToken += 1
+            }
+
+            inlineActionButton(systemImage: "checkmark.square", identifier: "format-checklist-toggle") {
+                checklistToggleToken += 1
+            }
+
+            inlineActionButton(systemImage: "minus.circle.fill", identifier: "format-font-smaller") {
+                decreaseFontSizeToggleToken += 1
+            }
+
+            Text("\(Int(formattingState.fontSize.rounded()))")
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .frame(width: 30, height: 26)
+
+            inlineActionButton(systemImage: "plus.circle.fill", identifier: "format-font-larger") {
+                increaseFontSizeToggleToken += 1
+            }
+
+            desktopColorControls
+        }
+    }
+
+    private var desktopColorControls: some View {
+        HStack(spacing: 5) {
+            Button {
+                applyDefaultTextColor()
+            } label: {
+                Circle()
+                    .fill(Color(uiColor: editorChromeStyle.editorTextUIColor))
+                    .frame(width: 20, height: 20)
+                    .overlay {
+                        Text("A")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(editorChromeStyle.editorSurfaceColor)
+                    }
+                    .overlay {
+                        Circle()
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("format-color-default")
+            .accessibilityLabel("Auto Text Color")
+
+            ForEach(textColorSwatches) { swatch in
+                Button {
+                    applyTextColor(swatch.uiColor)
+                } label: {
+                    Circle()
+                        .fill(swatch.color)
+                        .frame(width: isSelectedTextColor(swatch.uiColor) ? 18 : 16, height: isSelectedTextColor(swatch.uiColor) ? 18 : 16)
+                        .frame(width: 18, height: 22)
+                        .overlay {
+                            if isSelectedTextColor(swatch.uiColor) {
+                                Circle()
+                                    .stroke(Color.primary, lineWidth: 2)
+                                    .padding(-2)
+                            }
+                        }
+                        .overlay {
+                            Circle()
+                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("format-color-\(swatch.id)")
+                .accessibilityLabel(swatch.name)
             }
         }
-        .overlay {
-            if editorChromeStyle == .chromeAccent {
-                Capsule()
-                    .stroke(chromeAccentToolbarTrimGradient(for: colorScheme), lineWidth: 0.9)
-            } else {
-                Capsule()
-                    .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
-            }
-        }
-        .accessibilityIdentifier("keyboard-control-bar")
     }
 
     private var overflowFormattingControls: some View {
@@ -1409,6 +1568,37 @@ private final class TextFormattingController: ObservableObject {
 
     func applyTextColor(_ color: UIColor?) {
         applyTextColorHandler?(color)
+    }
+}
+
+final class NoteEditorToolbarBridge: ObservableObject {
+    @Published var title = "Untitled"
+    @Published var canUndo = false
+    @Published var canRedo = false
+
+    var editTitle: (() -> Void)?
+    var undo: (() -> Void)?
+    var redo: (() -> Void)?
+    var newNote: (() -> Void)?
+    var newFolder: (() -> Void)?
+    var exportNote: (() -> Void)?
+    var importFromPhotoLibrary: (() -> Void)?
+    var importImageFile: (() -> Void)?
+    var deleteNote: (() -> Void)?
+
+    func reset() {
+        title = "Untitled"
+        canUndo = false
+        canRedo = false
+        editTitle = nil
+        undo = nil
+        redo = nil
+        newNote = nil
+        newFolder = nil
+        exportNote = nil
+        importFromPhotoLibrary = nil
+        importImageFile = nil
+        deleteNote = nil
     }
 }
 
@@ -2180,7 +2370,11 @@ private struct SelectableTextView: UIViewRepresentable {
             editMenuForTextIn range: NSRange,
             suggestedActions: [UIMenuElement]
         ) -> UIMenu? {
+#if targetEnvironment(macCatalyst)
+            return UIMenu(children: suggestedActions)
+#else
             UIMenu(children: [])
+#endif
         }
 
         func hasPendingFormattingMutation(
@@ -2303,6 +2497,8 @@ private struct SelectableTextView: UIViewRepresentable {
             }
 
             textView.textStorage.beginEditing()
+            let previousText = NSAttributedString(attributedString: textView.attributedText)
+            let previousSelection = textView.selectedRange
             textView.textStorage.addAttribute(.foregroundColor, value: resolvedColor, range: selectedRange)
             syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: resolvedColor)
             textView.textStorage.endEditing()
@@ -2311,7 +2507,50 @@ private struct SelectableTextView: UIViewRepresentable {
             lastKnownSelectionRange = selectedRange
             textView.becomeFirstResponder()
             syncContent(from: textView)
+            registerFormattingUndo(in: textView, previousText: previousText, previousSelection: previousSelection)
             reportFormattingState(from: textView)
+        }
+
+        private func registerFormattingUndo(
+            in textView: UITextView,
+            previousText: NSAttributedString,
+            previousSelection: NSRange
+        ) {
+            guard let undoManager = textView.undoManager else { return }
+            let currentText = NSAttributedString(attributedString: textView.attributedText)
+            let currentSelection = textView.selectedRange
+
+            undoManager.registerUndo(withTarget: self) { target in
+                target.restoreFormattingUndoState(
+                    in: textView,
+                    previousText: currentText,
+                    previousSelection: currentSelection,
+                    restoredText: previousText,
+                    restoredSelection: previousSelection
+                )
+            }
+            undoManager.setActionName("Format")
+        }
+
+        private func restoreFormattingUndoState(
+            in textView: UITextView,
+            previousText: NSAttributedString,
+            previousSelection: NSRange,
+            restoredText: NSAttributedString,
+            restoredSelection: NSRange
+        ) {
+            applyAttributedText(
+                restoredText,
+                in: textView,
+                selectedRange: restoredSelection,
+                registersUndo: false
+            )
+            registerFormattingUndo(
+                in: textView,
+                previousText: previousText,
+                previousSelection: previousSelection
+            )
+            reportUndoManagerChanged(textView.undoManager)
         }
 
         func normalizeTypingAttributes(in textView: UITextView) {
@@ -2881,8 +3120,11 @@ private struct SelectableTextView: UIViewRepresentable {
             _ attributedText: NSAttributedString,
             in textView: UITextView,
             selectedRange: NSRange,
-            animated: Bool = false
+            animated: Bool = false,
+            registersUndo: Bool = true
         ) {
+            let previousText = NSAttributedString(attributedString: textView.attributedText)
+            let previousSelection = textView.selectedRange
             let styledText = NSMutableAttributedString(attributedString: attributedText)
             _ = ChecklistItemEditor.applyEditorRendering(in: styledText)
             let previousTypingAttributes = textView.typingAttributes
@@ -2910,6 +3152,13 @@ private struct SelectableTextView: UIViewRepresentable {
 
             lastKnownSelectionRange = selectedRange
             syncContent(from: textView)
+            if registersUndo {
+                registerFormattingUndo(
+                    in: textView,
+                    previousText: previousText,
+                    previousSelection: previousSelection
+                )
+            }
             reportFormattingState(from: textView)
         }
 

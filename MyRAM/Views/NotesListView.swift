@@ -9,6 +9,7 @@ struct NotesListView: View {
     private let topBarIconSize: CGFloat = 20
     private let topBarHeight: CGFloat = 44
     @StateObject private var vm: NotesViewModel
+    @StateObject private var editorToolbarBridge = NoteEditorToolbarBridge()
     @State private var editMode: EditMode = .inactive
     @State private var selectedNote: Note? = nil
     @State private var showingRecentlyDeleted = false
@@ -49,22 +50,23 @@ struct NotesListView: View {
                     .padding(.horizontal)
                     .padding(.top, 6)
 
-                List(selection: $selectedNoteIDs) {
-                    ForEach(listItems) { item in
-                        row(for: item)
-                    }
+#if targetEnvironment(macCatalyst)
+                HStack(spacing: 0) {
+                    notesListContent
+                        .frame(width: 340)
+
+                    Divider()
+
+                    desktopEditorDetail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .listStyle(.insetGrouped)
-                .environment(\.editMode, $editMode)
-                .scrollContentBackground(editorChromeStyle.isWarmPaper ? .hidden : .automatic)
+#else
+                notesListContent
+#endif
             }
             .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
-            .sheet(item: $selectedNote) { note in
-                NoteEditorView(vm: vm, note: note) { newNote in
-                    selectedNote = newNote
-                }
-            }
+            .modifier(MobileNoteEditorSheet(selectedNote: $selectedNote, vm: vm))
             .sheet(isPresented: $showingRecentlyDeleted) {
                 RecentlyDeletedView(
                     notes: recentlyDeletedNotes,
@@ -147,14 +149,14 @@ struct NotesListView: View {
             }
             .confirmationDialog("Edit History", isPresented: $showingListUndoRedoActions, titleVisibility: .visible) {
                 Button("Undo") {
-                    performListUndo()
+                    performCombinedUndo()
                 }
-                .disabled(!canPerformListUndo)
+                .disabled(!canPerformCombinedUndo)
 
                 Button("Redo") {
-                    performListRedo()
+                    performCombinedRedo()
                 }
-                .disabled(!canPerformListRedo)
+                .disabled(!canPerformCombinedRedo)
             }
             .confirmationDialog(
                 "Delete folder \"\(folderAwaitingDeleteDecision?.name ?? "")\"?",
@@ -249,6 +251,15 @@ struct NotesListView: View {
         .onChange(of: vm.notes) { _, updatedNotes in
             let currentIDs = Set(updatedNotes.map(\.id))
             selectedNoteIDs = selectedNoteIDs.intersection(currentIDs)
+            if let selectedNote, !currentIDs.contains(selectedNote.id) {
+                self.selectedNote = nil
+                editorToolbarBridge.reset()
+            }
+        }
+        .onChange(of: selectedNote?.id) { _, noteID in
+            if noteID == nil {
+                editorToolbarBridge.reset()
+            }
         }
     }
 
@@ -262,6 +273,40 @@ struct NotesListView: View {
 
     private var pinnedHighlightText: Color {
         PinnedHighlightPalette.text(for: pinnedHighlightColor)
+    }
+
+    private var notesListContent: some View {
+        List(selection: $selectedNoteIDs) {
+            ForEach(listItems) { item in
+                row(for: item)
+            }
+        }
+        .listStyle(.insetGrouped)
+        .environment(\.editMode, $editMode)
+        .scrollContentBackground(editorChromeStyle.isWarmPaper ? .hidden : .automatic)
+    }
+
+    @ViewBuilder
+    private var desktopEditorDetail: some View {
+        if let selectedNote {
+            NoteEditorView(
+                vm: vm,
+                note: selectedNote,
+                onNewNote: { newNote in
+                    self.selectedNote = newNote
+                },
+                showsTopBar: false,
+                toolbarBridge: editorToolbarBridge
+            )
+            .id(selectedNote.id)
+        } else {
+            ContentUnavailableView(
+                "Select a Note",
+                systemImage: "note.text",
+                description: Text("Choose a note from the sidebar or create a new one.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
     private var notesListTopBar: some View {
@@ -280,6 +325,12 @@ struct NotesListView: View {
                 titleControl
 
                 Spacer(minLength: 0)
+
+#if targetEnvironment(macCatalyst)
+                if selectedNote != nil {
+                    desktopEditorToolbarActions
+                }
+#endif
 
                 ForEach(layout.visibleActions, id: \.self) { action in
                     topBarVisibleAction(for: action)
@@ -397,6 +448,42 @@ struct NotesListView: View {
         .accessibilityLabel(editMode.isEditing ? "Finish selecting notes" : "Select notes")
     }
 
+    private var desktopEditorToolbarActions: some View {
+        HStack(spacing: 8) {
+            compactActionButton(systemImage: "square.and.arrow.up", identifier: "desktop-topbar-export-note") {
+                editorToolbarBridge.exportNote?()
+            }
+
+            Menu {
+                Button {
+                    editorToolbarBridge.importFromPhotoLibrary?()
+                } label: {
+                    Label("Photo Library", systemImage: "photo")
+                }
+
+                Button {
+                    editorToolbarBridge.importImageFile?()
+                } label: {
+                    Label("Import Image", systemImage: "square.and.arrow.down")
+                }
+            } label: {
+                Image(systemName: "paperclip")
+                    .font(.system(size: topBarIconSize, weight: .semibold))
+                    .frame(width: topBarControlSize, height: topBarControlSize)
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(.primary)
+            }
+            .tint(.primary)
+            .accessibilityIdentifier("desktop-topbar-attachments")
+
+            compactActionButton(systemImage: "trash", identifier: "desktop-topbar-delete-note") {
+                editorToolbarBridge.deleteNote?()
+                selectedNote = nil
+                editorToolbarBridge.reset()
+            }
+        }
+    }
+
     private func compactActionButton(
         systemImage: String,
         identifier: String,
@@ -463,8 +550,8 @@ struct NotesListView: View {
             compactActionButton(systemImage: "arrow.uturn.backward.circle", identifier: "notes-topbar-history") {
                 showingListUndoRedoActions = true
             }
-            .opacity((canPerformListUndo || canPerformListRedo) ? 1 : 0.4)
-            .disabled(!canPerformListUndo && !canPerformListRedo)
+            .opacity((canPerformCombinedUndo || canPerformCombinedRedo) ? 1 : 0.4)
+            .disabled(!canPerformCombinedUndo && !canPerformCombinedRedo)
         case .newNote:
             compactActionButton(systemImage: "square.and.pencil", identifier: "notes-topbar-new-note") {
                 selectedNote = vm.createNewNote()
@@ -491,7 +578,7 @@ struct NotesListView: View {
                 Label("Edit History", systemImage: "arrow.uturn.backward.circle")
             }
             .foregroundStyle(.primary)
-            .disabled(!canPerformListUndo && !canPerformListRedo)
+            .disabled(!canPerformCombinedUndo && !canPerformCombinedRedo)
         case .newNote:
             Button {
                 selectedNote = vm.createNewNote()
@@ -717,6 +804,32 @@ struct NotesListView: View {
         !rootTitleRedoHistory.isEmpty || vm.hasRedoableAction
     }
 
+    private var canPerformCombinedUndo: Bool {
+        (selectedNote != nil && editorToolbarBridge.canUndo) || canPerformListUndo
+    }
+
+    private var canPerformCombinedRedo: Bool {
+        (selectedNote != nil && editorToolbarBridge.canRedo) || canPerformListRedo
+    }
+
+    private func performCombinedUndo() {
+        if selectedNote != nil, editorToolbarBridge.canUndo {
+            editorToolbarBridge.undo?()
+            return
+        }
+
+        performListUndo()
+    }
+
+    private func performCombinedRedo() {
+        if selectedNote != nil, editorToolbarBridge.canRedo {
+            editorToolbarBridge.redo?()
+            return
+        }
+
+        performListRedo()
+    }
+
     private func performListUndo() {
         if let previousTitle = rootTitleUndoHistory.popLast() {
             rootTitleRedoHistory.append(mainListTitle)
@@ -862,6 +975,24 @@ struct NotesListView: View {
 private struct SharePayload: Identifiable {
     let id = UUID()
     let urls: [URL]
+}
+
+private struct MobileNoteEditorSheet: ViewModifier {
+    @Binding var selectedNote: Note?
+    @ObservedObject var vm: NotesViewModel
+
+    func body(content: Content) -> some View {
+#if targetEnvironment(macCatalyst)
+        content
+#else
+        content
+            .sheet(item: $selectedNote) { note in
+                NoteEditorView(vm: vm, note: note) { newNote in
+                    selectedNote = newNote
+                }
+            }
+#endif
+    }
 }
 
 private struct ChromeListRowSurface: ViewModifier {
