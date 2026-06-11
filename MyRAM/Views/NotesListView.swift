@@ -332,7 +332,6 @@ struct NotesListView: View {
                     Image(systemName: "ellipsis.circle")
                         .font(.system(size: topBarIconSize, weight: .semibold))
                         .frame(width: topBarControlSize, height: topBarControlSize)
-                        .modifier(ChromeListControlPlate(style: editorChromeStyle, cornerRadius: 12))
                         .symbolRenderingMode(.monochrome)
                         .foregroundStyle(.primary)
                 }
@@ -407,7 +406,6 @@ struct NotesListView: View {
             Image(systemName: systemImage)
                 .font(.system(size: topBarIconSize, weight: .semibold))
                 .frame(width: topBarControlSize, height: topBarControlSize)
-                .modifier(ChromeListControlPlate(style: editorChromeStyle, cornerRadius: 12))
         }
         .buttonStyle(.plain)
         .foregroundStyle(.primary)
@@ -864,29 +862,6 @@ struct NotesListView: View {
 private struct SharePayload: Identifiable {
     let id = UUID()
     let urls: [URL]
-}
-
-private struct ChromeListControlPlate: ViewModifier {
-    @Environment(\.colorScheme) private var colorScheme
-    let style: EditorChromeStyle
-    var cornerRadius: CGFloat = 12
-
-    func body(content: Content) -> some View {
-        content
-            .background {
-                if style.isChromeAccent {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .fill(chromeAccentControlGradient(for: colorScheme))
-                }
-            }
-            .overlay {
-                if style.isChromeAccent {
-                    RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                        .stroke(chromeAccentToolbarTrimGradient(for: colorScheme), lineWidth: 0.75)
-                }
-            }
-            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
-    }
 }
 
 private struct ChromeListRowSurface: ViewModifier {
