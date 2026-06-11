@@ -17,6 +17,7 @@ struct NotesListView: View {
     @State private var selectedNoteIDs: Set<UUID> = []
     @State private var sharePayload: SharePayload?
     @State private var exportErrorMessage: String?
+    @State private var importErrorMessage: String?
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
     @State private var folderAwaitingRename: Folder?
@@ -86,6 +87,9 @@ struct NotesListView: View {
             .sheet(item: $sharePayload) { payload in
                 ActivityShareSheet(activityItems: payload.urls)
             }
+            .onOpenURL { url in
+                importMyRAMFile(from: url)
+            }
             .alert("Unable to Export Notes", isPresented: Binding(
                 get: { exportErrorMessage != nil },
                 set: { if !$0 { exportErrorMessage = nil } }
@@ -93,6 +97,14 @@ struct NotesListView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(exportErrorMessage ?? "An unknown export error occurred.")
+            }
+            .alert("Unable to Import Notes", isPresented: Binding(
+                get: { importErrorMessage != nil },
+                set: { if !$0 { importErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(importErrorMessage ?? "An unknown import error occurred.")
             }
             .alert("New Folder", isPresented: $showingCreateFolderPrompt) {
                 TextField("Folder Name", text: $newFolderName)
@@ -963,6 +975,15 @@ struct NotesListView: View {
         } catch {
             exportErrorMessage = (error as? LocalizedError)?.errorDescription
                 ?? "An unknown export error occurred."
+        }
+    }
+
+    private func importMyRAMFile(from url: URL) {
+        do {
+            selectedNote = try vm.importNotes(from: url).first
+        } catch {
+            importErrorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "An unknown import error occurred."
         }
     }
 

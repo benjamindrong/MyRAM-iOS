@@ -909,6 +909,38 @@ final class NotesViewModel: ObservableObject {
         return try Self.writeStructuredExportJSON(notes: nonDeletedNotes, exportedAt: exportTime)
     }
 
+    @discardableResult
+    func importNotes(from exportURL: URL) throws -> [Note] {
+        let didStartAccessing = exportURL.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                exportURL.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        let data = try Data(contentsOf: exportURL)
+        let manifest: ExportManifest
+        do {
+            manifest = try JSONDecoder().decode(ExportManifest.self, from: data)
+        } catch {
+            throw NoteImportError.invalidFile
+        }
+
+        guard manifest.format == "myram-note-export", manifest.version == 1 else {
+            throw NoteImportError.unsupportedFormat
+        }
+
+        let importedNotes = manifest.notes.compactMap(importNote)
+        guard !importedNotes.isEmpty else {
+            throw NoteImportError.noImportableNotes
+        }
+
+        try context.save()
+        refreshCurrentFolderContent()
+        selectNote(importedNotes[0])
+        return importedNotes
+    }
+
     nonisolated static func buildNoteExportText(
         for note: Note,
         exportedAt: Date = Date(),
@@ -952,9 +984,9 @@ final class NotesViewModel: ObservableObject {
         let timestamp = makeExportTimestamp(now)
         if notes.count == 1, let note = notes.first {
             let stem = makeSafeFileStem(from: note.title, fallback: "Note")
-            return "MyRAM-\(stem)-\(timestamp).json"
+            return "MyRAM-\(stem)-\(timestamp).myram"
         }
-        return "MyRAM-Notes-\(timestamp).json"
+        return "MyRAM-Notes-\(timestamp).myram"
     }
 
     nonisolated private static func writeStructuredExportJSON(
@@ -999,7 +1031,8 @@ final class NotesViewModel: ObservableObject {
                         id: attachment.id.uuidString,
                         createdAt: iso8601Timestamp(from: attachment.createdAt),
                         mimeType: mimeType,
-                        filename: filename
+                        filename: filename,
+                        data: attachment.imageData.base64EncodedString()
                     )
                 )
             }
@@ -1061,6 +1094,77 @@ final class NotesViewModel: ObservableObject {
                     modifiedAt: iso8601Timestamp(from: $0.modifiedAt)
                 )
             }
+    }
+
+    private func importNote(from noteRecord: ExportManifestNote) -> Note? {
+        if noteRecord.deletedAt != nil {
+            return nil
+        }
+
+        let folder = folder(forPath: noteRecord.folderPath)
+        let note = Note(title: noteRecord.title, content: noteRecord.content, folder: folder)
+        note.createdAt = Self.date(from: noteRecord.createdAt) ?? .now
+        note.modifiedAt = Self.date(from: noteRecord.modifiedAt) ?? .now
+        context.insert(note)
+
+        let pinnedThoughts = noteRecord.pinnedThoughts.sorted {
+            if $0.order != $1.order {
+                return $0.order < $1.order
+            }
+            return $0.createdAt < $1.createdAt
+        }
+
+        for thoughtRecord in pinnedThoughts {
+            let thought = PinnedThought(
+                text: thoughtRecord.text,
+                order: thoughtRecord.order,
+                note: note
+            )
+            thought.isCollapsed = thoughtRecord.isCollapsed
+            thought.createdAt = Self.date(from: thoughtRecord.createdAt) ?? note.createdAt
+            thought.modifiedAt = Self.date(from: thoughtRecord.modifiedAt) ?? note.modifiedAt
+            context.insert(thought)
+            note.pinnedThoughts.append(thought)
+        }
+
+        for attachmentRecord in noteRecord.attachments {
+            guard let imageData = Data(base64Encoded: attachmentRecord.data) else { continue }
+            let attachment = NotePhotoAttachment(imageData: imageData, note: note)
+            attachment.createdAt = Self.date(from: attachmentRecord.createdAt) ?? note.createdAt
+            context.insert(attachment)
+            note.photoAttachments.append(attachment)
+        }
+
+        folder?.modifiedAt = .now
+        return note
+    }
+
+    private func folder(forPath path: [String]) -> Folder? {
+        var parent: Folder?
+
+        for rawSegment in path {
+            let name = rawSegment.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty else { continue }
+
+            if let existingFolder = fetchFolders().first(where: { folder in
+                folder.name == name && folder.parentFolder?.id == parent?.id
+            }) {
+                parent = existingFolder
+                continue
+            }
+
+            let folder = Folder(name: name, parentFolder: parent)
+            context.insert(folder)
+            folders.append(folder)
+            parent = folder
+        }
+
+        return parent
+    }
+
+    private func fetchFolders() -> [Folder] {
+        let descriptor = FetchDescriptor<Folder>()
+        return (try? context.fetch(descriptor)) ?? []
     }
 
     nonisolated private static func writeSingleNoteExport(note: Note, exportedAt: Date) throws -> URL {
@@ -1226,6 +1330,12 @@ final class NotesViewModel: ObservableObject {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         return formatter.string(from: date)
+    }
+
+    nonisolated private static func date(from timestamp: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: timestamp)
     }
 
     nonisolated private static func uniqueFilename(baseName: String, used: inout Set<String>) -> String {
@@ -1451,6 +1561,7 @@ private struct ExportManifestAttachment: Codable {
     let createdAt: String
     let mimeType: String
     let filename: String
+    let data: String
 }
 
 enum NoteExportError: LocalizedError {
@@ -1469,6 +1580,23 @@ enum NoteExportError: LocalizedError {
             "The note export manifest could not be encoded as JSON."
         case .failedToCreateArchive:
             "The selected notes could not be zipped for export."
+        }
+    }
+}
+
+enum NoteImportError: LocalizedError {
+    case invalidFile
+    case unsupportedFormat
+    case noImportableNotes
+
+    var errorDescription: String? {
+        switch self {
+        case .invalidFile:
+            "The selected file is not a valid MyRAM export."
+        case .unsupportedFormat:
+            "This MyRAM export format is not supported."
+        case .noImportableNotes:
+            "The selected MyRAM export does not contain any importable notes."
         }
     }
 }
