@@ -8,6 +8,11 @@ struct NotesListView: View {
     private let topBarControlSize: CGFloat = 44
     private let topBarIconSize: CGFloat = 20
     private let topBarHeight: CGFloat = 44
+#if targetEnvironment(macCatalyst)
+    private let desktopSidebarMinimumWidth: CGFloat = 280
+    private let desktopSidebarMaximumWidth: CGFloat = 520
+    private let desktopSidebarResizeHandleWidth: CGFloat = 10
+#endif
     @StateObject private var vm: NotesViewModel
     @StateObject private var editorToolbarBridge = NoteEditorToolbarBridge()
     @State private var editMode: EditMode = .inactive
@@ -32,6 +37,10 @@ struct NotesListView: View {
     @State private var rootTitleRedoHistory: [String] = []
     @State private var showingListUndoRedoActions = false
     @State private var noteActionDialogContext: NoteActionDialogContext?
+#if targetEnvironment(macCatalyst)
+    @State private var desktopSidebarWidth: CGFloat = 340
+    @State private var desktopSidebarDragStartWidth: CGFloat?
+#endif
 #if DEBUG
     @State private var showingClearDemoNotesConfirmation = false
 #endif
@@ -54,9 +63,9 @@ struct NotesListView: View {
 #if targetEnvironment(macCatalyst)
                 HStack(spacing: 0) {
                     notesListContent
-                        .frame(width: 340)
+                        .frame(width: desktopSidebarWidth)
 
-                    Divider()
+                    desktopSidebarResizeHandle
 
                     desktopEditorDetail
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -276,6 +285,38 @@ struct NotesListView: View {
             }
         }
     }
+
+#if targetEnvironment(macCatalyst)
+    private var desktopSidebarResizeHandle: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(0.22))
+            .frame(width: desktopSidebarResizeHandleWidth)
+            .overlay(
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.45))
+                    .frame(width: 1)
+            )
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let startWidth = desktopSidebarDragStartWidth ?? desktopSidebarWidth
+                        desktopSidebarDragStartWidth = startWidth
+                        desktopSidebarWidth = clampedDesktopSidebarWidth(
+                            startWidth + value.translation.width
+                        )
+                    }
+                    .onEnded { _ in
+                        desktopSidebarDragStartWidth = nil
+                    }
+            )
+            .accessibilityLabel("Resize sidebar")
+    }
+
+    private func clampedDesktopSidebarWidth(_ width: CGFloat) -> CGFloat {
+        min(max(width, desktopSidebarMinimumWidth), desktopSidebarMaximumWidth)
+    }
+#endif
 
     private var editorChromeStyle: EditorChromeStyle {
         EditorChromeStyle(rawValue: editorChromeStyleRaw) ?? .standard

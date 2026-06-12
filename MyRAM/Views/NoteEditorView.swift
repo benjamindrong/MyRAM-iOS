@@ -5,6 +5,12 @@ import PhotosUI
 import UniformTypeIdentifiers
 import VisionKit
 
+#if targetEnvironment(macCatalyst)
+private let defaultEditorTextFont = UIFont.systemFont(ofSize: 20)
+#else
+private let defaultEditorTextFont = UIFont.preferredFont(forTextStyle: .body)
+#endif
+
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -1548,7 +1554,7 @@ struct EditorFormattingState {
     var italic = false
     var underline = false
     var strikethrough = false
-    var fontSize: CGFloat = 17
+    var fontSize: CGFloat = defaultEditorTextFont.pointSize
     var foregroundColor: UIColor?
 }
 
@@ -2042,7 +2048,7 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
         textView.delegate = context.coordinator
-        textView.font = .preferredFont(forTextStyle: .body)
+        textView.font = defaultEditorTextFont
         textView.textColor = textColor
         textView.adjustsFontForContentSizeCategory = true
         textView.allowsEditingTextAttributes = true
@@ -2050,7 +2056,7 @@ private struct SelectableTextView: UIViewRepresentable {
         textView.tintColor = tintColor
         textView.layer.cornerRadius = 8
         textView.typingAttributes = [
-            .font: textView.font ?? .preferredFont(forTextStyle: .body),
+            .font: textView.font ?? defaultEditorTextFont,
             .foregroundColor: textColor,
             .paragraphStyle: ChecklistItemEditor.editorParagraphStyle
         ]
@@ -2467,7 +2473,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 var typingAttributes = textView.typingAttributes
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
                 typingAttributes[.font] = adjustedFontSize(from: baseFont, delta: delta)
                 textView.typingAttributes = typingAttributes
                 reportFormattingState(from: textView)
@@ -2478,7 +2484,7 @@ private struct SelectableTextView: UIViewRepresentable {
             mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
                 let baseFont = (value as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
                 mutable.addAttribute(
                     .font,
                     value: adjustedFontSize(from: baseFont, delta: delta),
@@ -2661,7 +2667,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let desiredAttributedText = RichTextContentCodec.decode(
                 richTextData: richTextContentData,
                 plainText: plainText,
-                baseFont: textView.font ?? .preferredFont(forTextStyle: .body)
+                baseFont: textView.font ?? defaultEditorTextFont
             )
             let normalizedAttributedText = RichTextContentCodec.normalizedForDisplay(
                 desiredAttributedText,
@@ -2790,7 +2796,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func defaultTextAttributes(for textView: UITextView) -> [NSAttributedString.Key: Any] {
             [
-                .font: textView.font ?? .preferredFont(forTextStyle: .body),
+                .font: textView.font ?? defaultEditorTextFont,
                 .foregroundColor: defaultTextColor,
                 .paragraphStyle: ChecklistItemEditor.bodyParagraphStyle(
                     hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
@@ -2816,13 +2822,13 @@ private struct SelectableTextView: UIViewRepresentable {
             if range.length == 0 {
                 return (textView.typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
             }
             if range.location < textView.attributedText.length,
                let font = textView.attributedText.attribute(.font, at: range.location, effectiveRange: nil) as? UIFont {
                 return font
             }
-            return textView.font ?? .preferredFont(forTextStyle: .body)
+            return textView.font ?? defaultEditorTextFont
         }
 
         private func selectedForegroundColor(in textView: UITextView, range: NSRange) -> UIColor? {
@@ -2843,13 +2849,13 @@ private struct SelectableTextView: UIViewRepresentable {
             if range.length == 0 {
                 let font = (textView.typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
                 return font.fontDescriptor.symbolicTraits.contains(trait)
             }
 
             var hasAll = true
             textView.attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
-                let font = value as? UIFont ?? .preferredFont(forTextStyle: .body)
+                let font = value as? UIFont ?? defaultEditorTextFont
                 if !font.fontDescriptor.symbolicTraits.contains(trait) {
                     hasAll = false
                     stop.pointee = true
@@ -2884,7 +2890,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 var typingAttributes = textView.typingAttributes
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
                 let shouldApply = !baseFont.fontDescriptor.symbolicTraits.contains(trait)
                 typingAttributes[.font] = fontBySettingTrait(
                     on: baseFont,
@@ -2901,7 +2907,7 @@ private struct SelectableTextView: UIViewRepresentable {
             mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
                 let baseFont = (value as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
                 mutable.addAttribute(
                     .font,
                     value: fontBySettingTrait(
@@ -2922,7 +2928,7 @@ private struct SelectableTextView: UIViewRepresentable {
         ) -> Bool {
             var hasTraitMissing = false
             attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
-                let font = value as? UIFont ?? .preferredFont(forTextStyle: .body)
+                let font = value as? UIFont ?? defaultEditorTextFont
                 if !font.fontDescriptor.symbolicTraits.contains(trait) {
                     hasTraitMissing = true
                     stop.pointee = true
