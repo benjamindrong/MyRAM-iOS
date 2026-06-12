@@ -219,6 +219,7 @@ struct NotesListView: View {
                     }
                 )
             }
+#if !targetEnvironment(macCatalyst)
             .overlay {
                 if let context = noteActionDialogContext {
                     NoteActionSheetOverlay(
@@ -245,6 +246,7 @@ struct NotesListView: View {
                     )
                 }
             }
+#endif
 #if DEBUG
             .confirmationDialog(
                 "Clear Demo Notes?",
@@ -678,15 +680,27 @@ struct NotesListView: View {
             if editMode.isEditing {
                 if isBulkNoteActionTarget(note) {
                     noteRowContent(note)
+#if targetEnvironment(macCatalyst)
+                        .contextMenu {
+                            noteContextMenuButtons(for: .bulk)
+                        }
+#else
                         .highPriorityGesture(
                             LongPressGesture(minimumDuration: 0.35)
                                 .onEnded { _ in
                                     handleBulkNoteLongPress(note)
                                 }
                         )
+#endif
                 } else {
                     noteRowContent(note)
+#if targetEnvironment(macCatalyst)
+                        .contextMenu {
+                            noteContextMenuButtons(for: .single(note))
+                        }
+#else
                         .highPriorityGesture(noteLongPressGesture(for: note))
+#endif
                 }
             } else {
                 Button {
@@ -696,7 +710,13 @@ struct NotesListView: View {
                     noteRowContent(note)
                 }
                 .buttonStyle(.plain)
+#if targetEnvironment(macCatalyst)
+                .contextMenu {
+                    noteContextMenuButtons(for: .single(note))
+                }
+#else
                 .highPriorityGesture(noteLongPressGesture(for: note))
+#endif
             }
         }
         .tag(note.id)
@@ -740,6 +760,22 @@ struct NotesListView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .modifier(ChromeListRowSurface(style: editorChromeStyle))
         .contentShape(Rectangle())
+    }
+
+    @ViewBuilder
+    private func noteContextMenuButtons(for context: NoteActionDialogContext) -> some View {
+        Button(pinActionTitle(for: context)) {
+            performPinAction(for: context)
+        }
+        Button(moveActionTitle(for: context)) {
+            performMoveAction(for: context)
+        }
+        Button(exportActionTitle(for: context)) {
+            performExportAction(for: context)
+        }
+        Button(deleteActionTitle(for: context), role: .destructive) {
+            performDeleteAction(for: context)
+        }
     }
 
     @ViewBuilder
@@ -795,6 +831,33 @@ struct NotesListView: View {
             return (note.isPinned ?? false) ? "Unpin" : "Pin"
         case .bulk:
             return bulkPinActionTitleWithCount
+        }
+    }
+
+    private func moveActionTitle(for context: NoteActionDialogContext) -> String {
+        switch context {
+        case .single:
+            return "Move to Folder"
+        case .bulk:
+            return "Move \(selectedNotes.count) to Folder"
+        }
+    }
+
+    private func exportActionTitle(for context: NoteActionDialogContext) -> String {
+        switch context {
+        case .single:
+            return "Export"
+        case .bulk:
+            return "Export \(selectedNotes.count) Selected"
+        }
+    }
+
+    private func deleteActionTitle(for context: NoteActionDialogContext) -> String {
+        switch context {
+        case .single:
+            return "Delete"
+        case .bulk:
+            return "Delete \(selectedNotes.count) Selected"
         }
     }
 
@@ -920,7 +983,7 @@ struct NotesListView: View {
     private func isBulkNoteActionTarget(_ note: Note) -> Bool {
         editMode.isEditing
             && selectedNoteIDs.contains(note.id)
-            && selectedNotes.count > 1
+            && !selectedNotes.isEmpty
     }
 
     private func handleBulkNoteLongPress(_ note: Note) {
