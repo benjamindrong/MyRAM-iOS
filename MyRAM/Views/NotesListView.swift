@@ -9,10 +9,10 @@ struct NotesListView: View {
     private let topBarIconSize: CGFloat = 20
     private let topBarHeight: CGFloat = 44
 #if targetEnvironment(macCatalyst)
-    private let desktopSidebarCollapsedThreshold: CGFloat = 120
-    private let desktopSidebarMinimumExpandedWidth: CGFloat = 220
+    private let desktopSidebarMinimumWidth: CGFloat = 0
     private let desktopSidebarMaximumWidth: CGFloat = 520
     private let desktopSidebarResizeHandleWidth: CGFloat = 10
+    private let desktopSidebarCollapsedHandleWidth: CGFloat = 24
 #endif
     @StateObject private var vm: NotesViewModel
     @StateObject private var editorToolbarBridge = NoteEditorToolbarBridge()
@@ -290,8 +290,8 @@ struct NotesListView: View {
 #if targetEnvironment(macCatalyst)
     private var desktopSidebarResizeHandle: some View {
         Rectangle()
-            .fill(Color.secondary.opacity(0.22))
-            .frame(width: desktopSidebarResizeHandleWidth)
+            .fill(Color.secondary.opacity(desktopSidebarWidth == 0 ? 0.30 : 0.22))
+            .frame(width: desktopSidebarHandleWidth)
             .overlay(
                 Rectangle()
                     .fill(Color.secondary.opacity(0.45))
@@ -314,11 +314,12 @@ struct NotesListView: View {
             .accessibilityLabel("Resize sidebar")
     }
 
+    private var desktopSidebarHandleWidth: CGFloat {
+        desktopSidebarWidth == 0 ? desktopSidebarCollapsedHandleWidth : desktopSidebarResizeHandleWidth
+    }
+
     private func clampedDesktopSidebarWidth(_ width: CGFloat) -> CGFloat {
-        if width < desktopSidebarCollapsedThreshold {
-            return 0
-        }
-        return min(max(width, desktopSidebarMinimumExpandedWidth), desktopSidebarMaximumWidth)
+        min(max(width, desktopSidebarMinimumWidth), desktopSidebarMaximumWidth)
     }
 #endif
 
