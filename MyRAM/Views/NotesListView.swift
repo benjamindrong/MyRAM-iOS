@@ -290,7 +290,7 @@ struct NotesListView: View {
     }
 
     private var notesListContent: some View {
-        List(selection: $selectedNoteIDs) {
+        List(selection: notesListSelection) {
             ForEach(listItems) { item in
                 row(for: item)
             }
@@ -309,6 +309,22 @@ struct NotesListView: View {
         .listStyle(.insetGrouped)
         .environment(\.editMode, $editMode)
         .scrollContentBackground(editorChromeStyle.isWarmPaper ? .hidden : .automatic)
+    }
+
+    private var notesListSelection: Binding<Set<UUID>> {
+        Binding(
+            get: { selectedNoteIDs },
+            set: { proposedSelection in
+#if targetEnvironment(macCatalyst)
+                if editMode.isEditing {
+                    selectedNoteIDs = toggledDesktopSelection(from: selectedNoteIDs, proposedSelection: proposedSelection)
+                    return
+                }
+#endif
+
+                selectedNoteIDs = proposedSelection
+            }
+        )
     }
 
     @ViewBuilder
@@ -1034,6 +1050,25 @@ struct NotesListView: View {
             selectedNoteIDs.insert(noteID)
         }
     }
+
+#if targetEnvironment(macCatalyst)
+    private func toggledDesktopSelection(
+        from currentSelection: Set<UUID>,
+        proposedSelection: Set<UUID>
+    ) -> Set<UUID> {
+        guard let clickedNoteID = proposedSelection.first, proposedSelection.count == 1 else {
+            return proposedSelection
+        }
+
+        var updatedSelection = currentSelection
+        if updatedSelection.contains(clickedNoteID) {
+            updatedSelection.remove(clickedNoteID)
+        } else {
+            updatedSelection.insert(clickedNoteID)
+        }
+        return updatedSelection
+    }
+#endif
 
     private func isBulkNoteActionTarget(_ note: Note) -> Bool {
         editMode.isEditing
