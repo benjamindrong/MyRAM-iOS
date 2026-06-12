@@ -13,6 +13,7 @@ final class MyRAMTests: XCTestCase {
                 let createdAt: String
                 let mimeType: String
                 let filename: String
+                let data: String
             }
 
             struct PinnedThoughtRecord: Decodable {
@@ -1025,7 +1026,7 @@ final class MyRAMTests: XCTestCase {
 
         let exportedAt = Date(timeIntervalSince1970: 4000)
         let exportURLs = try vm.exportNotesForSharing([note], nowProvider: { exportedAt })
-        let exportURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "json" }))
+        let exportURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "myram" }))
         let textURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "txt" }))
         let imageURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "jpg" }))
         let exportData = try Data(contentsOf: exportURL)
@@ -1042,6 +1043,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(noteRecord.modifiedAt, iso8601String(note.modifiedAt))
         XCTAssertEqual(attachmentRecord.mimeType, "image/jpeg")
         XCTAssertEqual(attachmentRecord.filename, imageURL.lastPathComponent)
+        XCTAssertEqual(Data(base64Encoded: attachmentRecord.data), imageData)
         XCTAssertEqual(try Data(contentsOf: imageURL), imageData)
         XCTAssertTrue(noteText.contains("Title: Daily Log"))
         XCTAssertTrue(noteText.contains("Pinned:\n- Review receipt"))
@@ -1063,7 +1065,7 @@ final class MyRAMTests: XCTestCase {
         vm.addPhotoAttachment(to: note2, imageData: imageData)
 
         let exportURLs = try vm.exportNotesForSharing([note1, note2])
-        let exportURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "json" }))
+        let exportURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "myram" }))
         let jpgURLs = exportURLs.filter { $0.pathExtension.lowercased() == "jpg" }
         let textURLs = exportURLs.filter { $0.pathExtension.lowercased() == "txt" }
         XCTAssertEqual(jpgURLs.count, 1)
@@ -1078,7 +1080,40 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(noteByTitle["Second Note"]?.folderPath, ["Work"])
         XCTAssertEqual(noteByTitle["Second Note"]?.attachments.first?.mimeType, "image/jpeg")
         XCTAssertEqual(noteByTitle["Second Note"]?.attachments.first?.filename, jpgURLs[0].lastPathComponent)
+        XCTAssertEqual(Data(base64Encoded: noteByTitle["Second Note"]?.attachments.first?.data ?? ""), imageData)
         XCTAssertEqual(try Data(contentsOf: jpgURLs[0]), imageData)
+    }
+
+    func testImportNotesFromMyRAMExportRestoresNotesPinnedThoughtsAndFolders() throws {
+        let sourceContainer = try makeContainer(isStoredInMemoryOnly: true)
+        let sourceVM = NotesViewModel(context: sourceContainer.mainContext)
+        sourceVM.createFolder(named: "Work")
+        let workFolder = try XCTUnwrap(sourceVM.folders.first(where: { $0.name == "Work" }))
+        let sourceNote = sourceVM.createNewNote()
+        sourceVM.updateNote(sourceNote, title: "Imported Plan", content: "Follow up tomorrow")
+        sourceVM.moveNote(sourceNote, to: workFolder)
+        let pinnedThought = try XCTUnwrap(sourceVM.addPinnedThought(to: sourceNote, text: "Call Sam"))
+        pinnedThought.isCollapsed = true
+        let imageData = try makeJPEGData()
+        sourceVM.addPhotoAttachment(to: sourceNote, imageData: imageData)
+        sourceNote.createdAt = Date(timeIntervalSince1970: 1000)
+        sourceNote.modifiedAt = Date(timeIntervalSince1970: 2000)
+
+        let exportURLs = try sourceVM.exportNotesForSharing([sourceNote])
+        let exportURL = try XCTUnwrap(exportURLs.first(where: { $0.pathExtension.lowercased() == "myram" }))
+        let importContainer = try makeContainer(isStoredInMemoryOnly: true)
+        let importVM = NotesViewModel(context: importContainer.mainContext)
+
+        let importedNotes = try importVM.importNotes(from: exportURL)
+        let importedNote = try XCTUnwrap(importedNotes.first)
+
+        XCTAssertEqual(importedNote.title, "Imported Plan")
+        XCTAssertEqual(importedNote.content, "Follow up tomorrow")
+        XCTAssertEqual(importedNote.folder?.name, "Work")
+        XCTAssertEqual(importedNote.pinnedThoughts.first?.text, "Call Sam")
+        XCTAssertEqual(importedNote.pinnedThoughts.first?.isCollapsed, true)
+        XCTAssertEqual(importedNote.photoAttachments.first?.imageData, imageData)
+        XCTAssertEqual(importVM.currentNote?.id, importedNote.id)
     }
 
     func testSetNotePinnedMovesNoteAheadOfUnpinnedNotes() throws {

@@ -8,7 +8,14 @@ struct NotesListView: View {
     private let topBarControlSize: CGFloat = 44
     private let topBarIconSize: CGFloat = 20
     private let topBarHeight: CGFloat = 44
+#if targetEnvironment(macCatalyst)
+    private let desktopSidebarMinimumWidth: CGFloat = 0
+    private let desktopSidebarMaximumWidth: CGFloat = 520
+    private let desktopSidebarResizeHandleWidth: CGFloat = 10
+    private let desktopSidebarCollapsedHandleWidth: CGFloat = 24
+#endif
     @StateObject private var vm: NotesViewModel
+    @StateObject private var editorToolbarBridge = NoteEditorToolbarBridge()
     @State private var editMode: EditMode = .inactive
     @State private var selectedNote: Note? = nil
     @State private var showingRecentlyDeleted = false
@@ -16,6 +23,7 @@ struct NotesListView: View {
     @State private var selectedNoteIDs: Set<UUID> = []
     @State private var sharePayload: SharePayload?
     @State private var exportErrorMessage: String?
+    @State private var importErrorMessage: String?
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
     @State private var folderAwaitingRename: Folder?
@@ -30,6 +38,10 @@ struct NotesListView: View {
     @State private var rootTitleRedoHistory: [String] = []
     @State private var showingListUndoRedoActions = false
     @State private var noteActionDialogContext: NoteActionDialogContext?
+#if targetEnvironment(macCatalyst)
+    @State private var desktopSidebarWidth: CGFloat = 340
+    @State private var desktopSidebarDragStartWidth: CGFloat?
+#endif
 #if DEBUG
     @State private var showingClearDemoNotesConfirmation = false
 #endif
@@ -49,22 +61,23 @@ struct NotesListView: View {
                     .padding(.horizontal)
                     .padding(.top, 6)
 
-                List(selection: $selectedNoteIDs) {
-                    ForEach(listItems) { item in
-                        row(for: item)
-                    }
+#if targetEnvironment(macCatalyst)
+                HStack(spacing: 0) {
+                    notesListContent
+                        .frame(width: desktopSidebarWidth)
+
+                    desktopSidebarResizeHandle
+
+                    desktopEditorDetail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                .listStyle(.insetGrouped)
-                .environment(\.editMode, $editMode)
-                .scrollContentBackground(editorChromeStyle.isWarmPaper ? .hidden : .automatic)
+#else
+                notesListContent
+#endif
             }
             .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
-            .sheet(item: $selectedNote) { note in
-                NoteEditorView(vm: vm, note: note) { newNote in
-                    selectedNote = newNote
-                }
-            }
+            .modifier(MobileNoteEditorSheet(selectedNote: $selectedNote, vm: vm))
             .sheet(isPresented: $showingRecentlyDeleted) {
                 RecentlyDeletedView(
                     notes: recentlyDeletedNotes,
@@ -84,6 +97,9 @@ struct NotesListView: View {
             .sheet(item: $sharePayload) { payload in
                 ActivityShareSheet(activityItems: payload.urls)
             }
+            .onOpenURL { url in
+                importMyRAMFile(from: url)
+            }
             .alert("Unable to Export Notes", isPresented: Binding(
                 get: { exportErrorMessage != nil },
                 set: { if !$0 { exportErrorMessage = nil } }
@@ -91,6 +107,14 @@ struct NotesListView: View {
                 Button("OK", role: .cancel) {}
             } message: {
                 Text(exportErrorMessage ?? "An unknown export error occurred.")
+            }
+            .alert("Unable to Import Notes", isPresented: Binding(
+                get: { importErrorMessage != nil },
+                set: { if !$0 { importErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(importErrorMessage ?? "An unknown import error occurred.")
             }
             .alert("New Folder", isPresented: $showingCreateFolderPrompt) {
                 TextField("Folder Name", text: $newFolderName)
@@ -147,14 +171,14 @@ struct NotesListView: View {
             }
             .confirmationDialog("Edit History", isPresented: $showingListUndoRedoActions, titleVisibility: .visible) {
                 Button("Undo") {
-                    performListUndo()
+                    performCombinedUndo()
                 }
-                .disabled(!canPerformListUndo)
+                .disabled(!canPerformCombinedUndo)
 
                 Button("Redo") {
-                    performListRedo()
+                    performCombinedRedo()
                 }
-                .disabled(!canPerformListRedo)
+                .disabled(!canPerformCombinedRedo)
             }
             .confirmationDialog(
                 "Delete folder \"\(folderAwaitingDeleteDecision?.name ?? "")\"?",
@@ -205,6 +229,7 @@ struct NotesListView: View {
                     }
                 )
             }
+#if !targetEnvironment(macCatalyst)
             .overlay {
                 if let context = noteActionDialogContext {
                     NoteActionSheetOverlay(
@@ -231,6 +256,7 @@ struct NotesListView: View {
                     )
                 }
             }
+#endif
 #if DEBUG
             .confirmationDialog(
                 "Clear Demo Notes?",
@@ -249,8 +275,53 @@ struct NotesListView: View {
         .onChange(of: vm.notes) { _, updatedNotes in
             let currentIDs = Set(updatedNotes.map(\.id))
             selectedNoteIDs = selectedNoteIDs.intersection(currentIDs)
+            if let selectedNote, !currentIDs.contains(selectedNote.id) {
+                self.selectedNote = nil
+                editorToolbarBridge.reset()
+            }
+        }
+        .onChange(of: selectedNote?.id) { _, noteID in
+            if noteID == nil {
+                editorToolbarBridge.reset()
+            }
         }
     }
+
+#if targetEnvironment(macCatalyst)
+    private var desktopSidebarResizeHandle: some View {
+        Rectangle()
+            .fill(Color.secondary.opacity(desktopSidebarWidth == 0 ? 0.30 : 0.22))
+            .frame(width: desktopSidebarHandleWidth)
+            .overlay(
+                Rectangle()
+                    .fill(Color.secondary.opacity(0.45))
+                    .frame(width: 1)
+            )
+            .contentShape(Rectangle())
+            .gesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { value in
+                        let startWidth = desktopSidebarDragStartWidth ?? desktopSidebarWidth
+                        desktopSidebarDragStartWidth = startWidth
+                        desktopSidebarWidth = clampedDesktopSidebarWidth(
+                            startWidth + value.translation.width
+                        )
+                    }
+                    .onEnded { _ in
+                        desktopSidebarDragStartWidth = nil
+                    }
+            )
+            .accessibilityLabel("Resize sidebar")
+    }
+
+    private var desktopSidebarHandleWidth: CGFloat {
+        desktopSidebarWidth == 0 ? desktopSidebarCollapsedHandleWidth : desktopSidebarResizeHandleWidth
+    }
+
+    private func clampedDesktopSidebarWidth(_ width: CGFloat) -> CGFloat {
+        min(max(width, desktopSidebarMinimumWidth), desktopSidebarMaximumWidth)
+    }
+#endif
 
     private var editorChromeStyle: EditorChromeStyle {
         EditorChromeStyle(rawValue: editorChromeStyleRaw) ?? .standard
@@ -262,6 +333,67 @@ struct NotesListView: View {
 
     private var pinnedHighlightText: Color {
         PinnedHighlightPalette.text(for: pinnedHighlightColor)
+    }
+
+    private var notesListContent: some View {
+        List(selection: notesListSelection) {
+            ForEach(listItems) { item in
+                row(for: item)
+            }
+        }
+#if targetEnvironment(macCatalyst)
+        .contextMenu(forSelectionType: UUID.self) { noteIDs in
+            desktopNoteContextMenuButtons(for: noteIDs)
+        } primaryAction: { noteIDs in
+            if noteIDs.count == 1,
+               let noteID = noteIDs.first,
+               let note = note(for: noteID) {
+                handleNotePrimaryAction(note)
+            }
+        }
+#endif
+        .listStyle(.insetGrouped)
+        .environment(\.editMode, $editMode)
+        .scrollContentBackground(editorChromeStyle.isWarmPaper ? .hidden : .automatic)
+    }
+
+    private var notesListSelection: Binding<Set<UUID>> {
+        Binding(
+            get: { selectedNoteIDs },
+            set: { proposedSelection in
+#if targetEnvironment(macCatalyst)
+                if editMode.isEditing {
+                    selectedNoteIDs = toggledDesktopSelection(from: selectedNoteIDs, proposedSelection: proposedSelection)
+                    return
+                }
+#endif
+
+                selectedNoteIDs = proposedSelection
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var desktopEditorDetail: some View {
+        if let selectedNote {
+            NoteEditorView(
+                vm: vm,
+                note: selectedNote,
+                onNewNote: { newNote in
+                    self.selectedNote = newNote
+                },
+                showsTopBar: false,
+                toolbarBridge: editorToolbarBridge
+            )
+            .id(selectedNote.id)
+        } else {
+            ContentUnavailableView(
+                "Select a Note",
+                systemImage: "note.text",
+                description: Text("Choose a note from the sidebar or create a new one.")
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
     private var notesListTopBar: some View {
@@ -280,6 +412,12 @@ struct NotesListView: View {
                 titleControl
 
                 Spacer(minLength: 0)
+
+#if targetEnvironment(macCatalyst)
+                if selectedNote != nil {
+                    desktopEditorToolbarActions
+                }
+#endif
 
                 ForEach(layout.visibleActions, id: \.self) { action in
                     topBarVisibleAction(for: action)
@@ -397,6 +535,42 @@ struct NotesListView: View {
         .accessibilityLabel(editMode.isEditing ? "Finish selecting notes" : "Select notes")
     }
 
+    private var desktopEditorToolbarActions: some View {
+        HStack(spacing: 8) {
+            compactActionButton(systemImage: "square.and.arrow.up", identifier: "desktop-topbar-export-note") {
+                editorToolbarBridge.exportNote?()
+            }
+
+            Menu {
+                Button {
+                    editorToolbarBridge.importFromPhotoLibrary?()
+                } label: {
+                    Label("Photo Library", systemImage: "photo")
+                }
+
+                Button {
+                    editorToolbarBridge.importImageFile?()
+                } label: {
+                    Label("Import Image", systemImage: "square.and.arrow.down")
+                }
+            } label: {
+                Image(systemName: "paperclip")
+                    .font(.system(size: topBarIconSize, weight: .semibold))
+                    .frame(width: topBarControlSize, height: topBarControlSize)
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(.primary)
+            }
+            .tint(.primary)
+            .accessibilityIdentifier("desktop-topbar-attachments")
+
+            compactActionButton(systemImage: "trash", identifier: "desktop-topbar-delete-note") {
+                editorToolbarBridge.deleteNote?()
+                selectedNote = nil
+                editorToolbarBridge.reset()
+            }
+        }
+    }
+
     private func compactActionButton(
         systemImage: String,
         identifier: String,
@@ -463,8 +637,8 @@ struct NotesListView: View {
             compactActionButton(systemImage: "arrow.uturn.backward.circle", identifier: "notes-topbar-history") {
                 showingListUndoRedoActions = true
             }
-            .opacity((canPerformListUndo || canPerformListRedo) ? 1 : 0.4)
-            .disabled(!canPerformListUndo && !canPerformListRedo)
+            .opacity((canPerformCombinedUndo || canPerformCombinedRedo) ? 1 : 0.4)
+            .disabled(!canPerformCombinedUndo && !canPerformCombinedRedo)
         case .newNote:
             compactActionButton(systemImage: "square.and.pencil", identifier: "notes-topbar-new-note") {
                 selectedNote = vm.createNewNote()
@@ -491,7 +665,7 @@ struct NotesListView: View {
                 Label("Edit History", systemImage: "arrow.uturn.backward.circle")
             }
             .foregroundStyle(.primary)
-            .disabled(!canPerformListUndo && !canPerformListRedo)
+            .disabled(!canPerformCombinedUndo && !canPerformCombinedRedo)
         case .newNote:
             Button {
                 selectedNote = vm.createNewNote()
@@ -575,6 +749,12 @@ struct NotesListView: View {
     }
 
     private func noteRow(_ note: Note) -> some View {
+#if targetEnvironment(macCatalyst)
+        noteRowContent(note)
+            .tag(note.id)
+            .listRowSeparatorTint(.secondary.opacity(0.3))
+            .listRowBackground(Color.clear)
+#else
         Group {
             if editMode.isEditing {
                 if isBulkNoteActionTarget(note) {
@@ -591,8 +771,7 @@ struct NotesListView: View {
                 }
             } else {
                 Button {
-                    vm.selectNote(note)
-                    selectedNote = note
+                    handleNotePrimaryAction(note)
                 } label: {
                     noteRowContent(note)
                 }
@@ -603,6 +782,7 @@ struct NotesListView: View {
         .tag(note.id)
         .listRowSeparatorTint(.secondary.opacity(0.3))
         .listRowBackground(Color.clear)
+#endif
     }
 
     private func noteRowContent(_ note: Note) -> some View {
@@ -644,6 +824,54 @@ struct NotesListView: View {
     }
 
     @ViewBuilder
+    private func noteContextMenuButtons(for context: NoteActionDialogContext) -> some View {
+        Button(pinActionTitle(for: context)) {
+            performPinAction(for: context)
+        }
+        Button(moveActionTitle(for: context)) {
+            performMoveAction(for: context)
+        }
+        Button(exportActionTitle(for: context)) {
+            performExportAction(for: context)
+        }
+        Button(deleteActionTitle(for: context), role: .destructive) {
+            performDeleteAction(for: context)
+        }
+    }
+
+    private func desktopNoteActionContext(for note: Note) -> NoteActionDialogContext {
+        if selectedNoteIDs.contains(note.id), !selectedNotes.isEmpty {
+            return .bulk
+        }
+        return .single(note)
+    }
+
+    @ViewBuilder
+    private func desktopNoteContextMenuButtons(for noteIDs: Set<UUID>) -> some View {
+        let notes = notes(for: noteIDs)
+        if notes.count == 1, let note = notes.first {
+            noteContextMenuButtons(for: desktopNoteActionContext(for: note))
+        } else if !notes.isEmpty {
+            Button(desktopBulkPinActionTitle(for: notes)) {
+                selectedNoteIDs = Set(notes.map(\.id))
+                setPinnedStateForSelectedNotes(isPinned: shouldPinSelectedNotes)
+            }
+            Button("Move \(notes.count) to Folder") {
+                selectedNoteIDs = Set(notes.map(\.id))
+                bulkNoteMoveRequest = BulkNoteMoveRequest(notes: selectedNotes)
+            }
+            Button("Export \(notes.count) Selected") {
+                selectedNoteIDs = Set(notes.map(\.id))
+                exportSelectedNotes()
+            }
+            Button("Delete \(notes.count) Selected", role: .destructive) {
+                selectedNoteIDs = Set(notes.map(\.id))
+                deleteSelectedNotes()
+            }
+        }
+    }
+
+    @ViewBuilder
     private func noteActionButtons(for context: NoteActionDialogContext) -> some View {
         switch context {
         case .single(let note):
@@ -680,8 +908,22 @@ struct NotesListView: View {
         vm.notes.filter { selectedNoteIDs.contains($0.id) }
     }
 
+    private func note(for noteID: UUID) -> Note? {
+        vm.notes.first { $0.id == noteID }
+    }
+
+    private func notes(for noteIDs: Set<UUID>) -> [Note] {
+        vm.notes.filter { noteIDs.contains($0.id) }
+    }
+
     private var shouldPinSelectedNotes: Bool {
         selectedNotes.contains { ($0.isPinned ?? false) == false }
+    }
+
+    private func desktopBulkPinActionTitle(for notes: [Note]) -> String {
+        notes.contains { ($0.isPinned ?? false) == false }
+            ? "Pin \(notes.count) Selected"
+            : "Unpin \(notes.count) Selected"
     }
 
     private var bulkPinActionTitleWithCount: String {
@@ -696,6 +938,33 @@ struct NotesListView: View {
             return (note.isPinned ?? false) ? "Unpin" : "Pin"
         case .bulk:
             return bulkPinActionTitleWithCount
+        }
+    }
+
+    private func moveActionTitle(for context: NoteActionDialogContext) -> String {
+        switch context {
+        case .single:
+            return "Move to Folder"
+        case .bulk:
+            return "Move \(selectedNotes.count) to Folder"
+        }
+    }
+
+    private func exportActionTitle(for context: NoteActionDialogContext) -> String {
+        switch context {
+        case .single:
+            return "Export"
+        case .bulk:
+            return "Export \(selectedNotes.count) Selected"
+        }
+    }
+
+    private func deleteActionTitle(for context: NoteActionDialogContext) -> String {
+        switch context {
+        case .single:
+            return "Delete"
+        case .bulk:
+            return "Delete \(selectedNotes.count) Selected"
         }
     }
 
@@ -715,6 +984,32 @@ struct NotesListView: View {
 
     private var canPerformListRedo: Bool {
         !rootTitleRedoHistory.isEmpty || vm.hasRedoableAction
+    }
+
+    private var canPerformCombinedUndo: Bool {
+        (selectedNote != nil && editorToolbarBridge.canUndo) || canPerformListUndo
+    }
+
+    private var canPerformCombinedRedo: Bool {
+        (selectedNote != nil && editorToolbarBridge.canRedo) || canPerformListRedo
+    }
+
+    private func performCombinedUndo() {
+        if selectedNote != nil, editorToolbarBridge.canUndo {
+            editorToolbarBridge.undo?()
+            return
+        }
+
+        performListUndo()
+    }
+
+    private func performCombinedRedo() {
+        if selectedNote != nil, editorToolbarBridge.canRedo {
+            editorToolbarBridge.redo?()
+            return
+        }
+
+        performListRedo()
     }
 
     private func performListUndo() {
@@ -784,6 +1079,16 @@ struct NotesListView: View {
         selectedNoteIDs.removeAll()
     }
 
+    private func handleNotePrimaryAction(_ note: Note) {
+        if editMode.isEditing {
+            toggleSelection(for: note.id)
+            return
+        }
+
+        vm.selectNote(note)
+        selectedNote = note
+    }
+
     private func toggleSelection(for noteID: UUID) {
         if selectedNoteIDs.contains(noteID) {
             selectedNoteIDs.remove(noteID)
@@ -792,10 +1097,29 @@ struct NotesListView: View {
         }
     }
 
+#if targetEnvironment(macCatalyst)
+    private func toggledDesktopSelection(
+        from currentSelection: Set<UUID>,
+        proposedSelection: Set<UUID>
+    ) -> Set<UUID> {
+        guard let clickedNoteID = proposedSelection.first, proposedSelection.count == 1 else {
+            return proposedSelection
+        }
+
+        var updatedSelection = currentSelection
+        if updatedSelection.contains(clickedNoteID) {
+            updatedSelection.remove(clickedNoteID)
+        } else {
+            updatedSelection.insert(clickedNoteID)
+        }
+        return updatedSelection
+    }
+#endif
+
     private func isBulkNoteActionTarget(_ note: Note) -> Bool {
         editMode.isEditing
             && selectedNoteIDs.contains(note.id)
-            && selectedNotes.count > 1
+            && !selectedNotes.isEmpty
     }
 
     private func handleBulkNoteLongPress(_ note: Note) {
@@ -853,6 +1177,15 @@ struct NotesListView: View {
         }
     }
 
+    private func importMyRAMFile(from url: URL) {
+        do {
+            selectedNote = try vm.importNotes(from: url).first
+        } catch {
+            importErrorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "An unknown import error occurred."
+        }
+    }
+
     private var notePreviewContentTextColor: Color {
         colorScheme == .dark ? .primary : .secondary
     }
@@ -862,6 +1195,24 @@ struct NotesListView: View {
 private struct SharePayload: Identifiable {
     let id = UUID()
     let urls: [URL]
+}
+
+private struct MobileNoteEditorSheet: ViewModifier {
+    @Binding var selectedNote: Note?
+    @ObservedObject var vm: NotesViewModel
+
+    func body(content: Content) -> some View {
+#if targetEnvironment(macCatalyst)
+        content
+#else
+        content
+            .sheet(item: $selectedNote) { note in
+                NoteEditorView(vm: vm, note: note) { newNote in
+                    selectedNote = newNote
+                }
+            }
+#endif
+    }
 }
 
 private struct ChromeListRowSurface: ViewModifier {

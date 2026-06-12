@@ -6,6 +6,14 @@ Build MyRAM as a user-controlled external-memory notes app. The product should s
 
 The current major product direction is the future **Defrag** feature.
 
+## Desktop Build Direction
+
+The first mac desktop build uses the existing iOS app target with Mac Catalyst enabled. This keeps the current UIKit-backed editor, sharing flow, SwiftData models, and SwiftUI screens on one implementation path while desktop-specific behavior is still being defined.
+
+Do not exclude Intel architecture support from the desktop build unless a ticket explicitly narrows support. A 2019 Intel Mac should remain supported when it runs the required macOS version for the APIs used by the app.
+
+If the desktop app later needs AppKit-native behavior that Catalyst cannot provide cleanly, add a dedicated macOS target behind a separate ticket and keep platform-specific code isolated.
+
 ## Non-Negotiable Product Rule
 
 Do not build features that automatically decide user priority.

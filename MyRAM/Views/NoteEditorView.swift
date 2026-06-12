@@ -5,12 +5,20 @@ import PhotosUI
 import UniformTypeIdentifiers
 import VisionKit
 
+#if targetEnvironment(macCatalyst)
+private let defaultEditorTextFont = UIFont.systemFont(ofSize: 20)
+#else
+private let defaultEditorTextFont = UIFont.preferredFont(forTextStyle: .body)
+#endif
+
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
     @ObservedObject var vm: NotesViewModel
     let note: Note
     let onNewNote: (Note) -> Void
+    var showsTopBar = true
+    var toolbarBridge: NoteEditorToolbarBridge?
     @StateObject private var formattingController = TextFormattingController()
     
     @State private var title: String = ""
@@ -73,10 +81,14 @@ struct NoteEditorView: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 12) {
-                editorTopBar
+                if showsTopBar {
+                    editorTopBar
+                }
 
                 ZStack(alignment: .bottom) {
                     VStack(spacing: 12) {
+                        editorTitleHeader
+
                         pinnedThoughtsSection
 
                         SelectableTextView(
@@ -194,6 +206,7 @@ struct NoteEditorView: View {
                 lastSnapshot = currentNoteSnapshot()
                 vm.recordNoteOpened(note)
                 arePinnedThoughtsExpanded = vm.isPinnedThoughtsSectionExpanded(for: note)
+                configureToolbarBridge()
             }
             .onChange(of: title) { handleEditorChange() }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
@@ -525,6 +538,30 @@ struct NoteEditorView: View {
         editingPinnedThoughtID = pinnedThought.id
     }
 
+    private func configureToolbarBridge() {
+        toolbarBridge?.title = title.isEmpty ? "Untitled" : title
+        toolbarBridge?.canUndo = canPerformUndo
+        toolbarBridge?.canRedo = canPerformRedo
+        toolbarBridge?.editTitle = {
+            titleDraft = title
+            showingTitleEditor = true
+        }
+        toolbarBridge?.undo = { performUndo() }
+        toolbarBridge?.redo = { performRedo() }
+        toolbarBridge?.newNote = { onNewNote(vm.createNewNote()) }
+        toolbarBridge?.newFolder = {
+            newFolderName = ""
+            showingCreateFolderPrompt = true
+        }
+        toolbarBridge?.exportNote = { exportCurrentNote() }
+        toolbarBridge?.importFromPhotoLibrary = { showingPhotoPicker = true }
+        toolbarBridge?.importImageFile = { showingFileImporter = true }
+        toolbarBridge?.deleteNote = {
+            vm.deleteNote(note)
+            dismiss()
+        }
+    }
+
     private func unpinThoughtToBody(_ thought: PinnedThought) {
         let unpinnedText = thought.text.trimmingCharacters(in: .whitespacesAndNewlines)
         vm.unpinThought(thought)
@@ -544,8 +581,6 @@ struct NoteEditorView: View {
         GeometryReader { proxy in
             let layout = topBarActionLayout(totalWidth: proxy.size.width)
             ChromeActionBar(style: editorChromeStyle) {
-                titleEditorButton
-
                 Spacer(minLength: 0)
 
                 ForEach(layout.visibleActions, id: \.self) { action in
@@ -570,6 +605,14 @@ struct NoteEditorView: View {
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
         }
         .frame(height: 42)
+    }
+
+    private var editorTitleHeader: some View {
+        HStack {
+            titleEditorButton
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var titleEditorButton: some View {
@@ -711,6 +754,8 @@ struct NoteEditorView: View {
         DispatchQueue.main.async {
             canUndo = (activeUndoManager?.canUndo ?? false) || !undoHistory.isEmpty
             canRedo = (activeUndoManager?.canRedo ?? false) || !redoHistory.isEmpty
+            toolbarBridge?.canUndo = canPerformUndo
+            toolbarBridge?.canRedo = canPerformRedo
         }
     }
 
@@ -751,6 +796,7 @@ struct NoteEditorView: View {
             richTextContentData: richTextContentData
         )
         vm.recordNoteEdited(note)
+        toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
     }
 
@@ -941,6 +987,42 @@ struct NoteEditorView: View {
     }
 
     private var collapsedEditorControls: some View {
+        desktopOrMobileEditorControls
+            .padding(.horizontal, 10)
+            .padding(.vertical, 6)
+            .background {
+                if editorChromeStyle == .chromeAccent {
+                    Capsule().fill(chromeAccentGradient(for: colorScheme))
+                } else {
+                    Capsule().fill(editorChromeStyle.toolbarFillColor)
+                }
+            }
+            .overlay {
+                if editorChromeStyle == .chromeAccent {
+                    Capsule()
+                        .stroke(chromeAccentToolbarTrimGradient(for: colorScheme), lineWidth: 0.9)
+                } else {
+                    Capsule()
+                        .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
+                }
+            }
+            .accessibilityIdentifier("keyboard-control-bar")
+    }
+
+    @ViewBuilder
+    private var desktopOrMobileEditorControls: some View {
+#if targetEnvironment(macCatalyst)
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: 8) {
+                inlineActionButton(systemImage: "pin", identifier: "keyboard-control-pin") {
+                    pinSelectionToggleToken += 1
+                }
+
+                desktopInlineFormattingControls
+            }
+        }
+        .frame(maxWidth: 560)
+#else
         HStack(spacing: 8) {
             inlineActionButton(
                 systemImage: isKeyboardVisible ? "keyboard.chevron.compact.down" : "keyboard",
@@ -996,25 +1078,108 @@ struct NoteEditorView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("keyboard-control-overflow-toggle")
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .background {
-            if editorChromeStyle == .chromeAccent {
-                Capsule().fill(chromeAccentGradient(for: colorScheme))
-            } else {
-                Capsule().fill(editorChromeStyle.toolbarFillColor)
+#endif
+    }
+
+    private var desktopInlineFormattingControls: some View {
+        HStack(spacing: 8) {
+            formattingToggleButton(
+                label: "B",
+                isActive: formattingState.bold,
+                identifier: "format-bold-toggle"
+            ) {
+                boldToggleToken += 1
+            }
+            formattingToggleButton(
+                label: "I",
+                isActive: formattingState.italic,
+                identifier: "format-italic-toggle"
+            ) {
+                italicToggleToken += 1
+            }
+            formattingToggleButton(
+                label: "U",
+                isActive: formattingState.underline,
+                identifier: "format-underline-toggle"
+            ) {
+                underlineToggleToken += 1
+            }
+            formattingToggleButton(
+                label: "S",
+                isActive: formattingState.strikethrough,
+                identifier: "format-strikethrough-toggle",
+                isStrikethroughLabel: true
+            ) {
+                strikethroughToggleToken += 1
+            }
+
+            inlineActionButton(systemImage: "checkmark.square", identifier: "format-checklist-toggle") {
+                checklistToggleToken += 1
+            }
+
+            inlineActionButton(systemImage: "minus.circle.fill", identifier: "format-font-smaller") {
+                decreaseFontSizeToggleToken += 1
+            }
+
+            Text("\(Int(formattingState.fontSize.rounded()))")
+                .font(.subheadline.weight(.semibold).monospacedDigit())
+                .frame(width: 30, height: 26)
+
+            inlineActionButton(systemImage: "plus.circle.fill", identifier: "format-font-larger") {
+                increaseFontSizeToggleToken += 1
+            }
+
+            desktopColorControls
+        }
+    }
+
+    private var desktopColorControls: some View {
+        HStack(spacing: 5) {
+            Button {
+                applyDefaultTextColor()
+            } label: {
+                Circle()
+                    .fill(Color(uiColor: editorChromeStyle.editorTextUIColor))
+                    .frame(width: 20, height: 20)
+                    .overlay {
+                        Text("A")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(editorChromeStyle.editorSurfaceColor)
+                    }
+                    .overlay {
+                        Circle()
+                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                    }
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("format-color-default")
+            .accessibilityLabel("Auto Text Color")
+
+            ForEach(textColorSwatches) { swatch in
+                Button {
+                    applyTextColor(swatch.uiColor)
+                } label: {
+                    Circle()
+                        .fill(swatch.color)
+                        .frame(width: isSelectedTextColor(swatch.uiColor) ? 18 : 16, height: isSelectedTextColor(swatch.uiColor) ? 18 : 16)
+                        .frame(width: 18, height: 22)
+                        .overlay {
+                            if isSelectedTextColor(swatch.uiColor) {
+                                Circle()
+                                    .stroke(Color.primary, lineWidth: 2)
+                                    .padding(-2)
+                            }
+                        }
+                        .overlay {
+                            Circle()
+                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("format-color-\(swatch.id)")
+                .accessibilityLabel(swatch.name)
             }
         }
-        .overlay {
-            if editorChromeStyle == .chromeAccent {
-                Capsule()
-                    .stroke(chromeAccentToolbarTrimGradient(for: colorScheme), lineWidth: 0.9)
-            } else {
-                Capsule()
-                    .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
-            }
-        }
-        .accessibilityIdentifier("keyboard-control-bar")
     }
 
     private var overflowFormattingControls: some View {
@@ -1389,7 +1554,7 @@ struct EditorFormattingState {
     var italic = false
     var underline = false
     var strikethrough = false
-    var fontSize: CGFloat = 17
+    var fontSize: CGFloat = defaultEditorTextFont.pointSize
     var foregroundColor: UIColor?
 }
 
@@ -1421,6 +1586,37 @@ private final class TextFormattingController: ObservableObject {
 
     func applyTextColor(_ color: UIColor?) {
         applyTextColorHandler?(color)
+    }
+}
+
+final class NoteEditorToolbarBridge: ObservableObject {
+    @Published var title = "Untitled"
+    @Published var canUndo = false
+    @Published var canRedo = false
+
+    var editTitle: (() -> Void)?
+    var undo: (() -> Void)?
+    var redo: (() -> Void)?
+    var newNote: (() -> Void)?
+    var newFolder: (() -> Void)?
+    var exportNote: (() -> Void)?
+    var importFromPhotoLibrary: (() -> Void)?
+    var importImageFile: (() -> Void)?
+    var deleteNote: (() -> Void)?
+
+    func reset() {
+        title = "Untitled"
+        canUndo = false
+        canRedo = false
+        editTitle = nil
+        undo = nil
+        redo = nil
+        newNote = nil
+        newFolder = nil
+        exportNote = nil
+        importFromPhotoLibrary = nil
+        importImageFile = nil
+        deleteNote = nil
     }
 }
 
@@ -1851,8 +2047,9 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
+        context.coordinator.installTextPlacementTapRecognizer(on: textView)
         textView.delegate = context.coordinator
-        textView.font = .preferredFont(forTextStyle: .body)
+        textView.font = defaultEditorTextFont
         textView.textColor = textColor
         textView.adjustsFontForContentSizeCategory = true
         textView.allowsEditingTextAttributes = true
@@ -1860,13 +2057,17 @@ private struct SelectableTextView: UIViewRepresentable {
         textView.tintColor = tintColor
         textView.layer.cornerRadius = 8
         textView.typingAttributes = [
-            .font: textView.font ?? .preferredFont(forTextStyle: .body),
+            .font: textView.font ?? defaultEditorTextFont,
             .foregroundColor: textColor,
             .paragraphStyle: ChecklistItemEditor.editorParagraphStyle
         ]
         textView.textContainerInset = ChecklistItemEditor.textContainerInsets(hasChecklistItems: false)
         textView.keyboardDismissMode = .interactive
+#if targetEnvironment(macCatalyst)
+        textView.alwaysBounceVertical = false
+#else
         textView.alwaysBounceVertical = true
+#endif
         return textView
     }
 
@@ -1875,6 +2076,7 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.formattingController = formattingController
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
+        context.coordinator.installTextPlacementTapRecognizer(on: textView)
         context.coordinator.isUpdatingUIView = true
         defer {
             context.coordinator.isUpdatingUIView = false
@@ -1909,6 +2111,7 @@ private struct SelectableTextView: UIViewRepresentable {
             )
             context.coordinator.reportUndoManagerChanged(textView.undoManager)
         } else if !textView.isFirstResponder
+            && !context.coordinator.isHandlingUserFocusChange
             && !hasPendingFormattingMutation
             && !context.coordinator.hasUnsyncedAppliedContent {
             context.coordinator.applyBoundContent(
@@ -2068,9 +2271,14 @@ private struct SelectableTextView: UIViewRepresentable {
         var textColorToggleToken = 0
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
         var isUpdatingUIView = false
+        var isHandlingUserFocusChange = false
         private var appliedPlainTextAwaitingBinding: String?
         private var appliedRichTextDataAwaitingBinding: Data?
         private weak var checklistTapRecognizer: UITapGestureRecognizer?
+#if targetEnvironment(macCatalyst)
+        private weak var textPlacementTapRecognizer: UITapGestureRecognizer?
+        private var pendingFocusTapSelectionRange: NSRange?
+#endif
 
         init(
             formattingController: TextFormattingController,
@@ -2120,6 +2328,24 @@ private struct SelectableTextView: UIViewRepresentable {
             checklistTapRecognizer = recognizer
         }
 
+        func installTextPlacementTapRecognizer(on textView: UITextView) {
+#if targetEnvironment(macCatalyst)
+            if textPlacementTapRecognizer?.view === textView {
+                return
+            }
+
+            if let previous = textPlacementTapRecognizer {
+                previous.view?.removeGestureRecognizer(previous)
+            }
+
+            let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTextPlacementTap(_:)))
+            recognizer.cancelsTouchesInView = false
+            recognizer.delegate = self
+            textView.addGestureRecognizer(recognizer)
+            textPlacementTapRecognizer = recognizer
+#endif
+        }
+
         @objc
         private func handleChecklistTap(_ recognizer: UITapGestureRecognizer) {
             guard recognizer.state == .ended,
@@ -2155,6 +2381,38 @@ private struct SelectableTextView: UIViewRepresentable {
             reportUndoManagerChanged(textView.undoManager)
         }
 
+#if targetEnvironment(macCatalyst)
+        @objc
+        private func handleTextPlacementTap(_ recognizer: UITapGestureRecognizer) {
+            guard recognizer.state == .ended,
+                  let textView = textView,
+                  !textView.isFirstResponder else { return }
+
+            let location = recognizer.location(in: textView)
+            let gutterAdjustedX = location.x - textView.textContainerInset.left
+            if gutterAdjustedX >= 0, gutterAdjustedX <= ChecklistItemEditor.gutterTapWidth {
+                return
+            }
+
+            guard let position = textView.closestPosition(to: location) else { return }
+            let characterOffset = textView.offset(from: textView.beginningOfDocument, to: position)
+            let textLength = (textView.text as NSString).length
+            let cursorRange = NSRange(location: min(max(characterOffset, 0), textLength), length: 0)
+
+            pendingFocusTapSelectionRange = cursorRange
+            isHandlingUserFocusChange = true
+            textView.becomeFirstResponder()
+            restoreSelectionWithoutScrolling(cursorRange, in: textView)
+            lastKnownSelectionRange = cursorRange
+            reportFormattingState(from: textView)
+
+            RunLoop.main.perform { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.applyPendingFocusTapSelection(in: textView)
+            }
+        }
+#endif
+
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
@@ -2175,13 +2433,24 @@ private struct SelectableTextView: UIViewRepresentable {
             reportFormattingState(from: textView)
         }
 
+        func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
+            isHandlingUserFocusChange = true
+            return true
+        }
+
         func textViewDidBeginEditing(_ textView: UITextView) {
             lastKnownSelectionRange = safeSelectedRange(in: textView)
+            RunLoop.main.perform { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.applyPendingFocusTapSelection(in: textView)
+                self.reportFormattingState(from: textView)
+            }
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
+            isHandlingUserFocusChange = false
             syncContent(from: textView)
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
@@ -2192,7 +2461,11 @@ private struct SelectableTextView: UIViewRepresentable {
             editMenuForTextIn range: NSRange,
             suggestedActions: [UIMenuElement]
         ) -> UIMenu? {
+#if targetEnvironment(macCatalyst)
+            return UIMenu(children: suggestedActions)
+#else
             UIMenu(children: [])
+#endif
         }
 
         func hasPendingFormattingMutation(
@@ -2273,7 +2546,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 var typingAttributes = textView.typingAttributes
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
                 typingAttributes[.font] = adjustedFontSize(from: baseFont, delta: delta)
                 textView.typingAttributes = typingAttributes
                 reportFormattingState(from: textView)
@@ -2284,7 +2557,7 @@ private struct SelectableTextView: UIViewRepresentable {
             mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
                 let baseFont = (value as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
                 mutable.addAttribute(
                     .font,
                     value: adjustedFontSize(from: baseFont, delta: delta),
@@ -2315,15 +2588,60 @@ private struct SelectableTextView: UIViewRepresentable {
             }
 
             textView.textStorage.beginEditing()
+            let previousText = NSAttributedString(attributedString: textView.attributedText)
+            let previousSelection = textView.selectedRange
             textView.textStorage.addAttribute(.foregroundColor, value: resolvedColor, range: selectedRange)
             syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: resolvedColor)
             textView.textStorage.endEditing()
 
-            textView.selectedRange = selectedRange
+            restoreSelectionWithoutScrolling(selectedRange, in: textView)
             lastKnownSelectionRange = selectedRange
             textView.becomeFirstResponder()
             syncContent(from: textView)
+            registerFormattingUndo(in: textView, previousText: previousText, previousSelection: previousSelection)
             reportFormattingState(from: textView)
+        }
+
+        private func registerFormattingUndo(
+            in textView: UITextView,
+            previousText: NSAttributedString,
+            previousSelection: NSRange
+        ) {
+            guard let undoManager = textView.undoManager else { return }
+            let currentText = NSAttributedString(attributedString: textView.attributedText)
+            let currentSelection = textView.selectedRange
+
+            undoManager.registerUndo(withTarget: self) { target in
+                target.restoreFormattingUndoState(
+                    in: textView,
+                    previousText: currentText,
+                    previousSelection: currentSelection,
+                    restoredText: previousText,
+                    restoredSelection: previousSelection
+                )
+            }
+            undoManager.setActionName("Format")
+        }
+
+        private func restoreFormattingUndoState(
+            in textView: UITextView,
+            previousText: NSAttributedString,
+            previousSelection: NSRange,
+            restoredText: NSAttributedString,
+            restoredSelection: NSRange
+        ) {
+            applyAttributedText(
+                restoredText,
+                in: textView,
+                selectedRange: restoredSelection,
+                registersUndo: false
+            )
+            registerFormattingUndo(
+                in: textView,
+                previousText: previousText,
+                previousSelection: previousSelection
+            )
+            reportUndoManagerChanged(textView.undoManager)
         }
 
         func normalizeTypingAttributes(in textView: UITextView) {
@@ -2422,7 +2740,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let desiredAttributedText = RichTextContentCodec.decode(
                 richTextData: richTextContentData,
                 plainText: plainText,
-                baseFont: textView.font ?? .preferredFont(forTextStyle: .body)
+                baseFont: textView.font ?? defaultEditorTextFont
             )
             let normalizedAttributedText = RichTextContentCodec.normalizedForDisplay(
                 desiredAttributedText,
@@ -2438,7 +2756,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let clampedLocation = min(max(selectedRange.location, 0), newLength)
             let clampedLength = min(selectedRange.length, max(newLength - clampedLocation, 0))
             let restoredRange = NSRange(location: clampedLocation, length: clampedLength)
-            textView.selectedRange = restoredRange
+            restoreSelectionWithoutScrolling(restoredRange, in: textView)
             lastKnownSelectionRange = restoredRange
             reportFormattingState(from: textView)
         }
@@ -2514,7 +2832,7 @@ private struct SelectableTextView: UIViewRepresentable {
             if cachedRange.length > 0,
                cachedRange.location != NSNotFound,
                NSMaxRange(cachedRange) <= fullText.length {
-                textView.selectedRange = cachedRange
+                restoreSelectionWithoutScrolling(cachedRange, in: textView)
                 return fullText.substring(with: cachedRange)
             }
 
@@ -2551,7 +2869,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func defaultTextAttributes(for textView: UITextView) -> [NSAttributedString.Key: Any] {
             [
-                .font: textView.font ?? .preferredFont(forTextStyle: .body),
+                .font: textView.font ?? defaultEditorTextFont,
                 .foregroundColor: defaultTextColor,
                 .paragraphStyle: ChecklistItemEditor.bodyParagraphStyle(
                     hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
@@ -2577,13 +2895,13 @@ private struct SelectableTextView: UIViewRepresentable {
             if range.length == 0 {
                 return (textView.typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
             }
             if range.location < textView.attributedText.length,
                let font = textView.attributedText.attribute(.font, at: range.location, effectiveRange: nil) as? UIFont {
                 return font
             }
-            return textView.font ?? .preferredFont(forTextStyle: .body)
+            return textView.font ?? defaultEditorTextFont
         }
 
         private func selectedForegroundColor(in textView: UITextView, range: NSRange) -> UIColor? {
@@ -2604,13 +2922,13 @@ private struct SelectableTextView: UIViewRepresentable {
             if range.length == 0 {
                 let font = (textView.typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
                 return font.fontDescriptor.symbolicTraits.contains(trait)
             }
 
             var hasAll = true
             textView.attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
-                let font = value as? UIFont ?? .preferredFont(forTextStyle: .body)
+                let font = value as? UIFont ?? defaultEditorTextFont
                 if !font.fontDescriptor.symbolicTraits.contains(trait) {
                     hasAll = false
                     stop.pointee = true
@@ -2645,7 +2963,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 var typingAttributes = textView.typingAttributes
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
                 let shouldApply = !baseFont.fontDescriptor.symbolicTraits.contains(trait)
                 typingAttributes[.font] = fontBySettingTrait(
                     on: baseFont,
@@ -2662,7 +2980,7 @@ private struct SelectableTextView: UIViewRepresentable {
             mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
                 let baseFont = (value as? UIFont)
                     ?? textView.font
-                    ?? .preferredFont(forTextStyle: .body)
+                    ?? defaultEditorTextFont
                 mutable.addAttribute(
                     .font,
                     value: fontBySettingTrait(
@@ -2683,7 +3001,7 @@ private struct SelectableTextView: UIViewRepresentable {
         ) -> Bool {
             var hasTraitMissing = false
             attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
-                let font = value as? UIFont ?? .preferredFont(forTextStyle: .body)
+                let font = value as? UIFont ?? defaultEditorTextFont
                 if !font.fontDescriptor.symbolicTraits.contains(trait) {
                     hasTraitMissing = true
                     stop.pointee = true
@@ -2893,15 +3211,18 @@ private struct SelectableTextView: UIViewRepresentable {
             _ attributedText: NSAttributedString,
             in textView: UITextView,
             selectedRange: NSRange,
-            animated: Bool = false
+            animated: Bool = false,
+            registersUndo: Bool = true
         ) {
+            let previousText = NSAttributedString(attributedString: textView.attributedText)
+            let previousSelection = textView.selectedRange
             let styledText = NSMutableAttributedString(attributedString: attributedText)
             _ = ChecklistItemEditor.applyEditorRendering(in: styledText)
             let previousTypingAttributes = textView.typingAttributes
 
             let applyUpdates = {
                 textView.attributedText = styledText
-                textView.selectedRange = selectedRange
+                self.restoreSelectionWithoutScrolling(selectedRange, in: textView)
                 if selectedRange.length == 0 {
                     textView.typingAttributes = previousTypingAttributes
                 }
@@ -2922,6 +3243,13 @@ private struct SelectableTextView: UIViewRepresentable {
 
             lastKnownSelectionRange = selectedRange
             syncContent(from: textView)
+            if registersUndo {
+                registerFormattingUndo(
+                    in: textView,
+                    previousText: previousText,
+                    previousSelection: previousSelection
+                )
+            }
             reportFormattingState(from: textView)
         }
 
@@ -2939,7 +3267,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let safeLocation = min(selectedRange.location, newLength)
             let safeLength = min(selectedRange.length, newLength - safeLocation)
             let safeRange = NSRange(location: safeLocation, length: safeLength)
-            textView.selectedRange = safeRange
+            restoreSelectionWithoutScrolling(safeRange, in: textView)
             lastKnownSelectionRange = safeRange
         }
 
@@ -2985,7 +3313,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let fullLength = (textView.text as NSString).length
             let cachedRange = lastKnownSelectionRange
             if cachedRange.length > 0, cachedRange.location + cachedRange.length <= fullLength {
-                textView.selectedRange = cachedRange
+                restoreSelectionWithoutScrolling(cachedRange, in: textView)
                 return cachedRange
             }
 
@@ -2999,6 +3327,24 @@ private struct SelectableTextView: UIViewRepresentable {
             }
         }
 
+        private func applyPendingFocusTapSelection(in textView: UITextView) {
+#if targetEnvironment(macCatalyst)
+            if let pendingFocusTapSelectionRange {
+                let textLength = (textView.text as NSString).length
+                let location = min(max(pendingFocusTapSelectionRange.location, 0), textLength)
+                let range = NSRange(location: location, length: 0)
+                restoreSelectionWithoutScrolling(range, in: textView)
+                lastKnownSelectionRange = range
+                self.pendingFocusTapSelectionRange = nil
+                isHandlingUserFocusChange = false
+                return
+            }
+#endif
+
+            isHandlingUserFocusChange = false
+            updateLastKnownSelectionRange(from: textView)
+        }
+
         private func safeSelectedRange(in textView: UITextView) -> NSRange {
             let textLength = (textView.text as NSString).length
             let selectedRange = textView.selectedRange
@@ -3009,6 +3355,16 @@ private struct SelectableTextView: UIViewRepresentable {
             let safeLocation = min(max(selectedRange.location, 0), textLength)
             let safeLength = min(selectedRange.length, max(textLength - safeLocation, 0))
             return NSRange(location: safeLocation, length: safeLength)
+        }
+
+        private func restoreSelectionWithoutScrolling(_ range: NSRange, in textView: UITextView) {
+#if targetEnvironment(macCatalyst)
+            let previousOffset = textView.contentOffset
+            textView.selectedRange = range
+            textView.setContentOffset(previousOffset, animated: false)
+#else
+            textView.selectedRange = range
+#endif
         }
     }
 }
