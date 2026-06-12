@@ -682,7 +682,7 @@ struct NotesListView: View {
                     noteRowContent(note)
 #if targetEnvironment(macCatalyst)
                         .contextMenu {
-                            noteContextMenuButtons(for: .bulk)
+                            noteContextMenuButtons(for: desktopNoteActionContext(for: note))
                         }
 #else
                         .highPriorityGesture(
@@ -696,7 +696,7 @@ struct NotesListView: View {
                     noteRowContent(note)
 #if targetEnvironment(macCatalyst)
                         .contextMenu {
-                            noteContextMenuButtons(for: .single(note))
+                            noteContextMenuButtons(for: desktopNoteActionContext(for: note))
                         }
 #else
                         .highPriorityGesture(noteLongPressGesture(for: note))
@@ -712,7 +712,7 @@ struct NotesListView: View {
                 .buttonStyle(.plain)
 #if targetEnvironment(macCatalyst)
                 .contextMenu {
-                    noteContextMenuButtons(for: .single(note))
+                    noteContextMenuButtons(for: desktopNoteActionContext(for: note))
                 }
 #else
                 .highPriorityGesture(noteLongPressGesture(for: note))
@@ -776,6 +776,13 @@ struct NotesListView: View {
         Button(deleteActionTitle(for: context), role: .destructive) {
             performDeleteAction(for: context)
         }
+    }
+
+    private func desktopNoteActionContext(for note: Note) -> NoteActionDialogContext {
+        if selectedNoteIDs.contains(note.id), !selectedNotes.isEmpty {
+            return .bulk
+        }
+        return .single(note)
     }
 
     @ViewBuilder
