@@ -36,6 +36,7 @@ struct NotesListView: View {
     @AppStorage("mainListTitle") private var mainListTitle = "My Notes"
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
+    @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
     
     init(context: ModelContext) {
         _vm = StateObject(wrappedValue: NotesViewModel(context: context))
@@ -255,6 +256,14 @@ struct NotesListView: View {
         EditorChromeStyle(rawValue: editorChromeStyleRaw) ?? .standard
     }
 
+    private var pinnedHighlightColor: PinnedHighlightColor {
+        PinnedHighlightColor(rawValue: pinnedHighlightColorRaw) ?? .yellow
+    }
+
+    private var pinnedHighlightText: Color {
+        PinnedHighlightPalette.text(for: pinnedHighlightColor)
+    }
+
     private var notesListTopBar: some View {
         GeometryReader { proxy in
             let layout = topBarActionLayout(totalWidth: proxy.size.width)
@@ -291,6 +300,12 @@ struct NotesListView: View {
                         Picker("Style", selection: $editorChromeStyleRaw) {
                             ForEach(EditorChromeStyle.allCases) { style in
                                 Text(style.title).tag(style.rawValue)
+                            }
+                        }
+
+                        Picker("Pinned Color", selection: $pinnedHighlightColorRaw) {
+                            ForEach(PinnedHighlightColor.allCases) { color in
+                                Text(color.title).tag(color.rawValue)
                             }
                         }
                     }
@@ -541,11 +556,12 @@ struct NotesListView: View {
                     .foregroundStyle(.tertiary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            .modifier(ChromeListRowSurface(style: editorChromeStyle))
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .listRowSeparatorTint(.secondary.opacity(0.35))
-        .listRowBackground(editorChromeStyle.listRowBackgroundColor)
+        .listRowBackground(Color.clear)
         .contextMenu {
             Button("Rename") {
                 folderAwaitingRename = folder
@@ -586,7 +602,7 @@ struct NotesListView: View {
         }
         .tag(note.id)
         .listRowSeparatorTint(.secondary.opacity(0.3))
-        .listRowBackground(editorChromeStyle.listRowBackgroundColor)
+        .listRowBackground(Color.clear)
     }
 
     private func noteRowContent(_ note: Note) -> some View {
@@ -600,11 +616,10 @@ struct NotesListView: View {
                     Text(pinnedThoughtPreview)
                         .lineLimit(1)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(PinnedHighlightPalette.text)
+                        .foregroundStyle(pinnedHighlightText)
                         .padding(.horizontal, 8)
                         .padding(.vertical, 4)
-                        .background(PinnedHighlightPalette.highlight)
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .modifier(ChromeListPinnedPreview(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
                 }
                 let contentPreview = noteContentPreviewText(for: note)
                 if !contentPreview.isEmpty {
@@ -624,6 +639,7 @@ struct NotesListView: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .modifier(ChromeListRowSurface(style: editorChromeStyle))
         .contentShape(Rectangle())
     }
 
@@ -848,8 +864,66 @@ private struct SharePayload: Identifiable {
     let urls: [URL]
 }
 
+private struct ChromeListRowSurface: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+
+    func body(content: Content) -> some View {
+        content
+            .padding(EdgeInsets(top: 10, leading: 10, bottom: 10, trailing: 10))
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(rowFillColor)
+            }
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(chromeAccentPinnedStrokeColor(for: colorScheme), lineWidth: 0.85)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
+
+    private var rowFillColor: Color {
+        if style.isChromeAccent {
+            return chromeAccentRowFillColor(for: colorScheme)
+        }
+        return style.listRowBackgroundColor
+    }
+}
+
+private struct ChromeListPinnedPreview: ViewModifier {
+    @Environment(\.colorScheme) private var colorScheme
+    let style: EditorChromeStyle
+    let pinnedColor: PinnedHighlightColor
+
+    func body(content: Content) -> some View {
+        content
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(PinnedHighlightPalette.highlight(for: pinnedColor))
+                    .overlay {
+                        if style.isChromeAccent {
+                            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                                .fill(chromeAccentPinnedShineGradient(for: colorScheme))
+                                .blendMode(.screen)
+                        }
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                }
+            .overlay {
+                if style.isChromeAccent {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(chromeAccentPinnedStrokeColor(for: colorScheme), lineWidth: 0.8)
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+    }
+}
+
 private struct NoteContextPreview: View {
     @Environment(\.colorScheme) private var colorScheme
+    @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
     let note: Note
 
     var body: some View {
@@ -863,13 +937,13 @@ private struct NoteContextPreview: View {
             if !pinnedThoughtPreview.isEmpty {
                 Text(pinnedThoughtPreview)
                     .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(PinnedHighlightPalette.text)
+                    .foregroundStyle(PinnedHighlightPalette.text(for: pinnedHighlightColor))
                     .lineLimit(3)
                     .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 5)
-                    .background(PinnedHighlightPalette.highlight)
+                    .background(PinnedHighlightPalette.highlight(for: pinnedHighlightColor))
                     .clipShape(RoundedRectangle(cornerRadius: 6))
             }
             let contentPreview = noteContentPreviewText(for: note)
@@ -890,6 +964,10 @@ private struct NoteContextPreview: View {
 
     private var notePreviewContentTextColor: Color {
         colorScheme == .dark ? .primary : .secondary
+    }
+
+    private var pinnedHighlightColor: PinnedHighlightColor {
+        PinnedHighlightColor(rawValue: pinnedHighlightColorRaw) ?? .yellow
     }
 }
 
@@ -951,6 +1029,12 @@ private struct NoteActionSheetOverlay: View {
     private var deleteTitle: String {
         selectedCount > 1 ? "Delete \(selectedCount) Selected" : "Delete"
     }
+}
+
+private func chromeAccentRowFillColor(for colorScheme: ColorScheme) -> Color {
+    colorScheme == .dark
+        ? Color(red: 0.20, green: 0.21, blue: 0.24).opacity(0.88)
+        : Color(red: 0.97, green: 0.97, blue: 0.98).opacity(0.96)
 }
 
 private struct NoteActionSheetRow: View {
