@@ -295,6 +295,17 @@ struct NotesListView: View {
                 row(for: item)
             }
         }
+#if targetEnvironment(macCatalyst)
+        .contextMenu(forSelectionType: UUID.self) { noteIDs in
+            desktopNoteContextMenuButtons(for: noteIDs)
+        } primaryAction: { noteIDs in
+            if noteIDs.count == 1,
+               let noteID = noteIDs.first,
+               let note = note(for: noteID) {
+                handleNotePrimaryAction(note)
+            }
+        }
+#endif
         .listStyle(.insetGrouped)
         .environment(\.editMode, $editMode)
         .scrollContentBackground(editorChromeStyle.isWarmPaper ? .hidden : .automatic)
@@ -676,52 +687,40 @@ struct NotesListView: View {
     }
 
     private func noteRow(_ note: Note) -> some View {
+#if targetEnvironment(macCatalyst)
+        noteRowContent(note)
+            .tag(note.id)
+            .listRowSeparatorTint(.secondary.opacity(0.3))
+            .listRowBackground(Color.clear)
+#else
         Group {
             if editMode.isEditing {
                 if isBulkNoteActionTarget(note) {
                     noteRowContent(note)
-#if targetEnvironment(macCatalyst)
-                        .contextMenu {
-                            noteContextMenuButtons(for: desktopNoteActionContext(for: note))
-                        }
-#else
                         .highPriorityGesture(
                             LongPressGesture(minimumDuration: 0.35)
                                 .onEnded { _ in
                                     handleBulkNoteLongPress(note)
                                 }
                         )
-#endif
                 } else {
                     noteRowContent(note)
-#if targetEnvironment(macCatalyst)
-                        .contextMenu {
-                            noteContextMenuButtons(for: desktopNoteActionContext(for: note))
-                        }
-#else
                         .highPriorityGesture(noteLongPressGesture(for: note))
-#endif
                 }
             } else {
                 Button {
-                    vm.selectNote(note)
-                    selectedNote = note
+                    handleNotePrimaryAction(note)
                 } label: {
                     noteRowContent(note)
                 }
                 .buttonStyle(.plain)
-#if targetEnvironment(macCatalyst)
-                .contextMenu {
-                    noteContextMenuButtons(for: desktopNoteActionContext(for: note))
-                }
-#else
                 .highPriorityGesture(noteLongPressGesture(for: note))
-#endif
             }
         }
         .tag(note.id)
         .listRowSeparatorTint(.secondary.opacity(0.3))
         .listRowBackground(Color.clear)
+#endif
     }
 
     private func noteRowContent(_ note: Note) -> some View {
@@ -786,6 +785,31 @@ struct NotesListView: View {
     }
 
     @ViewBuilder
+    private func desktopNoteContextMenuButtons(for noteIDs: Set<UUID>) -> some View {
+        let notes = notes(for: noteIDs)
+        if notes.count == 1, let note = notes.first {
+            noteContextMenuButtons(for: desktopNoteActionContext(for: note))
+        } else if !notes.isEmpty {
+            Button(desktopBulkPinActionTitle(for: notes)) {
+                selectedNoteIDs = Set(notes.map(\.id))
+                setPinnedStateForSelectedNotes(isPinned: shouldPinSelectedNotes)
+            }
+            Button("Move \(notes.count) to Folder") {
+                selectedNoteIDs = Set(notes.map(\.id))
+                bulkNoteMoveRequest = BulkNoteMoveRequest(notes: selectedNotes)
+            }
+            Button("Export \(notes.count) Selected") {
+                selectedNoteIDs = Set(notes.map(\.id))
+                exportSelectedNotes()
+            }
+            Button("Delete \(notes.count) Selected", role: .destructive) {
+                selectedNoteIDs = Set(notes.map(\.id))
+                deleteSelectedNotes()
+            }
+        }
+    }
+
+    @ViewBuilder
     private func noteActionButtons(for context: NoteActionDialogContext) -> some View {
         switch context {
         case .single(let note):
@@ -822,8 +846,22 @@ struct NotesListView: View {
         vm.notes.filter { selectedNoteIDs.contains($0.id) }
     }
 
+    private func note(for noteID: UUID) -> Note? {
+        vm.notes.first { $0.id == noteID }
+    }
+
+    private func notes(for noteIDs: Set<UUID>) -> [Note] {
+        vm.notes.filter { noteIDs.contains($0.id) }
+    }
+
     private var shouldPinSelectedNotes: Bool {
         selectedNotes.contains { ($0.isPinned ?? false) == false }
+    }
+
+    private func desktopBulkPinActionTitle(for notes: [Note]) -> String {
+        notes.contains { ($0.isPinned ?? false) == false }
+            ? "Pin \(notes.count) Selected"
+            : "Unpin \(notes.count) Selected"
     }
 
     private var bulkPinActionTitleWithCount: String {
@@ -977,6 +1015,16 @@ struct NotesListView: View {
             vm.deleteNote(selectedNote)
         }
         selectedNoteIDs.removeAll()
+    }
+
+    private func handleNotePrimaryAction(_ note: Note) {
+        if editMode.isEditing {
+            toggleSelection(for: note.id)
+            return
+        }
+
+        vm.selectNote(note)
+        selectedNote = note
     }
 
     private func toggleSelection(for noteID: UUID) {
