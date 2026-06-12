@@ -9,7 +9,8 @@ struct NotesListView: View {
     private let topBarIconSize: CGFloat = 20
     private let topBarHeight: CGFloat = 44
 #if targetEnvironment(macCatalyst)
-    private let desktopSidebarMinimumWidth: CGFloat = 280
+    private let desktopSidebarCollapsedThreshold: CGFloat = 120
+    private let desktopSidebarMinimumExpandedWidth: CGFloat = 220
     private let desktopSidebarMaximumWidth: CGFloat = 520
     private let desktopSidebarResizeHandleWidth: CGFloat = 10
 #endif
@@ -314,7 +315,10 @@ struct NotesListView: View {
     }
 
     private func clampedDesktopSidebarWidth(_ width: CGFloat) -> CGFloat {
-        min(max(width, desktopSidebarMinimumWidth), desktopSidebarMaximumWidth)
+        if width < desktopSidebarCollapsedThreshold {
+            return 0
+        }
+        return min(max(width, desktopSidebarMinimumExpandedWidth), desktopSidebarMaximumWidth)
     }
 #endif
 

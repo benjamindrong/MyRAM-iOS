@@ -2062,7 +2062,11 @@ private struct SelectableTextView: UIViewRepresentable {
         ]
         textView.textContainerInset = ChecklistItemEditor.textContainerInsets(hasChecklistItems: false)
         textView.keyboardDismissMode = .interactive
+#if targetEnvironment(macCatalyst)
+        textView.alwaysBounceVertical = false
+#else
         textView.alwaysBounceVertical = true
+#endif
         return textView
     }
 
@@ -2683,7 +2687,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let clampedLocation = min(max(selectedRange.location, 0), newLength)
             let clampedLength = min(selectedRange.length, max(newLength - clampedLocation, 0))
             let restoredRange = NSRange(location: clampedLocation, length: clampedLength)
-            textView.selectedRange = restoredRange
+            restoreSelectionWithoutScrolling(restoredRange, in: textView)
             lastKnownSelectionRange = restoredRange
             reportFormattingState(from: textView)
         }
@@ -3149,7 +3153,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
             let applyUpdates = {
                 textView.attributedText = styledText
-                textView.selectedRange = selectedRange
+                self.restoreSelectionWithoutScrolling(selectedRange, in: textView)
                 if selectedRange.length == 0 {
                     textView.typingAttributes = previousTypingAttributes
                 }
@@ -3194,7 +3198,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let safeLocation = min(selectedRange.location, newLength)
             let safeLength = min(selectedRange.length, newLength - safeLocation)
             let safeRange = NSRange(location: safeLocation, length: safeLength)
-            textView.selectedRange = safeRange
+            restoreSelectionWithoutScrolling(safeRange, in: textView)
             lastKnownSelectionRange = safeRange
         }
 
@@ -3240,7 +3244,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let fullLength = (textView.text as NSString).length
             let cachedRange = lastKnownSelectionRange
             if cachedRange.length > 0, cachedRange.location + cachedRange.length <= fullLength {
-                textView.selectedRange = cachedRange
+                restoreSelectionWithoutScrolling(cachedRange, in: textView)
                 return cachedRange
             }
 
@@ -3264,6 +3268,16 @@ private struct SelectableTextView: UIViewRepresentable {
             let safeLocation = min(max(selectedRange.location, 0), textLength)
             let safeLength = min(selectedRange.length, max(textLength - safeLocation, 0))
             return NSRange(location: safeLocation, length: safeLength)
+        }
+
+        private func restoreSelectionWithoutScrolling(_ range: NSRange, in textView: UITextView) {
+#if targetEnvironment(macCatalyst)
+            let previousOffset = textView.contentOffset
+            textView.selectedRange = range
+            textView.setContentOffset(previousOffset, animated: false)
+#else
+            textView.selectedRange = range
+#endif
         }
     }
 }
