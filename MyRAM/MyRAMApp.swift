@@ -6,9 +6,12 @@ import UIKit
 struct MyRAMApp: App {
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
+    @StateObject private var notesState: NotesListState
     private let isUITestMode = ProcessInfo.processInfo.arguments.contains("UITEST_MODE")
 
     init() {
+        _notesState = StateObject(wrappedValue: NotesListState(context: PersistenceManager.shared.context))
+
         if let forcedAppearance = ProcessInfo.processInfo.environment["UITEST_FORCE_APPEARANCE"],
            AppearanceSetting(rawValue: forcedAppearance) != nil {
             UserDefaults.standard.set(forcedAppearance, forKey: "appearanceSetting")
@@ -17,7 +20,7 @@ struct MyRAMApp: App {
 
     var body: some Scene {
         WindowGroup {
-            NotesListView(context: PersistenceManager.shared.context)
+            NotesListView(state: notesState)
                 .preferredColorScheme(editorChromeStyle.colorSchemeOverride ?? appearanceSetting.colorScheme)
                 .tint(editorChromeStyle.appTintColor)
                 .overlay(alignment: .topLeading) {

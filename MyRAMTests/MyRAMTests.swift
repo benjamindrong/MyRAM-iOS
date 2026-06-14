@@ -68,6 +68,57 @@ final class MyRAMTests: XCTestCase {
         }
     }
 
+    func testNoteSyncPayloadRoundTripsNoteFields() throws {
+        let noteID = UUID()
+        let folderID = UUID()
+        let note = Note(title: "Plan", content: "Ship nearby sync")
+        let folder = Folder(name: "Projects")
+        folder.id = folderID
+        note.id = noteID
+        note.folder = folder
+        note.richTextContentData = Data("rich".utf8)
+        note.isPinned = true
+        note.deletedAt = Date(timeIntervalSince1970: 300)
+
+        let data = try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: note))
+        let decoded = try MyRAMSyncPayloadCoding.decodeNote(from: data)
+
+        XCTAssertEqual(decoded.kind, .note)
+        XCTAssertEqual(decoded.id, noteID)
+        XCTAssertEqual(decoded.title, "Plan")
+        XCTAssertEqual(decoded.content, "Ship nearby sync")
+        XCTAssertEqual(decoded.richTextContentData, Data("rich".utf8))
+        XCTAssertEqual(decoded.isPinned, true)
+        XCTAssertEqual(decoded.deletedAt, note.deletedAt)
+        XCTAssertEqual(decoded.folderID, folderID)
+    }
+
+    func testFolderAndPinnedPayloadsMapToCollectionAndMarkerChanges() async throws {
+        let store = InMemorySyncStore()
+        let engine = SyncEngine(deviceID: "device-a", store: store)
+        let folder = Folder(name: "Archive")
+        let note = Note(title: "Pinned host")
+        let thought = PinnedThought(text: "Remember this", order: 2, note: note)
+
+        _ = await engine.recordLocalChange(
+            entityType: .collection,
+            entityID: folder.id.uuidString,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMFolderSyncPayload(folder: folder)),
+            updatedAt: folder.modifiedAt
+        )
+        _ = await engine.recordLocalChange(
+            entityType: .marker,
+            entityID: thought.id.uuidString,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: thought)),
+            updatedAt: thought.modifiedAt
+        )
+
+        let envelope = try XCTUnwrap(await engine.nextEnvelope())
+
+        XCTAssertEqual(envelope.changes.map(\.entityType), [.collection, .marker])
+        XCTAssertEqual(await engine.pendingChangeCount(), 2)
+    }
+
     func testWarmPaperAppearanceUsesIconPalette() {
         XCTAssertFalse(AppearanceSetting.allCases.map(\.title).contains("Warm Paper"))
         XCTAssertFalse(EditorChromeStyle.allCases.map(\.title).contains("Standard"))

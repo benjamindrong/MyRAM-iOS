@@ -8,13 +8,16 @@ final class NotesViewModel: ObservableObject {
     @Published var folders: [Folder] = []
     @Published var currentNote: Note? = nil
     @Published var currentFolder: Folder? = nil
+    @Published private(set) var activeNoteSyncRevision = 0
     @Published private(set) var hasUndoableAction = false
     @Published private(set) var hasRedoableAction = false
     
     private static let recentlyDeletedRetention: TimeInterval = 7 * 24 * 60 * 60
     private let context: ModelContext
+    private let syncController: MyRAMSyncController?
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
+    private var isApplyingRemoteSyncChange = false
     private var undoStack: [UndoAction] = [] {
         didSet {
             hasUndoableAction = !undoStack.isEmpty
@@ -26,8 +29,12 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    init(context: ModelContext) {
+    init(context: ModelContext, syncController: MyRAMSyncController? = nil) {
         self.context = context
+        self.syncController = syncController
+        self.syncController?.onChangesReceived = { [weak self] changes in
+            await self?.applyIncomingSyncChanges(changes)
+        }
         purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
@@ -133,6 +140,10 @@ final class NotesViewModel: ObservableObject {
         context.insert(note)
         currentFolder?.modifiedAt = .now
         try? context.save()
+        recordNoteSyncChange(note)
+        if let currentFolder {
+            recordFolderSyncChange(currentFolder)
+        }
         recordUndoAction(.noteCreation(NoteCreationUndoSnapshot(
             noteID: note.id,
             folderID: note.folder?.id
@@ -151,6 +162,10 @@ final class NotesViewModel: ObservableObject {
         currentFolder?.modifiedAt = .now
         context.insert(folder)
         try? context.save()
+        recordFolderSyncChange(folder)
+        if let currentFolder {
+            recordFolderSyncChange(currentFolder)
+        }
         recordUndoAction(.folderCreation(FolderCreationUndoSnapshot(
             folderID: folder.id,
             name: folder.name,
@@ -167,6 +182,7 @@ final class NotesViewModel: ObservableObject {
         folder.name = trimmedName
         folder.modifiedAt = .now
         try? context.save()
+        recordFolderSyncChange(folder)
         refreshCurrentFolderContent()
     }
 
@@ -176,6 +192,10 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        recordNoteSyncChange(note)
+        if let folder = note.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -187,6 +207,10 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        recordNoteSyncChange(note)
+        if let folder = note.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -236,6 +260,7 @@ final class NotesViewModel: ObservableObject {
         let targetFolder = shouldNavigateToParent ? folder.parentFolder : currentFolder
         let subtreeFolders = allFoldersInSubtree(of: folder)
         let subtreeFolderIDs = Set(subtreeFolders.map(\.id))
+        let deletedFolderPayloads = subtreeFolders.map { MyRAMFolderSyncPayload(folder: $0, isDeleted: true) }
         let deletedAt = Date()
         let folderSnapshot = buildFolderDeletionSnapshot(
             for: subtreeFolders,
@@ -262,6 +287,13 @@ final class NotesViewModel: ObservableObject {
 
         context.delete(folder)
         try? context.save()
+        for noteMove in folderSnapshot.noteMoves {
+            guard let note = fetchNote(withID: noteMove.noteID) else { continue }
+            recordNoteSyncChange(note, operation: note.deletedAt == nil ? .upsert : .delete)
+        }
+        for payload in deletedFolderPayloads {
+            recordFolderSyncDeletion(payload)
+        }
         recordUndoAction(.folderDeletion(folderSnapshot))
 
         currentFolder = targetFolder
@@ -291,6 +323,10 @@ final class NotesViewModel: ObservableObject {
         noteIntelligenceService.recordNoteEdited(note)
     }
 
+    func refreshedNote(withID noteID: UUID) -> Note? {
+        fetchNote(withID: noteID)
+    }
+
     func updateNote(
         _ note: Note,
         title: String,
@@ -304,6 +340,10 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        recordNoteSyncChange(note)
+        if let folder = note.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -317,6 +357,11 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        recordPinnedThoughtSyncChange(thought)
+        recordNoteSyncChange(note)
+        if let folder = note.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
         return thought
     }
@@ -329,6 +374,13 @@ final class NotesViewModel: ObservableObject {
         thought.note?.modifiedAt = .now
         thought.note?.folder?.modifiedAt = .now
         try? context.save()
+        recordPinnedThoughtSyncChange(thought)
+        if let note = thought.note {
+            recordNoteSyncChange(note)
+        }
+        if let folder = thought.note?.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -338,6 +390,10 @@ final class NotesViewModel: ObservableObject {
         thought.modifiedAt = .now
         thought.note?.modifiedAt = .now
         try? context.save()
+        recordPinnedThoughtSyncChange(thought)
+        if let note = thought.note {
+            recordNoteSyncChange(note)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -369,6 +425,13 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        for orderedThought in orderedThoughts {
+            recordPinnedThoughtSyncChange(orderedThought)
+        }
+        recordNoteSyncChange(note)
+        if let folder = note.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -389,6 +452,13 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        for orderedThought in orderedThoughts {
+            recordPinnedThoughtSyncChange(orderedThought)
+        }
+        recordNoteSyncChange(note)
+        if let folder = note.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -413,6 +483,13 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        for orderedThought in orderedThoughts {
+            recordPinnedThoughtSyncChange(orderedThought)
+        }
+        recordNoteSyncChange(note)
+        if let folder = note.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -422,12 +499,20 @@ final class NotesViewModel: ObservableObject {
 
     func deletePinnedParagraph(_ thought: PinnedThought) {
         let note = thought.note
+        let deletionPayload = MyRAMPinnedThoughtSyncPayload(thought: thought, isDeleted: true)
         note?.pinnedThoughts.removeAll { $0.id == thought.id }
         context.delete(thought)
         reorderPinnedThoughts(for: note)
         note?.modifiedAt = .now
         note?.folder?.modifiedAt = .now
         try? context.save()
+        recordPinnedThoughtSyncDeletion(deletionPayload)
+        if let note {
+            recordNoteSyncChange(note)
+        }
+        if let folder = note?.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -479,6 +564,10 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        recordNoteSyncChange(note, operation: .delete)
+        if let folder = note.folder {
+            recordFolderSyncChange(folder)
+        }
         recordUndoAction(.noteDeletion(snapshot))
         refreshCurrentFolderContent()
         if currentNote?.id == note.id {
@@ -498,6 +587,13 @@ final class NotesViewModel: ObservableObject {
         note.folder = destinationFolder
         note.modifiedAt = .now
         try? context.save()
+        recordNoteSyncChange(note)
+        if let previousFolder = previousFolderID.flatMap(fetchFolder(withID:)) {
+            recordFolderSyncChange(previousFolder)
+        }
+        if let destinationFolder {
+            recordFolderSyncChange(destinationFolder)
+        }
         recordUndoAction(.noteMove(NoteMoveUndoSnapshot(
             noteID: note.id,
             sourceFolderID: previousFolderID,
@@ -511,6 +607,10 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        recordNoteSyncChange(note)
+        if let folder = note.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -825,6 +925,207 @@ final class NotesViewModel: ObservableObject {
             }
         )
         return (try? context.fetch(descriptor))?.first
+    }
+
+    private func fetchPinnedThought(withID thoughtID: UUID) -> PinnedThought? {
+        let descriptor = FetchDescriptor<PinnedThought>(
+            predicate: #Predicate { thought in
+                thought.id == thoughtID
+            }
+        )
+        return (try? context.fetch(descriptor))?.first
+    }
+
+    private func recordNoteSyncChange(_ note: Note, operation: SyncOperation = .upsert) {
+        guard !isApplyingRemoteSyncChange,
+              let payload = try? MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: note)) else { return }
+
+        syncController?.recordLocalChange(
+            entityType: .item,
+            entityID: note.id.uuidString,
+            operation: operation,
+            payload: payload,
+            updatedAt: note.modifiedAt
+        )
+    }
+
+    private func recordFolderSyncChange(_ folder: Folder) {
+        guard !isApplyingRemoteSyncChange,
+              let payload = try? MyRAMSyncPayloadCoding.encode(MyRAMFolderSyncPayload(folder: folder)) else { return }
+
+        syncController?.recordLocalChange(
+            entityType: .collection,
+            entityID: folder.id.uuidString,
+            payload: payload,
+            updatedAt: folder.modifiedAt
+        )
+    }
+
+    private func recordFolderSyncDeletion(_ payload: MyRAMFolderSyncPayload) {
+        guard !isApplyingRemoteSyncChange,
+              let data = try? MyRAMSyncPayloadCoding.encode(payload) else { return }
+
+        syncController?.recordLocalChange(
+            entityType: .collection,
+            entityID: payload.id.uuidString,
+            operation: .delete,
+            payload: data,
+            updatedAt: payload.modifiedAt
+        )
+    }
+
+    private func recordPinnedThoughtSyncChange(_ thought: PinnedThought) {
+        guard !isApplyingRemoteSyncChange,
+              let payload = try? MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: thought)) else { return }
+
+        syncController?.recordLocalChange(
+            entityType: .marker,
+            entityID: thought.id.uuidString,
+            payload: payload,
+            updatedAt: thought.modifiedAt
+        )
+    }
+
+    private func recordPinnedThoughtSyncDeletion(_ payload: MyRAMPinnedThoughtSyncPayload) {
+        guard !isApplyingRemoteSyncChange,
+              let data = try? MyRAMSyncPayloadCoding.encode(payload) else { return }
+
+        syncController?.recordLocalChange(
+            entityType: .marker,
+            entityID: payload.id.uuidString,
+            operation: .delete,
+            payload: data,
+            updatedAt: payload.modifiedAt
+        )
+    }
+
+    private func applyIncomingSyncChanges(_ changes: [SyncChange]) async {
+        guard !changes.isEmpty else { return }
+        let activeNoteID = currentNote?.id
+        var shouldRefreshActiveNote = false
+        isApplyingRemoteSyncChange = true
+        defer { isApplyingRemoteSyncChange = false }
+
+        for change in changes {
+            switch change.entityType {
+            case .item:
+                if applyIncomingNoteChange(change, activeNoteID: activeNoteID) {
+                    shouldRefreshActiveNote = true
+                }
+            case .collection:
+                applyIncomingFolderChange(change)
+            case .marker:
+                if applyIncomingPinnedThoughtChange(change, activeNoteID: activeNoteID) {
+                    shouldRefreshActiveNote = true
+                }
+            }
+        }
+
+        try? context.save()
+        refreshCurrentFolderContent()
+        if shouldRefreshActiveNote {
+            activeNoteSyncRevision += 1
+        }
+    }
+
+    private func applyIncomingNoteChange(_ change: SyncChange, activeNoteID: UUID?) -> Bool {
+        guard let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload) else { return false }
+
+        if change.operation == .delete || payload.deletedAt != nil {
+            guard let note = fetchNote(withID: payload.id),
+                  note.modifiedAt <= payload.modifiedAt else { return false }
+            note.deletedAt = payload.deletedAt ?? payload.modifiedAt
+            note.modifiedAt = payload.modifiedAt
+            if currentNote?.id == note.id {
+                currentNote = nil
+                UserDefaults.standard.removeObject(forKey: "lastNoteID")
+            }
+            return activeNoteID == payload.id
+        }
+
+        let note = fetchNote(withID: payload.id) ?? Note(folder: nil)
+        if note.id != payload.id {
+            note.id = payload.id
+            context.insert(note)
+        } else if note.modifiedAt > payload.modifiedAt {
+            return false
+        }
+
+        note.title = payload.title
+        note.content = payload.content
+        note.richTextContentData = payload.richTextContentData
+        note.isPinned = payload.isPinned
+        note.createdAt = payload.createdAt
+        note.modifiedAt = payload.modifiedAt
+        note.deletedAt = payload.deletedAt
+        note.folder = payload.folderID.flatMap(fetchFolder(withID:))
+        return activeNoteID == payload.id
+    }
+
+    private func applyIncomingFolderChange(_ change: SyncChange) {
+        guard let payload = try? MyRAMSyncPayloadCoding.decodeFolder(from: change.payload) else { return }
+
+        if change.operation == .delete || payload.isDeleted {
+            guard let folder = fetchFolder(withID: payload.id),
+                  folder.modifiedAt <= payload.modifiedAt else { return }
+            context.delete(folder)
+            if currentFolder?.id == folder.id {
+                currentFolder = folder.parentFolder
+            }
+            return
+        }
+
+        let folder = fetchFolder(withID: payload.id) ?? Folder(name: payload.name)
+        if folder.id != payload.id {
+            folder.id = payload.id
+            context.insert(folder)
+        } else if folder.modifiedAt > payload.modifiedAt {
+            return
+        }
+
+        folder.name = payload.name
+        folder.createdAt = payload.createdAt
+        folder.modifiedAt = payload.modifiedAt
+        folder.parentFolder = payload.parentFolderID.flatMap(fetchFolder(withID:))
+    }
+
+    private func applyIncomingPinnedThoughtChange(_ change: SyncChange, activeNoteID: UUID?) -> Bool {
+        guard let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) else { return false }
+
+        if change.operation == .delete || payload.isDeleted {
+            guard let thought = fetchPinnedThought(withID: payload.id),
+                  thought.modifiedAt <= payload.modifiedAt else { return false }
+            let note = thought.note
+            note?.pinnedThoughts.removeAll { $0.id == thought.id }
+            context.delete(thought)
+            reorderPinnedThoughts(for: note)
+            return activeNoteID == note?.id
+        }
+
+        let thought = fetchPinnedThought(withID: payload.id) ?? PinnedThought(text: payload.text, order: payload.order)
+        if thought.id != payload.id {
+            thought.id = payload.id
+            context.insert(thought)
+        } else if thought.modifiedAt > payload.modifiedAt {
+            return false
+        }
+
+        let previousNoteID = thought.note?.id
+        let destinationNote = payload.noteID.flatMap(fetchNote(withID:))
+        if previousNoteID != destinationNote?.id {
+            thought.note?.pinnedThoughts.removeAll { $0.id == thought.id }
+        }
+        thought.text = payload.text
+        thought.order = payload.order
+        thought.isCollapsed = payload.isCollapsed
+        thought.createdAt = payload.createdAt
+        thought.modifiedAt = payload.modifiedAt
+        thought.note = destinationNote
+        if let destinationNote,
+           !destinationNote.pinnedThoughts.contains(where: { $0.id == thought.id }) {
+            destinationNote.pinnedThoughts.append(thought)
+        }
+        return activeNoteID == previousNoteID || activeNoteID == destinationNote?.id
     }
 
     private func removeUndoHistoryReferencingDeletedNote(noteID: UUID) {

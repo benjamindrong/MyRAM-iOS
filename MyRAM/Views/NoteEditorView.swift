@@ -55,6 +55,7 @@ struct NoteEditorView: View {
     @State private var redoHistory: [NoteSnapshot] = []
     @State private var lastSnapshot = NoteSnapshot()
     @State private var isApplyingUndo = false
+    @State private var isApplyingRemoteSyncUpdate = false
     @State private var selectedPickerItems: [PhotosPickerItem] = []
     @State private var showingPhotoPicker = false
     @State private var showingFileImporter = false
@@ -209,6 +210,9 @@ struct NoteEditorView: View {
                 configureToolbarBridge()
             }
             .onChange(of: title) { handleEditorChange() }
+            .onChange(of: vm.activeNoteSyncRevision) {
+                reloadNoteFromSync()
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                 isKeyboardVisible = true
             }
@@ -775,6 +779,7 @@ struct NoteEditorView: View {
     }
 
     private func handleEditorChange() {
+        guard !isApplyingRemoteSyncUpdate else { return }
         let currentSnapshot = currentNoteSnapshot()
         guard currentSnapshot != lastSnapshot else {
             refreshUndoState()
@@ -804,6 +809,23 @@ struct NoteEditorView: View {
         content = plainText
         richTextContentData = richTextData
         handleEditorChange()
+    }
+
+    private func reloadNoteFromSync() {
+        guard vm.currentNote?.id == note.id,
+              let refreshedNote = vm.refreshedNote(withID: note.id) else { return }
+        isApplyingRemoteSyncUpdate = true
+        title = refreshedNote.title
+        content = refreshedNote.content
+        richTextContentData = refreshedNote.richTextContentData
+        restoreContentToggleToken += 1
+        editingPinnedThoughtID = nil
+        lastSnapshot = currentNoteSnapshot()
+        toolbarBridge?.title = title.isEmpty ? "Untitled" : title
+        refreshUndoState()
+        DispatchQueue.main.async {
+            isApplyingRemoteSyncUpdate = false
+        }
     }
 
     private func handleFormattingStateChanged(_ state: EditorFormattingState) {
