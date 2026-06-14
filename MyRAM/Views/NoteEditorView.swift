@@ -10,10 +10,12 @@ private let defaultEditorTextFont = UIFont.systemFont(ofSize: 20)
 #else
 private let defaultEditorTextFont = UIFont.preferredFont(forTextStyle: .body)
 #endif
+private let editorCommitDelayNanoseconds: UInt64 = 500_000_000
 
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var vm: NotesViewModel
     let note: Note
     let onNewNote: (Note) -> Void
@@ -76,6 +78,8 @@ struct NoteEditorView: View {
     @State private var reorderItemFrames: [String: CGRect] = [:]
     @State private var keyboardToast: KeyboardToast?
     @State private var keyboardToastTask: Task<Void, Never>?
+    @State private var pendingNoteCommitTask: Task<Void, Never>?
+    @State private var hasPendingNoteCommit = false
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
     
@@ -210,6 +214,14 @@ struct NoteEditorView: View {
                 configureToolbarBridge()
             }
             .onChange(of: title) { handleEditorChange() }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase != .active {
+                    commitPendingNoteEdit()
+                }
+            }
+            .onDisappear {
+                commitPendingNoteEdit()
+            }
             .onChange(of: vm.activeNoteSyncRevision) {
                 reloadNoteFromSync()
             }
@@ -701,6 +713,7 @@ struct NoteEditorView: View {
         switch action {
         case .newNote:
             topBarActionButton(systemImage: "square.and.pencil", identifier: "topbar-new-note") {
+                commitPendingNoteEdit()
                 onNewNote(vm.createNewNote())
             }
         case .newFolder:
@@ -710,6 +723,7 @@ struct NoteEditorView: View {
             }
         case .exportNote:
             topBarActionButton(systemImage: "square.and.arrow.up", identifier: "topbar-export-note") {
+                commitPendingNoteEdit()
                 exportCurrentNote()
             }
         case .attachments:
@@ -778,6 +792,36 @@ struct NoteEditorView: View {
         )
     }
 
+    private func scheduleNoteCommit() {
+        hasPendingNoteCommit = true
+        pendingNoteCommitTask?.cancel()
+        pendingNoteCommitTask = Task {
+            try? await Task.sleep(nanoseconds: editorCommitDelayNanoseconds)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                commitPendingNoteEdit()
+            }
+        }
+    }
+
+    private func cancelPendingNoteCommit() {
+        pendingNoteCommitTask?.cancel()
+        pendingNoteCommitTask = nil
+        hasPendingNoteCommit = false
+    }
+
+    private func commitPendingNoteEdit() {
+        guard hasPendingNoteCommit else { return }
+        cancelPendingNoteCommit()
+        vm.commitNoteEdit(
+            note,
+            title: title,
+            content: content,
+            richTextContentData: richTextContentData
+        )
+        vm.recordNoteEdited(note)
+    }
+
     private func handleEditorChange() {
         guard !isApplyingRemoteSyncUpdate else { return }
         let currentSnapshot = currentNoteSnapshot()
@@ -794,13 +838,7 @@ struct NoteEditorView: View {
             }
         }
         lastSnapshot = currentSnapshot
-        vm.updateNote(
-            note,
-            title: title,
-            content: content,
-            richTextContentData: richTextContentData
-        )
-        vm.recordNoteEdited(note)
+        scheduleNoteCommit()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
     }
@@ -814,6 +852,7 @@ struct NoteEditorView: View {
     private func reloadNoteFromSync() {
         guard vm.currentNote?.id == note.id,
               let refreshedNote = vm.refreshedNote(withID: note.id) else { return }
+        cancelPendingNoteCommit()
         isApplyingRemoteSyncUpdate = true
         title = refreshedNote.title
         content = refreshedNote.content
@@ -921,12 +960,14 @@ struct NoteEditorView: View {
         restoreContentToggleToken += 1
         restorePinnedThoughts(snapshot.pinnedThoughts)
         lastSnapshot = snapshot
-        vm.updateNote(
+        cancelPendingNoteCommit()
+        vm.commitNoteEdit(
             note,
             title: snapshot.title,
             content: snapshot.content,
             richTextContentData: snapshot.richTextContentData
         )
+        vm.recordNoteEdited(note)
     }
 
     private func restorePinnedThoughts(_ snapshots: [PinnedThoughtSnapshot]) {
@@ -3380,13 +3421,9 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func restoreSelectionWithoutScrolling(_ range: NSRange, in textView: UITextView) {
-#if targetEnvironment(macCatalyst)
             let previousOffset = textView.contentOffset
             textView.selectedRange = range
             textView.setContentOffset(previousOffset, animated: false)
-#else
-            textView.selectedRange = range
-#endif
         }
     }
 }

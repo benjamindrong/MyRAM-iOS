@@ -327,7 +327,7 @@ final class NotesViewModel: ObservableObject {
         fetchNote(withID: noteID)
     }
 
-    func updateNote(
+    func commitNoteEdit(
         _ note: Note,
         title: String,
         content: String,
@@ -338,13 +338,8 @@ final class NotesViewModel: ObservableObject {
         note.content = content
         note.richTextContentData = richTextContentData
         note.modifiedAt = .now
-        note.folder?.modifiedAt = .now
         try? context.save()
         recordNoteSyncChange(note)
-        if let folder = note.folder {
-            recordFolderSyncChange(folder)
-        }
-        refreshCurrentFolderContent()
     }
 
     func addPinnedThought(to note: Note, text: String = "") -> PinnedThought? {

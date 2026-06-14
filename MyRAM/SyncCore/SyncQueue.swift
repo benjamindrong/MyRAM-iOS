@@ -7,11 +7,17 @@ public actor SyncQueue {
     public init() {}
 
     public func enqueue(_ change: SyncChange) {
+        if let existingIndex = pendingChanges.firstIndex(where: { $0.syncTarget == change.syncTarget }) {
+            pendingChanges[existingIndex] = change
+            return
+        }
         pendingChanges.append(change)
     }
 
     public func enqueue(_ changes: [SyncChange]) {
-        pendingChanges.append(contentsOf: changes)
+        for change in changes {
+            enqueue(change)
+        }
     }
 
     public func pendingBatch(limit: Int = 100) -> [SyncChange] {
@@ -34,4 +40,15 @@ public actor SyncQueue {
     public func pendingCount() -> Int {
         pendingChanges.count
     }
+}
+
+private extension SyncChange {
+    var syncTarget: SyncTarget {
+        SyncTarget(entityType: entityType, entityID: entityID)
+    }
+}
+
+private struct SyncTarget: Hashable {
+    let entityType: SyncEntityType
+    let entityID: String
 }

@@ -119,6 +119,56 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(await engine.pendingChangeCount(), 2)
     }
 
+    func testPendingSyncChangesCoalesceByEntity() async throws {
+        let store = InMemorySyncStore()
+        let engine = SyncEngine(deviceID: "device-a", store: store)
+        let noteID = UUID().uuidString
+
+        _ = await engine.recordLocalChange(
+            entityType: .item,
+            entityID: noteID,
+            payload: Data("first".utf8),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        _ = await engine.recordLocalChange(
+            entityType: .item,
+            entityID: noteID,
+            payload: Data("second".utf8),
+            updatedAt: Date(timeIntervalSince1970: 101)
+        )
+
+        let envelope = try XCTUnwrap(await engine.nextEnvelope())
+
+        XCTAssertEqual(envelope.changes.count, 1)
+        XCTAssertEqual(envelope.changes.first?.payload, Data("second".utf8))
+        XCTAssertEqual(await engine.pendingChangeCount(), 1)
+    }
+
+    func testPendingSyncChangesKeepDifferentEntities() async throws {
+        let store = InMemorySyncStore()
+        let engine = SyncEngine(deviceID: "device-a", store: store)
+        let noteID = UUID().uuidString
+        let folderID = UUID().uuidString
+
+        _ = await engine.recordLocalChange(
+            entityType: .item,
+            entityID: noteID,
+            payload: Data("note".utf8),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        _ = await engine.recordLocalChange(
+            entityType: .collection,
+            entityID: folderID,
+            payload: Data("folder".utf8),
+            updatedAt: Date(timeIntervalSince1970: 101)
+        )
+
+        let envelope = try XCTUnwrap(await engine.nextEnvelope())
+
+        XCTAssertEqual(envelope.changes.map(\.entityType), [.item, .collection])
+        XCTAssertEqual(await engine.pendingChangeCount(), 2)
+    }
+
     func testWarmPaperAppearanceUsesIconPalette() {
         XCTAssertFalse(AppearanceSetting.allCases.map(\.title).contains("Warm Paper"))
         XCTAssertFalse(EditorChromeStyle.allCases.map(\.title).contains("Standard"))
