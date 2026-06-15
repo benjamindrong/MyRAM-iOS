@@ -10,15 +10,20 @@ private let defaultEditorTextFont = UIFont.systemFont(ofSize: 20)
 #else
 private let defaultEditorTextFont = UIFont.preferredFont(forTextStyle: .body)
 #endif
+private let editorCommitDelayNanoseconds: UInt64 = 500_000_000
 
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var vm: NotesViewModel
     let note: Note
     let onNewNote: (Note) -> Void
     var showsTopBar = true
     var toolbarBridge: NoteEditorToolbarBridge?
+    var syncController: MyRAMSyncController? = nil
+    var syncConflicts: [SyncConflictVersion] = []
+    var onOpenSyncConflicts: (() -> Void)?
     @StateObject private var formattingController = TextFormattingController()
     
     @State private var title: String = ""
@@ -55,6 +60,7 @@ struct NoteEditorView: View {
     @State private var redoHistory: [NoteSnapshot] = []
     @State private var lastSnapshot = NoteSnapshot()
     @State private var isApplyingUndo = false
+    @State private var isApplyingRemoteSyncUpdate = false
     @State private var selectedPickerItems: [PhotosPickerItem] = []
     @State private var showingPhotoPicker = false
     @State private var showingFileImporter = false
@@ -63,6 +69,7 @@ struct NoteEditorView: View {
     @State private var lookupRequest: LookupRequest?
     @State private var sharePayload: NoteSharePayload?
     @State private var exportErrorMessage: String?
+    @State private var selectedSyncConflict: SyncConflictVersion?
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
     @State private var showingTitleEditor = false
@@ -75,12 +82,15 @@ struct NoteEditorView: View {
     @State private var reorderItemFrames: [String: CGRect] = [:]
     @State private var keyboardToast: KeyboardToast?
     @State private var keyboardToastTask: Task<Void, Never>?
+    @State private var pendingNoteCommitTask: Task<Void, Never>?
+    @State private var hasPendingNoteCommit = false
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
     
     var body: some View {
         NavigationStack {
-            VStack(spacing: 12) {
+            ZStack {
+                VStack(spacing: 12) {
                 if showsTopBar {
                     editorTopBar
                 }
@@ -88,6 +98,19 @@ struct NoteEditorView: View {
                 ZStack(alignment: .bottom) {
                     VStack(spacing: 12) {
                         editorTitleHeader
+
+                        if !syncConflicts.isEmpty, let onOpenSyncConflicts {
+                            SyncConflictNotice(
+                                conflictCount: syncConflicts.count,
+                                onOpen: {
+                                    if let firstConflict = syncConflicts.first {
+                                        selectedSyncConflict = firstConflict
+                                    } else {
+                                        onOpenSyncConflicts()
+                                    }
+                                }
+                            )
+                        }
 
                         pinnedThoughtsSection
 
@@ -198,6 +221,13 @@ struct NoteEditorView: View {
             .padding()
             .background(editorChromeStyle.editorBackgroundColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
+            .overlay(alignment: .topTrailing) {
+                if let syncController {
+                    SyncStatusIndicator(syncController: syncController)
+                        .padding(.top, showsTopBar ? 58 : 14)
+                        .padding(.trailing, 14)
+                }
+            }
             .presentationDragIndicator(.visible)
             .onAppear {
                 title = note.title
@@ -209,6 +239,17 @@ struct NoteEditorView: View {
                 configureToolbarBridge()
             }
             .onChange(of: title) { handleEditorChange() }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase != .active {
+                    commitPendingNoteEdit()
+                }
+            }
+            .onDisappear {
+                commitPendingNoteEdit()
+            }
+            .onChange(of: vm.activeNoteSyncRevision) {
+                reloadNoteFromSync()
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                 isKeyboardVisible = true
             }
@@ -236,14 +277,28 @@ struct NoteEditorView: View {
                 guard case let .success(urls) = result else { return }
                 importImageFiles(from: urls)
             }
-            .sheet(item: $expandedAttachment) { attachment in
-                ExpandedPhotoView(attachment: attachment)
-            }
             .sheet(item: $lookupRequest) { request in
                 ReferenceLookupView(term: request.term)
             }
             .sheet(item: $sharePayload) { payload in
                 ActivityShareSheet(activityItems: payload.urls)
+            }
+            .sheet(item: $selectedSyncConflict) { conflict in
+                SyncConflictDetailView(
+                    conflict: conflict,
+                    onCopy: {
+                        UIPasteboard.general.string = conflict.remoteText
+                    },
+                    onRestore: {
+                        selectedSyncConflict = nil
+                        vm.restoreSyncConflict(conflict)
+                    },
+                    onReview: {
+                        selectedSyncConflict = nil
+                        vm.markSyncConflictReviewed(conflict)
+                    }
+                )
+                .presentationDetents([.large])
             }
             .confirmationDialog("Edit History", isPresented: $showingUndoRedoActions, titleVisibility: .visible) {
                 Button("Undo") {
@@ -285,6 +340,16 @@ struct NoteEditorView: View {
                 }
             } message: {
                 Text("Update the note title.")
+            }
+
+                if let expandedAttachment {
+                    ExpandedPhotoView(attachment: expandedAttachment) {
+                        self.expandedAttachment = nil
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+                    .zIndex(10)
+                }
             }
         }
     }
@@ -697,6 +762,7 @@ struct NoteEditorView: View {
         switch action {
         case .newNote:
             topBarActionButton(systemImage: "square.and.pencil", identifier: "topbar-new-note") {
+                commitPendingNoteEdit()
                 onNewNote(vm.createNewNote())
             }
         case .newFolder:
@@ -706,6 +772,7 @@ struct NoteEditorView: View {
             }
         case .exportNote:
             topBarActionButton(systemImage: "square.and.arrow.up", identifier: "topbar-export-note") {
+                commitPendingNoteEdit()
                 exportCurrentNote()
             }
         case .attachments:
@@ -774,7 +841,38 @@ struct NoteEditorView: View {
         )
     }
 
+    private func scheduleNoteCommit() {
+        hasPendingNoteCommit = true
+        pendingNoteCommitTask?.cancel()
+        pendingNoteCommitTask = Task {
+            try? await Task.sleep(nanoseconds: editorCommitDelayNanoseconds)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                commitPendingNoteEdit()
+            }
+        }
+    }
+
+    private func cancelPendingNoteCommit() {
+        pendingNoteCommitTask?.cancel()
+        pendingNoteCommitTask = nil
+        hasPendingNoteCommit = false
+    }
+
+    private func commitPendingNoteEdit() {
+        guard hasPendingNoteCommit else { return }
+        cancelPendingNoteCommit()
+        vm.commitNoteEdit(
+            note,
+            title: title,
+            content: content,
+            richTextContentData: richTextContentData
+        )
+        vm.recordNoteEdited(note)
+    }
+
     private func handleEditorChange() {
+        guard !isApplyingRemoteSyncUpdate else { return }
         let currentSnapshot = currentNoteSnapshot()
         guard currentSnapshot != lastSnapshot else {
             refreshUndoState()
@@ -789,13 +887,7 @@ struct NoteEditorView: View {
             }
         }
         lastSnapshot = currentSnapshot
-        vm.updateNote(
-            note,
-            title: title,
-            content: content,
-            richTextContentData: richTextContentData
-        )
-        vm.recordNoteEdited(note)
+        scheduleNoteCommit()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
     }
@@ -804,6 +896,24 @@ struct NoteEditorView: View {
         content = plainText
         richTextContentData = richTextData
         handleEditorChange()
+    }
+
+    private func reloadNoteFromSync() {
+        guard vm.currentNote?.id == note.id,
+              let refreshedNote = vm.refreshedNote(withID: note.id) else { return }
+        cancelPendingNoteCommit()
+        isApplyingRemoteSyncUpdate = true
+        title = refreshedNote.title
+        content = refreshedNote.content
+        richTextContentData = refreshedNote.richTextContentData
+        restoreContentToggleToken += 1
+        editingPinnedThoughtID = nil
+        lastSnapshot = currentNoteSnapshot()
+        toolbarBridge?.title = title.isEmpty ? "Untitled" : title
+        refreshUndoState()
+        DispatchQueue.main.async {
+            isApplyingRemoteSyncUpdate = false
+        }
     }
 
     private func handleFormattingStateChanged(_ state: EditorFormattingState) {
@@ -899,12 +1009,14 @@ struct NoteEditorView: View {
         restoreContentToggleToken += 1
         restorePinnedThoughts(snapshot.pinnedThoughts)
         lastSnapshot = snapshot
-        vm.updateNote(
+        cancelPendingNoteCommit()
+        vm.commitNoteEdit(
             note,
             title: snapshot.title,
             content: snapshot.content,
             richTextContentData: snapshot.richTextContentData
         )
+        vm.recordNoteEdited(note)
     }
 
     private func restorePinnedThoughts(_ snapshots: [PinnedThoughtSnapshot]) {
@@ -1129,57 +1241,46 @@ struct NoteEditorView: View {
                 increaseFontSizeToggleToken += 1
             }
 
-            desktopColorControls
+            textColorMenu(controlSize: 26, swatchSize: 18)
         }
     }
 
-    private var desktopColorControls: some View {
-        HStack(spacing: 5) {
+    private func textColorMenu(controlSize: CGFloat, swatchSize: CGFloat) -> some View {
+        Menu {
             Button {
                 applyDefaultTextColor()
             } label: {
-                Circle()
-                    .fill(Color(uiColor: editorChromeStyle.editorTextUIColor))
-                    .frame(width: 20, height: 20)
-                    .overlay {
-                        Text("A")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(editorChromeStyle.editorSurfaceColor)
-                    }
-                    .overlay {
-                        Circle()
-                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                    }
+                Label("Auto Text Color", systemImage: "textformat")
             }
-            .buttonStyle(.plain)
             .accessibilityIdentifier("format-color-default")
-            .accessibilityLabel("Auto Text Color")
 
             ForEach(textColorSwatches) { swatch in
                 Button {
                     applyTextColor(swatch.uiColor)
                 } label: {
-                    Circle()
-                        .fill(swatch.color)
-                        .frame(width: isSelectedTextColor(swatch.uiColor) ? 18 : 16, height: isSelectedTextColor(swatch.uiColor) ? 18 : 16)
-                        .frame(width: 18, height: 22)
-                        .overlay {
-                            if isSelectedTextColor(swatch.uiColor) {
-                                Circle()
-                                    .stroke(Color.primary, lineWidth: 2)
-                                    .padding(-2)
-                            }
-                        }
-                        .overlay {
-                            Circle()
-                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                        }
+                    Label(swatch.name, systemImage: "circle.fill")
                 }
-                .buttonStyle(.plain)
                 .accessibilityIdentifier("format-color-\(swatch.id)")
-                .accessibilityLabel(swatch.name)
             }
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(Color(uiColor: selectedTextUIColor ?? editorChromeStyle.editorTextUIColor))
+                    .frame(width: swatchSize, height: swatchSize)
+                    .overlay {
+                        Circle()
+                            .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+                    }
+                Text("A")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(editorChromeStyle.editorSurfaceColor)
+            }
+            .frame(width: controlSize, height: controlSize)
+            .modifier(ChromeControlPlate(style: editorChromeStyle, cornerRadius: 7))
         }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("format-color-menu")
+        .accessibilityLabel("Text Color")
     }
 
     private var overflowFormattingControls: some View {
@@ -1859,35 +1960,54 @@ private struct AttachmentThumbnail: View {
 }
 
 private struct ExpandedPhotoView: View {
-    @Environment(\.dismiss) private var dismiss
     let attachment: NotePhotoAttachment
+    let onDismiss: () -> Void
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
+        ZStack(alignment: .topTrailing) {
+            Color.black
+                .ignoresSafeArea()
+                .onTapGesture {
+                    onDismiss()
+                }
 
-                if let image = UIImage(data: attachment.imageData) {
-                    LiveTextImageView(image: image)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding()
-                        .background(Color.black)
-                } else {
-                    ContentUnavailableView(
-                        "Photo Unavailable",
-                        systemImage: "exclamationmark.triangle",
-                        description: Text("This attachment could not be loaded.")
-                    )
-                }
+            if let image = UIImage(data: attachment.imageData) {
+                LiveTextImageView(image: image, imageID: attachment.id)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                    .background(Color.black)
+            } else {
+                ContentUnavailableView(
+                    "Photo Unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("This attachment could not be loaded.")
+                )
             }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        dismiss()
-                    }
-                }
+
+            Button {
+                onDismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 34, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
             }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityLabel("Close Attachment")
+            .padding(.top, 18)
+            .padding(.trailing, 18)
         }
+        .contentShape(Rectangle())
+        .frame(
+            minWidth: 320,
+            idealWidth: 900,
+            maxWidth: .infinity,
+            minHeight: 320,
+            idealHeight: 700,
+            maxHeight: .infinity
+        )
     }
 }
 
@@ -1907,13 +2027,14 @@ private struct ReferenceLookupView: UIViewControllerRepresentable {
 @MainActor
 private struct LiveTextImageView: UIViewRepresentable {
     let image: UIImage
+    let imageID: UUID
 
     func makeUIView(context: Context) -> LiveTextEnabledImageView {
         LiveTextEnabledImageView(frame: .zero)
     }
 
     func updateUIView(_ imageView: LiveTextEnabledImageView, context: Context) {
-        imageView.setAnalyzedImage(image)
+        imageView.setAnalyzedImage(image, id: imageID)
     }
 }
 
@@ -1924,6 +2045,7 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
     private let analyzer = ImageAnalyzer()
     private var analysisTask: Task<Void, Never>?
     private var sourceImage: UIImage?
+    private var sourceImageID: UUID?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -1957,7 +2079,10 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
         }
     }
 
-    func setAnalyzedImage(_ image: UIImage) {
+    func setAnalyzedImage(_ image: UIImage, id: UUID) {
+        guard sourceImageID != id else { return }
+
+        sourceImageID = id
         sourceImage = image
         imageView.image = image
         setZoomScale(1.0, animated: false)
@@ -3358,13 +3483,9 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func restoreSelectionWithoutScrolling(_ range: NSRange, in textView: UITextView) {
-#if targetEnvironment(macCatalyst)
             let previousOffset = textView.contentOffset
             textView.selectedRange = range
             textView.setContentOffset(previousOffset, animated: false)
-#else
-            textView.selectedRange = range
-#endif
         }
     }
 }

@@ -68,6 +68,496 @@ final class MyRAMTests: XCTestCase {
         }
     }
 
+    func testNoteSyncPayloadRoundTripsNoteFields() throws {
+        let noteID = UUID()
+        let folderID = UUID()
+        let note = Note(title: "Plan", content: "Ship nearby sync")
+        let folder = Folder(name: "Projects")
+        folder.id = folderID
+        note.id = noteID
+        note.folder = folder
+        note.richTextContentData = Data("rich".utf8)
+        note.isPinned = true
+        note.deletedAt = Date(timeIntervalSince1970: 300)
+
+        let data = try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: note))
+        let decoded = try MyRAMSyncPayloadCoding.decodeNote(from: data)
+
+        XCTAssertEqual(decoded.kind, .note)
+        XCTAssertEqual(decoded.id, noteID)
+        XCTAssertEqual(decoded.title, "Plan")
+        XCTAssertEqual(decoded.content, "Ship nearby sync")
+        XCTAssertEqual(decoded.richTextContentData, Data("rich".utf8))
+        XCTAssertEqual(decoded.isPinned, true)
+        XCTAssertEqual(decoded.deletedAt, note.deletedAt)
+        XCTAssertEqual(decoded.folderID, folderID)
+    }
+
+    func testPhotoAttachmentSyncPayloadRoundTripsImageFields() throws {
+        let note = Note(title: "Photo host")
+        let attachment = NotePhotoAttachment(imageData: Data("image".utf8), note: note)
+        attachment.createdAt = Date(timeIntervalSince1970: 400)
+
+        let data = try MyRAMSyncPayloadCoding.encode(MyRAMPhotoAttachmentSyncPayload(attachment: attachment))
+        let decoded = try MyRAMSyncPayloadCoding.decodePhotoAttachment(from: data)
+
+        XCTAssertEqual(decoded.kind, .photoAttachment)
+        XCTAssertEqual(decoded.id, attachment.id)
+        XCTAssertEqual(decoded.noteID, note.id)
+        XCTAssertEqual(decoded.imageData, Data("image".utf8))
+        XCTAssertEqual(decoded.createdAt, attachment.createdAt)
+        XCTAssertFalse(decoded.isDeleted)
+    }
+
+    func testFolderAndPinnedPayloadsMapToCollectionAndMarkerChanges() async throws {
+        let store = InMemorySyncStore()
+        let engine = SyncEngine(deviceID: "device-a", store: store)
+        let folder = Folder(name: "Archive")
+        let note = Note(title: "Pinned host")
+        let thought = PinnedThought(text: "Remember this", order: 2, note: note)
+
+        _ = await engine.recordLocalChange(
+            entityType: .collection,
+            entityID: folder.id.uuidString,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMFolderSyncPayload(folder: folder)),
+            updatedAt: folder.modifiedAt
+        )
+        _ = await engine.recordLocalChange(
+            entityType: .marker,
+            entityID: thought.id.uuidString,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: thought)),
+            updatedAt: thought.modifiedAt
+        )
+
+        let nextEnvelope = await engine.nextEnvelope()
+        let envelope = try XCTUnwrap(nextEnvelope)
+        let pendingChangeCount = await engine.pendingChangeCount()
+
+        XCTAssertEqual(envelope.changes.map(\.entityType), [.collection, .marker])
+        XCTAssertEqual(pendingChangeCount, 2)
+    }
+
+    func testPendingSyncChangesCoalesceByEntity() async throws {
+        let store = InMemorySyncStore()
+        let engine = SyncEngine(deviceID: "device-a", store: store)
+        let noteID = UUID().uuidString
+
+        _ = await engine.recordLocalChange(
+            entityType: .item,
+            entityID: noteID,
+            payload: Data("first".utf8),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        _ = await engine.recordLocalChange(
+            entityType: .item,
+            entityID: noteID,
+            payload: Data("second".utf8),
+            updatedAt: Date(timeIntervalSince1970: 101)
+        )
+
+        let nextEnvelope = await engine.nextEnvelope()
+        let envelope = try XCTUnwrap(nextEnvelope)
+        let pendingChangeCount = await engine.pendingChangeCount()
+
+        XCTAssertEqual(envelope.changes.count, 1)
+        XCTAssertEqual(envelope.changes.first?.payload, Data("second".utf8))
+        XCTAssertEqual(pendingChangeCount, 1)
+    }
+
+    func testPendingSyncChangesKeepDifferentEntities() async throws {
+        let store = InMemorySyncStore()
+        let engine = SyncEngine(deviceID: "device-a", store: store)
+        let noteID = UUID().uuidString
+        let folderID = UUID().uuidString
+
+        _ = await engine.recordLocalChange(
+            entityType: .item,
+            entityID: noteID,
+            payload: Data("note".utf8),
+            updatedAt: Date(timeIntervalSince1970: 100)
+        )
+        _ = await engine.recordLocalChange(
+            entityType: .collection,
+            entityID: folderID,
+            payload: Data("folder".utf8),
+            updatedAt: Date(timeIntervalSince1970: 101)
+        )
+
+        let nextEnvelope = await engine.nextEnvelope()
+        let envelope = try XCTUnwrap(nextEnvelope)
+        let pendingChangeCount = await engine.pendingChangeCount()
+
+        XCTAssertEqual(envelope.changes.map(\.entityType), [.item, .collection])
+        XCTAssertEqual(pendingChangeCount, 2)
+    }
+
+    func testSyncQueuePersistsPendingChangesAcrossInstances() async throws {
+        let fileURL = temporarySyncQueueFileURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let persistence = FileBackedSyncQueuePersistence(fileURL: fileURL)
+        let noteID = UUID().uuidString
+        let change = SyncChange(
+            entityType: .item,
+            entityID: noteID,
+            operation: .upsert,
+            payload: Data("persisted".utf8),
+            updatedAt: Date(timeIntervalSince1970: 100),
+            originDeviceID: "device-a"
+        )
+
+        await SyncQueue(persistence: persistence).enqueue(change)
+        let reloadedQueue = SyncQueue(persistence: FileBackedSyncQueuePersistence(fileURL: fileURL))
+        let reloadedBatch = await reloadedQueue.pendingBatch()
+
+        XCTAssertEqual(reloadedBatch, [change])
+    }
+
+    func testSyncQueuePersistsAcknowledgedChangesRemoval() async throws {
+        let fileURL = temporarySyncQueueFileURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let queue = SyncQueue(persistence: FileBackedSyncQueuePersistence(fileURL: fileURL))
+        let change = SyncChange(
+            entityType: .attachment,
+            entityID: UUID().uuidString,
+            operation: .upsert,
+            payload: Data("image".utf8),
+            updatedAt: Date(timeIntervalSince1970: 100),
+            originDeviceID: "device-a"
+        )
+
+        await queue.enqueue(change)
+        await queue.markAcknowledged([change.id])
+        let reloadedQueue = SyncQueue(persistence: FileBackedSyncQueuePersistence(fileURL: fileURL))
+        let reloadedBatch = await reloadedQueue.pendingBatch()
+
+        XCTAssertTrue(reloadedBatch.isEmpty)
+    }
+
+    func testSyncEnvelopeDecodesMissingAcknowledgements() throws {
+        let change = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            entityType: .item,
+            entityID: UUID().uuidString,
+            operation: .upsert,
+            payload: Data("payload".utf8),
+            updatedAt: Date(timeIntervalSince1970: 100),
+            originDeviceID: "device-a"
+        )
+        let envelope = SyncEnvelope(
+            senderDeviceID: "device-a",
+            sentAt: Date(timeIntervalSince1970: 200),
+            changes: [change]
+        )
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(envelope)) as? [String: Any]
+        json?["acknowledgedChangeIDs"] = nil
+        let legacyData = try JSONSerialization.data(withJSONObject: try XCTUnwrap(json))
+
+        let decodedEnvelope = try JSONDecoder().decode(SyncEnvelope.self, from: legacyData)
+
+        XCTAssertEqual(decodedEnvelope.changes, [change])
+        XCTAssertTrue(decodedEnvelope.acknowledgedChangeIDs.isEmpty)
+    }
+
+    func testIncomingPhotoAttachmentSyncAddsAndRemovesAttachment() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+        let remoteNote = Note(title: "Remote host")
+        remoteNote.id = note.id
+        let attachment = NotePhotoAttachment(imageData: Data("remote".utf8), note: remoteNote)
+        attachment.createdAt = Date(timeIntervalSince1970: 500)
+        let addPayload = try MyRAMSyncPayloadCoding.encode(MyRAMPhotoAttachmentSyncPayload(attachment: attachment))
+
+        await vm.applyIncomingSyncChanges([
+            SyncChange(
+                entityType: .attachment,
+                entityID: attachment.id.uuidString,
+                operation: .upsert,
+                payload: addPayload,
+                updatedAt: Date(timeIntervalSince1970: 501),
+                originDeviceID: "device-b"
+            )
+        ])
+
+        XCTAssertEqual(note.photoAttachments.count, 1)
+        XCTAssertEqual(note.photoAttachments.first?.id, attachment.id)
+        XCTAssertEqual(note.photoAttachments.first?.imageData, Data("remote".utf8))
+
+        let deletePayload = try MyRAMSyncPayloadCoding.encode(
+            MyRAMPhotoAttachmentSyncPayload(attachment: note.photoAttachments[0], isDeleted: true)
+        )
+        await vm.applyIncomingSyncChanges([
+            SyncChange(
+                entityType: .attachment,
+                entityID: attachment.id.uuidString,
+                operation: .delete,
+                payload: deletePayload,
+                updatedAt: Date(timeIntervalSince1970: 502),
+                originDeviceID: "device-b"
+            )
+        ])
+
+        XCTAssertTrue(note.photoAttachments.isEmpty)
+    }
+
+    func testIncomingNoteDeletePreservesDivergedTextAsConflict() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Local title", content: "Local body")
+        note.id = UUID()
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        note.richTextContentData = Data("local rich".utf8)
+        context.insert(note)
+        let remoteNote = Note(title: "Remote title", content: "Remote body")
+        remoteNote.id = note.id
+        remoteNote.modifiedAt = Date(timeIntervalSince1970: 200)
+        remoteNote.deletedAt = remoteNote.modifiedAt
+        remoteNote.richTextContentData = Data("remote rich".utf8)
+        let deletePayload = try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: remoteNote))
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        let result = applier.apply(
+            [
+                SyncChange(
+                    entityType: .item,
+                    entityID: note.id.uuidString,
+                    operation: .delete,
+                    payload: deletePayload,
+                    updatedAt: remoteNote.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: note.id,
+            currentNoteID: note.id,
+            currentFolderID: nil
+        )
+
+        XCTAssertTrue(result.shouldRefreshActiveNote)
+        XCTAssertNil(note.deletedAt)
+        XCTAssertEqual(note.title, "Local title")
+        XCTAssertEqual(note.content, "Local body")
+        let conflicts = conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 201))
+        XCTAssertEqual(Set(conflicts.map(\.field)), [.noteTitle, .noteContent])
+        XCTAssertTrue(conflicts.contains { $0.localText == "Local title" && $0.remoteText == "Remote title" })
+        XCTAssertTrue(conflicts.contains { $0.localText == "Local body" && $0.remoteText == "Remote body" })
+    }
+
+    func testIncomingNewerNoteTextPreservesDivergedTextAsConflict() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Local title", content: "Local body")
+        note.id = UUID()
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        let remoteNote = Note(title: "Remote title", content: "Remote body")
+        remoteNote.id = note.id
+        remoteNote.modifiedAt = Date(timeIntervalSince1970: 200)
+        let payload = try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: remoteNote))
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        _ = applier.apply(
+            [
+                SyncChange(
+                    entityType: .item,
+                    entityID: note.id.uuidString,
+                    operation: .upsert,
+                    payload: payload,
+                    updatedAt: remoteNote.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: note.id,
+            currentNoteID: note.id,
+            currentFolderID: nil
+        )
+
+        XCTAssertEqual(note.title, "Local title")
+        XCTAssertEqual(note.content, "Local body")
+        XCTAssertNil(note.deletedAt)
+        let conflicts = conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 201))
+        XCTAssertEqual(Set(conflicts.map(\.field)), [.noteTitle, .noteContent])
+        XCTAssertTrue(conflicts.contains { $0.localText == "Local title" && $0.remoteText == "Remote title" })
+        XCTAssertTrue(conflicts.contains { $0.localText == "Local body" && $0.remoteText == "Remote body" })
+    }
+
+    func testIncomingFolderDeletePreservesRenamedFolderAsConflict() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let folder = Folder(name: "Local folder")
+        folder.id = UUID()
+        folder.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(folder)
+        let remoteFolder = Folder(name: "Remote folder")
+        remoteFolder.id = folder.id
+        remoteFolder.modifiedAt = Date(timeIntervalSince1970: 200)
+        let deletePayload = try MyRAMSyncPayloadCoding.encode(
+            MyRAMFolderSyncPayload(folder: remoteFolder, isDeleted: true)
+        )
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        _ = applier.apply(
+            [
+                SyncChange(
+                    entityType: .collection,
+                    entityID: folder.id.uuidString,
+                    operation: .delete,
+                    payload: deletePayload,
+                    updatedAt: remoteFolder.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: nil,
+            currentNoteID: nil,
+            currentFolderID: folder.id
+        )
+
+        let folders = try context.fetch(FetchDescriptor<Folder>())
+        XCTAssertTrue(folders.contains { $0.id == folder.id })
+        let conflict = try XCTUnwrap(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 201)).first)
+        XCTAssertEqual(conflict.field, .folderTitle)
+        XCTAssertEqual(conflict.localText, "Local folder")
+        XCTAssertEqual(conflict.remoteText, "Remote folder")
+    }
+
+    func testIncomingNewerFolderTitlePreservesRenamedFolderAsConflict() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let folder = Folder(name: "Local folder")
+        folder.id = UUID()
+        folder.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(folder)
+        let remoteFolder = Folder(name: "Remote folder")
+        remoteFolder.id = folder.id
+        remoteFolder.modifiedAt = Date(timeIntervalSince1970: 200)
+        let payload = try MyRAMSyncPayloadCoding.encode(MyRAMFolderSyncPayload(folder: remoteFolder))
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        _ = applier.apply(
+            [
+                SyncChange(
+                    entityType: .collection,
+                    entityID: folder.id.uuidString,
+                    operation: .upsert,
+                    payload: payload,
+                    updatedAt: remoteFolder.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: nil,
+            currentNoteID: nil,
+            currentFolderID: folder.id
+        )
+
+        XCTAssertEqual(folder.name, "Local folder")
+        let conflict = try XCTUnwrap(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 201)).first)
+        XCTAssertEqual(conflict.field, .folderTitle)
+        XCTAssertEqual(conflict.localText, "Local folder")
+        XCTAssertEqual(conflict.remoteText, "Remote folder")
+    }
+
+    func testIncomingPinnedTextDeletePreservesEditedPinnedTextAsConflict() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Pinned host")
+        let thought = PinnedThought(text: "Remote pinned", order: 0, note: note)
+        thought.id = UUID()
+        thought.modifiedAt = Date(timeIntervalSince1970: 200)
+        note.pinnedThoughts.append(thought)
+        context.insert(note)
+        let deletePayload = try MyRAMSyncPayloadCoding.encode(
+            MyRAMPinnedThoughtSyncPayload(thought: thought, isDeleted: true)
+        )
+        thought.text = "Local pinned"
+        thought.modifiedAt = Date(timeIntervalSince1970: 100)
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        let result = applier.apply(
+            [
+                SyncChange(
+                    entityType: .marker,
+                    entityID: thought.id.uuidString,
+                    operation: .delete,
+                    payload: deletePayload,
+                    updatedAt: Date(timeIntervalSince1970: 200),
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: note.id,
+            currentNoteID: note.id,
+            currentFolderID: nil
+        )
+
+        XCTAssertTrue(result.shouldRefreshActiveNote)
+        XCTAssertTrue(note.pinnedThoughts.contains { $0.id == thought.id })
+        XCTAssertEqual(thought.text, "Local pinned")
+        let conflict = try XCTUnwrap(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 201)).first)
+        XCTAssertEqual(conflict.field, .pinnedText)
+        XCTAssertEqual(conflict.localText, "Local pinned")
+        XCTAssertEqual(conflict.remoteText, "Remote pinned")
+    }
+
+    func testIncomingNewerPinnedTextPreservesEditedPinnedTextAsConflict() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let originalNote = Note(title: "Original host")
+        let destinationNote = Note(title: "Remote host")
+        let thought = PinnedThought(text: "Local pinned", order: 0, note: originalNote)
+        thought.id = UUID()
+        thought.modifiedAt = Date(timeIntervalSince1970: 100)
+        originalNote.pinnedThoughts.append(thought)
+        context.insert(originalNote)
+        context.insert(destinationNote)
+        let remoteThought = PinnedThought(text: "Remote pinned", order: 1, note: destinationNote)
+        remoteThought.id = thought.id
+        remoteThought.modifiedAt = Date(timeIntervalSince1970: 200)
+        let payload = try MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: remoteThought))
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        let result = applier.apply(
+            [
+                SyncChange(
+                    entityType: .marker,
+                    entityID: thought.id.uuidString,
+                    operation: .upsert,
+                    payload: payload,
+                    updatedAt: remoteThought.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: originalNote.id,
+            currentNoteID: originalNote.id,
+            currentFolderID: nil
+        )
+
+        XCTAssertTrue(result.shouldRefreshActiveNote)
+        XCTAssertEqual(thought.text, "Local pinned")
+        XCTAssertEqual(thought.note?.id, originalNote.id)
+        XCTAssertTrue(originalNote.pinnedThoughts.contains { $0.id == thought.id })
+        XCTAssertFalse(destinationNote.pinnedThoughts.contains { $0.id == thought.id })
+        let conflict = try XCTUnwrap(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 201)).first)
+        XCTAssertEqual(conflict.field, .pinnedText)
+        XCTAssertEqual(conflict.localText, "Local pinned")
+        XCTAssertEqual(conflict.remoteText, "Remote pinned")
+    }
+
     func testWarmPaperAppearanceUsesIconPalette() {
         XCTAssertFalse(AppearanceSetting.allCases.map(\.title).contains("Warm Paper"))
         XCTAssertFalse(EditorChromeStyle.allCases.map(\.title).contains("Standard"))
@@ -1576,6 +2066,18 @@ final class MyRAMTests: XCTestCase {
         }
 
         return try XCTUnwrap(image.jpegData(compressionQuality: 0.8))
+    }
+
+    private func temporarySyncQueueFileURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("sync-pending-changes.json")
+    }
+
+    private func temporarySyncConflictFileURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("sync-conflicts.json")
     }
 
     private func iso8601String(_ date: Date) -> String {

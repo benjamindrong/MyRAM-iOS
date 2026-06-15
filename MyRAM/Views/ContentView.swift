@@ -9,9 +9,9 @@ import SwiftUI
 import SwiftData
 
 struct ContentView: View {
-    @Environment(\.modelContext) private var context
+    @StateObject private var state = NotesListState(context: PersistenceManager.shared.context)
 
     var body: some View {
-        NotesListView(context: context)
+        NotesListView(state: state)
     }
 }

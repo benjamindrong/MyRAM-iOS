@@ -2,6 +2,27 @@
 import SwiftUI
 import SwiftData
 import UIKit
+import Combine
+
+@MainActor
+final class NotesListState: ObservableObject {
+    let vm: NotesViewModel
+    let syncController: MyRAMSyncController
+    private var cancellables: Set<AnyCancellable> = []
+
+    init(context: ModelContext) {
+        let syncController = MyRAMSyncController()
+        self.syncController = syncController
+        vm = NotesViewModel(context: context, syncController: syncController)
+
+        vm.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+        syncController.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
+    }
+}
 
 struct NotesListView: View {
     @Environment(\.colorScheme) private var colorScheme
@@ -14,7 +35,7 @@ struct NotesListView: View {
     private let desktopSidebarResizeHandleWidth: CGFloat = 10
     private let desktopSidebarCollapsedHandleWidth: CGFloat = 24
 #endif
-    @StateObject private var vm: NotesViewModel
+    @ObservedObject private var state: NotesListState
     @StateObject private var editorToolbarBridge = NoteEditorToolbarBridge()
     @State private var editMode: EditMode = .inactive
     @State private var selectedNote: Note? = nil
@@ -37,6 +58,7 @@ struct NotesListView: View {
     @State private var rootTitleUndoHistory: [String] = []
     @State private var rootTitleRedoHistory: [String] = []
     @State private var showingListUndoRedoActions = false
+    @State private var showingNearbySync = false
     @State private var noteActionDialogContext: NoteActionDialogContext?
 #if targetEnvironment(macCatalyst)
     @State private var desktopSidebarWidth: CGFloat = 340
@@ -50,9 +72,12 @@ struct NotesListView: View {
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
     
-    init(context: ModelContext) {
-        _vm = StateObject(wrappedValue: NotesViewModel(context: context))
+    init(state: NotesListState) {
+        self.state = state
     }
+
+    private var vm: NotesViewModel { state.vm }
+    private var syncController: MyRAMSyncController { state.syncController }
     
     var body: some View {
         NavigationStack {
@@ -77,7 +102,14 @@ struct NotesListView: View {
             }
             .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
-            .modifier(MobileNoteEditorSheet(selectedNote: $selectedNote, vm: vm))
+            .modifier(MobileNoteEditorSheet(
+                selectedNote: $selectedNote,
+                vm: vm,
+                syncController: syncController,
+                onOpenSyncConflicts: {
+                    showingNearbySync = true
+                }
+            ))
             .sheet(isPresented: $showingRecentlyDeleted) {
                 RecentlyDeletedView(
                     notes: recentlyDeletedNotes,
@@ -96,6 +128,27 @@ struct NotesListView: View {
             }
             .sheet(item: $sharePayload) { payload in
                 ActivityShareSheet(activityItems: payload.urls)
+            }
+            .sheet(isPresented: $showingNearbySync) {
+                NavigationStack {
+                    NearbySyncView(
+                        syncController: syncController,
+                        style: editorChromeStyle,
+                        conflicts: vm.syncConflicts,
+                        onCopyConflict: copySyncConflict,
+                        onRestoreConflict: vm.restoreSyncConflict,
+                        onReviewConflict: vm.markSyncConflictReviewed
+                    )
+                        .navigationTitle("Nearby Sync")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") {
+                                    showingNearbySync = false
+                                }
+                            }
+                        }
+                }
             }
             .onOpenURL { url in
                 importMyRAMFile(from: url)
@@ -257,6 +310,13 @@ struct NotesListView: View {
                 }
             }
 #endif
+            .overlay(alignment: .bottomTrailing) {
+                SyncStatusIndicator(syncController: syncController) {
+                    showingNearbySync = true
+                }
+                .padding(.trailing, 16)
+                .padding(.bottom, 14)
+            }
 #if DEBUG
             .confirmationDialog(
                 "Clear Demo Notes?",
@@ -383,7 +443,11 @@ struct NotesListView: View {
                     self.selectedNote = newNote
                 },
                 showsTopBar: false,
-                toolbarBridge: editorToolbarBridge
+                toolbarBridge: editorToolbarBridge,
+                syncConflicts: vm.activeSyncConflicts(for: selectedNote),
+                onOpenSyncConflicts: {
+                    showingNearbySync = true
+                }
             )
             .id(selectedNote.id)
         } else {
@@ -424,6 +488,15 @@ struct NotesListView: View {
                 }
 
                 Menu {
+                    Button {
+                        showingNearbySync = true
+                    } label: {
+                        Label("Nearby Sync", systemImage: "dot.radiowaves.left.and.right")
+                    }
+                    .foregroundStyle(.primary)
+
+                    Divider()
+
                     ForEach(layout.overflowActions, id: \.self) { action in
                         overflowMenuItem(for: action)
                     }
@@ -1190,6 +1263,10 @@ struct NotesListView: View {
         colorScheme == .dark ? .primary : .secondary
     }
 
+    private func copySyncConflict(_ conflict: SyncConflictVersion) {
+        UIPasteboard.general.string = conflict.remoteText
+    }
+
 }
 
 private struct SharePayload: Identifiable {
@@ -1200,6 +1277,8 @@ private struct SharePayload: Identifiable {
 private struct MobileNoteEditorSheet: ViewModifier {
     @Binding var selectedNote: Note?
     @ObservedObject var vm: NotesViewModel
+    @ObservedObject var syncController: MyRAMSyncController
+    let onOpenSyncConflicts: () -> Void
 
     func body(content: Content) -> some View {
 #if targetEnvironment(macCatalyst)
@@ -1207,9 +1286,16 @@ private struct MobileNoteEditorSheet: ViewModifier {
 #else
         content
             .sheet(item: $selectedNote) { note in
-                NoteEditorView(vm: vm, note: note) { newNote in
-                    selectedNote = newNote
-                }
+                NoteEditorView(
+                    vm: vm,
+                    note: note,
+                    onNewNote: { newNote in
+                        selectedNote = newNote
+                    },
+                    syncController: syncController,
+                    syncConflicts: vm.activeSyncConflicts(for: note),
+                    onOpenSyncConflicts: onOpenSyncConflicts
+                )
             }
 #endif
     }
