@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 struct SyncConflictNotice: View {
     let conflictCount: Int
@@ -78,6 +79,7 @@ struct SyncConflictReviewList: View {
                     onReview(conflict)
                 }
             )
+            .presentationDetents([.large])
         }
     }
 
@@ -151,8 +153,8 @@ private struct SyncConflictDetailView: View {
 
                     actionButtons
                 }
-                .padding()
-                .frame(maxWidth: 760, alignment: .leading)
+                .padding(24)
+                .frame(maxWidth: 1_020, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
             .navigationTitle(conflict.field.displayTitle)
@@ -165,6 +167,7 @@ private struct SyncConflictDetailView: View {
                 }
             }
         }
+        .frame(minWidth: 860, minHeight: 680)
     }
 
     private var actionButtons: some View {
@@ -217,14 +220,35 @@ private struct SyncConflictDetailView: View {
             Text(title)
                 .font(.headline)
 
-            Text(text.isEmpty ? "Empty text" : text)
-                .font(.body)
-                .textSelection(.enabled)
+            SelectableConflictText(text: text.isEmpty ? "Empty text" : text)
+                .frame(minHeight: 160)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(12)
                 .background(Color.secondary.opacity(0.10))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+    }
+}
+
+private struct SelectableConflictText: UIViewRepresentable {
+    let text: String
+
+    func makeUIView(context: Context) -> UITextView {
+        let textView = UITextView()
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.isScrollEnabled = true
+        textView.adjustsFontForContentSizeCategory = true
+        textView.backgroundColor = .clear
+        textView.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
+        textView.textContainer.lineFragmentPadding = 0
+        textView.font = UIFont.preferredFont(forTextStyle: .body)
+        textView.textColor = .label
+        return textView
+    }
+
+    func updateUIView(_ textView: UITextView, context: Context) {
+        textView.text = text
+        textView.font = UIFont.preferredFont(forTextStyle: .body)
     }
 }
 
