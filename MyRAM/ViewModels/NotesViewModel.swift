@@ -1,4 +1,5 @@
 // NotesViewModel.swift
+import NearbySyncCore
 import SwiftUI
 import SwiftData
 
@@ -544,7 +545,22 @@ final class NotesViewModel: ObservableObject {
     }
 
     func markSyncConflictReviewed(_ conflict: SyncConflictVersion) {
-        syncConflicts = syncConflictService.markReviewed(conflict)
+        guard let result = syncConflictService.markReviewed(conflict, activeNoteID: currentNote?.id) else { return }
+        syncConflicts = result.conflicts
+
+        if let note = result.note {
+            recordNoteSyncChange(note)
+        }
+        if let pinnedThought = result.pinnedThought {
+            recordPinnedThoughtSyncChange(pinnedThought)
+        }
+        if let folder = result.folder {
+            recordFolderSyncChange(folder)
+        }
+        if result.shouldRefreshActiveNote {
+            activeNoteSyncRevision += 1
+        }
+        refreshCurrentFolderContent()
     }
 
     func restoreSyncConflict(_ conflict: SyncConflictVersion) {

@@ -250,7 +250,7 @@ struct SyncConflictDetailView: View {
     }
 
     private var reviewedButton: some View {
-        Button("Mark Reviewed") {
+        Button("Keep Local Version") {
             onReview()
         }
         .buttonStyle(.bordered)

@@ -1,5 +1,6 @@
 import Foundation
 import MultipeerConnectivity
+import NearbySyncCore
 
 @MainActor
 final class MyRAMSyncController: NSObject, ObservableObject {

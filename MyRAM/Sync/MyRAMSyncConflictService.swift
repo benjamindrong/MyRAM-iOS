@@ -29,8 +29,36 @@ final class MyRAMSyncConflictService {
         }
     }
 
-    func markReviewed(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
-        store.removeConflict(id: conflict.id)
+    func markReviewed(_ conflict: SyncConflictVersion, activeNoteID: UUID?) -> SyncConflictRestoreResult? {
+        let now = Date()
+        var result = SyncConflictRestoreResult(conflicts: store.activeConflicts())
+
+        switch conflict.field {
+        case .noteTitle, .noteContent:
+            guard let note = fetchNote(withID: conflict.entityID) else { return nil }
+            note.modifiedAt = now
+            result.note = note
+            result.folder = note.folder
+            result.shouldRefreshActiveNote = activeNoteID == note.id
+
+        case .folderTitle:
+            guard let folder = fetchFolder(withID: conflict.entityID) else { return nil }
+            folder.modifiedAt = now
+            result.folder = folder
+
+        case .pinnedText:
+            guard let thought = fetchPinnedThought(withID: conflict.entityID) else { return nil }
+            thought.modifiedAt = now
+            thought.note?.modifiedAt = now
+            result.pinnedThought = thought
+            result.note = thought.note
+            result.folder = thought.note?.folder
+            result.shouldRefreshActiveNote = activeNoteID == thought.note?.id
+        }
+
+        try? context.save()
+        result.conflicts = store.removeConflict(id: conflict.id)
+        return result
     }
 
     func restore(_ conflict: SyncConflictVersion, activeNoteID: UUID?) -> SyncConflictRestoreResult? {
