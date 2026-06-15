@@ -125,27 +125,16 @@ struct SyncConflictDetailView: View {
     let onCopy: () -> Void
     let onRestore: () -> Void
     let onReview: () -> Void
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
-                    HStack(alignment: .firstTextBaseline) {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(conflict.field.displayTitle)
-                                .font(.title3.weight(.semibold))
-                            Text(conflict.preservedAt.formatted(date: .abbreviated, time: .shortened))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        Spacer(minLength: 16)
-
-                        Button("Close") {
-                            dismiss()
-                        }
-                        .buttonStyle(.bordered)
+                    ViewThatFits(in: .horizontal) {
+                        headerRow
+                        headerStack
                     }
 
                     conflictTextSection(title: "Preserved Synced Version", text: conflict.remoteText)
@@ -153,8 +142,8 @@ struct SyncConflictDetailView: View {
 
                     actionButtons
                 }
-                .padding(24)
-                .frame(maxWidth: 1_020, alignment: .leading)
+                .padding(detailPadding)
+                .frame(maxWidth: detailMaxWidth, alignment: .leading)
                 .frame(maxWidth: .infinity)
             }
             .navigationTitle(conflict.field.displayTitle)
@@ -167,31 +156,83 @@ struct SyncConflictDetailView: View {
                 }
             }
         }
-        .frame(minWidth: 860, minHeight: 680)
+        .modifier(SyncConflictDetailFrame())
+    }
+
+    private var headerRow: some View {
+        HStack(alignment: .firstTextBaseline) {
+            headerTitle
+
+            Spacer(minLength: 16)
+
+            closeButton
+        }
+    }
+
+    private var headerStack: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            headerTitle
+            closeButton
+        }
+    }
+
+    private var headerTitle: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(conflict.field.displayTitle)
+                .font(.title3.weight(.semibold))
+            Text(conflict.preservedAt.formatted(date: .abbreviated, time: .shortened))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var closeButton: some View {
+        Button("Close") {
+            dismiss()
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var detailPadding: CGFloat {
+        horizontalSizeClass == .compact ? 16 : 24
+    }
+
+    private var detailMaxWidth: CGFloat {
+        horizontalSizeClass == .compact ? .infinity : 1_020
     }
 
     private var actionButtons: some View {
-        ViewThatFits(in: .horizontal) {
-            HStack(spacing: 10) {
-                copyButton
+        Group {
+#if targetEnvironment(macCatalyst)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    copyButton
 
-                Spacer(minLength: 8)
+                    Spacer(minLength: 8)
 
-                restoreButton
-                reviewedButton
+                    restoreButton
+                    reviewedButton
+                }
+
+                stackedActionButtons
             }
-
-            VStack(alignment: .leading, spacing: 10) {
-                copyButton
-                    .frame(maxWidth: .infinity)
-                restoreButton
-                    .frame(maxWidth: .infinity)
-                reviewedButton
-                    .frame(maxWidth: .infinity)
-            }
+#else
+            stackedActionButtons
+#endif
         }
         .controlSize(.regular)
         .padding(.top, 4)
+    }
+
+    private var stackedActionButtons: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            copyButton
+                .frame(maxWidth: .infinity)
+            restoreButton
+                .frame(maxWidth: .infinity)
+            reviewedButton
+                .frame(maxWidth: .infinity)
+        }
     }
 
     private var copyButton: some View {
@@ -226,6 +267,16 @@ struct SyncConflictDetailView: View {
                 .background(Color.secondary.opacity(0.10))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+    }
+}
+
+private struct SyncConflictDetailFrame: ViewModifier {
+    func body(content: Content) -> some View {
+#if targetEnvironment(macCatalyst)
+        content.frame(minWidth: 860, minHeight: 680)
+#else
+        content
+#endif
     }
 }
 
