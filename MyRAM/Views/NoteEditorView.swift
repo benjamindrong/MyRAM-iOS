@@ -85,7 +85,8 @@ struct NoteEditorView: View {
     
     var body: some View {
         NavigationStack {
-            VStack(spacing: 12) {
+            ZStack {
+                VStack(spacing: 12) {
                 if showsTopBar {
                     editorTopBar
                 }
@@ -252,9 +253,6 @@ struct NoteEditorView: View {
                 guard case let .success(urls) = result else { return }
                 importImageFiles(from: urls)
             }
-            .sheet(item: $expandedAttachment) { attachment in
-                ExpandedPhotoView(attachment: attachment)
-            }
             .sheet(item: $lookupRequest) { request in
                 ReferenceLookupView(term: request.term)
             }
@@ -301,6 +299,16 @@ struct NoteEditorView: View {
                 }
             } message: {
                 Text("Update the note title.")
+            }
+
+                if let expandedAttachment {
+                    ExpandedPhotoView(attachment: expandedAttachment) {
+                        self.expandedAttachment = nil
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .ignoresSafeArea()
+                    .zIndex(10)
+                }
             }
         }
     }
@@ -1922,8 +1930,8 @@ private struct AttachmentThumbnail: View {
 }
 
 private struct ExpandedPhotoView: View {
-    @Environment(\.dismiss) private var dismiss
     let attachment: NotePhotoAttachment
+    let onDismiss: () -> Void
 
     var body: some View {
         NavigationStack {
@@ -1946,7 +1954,7 @@ private struct ExpandedPhotoView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button("Done") {
-                        dismiss()
+                        onDismiss()
                     }
                 }
             }
