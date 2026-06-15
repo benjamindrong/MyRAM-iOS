@@ -342,6 +342,20 @@ final class NotesViewModel: ObservableObject {
         recordNoteSyncChange(note)
     }
 
+    func updateNote(
+        _ note: Note,
+        title: String,
+        content: String,
+        richTextContentData: Data? = nil
+    ) {
+        commitNoteEdit(
+            note,
+            title: title,
+            content: content,
+            richTextContentData: richTextContentData
+        )
+    }
+
     func addPinnedThought(to note: Note, text: String = "") -> PinnedThought? {
         guard note.deletedAt == nil else { return nil }
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -528,6 +542,11 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        recordNoteSyncChange(note)
+        recordPhotoAttachmentSyncChange(attachment, updatedAt: note.modifiedAt)
+        if let folder = note.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -541,11 +560,17 @@ final class NotesViewModel: ObservableObject {
 
     func removePhotoAttachment(_ attachment: NotePhotoAttachment, from note: Note) {
         guard note.deletedAt == nil else { return }
+        let deletionPayload = MyRAMPhotoAttachmentSyncPayload(attachment: attachment, isDeleted: true)
         note.photoAttachments.removeAll { $0.id == attachment.id }
         context.delete(attachment)
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
+        recordNoteSyncChange(note)
+        recordPhotoAttachmentSyncDeletion(deletionPayload, updatedAt: note.modifiedAt)
+        if let folder = note.folder {
+            recordFolderSyncChange(folder)
+        }
         refreshCurrentFolderContent()
     }
 
@@ -931,6 +956,15 @@ final class NotesViewModel: ObservableObject {
         return (try? context.fetch(descriptor))?.first
     }
 
+    private func fetchPhotoAttachment(withID attachmentID: UUID) -> NotePhotoAttachment? {
+        let descriptor = FetchDescriptor<NotePhotoAttachment>(
+            predicate: #Predicate { attachment in
+                attachment.id == attachmentID
+            }
+        )
+        return (try? context.fetch(descriptor))?.first
+    }
+
     private func recordNoteSyncChange(_ note: Note, operation: SyncOperation = .upsert) {
         guard !isApplyingRemoteSyncChange,
               let payload = try? MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: note)) else { return }
@@ -994,7 +1028,32 @@ final class NotesViewModel: ObservableObject {
         )
     }
 
-    private func applyIncomingSyncChanges(_ changes: [SyncChange]) async {
+    private func recordPhotoAttachmentSyncChange(_ attachment: NotePhotoAttachment, updatedAt: Date) {
+        guard !isApplyingRemoteSyncChange,
+              let payload = try? MyRAMSyncPayloadCoding.encode(MyRAMPhotoAttachmentSyncPayload(attachment: attachment)) else { return }
+
+        syncController?.recordLocalChange(
+            entityType: .attachment,
+            entityID: attachment.id.uuidString,
+            payload: payload,
+            updatedAt: updatedAt
+        )
+    }
+
+    private func recordPhotoAttachmentSyncDeletion(_ payload: MyRAMPhotoAttachmentSyncPayload, updatedAt: Date) {
+        guard !isApplyingRemoteSyncChange,
+              let data = try? MyRAMSyncPayloadCoding.encode(payload) else { return }
+
+        syncController?.recordLocalChange(
+            entityType: .attachment,
+            entityID: payload.id.uuidString,
+            operation: .delete,
+            payload: data,
+            updatedAt: updatedAt
+        )
+    }
+
+    func applyIncomingSyncChanges(_ changes: [SyncChange]) async {
         guard !changes.isEmpty else { return }
         let activeNoteID = currentNote?.id
         var shouldRefreshActiveNote = false
@@ -1011,6 +1070,10 @@ final class NotesViewModel: ObservableObject {
                 applyIncomingFolderChange(change)
             case .marker:
                 if applyIncomingPinnedThoughtChange(change, activeNoteID: activeNoteID) {
+                    shouldRefreshActiveNote = true
+                }
+            case .attachment:
+                if applyIncomingPhotoAttachmentChange(change, activeNoteID: activeNoteID) {
                     shouldRefreshActiveNote = true
                 }
             }
@@ -1121,6 +1184,40 @@ final class NotesViewModel: ObservableObject {
             destinationNote.pinnedThoughts.append(thought)
         }
         return activeNoteID == previousNoteID || activeNoteID == destinationNote?.id
+    }
+
+    private func applyIncomingPhotoAttachmentChange(_ change: SyncChange, activeNoteID: UUID?) -> Bool {
+        guard let payload = try? MyRAMSyncPayloadCoding.decodePhotoAttachment(from: change.payload) else { return false }
+
+        if change.operation == .delete || payload.isDeleted {
+            guard let attachment = fetchPhotoAttachment(withID: payload.id) else { return false }
+            let note = attachment.note
+            note?.photoAttachments.removeAll { $0.id == attachment.id }
+            context.delete(attachment)
+            return activeNoteID == note?.id
+        }
+
+        guard let destinationNote = payload.noteID.flatMap(fetchNote(withID:)) else { return false }
+        let previousAttachment = fetchPhotoAttachment(withID: payload.id)
+        let attachment = previousAttachment ?? NotePhotoAttachment(
+            imageData: payload.imageData,
+            note: destinationNote
+        )
+
+        if attachment.id != payload.id {
+            attachment.id = payload.id
+            context.insert(attachment)
+        } else if attachment.note?.id != destinationNote.id {
+            attachment.note?.photoAttachments.removeAll { $0.id == attachment.id }
+        }
+
+        attachment.imageData = payload.imageData
+        attachment.createdAt = payload.createdAt
+        attachment.note = destinationNote
+        if !destinationNote.photoAttachments.contains(where: { $0.id == attachment.id }) {
+            destinationNote.photoAttachments.append(attachment)
+        }
+        return activeNoteID == destinationNote.id
     }
 
     private func removeUndoHistoryReferencingDeletedNote(noteID: UUID) {

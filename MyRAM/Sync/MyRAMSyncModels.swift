@@ -4,6 +4,7 @@ enum MyRAMSyncPayloadKind: String, Codable {
     case note
     case folder
     case pinnedThought
+    case photoAttachment
 }
 
 struct MyRAMNoteSyncPayload: Codable, Equatable {
@@ -76,6 +77,24 @@ struct MyRAMPinnedThoughtSyncPayload: Codable, Equatable {
     }
 }
 
+struct MyRAMPhotoAttachmentSyncPayload: Codable, Equatable {
+    let kind: MyRAMSyncPayloadKind
+    let id: UUID
+    let noteID: UUID?
+    let imageData: Data
+    let createdAt: Date
+    let isDeleted: Bool
+
+    init(attachment: NotePhotoAttachment, isDeleted: Bool = false) {
+        kind = .photoAttachment
+        id = attachment.id
+        noteID = attachment.note?.id
+        imageData = attachment.imageData
+        createdAt = attachment.createdAt
+        self.isDeleted = isDeleted
+    }
+}
+
 enum MyRAMSyncPayloadCoding {
     private static let encoder = JSONEncoder()
     private static let decoder = JSONDecoder()
@@ -92,6 +111,10 @@ enum MyRAMSyncPayloadCoding {
         try encoder.encode(payload)
     }
 
+    static func encode(_ payload: MyRAMPhotoAttachmentSyncPayload) throws -> Data {
+        try encoder.encode(payload)
+    }
+
     static func decodeNote(from data: Data) throws -> MyRAMNoteSyncPayload {
         try decoder.decode(MyRAMNoteSyncPayload.self, from: data)
     }
@@ -103,5 +126,8 @@ enum MyRAMSyncPayloadCoding {
     static func decodePinnedThought(from data: Data) throws -> MyRAMPinnedThoughtSyncPayload {
         try decoder.decode(MyRAMPinnedThoughtSyncPayload.self, from: data)
     }
-}
 
+    static func decodePhotoAttachment(from data: Data) throws -> MyRAMPhotoAttachmentSyncPayload {
+        try decoder.decode(MyRAMPhotoAttachmentSyncPayload.self, from: data)
+    }
+}

@@ -4,6 +4,7 @@ public enum SyncEntityType: String, Codable, CaseIterable, Sendable {
     case item
     case collection
     case marker
+    case attachment
 }
 
 public enum SyncOperation: String, Codable, Sendable {

@@ -93,6 +93,22 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(decoded.folderID, folderID)
     }
 
+    func testPhotoAttachmentSyncPayloadRoundTripsImageFields() throws {
+        let note = Note(title: "Photo host")
+        let attachment = NotePhotoAttachment(imageData: Data("image".utf8), note: note)
+        attachment.createdAt = Date(timeIntervalSince1970: 400)
+
+        let data = try MyRAMSyncPayloadCoding.encode(MyRAMPhotoAttachmentSyncPayload(attachment: attachment))
+        let decoded = try MyRAMSyncPayloadCoding.decodePhotoAttachment(from: data)
+
+        XCTAssertEqual(decoded.kind, .photoAttachment)
+        XCTAssertEqual(decoded.id, attachment.id)
+        XCTAssertEqual(decoded.noteID, note.id)
+        XCTAssertEqual(decoded.imageData, Data("image".utf8))
+        XCTAssertEqual(decoded.createdAt, attachment.createdAt)
+        XCTAssertFalse(decoded.isDeleted)
+    }
+
     func testFolderAndPinnedPayloadsMapToCollectionAndMarkerChanges() async throws {
         let store = InMemorySyncStore()
         let engine = SyncEngine(deviceID: "device-a", store: store)
@@ -113,10 +129,12 @@ final class MyRAMTests: XCTestCase {
             updatedAt: thought.modifiedAt
         )
 
-        let envelope = try XCTUnwrap(await engine.nextEnvelope())
+        let nextEnvelope = await engine.nextEnvelope()
+        let envelope = try XCTUnwrap(nextEnvelope)
+        let pendingChangeCount = await engine.pendingChangeCount()
 
         XCTAssertEqual(envelope.changes.map(\.entityType), [.collection, .marker])
-        XCTAssertEqual(await engine.pendingChangeCount(), 2)
+        XCTAssertEqual(pendingChangeCount, 2)
     }
 
     func testPendingSyncChangesCoalesceByEntity() async throws {
@@ -137,11 +155,13 @@ final class MyRAMTests: XCTestCase {
             updatedAt: Date(timeIntervalSince1970: 101)
         )
 
-        let envelope = try XCTUnwrap(await engine.nextEnvelope())
+        let nextEnvelope = await engine.nextEnvelope()
+        let envelope = try XCTUnwrap(nextEnvelope)
+        let pendingChangeCount = await engine.pendingChangeCount()
 
         XCTAssertEqual(envelope.changes.count, 1)
         XCTAssertEqual(envelope.changes.first?.payload, Data("second".utf8))
-        XCTAssertEqual(await engine.pendingChangeCount(), 1)
+        XCTAssertEqual(pendingChangeCount, 1)
     }
 
     func testPendingSyncChangesKeepDifferentEntities() async throws {
@@ -163,10 +183,54 @@ final class MyRAMTests: XCTestCase {
             updatedAt: Date(timeIntervalSince1970: 101)
         )
 
-        let envelope = try XCTUnwrap(await engine.nextEnvelope())
+        let nextEnvelope = await engine.nextEnvelope()
+        let envelope = try XCTUnwrap(nextEnvelope)
+        let pendingChangeCount = await engine.pendingChangeCount()
 
         XCTAssertEqual(envelope.changes.map(\.entityType), [.item, .collection])
-        XCTAssertEqual(await engine.pendingChangeCount(), 2)
+        XCTAssertEqual(pendingChangeCount, 2)
+    }
+
+    func testIncomingPhotoAttachmentSyncAddsAndRemovesAttachment() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+        let remoteNote = Note(title: "Remote host")
+        remoteNote.id = note.id
+        let attachment = NotePhotoAttachment(imageData: Data("remote".utf8), note: remoteNote)
+        attachment.createdAt = Date(timeIntervalSince1970: 500)
+        let addPayload = try MyRAMSyncPayloadCoding.encode(MyRAMPhotoAttachmentSyncPayload(attachment: attachment))
+
+        await vm.applyIncomingSyncChanges([
+            SyncChange(
+                entityType: .attachment,
+                entityID: attachment.id.uuidString,
+                operation: .upsert,
+                payload: addPayload,
+                updatedAt: Date(timeIntervalSince1970: 501),
+                originDeviceID: "device-b"
+            )
+        ])
+
+        XCTAssertEqual(note.photoAttachments.count, 1)
+        XCTAssertEqual(note.photoAttachments.first?.id, attachment.id)
+        XCTAssertEqual(note.photoAttachments.first?.imageData, Data("remote".utf8))
+
+        let deletePayload = try MyRAMSyncPayloadCoding.encode(
+            MyRAMPhotoAttachmentSyncPayload(attachment: note.photoAttachments[0], isDeleted: true)
+        )
+        await vm.applyIncomingSyncChanges([
+            SyncChange(
+                entityType: .attachment,
+                entityID: attachment.id.uuidString,
+                operation: .delete,
+                payload: deletePayload,
+                updatedAt: Date(timeIntervalSince1970: 502),
+                originDeviceID: "device-b"
+            )
+        ])
+
+        XCTAssertTrue(note.photoAttachments.isEmpty)
     }
 
     func testWarmPaperAppearanceUsesIconPalette() {
