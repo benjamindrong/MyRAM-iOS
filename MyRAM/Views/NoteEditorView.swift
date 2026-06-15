@@ -1951,6 +1951,14 @@ private struct ExpandedPhotoView: View {
                 }
             }
         }
+        .frame(
+            minWidth: 320,
+            idealWidth: 900,
+            maxWidth: .infinity,
+            minHeight: 320,
+            idealHeight: 700,
+            maxHeight: .infinity
+        )
     }
 }
 
