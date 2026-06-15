@@ -191,6 +191,73 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(pendingChangeCount, 2)
     }
 
+    func testSyncQueuePersistsPendingChangesAcrossInstances() async throws {
+        let fileURL = temporarySyncQueueFileURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let persistence = FileBackedSyncQueuePersistence(fileURL: fileURL)
+        let noteID = UUID().uuidString
+        let change = SyncChange(
+            entityType: .item,
+            entityID: noteID,
+            operation: .upsert,
+            payload: Data("persisted".utf8),
+            updatedAt: Date(timeIntervalSince1970: 100),
+            originDeviceID: "device-a"
+        )
+
+        await SyncQueue(persistence: persistence).enqueue(change)
+        let reloadedQueue = SyncQueue(persistence: FileBackedSyncQueuePersistence(fileURL: fileURL))
+        let reloadedBatch = await reloadedQueue.pendingBatch()
+
+        XCTAssertEqual(reloadedBatch, [change])
+    }
+
+    func testSyncQueuePersistsAcknowledgedChangesRemoval() async throws {
+        let fileURL = temporarySyncQueueFileURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let queue = SyncQueue(persistence: FileBackedSyncQueuePersistence(fileURL: fileURL))
+        let change = SyncChange(
+            entityType: .attachment,
+            entityID: UUID().uuidString,
+            operation: .upsert,
+            payload: Data("image".utf8),
+            updatedAt: Date(timeIntervalSince1970: 100),
+            originDeviceID: "device-a"
+        )
+
+        await queue.enqueue(change)
+        await queue.markAcknowledged([change.id])
+        let reloadedQueue = SyncQueue(persistence: FileBackedSyncQueuePersistence(fileURL: fileURL))
+        let reloadedBatch = await reloadedQueue.pendingBatch()
+
+        XCTAssertTrue(reloadedBatch.isEmpty)
+    }
+
+    func testSyncEnvelopeDecodesMissingAcknowledgements() throws {
+        let change = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            entityType: .item,
+            entityID: UUID().uuidString,
+            operation: .upsert,
+            payload: Data("payload".utf8),
+            updatedAt: Date(timeIntervalSince1970: 100),
+            originDeviceID: "device-a"
+        )
+        let envelope = SyncEnvelope(
+            senderDeviceID: "device-a",
+            sentAt: Date(timeIntervalSince1970: 200),
+            changes: [change]
+        )
+        var json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(envelope)) as? [String: Any]
+        json?["acknowledgedChangeIDs"] = nil
+        let legacyData = try JSONSerialization.data(withJSONObject: try XCTUnwrap(json))
+
+        let decodedEnvelope = try JSONDecoder().decode(SyncEnvelope.self, from: legacyData)
+
+        XCTAssertEqual(decodedEnvelope.changes, [change])
+        XCTAssertTrue(decodedEnvelope.acknowledgedChangeIDs.isEmpty)
+    }
+
     func testIncomingPhotoAttachmentSyncAddsAndRemovesAttachment() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
@@ -1741,6 +1808,12 @@ final class MyRAMTests: XCTestCase {
         }
 
         return try XCTUnwrap(image.jpegData(compressionQuality: 0.8))
+    }
+
+    private func temporarySyncQueueFileURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("sync-pending-changes.json")
     }
 
     private func iso8601String(_ date: Date) -> String {

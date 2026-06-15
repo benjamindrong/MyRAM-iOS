@@ -44,11 +44,33 @@ public struct SyncEnvelope: Codable, Equatable, Sendable {
     public let senderDeviceID: String
     public let sentAt: Date
     public let changes: [SyncChange]
+    public let acknowledgedChangeIDs: [UUID]
 
-    public init(senderDeviceID: String, sentAt: Date = Date(), changes: [SyncChange]) {
+    public init(
+        senderDeviceID: String,
+        sentAt: Date = Date(),
+        changes: [SyncChange],
+        acknowledgedChangeIDs: [UUID] = []
+    ) {
         self.senderDeviceID = senderDeviceID
         self.sentAt = sentAt
         self.changes = changes
+        self.acknowledgedChangeIDs = acknowledgedChangeIDs
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case senderDeviceID
+        case sentAt
+        case changes
+        case acknowledgedChangeIDs
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        senderDeviceID = try container.decode(String.self, forKey: .senderDeviceID)
+        sentAt = try container.decode(Date.self, forKey: .sentAt)
+        changes = try container.decode([SyncChange].self, forKey: .changes)
+        acknowledgedChangeIDs = try container.decodeIfPresent([UUID].self, forKey: .acknowledgedChangeIDs) ?? []
     }
 }
 

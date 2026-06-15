@@ -32,7 +32,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
         localPeerName = deviceName
         peerID = peer
-        syncEngine = SyncEngine(deviceID: storedDeviceID, store: syncStore)
+        syncEngine = SyncEngine(
+            deviceID: storedDeviceID,
+            store: syncStore,
+            queue: SyncQueue(persistence: FileBackedSyncQueuePersistence(fileURL: Self.pendingChangesFileURL()))
+        )
         session = MCSession(peer: peer, securityIdentity: nil, encryptionPreference: .required)
         advertiser = MCNearbyServiceAdvertiser(peer: peer, discoveryInfo: nil, serviceType: serviceType)
         browser = MCNearbyServiceBrowser(peer: peer, serviceType: serviceType)
@@ -44,6 +48,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         browser.delegate = self
         advertiser.startAdvertisingPeer()
         browser.startBrowsingForPeers()
+
+        Task {
+            await updatePendingCount()
+            await sendPendingChanges()
+        }
     }
 
     deinit {
@@ -103,7 +112,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         do {
             let data = try JSONEncoder().encode(envelope)
             try session.send(data, toPeers: session.connectedPeers, with: .reliable)
-            await syncEngine.markEnvelopeSent(envelope)
             lastSyncAt = envelope.sentAt
             lastErrorMessage = nil
         } catch {
@@ -115,6 +123,34 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     private func updatePendingCount() async {
         pendingChangeCount = await syncEngine.pendingChangeCount()
+    }
+
+    private func sendAcknowledgement(for changes: [SyncChange], to peerID: MCPeerID) async {
+        guard !changes.isEmpty else { return }
+
+        let envelope = SyncEnvelope(
+            senderDeviceID: syncEngine.deviceID,
+            changes: [],
+            acknowledgedChangeIDs: changes.map(\.id)
+        )
+
+        do {
+            let data = try JSONEncoder().encode(envelope)
+            try session.send(data, toPeers: [peerID], with: .reliable)
+            lastErrorMessage = nil
+        } catch {
+            lastErrorMessage = "Unable to confirm nearby sync."
+        }
+    }
+
+    private static func pendingChangesFileURL() -> URL {
+        let supportDirectory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first ?? FileManager.default.temporaryDirectory
+        return supportDirectory
+            .appendingPathComponent("MyRAM", isDirectory: true)
+            .appendingPathComponent("sync-pending-changes.json")
     }
 
     private func rememberTrustedPeer(_ peerID: MCPeerID) {
@@ -166,10 +202,12 @@ extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
             guard let envelope = try? JSONDecoder().decode(SyncEnvelope.self, from: data) else { return }
+            await syncEngine.acknowledgeChanges(envelope.acknowledgedChangeIDs)
             let result = await syncEngine.applyIncomingEnvelope(envelope)
             let changesByID = Dictionary(uniqueKeysWithValues: envelope.changes.map { ($0.id, $0) })
             let appliedChanges = result.appliedChangeIDs.compactMap { changesByID[$0] }
             await onChangesReceived?(appliedChanges)
+            await sendAcknowledgement(for: envelope.changes, to: peerID)
             rememberTrustedPeer(peerID)
             lastConnectionEvent = "Received sync from \(displayName(for: peerID))"
             lastSyncAt = envelope.sentAt

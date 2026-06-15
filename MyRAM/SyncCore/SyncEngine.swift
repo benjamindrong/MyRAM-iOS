@@ -38,8 +38,8 @@ public final class SyncEngine: @unchecked Sendable {
         return SyncEnvelope(senderDeviceID: deviceID, changes: changes)
     }
 
-    public func markEnvelopeSent(_ envelope: SyncEnvelope) async {
-        await queue.markSent(envelope.changes)
+    public func acknowledgeChanges(_ changeIDs: [UUID]) async {
+        await queue.markAcknowledged(changeIDs)
     }
 
     public func applyIncomingEnvelope(_ envelope: SyncEnvelope) async -> SyncApplyResult {
