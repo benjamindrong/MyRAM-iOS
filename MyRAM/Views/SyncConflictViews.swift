@@ -120,7 +120,7 @@ struct SyncConflictReviewList: View {
     }
 }
 
-private struct SyncConflictDetailView: View {
+struct SyncConflictDetailView: View {
     let conflict: SyncConflictVersion
     let onCopy: () -> Void
     let onRestore: () -> Void

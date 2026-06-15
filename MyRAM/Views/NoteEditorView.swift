@@ -69,6 +69,7 @@ struct NoteEditorView: View {
     @State private var lookupRequest: LookupRequest?
     @State private var sharePayload: NoteSharePayload?
     @State private var exportErrorMessage: String?
+    @State private var selectedSyncConflict: SyncConflictVersion?
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
     @State private var showingTitleEditor = false
@@ -101,7 +102,13 @@ struct NoteEditorView: View {
                         if !syncConflicts.isEmpty, let onOpenSyncConflicts {
                             SyncConflictNotice(
                                 conflictCount: syncConflicts.count,
-                                onOpen: onOpenSyncConflicts
+                                onOpen: {
+                                    if let firstConflict = syncConflicts.first {
+                                        selectedSyncConflict = firstConflict
+                                    } else {
+                                        onOpenSyncConflicts()
+                                    }
+                                }
                             )
                         }
 
@@ -275,6 +282,23 @@ struct NoteEditorView: View {
             }
             .sheet(item: $sharePayload) { payload in
                 ActivityShareSheet(activityItems: payload.urls)
+            }
+            .sheet(item: $selectedSyncConflict) { conflict in
+                SyncConflictDetailView(
+                    conflict: conflict,
+                    onCopy: {
+                        UIPasteboard.general.string = conflict.remoteText
+                    },
+                    onRestore: {
+                        selectedSyncConflict = nil
+                        vm.restoreSyncConflict(conflict)
+                    },
+                    onReview: {
+                        selectedSyncConflict = nil
+                        vm.markSyncConflictReviewed(conflict)
+                    }
+                )
+                .presentationDetents([.large])
             }
             .confirmationDialog("Edit History", isPresented: $showingUndoRedoActions, titleVisibility: .visible) {
                 Button("Undo") {
