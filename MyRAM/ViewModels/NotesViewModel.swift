@@ -548,15 +548,6 @@ final class NotesViewModel: ObservableObject {
         guard let result = syncConflictService.markReviewed(conflict, activeNoteID: currentNote?.id) else { return }
         syncConflicts = result.conflicts
 
-        if let note = result.note {
-            recordNoteSyncChange(note)
-        }
-        if let pinnedThought = result.pinnedThought {
-            recordPinnedThoughtSyncChange(pinnedThought)
-        }
-        if let folder = result.folder {
-            recordFolderSyncChange(folder)
-        }
         if result.shouldRefreshActiveNote {
             activeNoteSyncRevision += 1
         }
@@ -567,18 +558,14 @@ final class NotesViewModel: ObservableObject {
         guard let result = syncConflictService.restore(conflict, activeNoteID: currentNote?.id) else { return }
         syncConflicts = result.conflicts
 
-        if let note = result.note {
-            recordNoteSyncChange(note)
-        }
-        if let pinnedThought = result.pinnedThought {
-            recordPinnedThoughtSyncChange(pinnedThought)
-        }
-        if let folder = result.folder {
-            recordFolderSyncChange(folder)
-        }
         if result.shouldRefreshActiveNote {
             activeNoteSyncRevision += 1
         }
+        refreshCurrentFolderContent()
+    }
+
+    func discardSyncConflict(_ conflict: SyncConflictVersion) {
+        syncConflicts = syncConflictService.discard(conflict)
         refreshCurrentFolderContent()
     }
 

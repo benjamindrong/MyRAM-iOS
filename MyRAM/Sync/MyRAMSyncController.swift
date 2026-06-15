@@ -91,12 +91,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 updatedAt: updatedAt
             )
             await updatePendingCount()
-            debouncedSender.schedule()
+            await debouncedSender.schedule()
         }
     }
 
     func flushPendingChanges() {
-        debouncedSender.flushNow()
+        Task {
+            await debouncedSender.flushNow()
+        }
     }
 
     private func sendPendingChanges() async {
@@ -138,6 +140,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         do {
             let data = try JSONEncoder().encode(envelope)
             try session.send(data, toPeers: [peerID], with: .reliable)
+            await syncEngine.markAcknowledgementSent(changes.map(\.id))
             lastErrorMessage = nil
         } catch {
             lastErrorMessage = "Unable to confirm nearby sync."
@@ -203,7 +206,6 @@ extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
             guard let envelope = try? JSONDecoder().decode(SyncEnvelope.self, from: data) else { return }
-            await syncEngine.acknowledgeChanges(envelope.acknowledgedChangeIDs)
             let result = await syncEngine.applyIncomingEnvelope(envelope)
             let changesByID = Dictionary(uniqueKeysWithValues: envelope.changes.map { ($0.id, $0) })
             let appliedChanges = result.appliedChangeIDs.compactMap { changesByID[$0] }

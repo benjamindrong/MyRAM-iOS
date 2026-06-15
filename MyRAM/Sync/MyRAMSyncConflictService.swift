@@ -61,6 +61,10 @@ final class MyRAMSyncConflictService {
         return result
     }
 
+    func discard(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
+        store.removeConflict(id: conflict.id)
+    }
+
     func restore(_ conflict: SyncConflictVersion, activeNoteID: UUID?) -> SyncConflictRestoreResult? {
         let now = Date()
         var result = SyncConflictRestoreResult(conflicts: store.activeConflicts())

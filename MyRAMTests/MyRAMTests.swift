@@ -386,6 +386,103 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(conflicts.contains { $0.localText == "Local body" && $0.remoteText == "Remote body" })
     }
 
+    func testIncomingNewNoteAppliesWithoutConflict() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let remoteNote = Note(title: "Remote title", content: "Remote body")
+        remoteNote.id = UUID()
+        remoteNote.createdAt = Date(timeIntervalSince1970: 90)
+        remoteNote.modifiedAt = Date(timeIntervalSince1970: 100)
+        let payload = try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: remoteNote))
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        _ = applier.apply(
+            [
+                SyncChange(
+                    entityType: .item,
+                    entityID: remoteNote.id.uuidString,
+                    operation: .upsert,
+                    payload: payload,
+                    updatedAt: remoteNote.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: nil,
+            currentNoteID: nil,
+            currentFolderID: nil
+        )
+
+        let descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { note in
+                note.id == remoteNote.id
+            }
+        )
+        let syncedNote = try XCTUnwrap(context.fetch(descriptor).first)
+        XCTAssertEqual(syncedNote.title, "Remote title")
+        XCTAssertEqual(syncedNote.content, "Remote body")
+        XCTAssertTrue(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 101)).isEmpty)
+    }
+
+    func testIncomingCleanNoteEditAppliesWithoutConflictWhenLocalMatchesRemoteBaseline() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let noteID = UUID()
+        let originalRemoteNote = Note(title: "Original title", content: "Original body")
+        originalRemoteNote.id = noteID
+        originalRemoteNote.modifiedAt = Date(timeIntervalSince1970: 100)
+        let editedRemoteNote = Note(title: "Edited title", content: "Edited body")
+        editedRemoteNote.id = noteID
+        editedRemoteNote.modifiedAt = Date(timeIntervalSince1970: 200)
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        _ = applier.apply(
+            [
+                SyncChange(
+                    entityType: .item,
+                    entityID: noteID.uuidString,
+                    operation: .upsert,
+                    payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: originalRemoteNote)),
+                    updatedAt: originalRemoteNote.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: noteID,
+            currentNoteID: noteID,
+            currentFolderID: nil
+        )
+        _ = applier.apply(
+            [
+                SyncChange(
+                    entityType: .item,
+                    entityID: noteID.uuidString,
+                    operation: .upsert,
+                    payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: editedRemoteNote)),
+                    updatedAt: editedRemoteNote.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: noteID,
+            currentNoteID: noteID,
+            currentFolderID: nil
+        )
+
+        let descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { note in
+                note.id == noteID
+            }
+        )
+        let syncedNote = try XCTUnwrap(context.fetch(descriptor).first)
+        XCTAssertEqual(syncedNote.title, "Edited title")
+        XCTAssertEqual(syncedNote.content, "Edited body")
+        XCTAssertTrue(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 201)).isEmpty)
+    }
+
     func testIncomingFolderDeletePreservesRenamedFolderAsConflict() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -1360,6 +1457,25 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(decoded.string, "Bold Italic")
         let underlineValue = decoded.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
         XCTAssertEqual(underlineValue, NSUnderlineStyle.single.rawValue)
+    }
+
+    func testRichTextCodecRoundTripPreservesConcreteFontSize() throws {
+        let mutable = NSMutableAttributedString(string: "Sized")
+        mutable.addAttribute(
+            .font,
+            value: UIFont.systemFont(ofSize: 24),
+            range: NSRange(location: 0, length: mutable.length)
+        )
+        let encoded = try XCTUnwrap(RichTextContentCodec.encode(mutable))
+
+        let decoded = RichTextContentCodec.decode(
+            richTextData: encoded,
+            plainText: "",
+            baseFont: UIFont.systemFont(ofSize: 17)
+        )
+
+        let decodedFont = try XCTUnwrap(decoded.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
+        XCTAssertEqual(decodedFont.pointSize, 24, accuracy: 0.5)
     }
 
     func testRichTextCodecRoundTripPreservesForegroundColor() throws {

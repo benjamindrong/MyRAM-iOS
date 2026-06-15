@@ -52,6 +52,7 @@ struct SyncConflictReviewList: View {
     let onCopy: (SyncConflictVersion) -> Void
     let onRestore: (SyncConflictVersion) -> Void
     let onReview: (SyncConflictVersion) -> Void
+    let onDiscard: (SyncConflictVersion) -> Void
     @State private var selectedConflict: SyncConflictVersion?
 
     var body: some View {
@@ -77,6 +78,10 @@ struct SyncConflictReviewList: View {
                 onReview: {
                     selectedConflict = nil
                     onReview(conflict)
+                },
+                onDiscard: {
+                    selectedConflict = nil
+                    onDiscard(conflict)
                 }
             )
             .presentationDetents([.large])
@@ -125,6 +130,7 @@ struct SyncConflictDetailView: View {
     let onCopy: () -> Void
     let onRestore: () -> Void
     let onReview: () -> Void
+    let onDiscard: () -> Void
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dismiss) private var dismiss
 
@@ -212,6 +218,7 @@ struct SyncConflictDetailView: View {
 
                     restoreButton
                     reviewedButton
+                    discardButton
                 }
 
                 stackedActionButtons
@@ -231,6 +238,8 @@ struct SyncConflictDetailView: View {
             restoreButton
                 .frame(maxWidth: .infinity)
             reviewedButton
+                .frame(maxWidth: .infinity)
+            discardButton
                 .frame(maxWidth: .infinity)
         }
     }
@@ -252,6 +261,13 @@ struct SyncConflictDetailView: View {
     private var reviewedButton: some View {
         Button("Keep Local Version") {
             onReview()
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var discardButton: some View {
+        Button("Discard Preserved Version", role: .destructive) {
+            onDiscard()
         }
         .buttonStyle(.bordered)
     }

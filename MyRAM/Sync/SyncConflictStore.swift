@@ -53,6 +53,15 @@ struct SyncConflictVersion: Codable, Equatable, Identifiable {
     }
 }
 
+struct SyncRemoteTextBaseline: Codable, Equatable {
+    let entityType: SyncConflictEntityType
+    let entityID: UUID
+    let field: SyncConflictField
+    let text: String
+    let richTextContentData: Data?
+    let modifiedAt: Date
+}
+
 final class SyncConflictStore {
     static let retention: TimeInterval = 7 * 24 * 60 * 60
 
@@ -98,6 +107,32 @@ final class SyncConflictStore {
         return conflicts
     }
 
+    func remoteBaseline(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField
+    ) -> SyncRemoteTextBaseline? {
+        loadBaselines().first {
+            $0.entityType == entityType
+                && $0.entityID == entityID
+                && $0.field == field
+        }
+    }
+
+    func saveRemoteBaseline(_ baseline: SyncRemoteTextBaseline) {
+        var baselines = loadBaselines()
+        if let index = baselines.firstIndex(where: {
+            $0.entityType == baseline.entityType
+                && $0.entityID == baseline.entityID
+                && $0.field == baseline.field
+        }) {
+            baselines[index] = baseline
+        } else {
+            baselines.append(baseline)
+        }
+        saveBaselines(baselines)
+    }
+
     private func loadConflicts() -> [SyncConflictVersion] {
         guard let data = try? Data(contentsOf: fileURL) else { return [] }
         return (try? decoder.decode([SyncConflictVersion].self, from: data)) ?? []
@@ -114,6 +149,29 @@ final class SyncConflictStore {
         } catch {
             assertionFailure("Unable to persist sync conflicts: \(error)")
         }
+    }
+
+    private func loadBaselines() -> [SyncRemoteTextBaseline] {
+        guard let data = try? Data(contentsOf: baselineFileURL) else { return [] }
+        return (try? decoder.decode([SyncRemoteTextBaseline].self, from: data)) ?? []
+    }
+
+    private func saveBaselines(_ baselines: [SyncRemoteTextBaseline]) {
+        do {
+            try FileManager.default.createDirectory(
+                at: baselineFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let data = try encoder.encode(baselines)
+            try data.write(to: baselineFileURL, options: [.atomic])
+        } catch {
+            assertionFailure("Unable to persist sync baselines: \(error)")
+        }
+    }
+
+    private var baselineFileURL: URL {
+        fileURL.deletingLastPathComponent()
+            .appendingPathComponent("sync-remote-text-baselines.json")
     }
 
     private static func defaultFileURL() -> URL {

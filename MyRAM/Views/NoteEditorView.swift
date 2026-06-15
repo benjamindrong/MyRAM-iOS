@@ -148,6 +148,8 @@ struct NoteEditorView: View {
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
+                    .padding(.top, editorChromeStyle.isChromeAccent ? 6 : 0)
+                    .padding(.horizontal, editorChromeStyle.isChromeAccent ? 6 : 0)
                     .padding(.bottom, editorControlOverlayBottomPadding)
 
                     VStack(spacing: 8) {
@@ -221,11 +223,11 @@ struct NoteEditorView: View {
             .padding()
             .background(editorChromeStyle.editorBackgroundColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
-            .overlay(alignment: .topTrailing) {
+            .overlay(alignment: .top) {
                 if let syncController {
                     SyncStatusIndicator(syncController: syncController)
                         .padding(.top, showsTopBar ? 58 : 14)
-                        .padding(.trailing, 14)
+                        .frame(maxWidth: 180)
                 }
             }
             .presentationDragIndicator(.visible)
@@ -296,6 +298,10 @@ struct NoteEditorView: View {
                     onReview: {
                         selectedSyncConflict = nil
                         vm.markSyncConflictReviewed(conflict)
+                    },
+                    onDiscard: {
+                        selectedSyncConflict = nil
+                        vm.discardSyncConflict(conflict)
                     }
                 )
                 .presentationDetents([.large])
