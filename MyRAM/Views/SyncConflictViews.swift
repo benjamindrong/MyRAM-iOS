@@ -14,7 +14,7 @@ struct SyncConflictNotice: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("A synced version was preserved for review.")
                         .font(.caption.weight(.semibold))
-                    Text("Open Sync Conflicts to copy or restore it.")
+                    Text("Open Sync Conflicts to copy or restore it within 7 days.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -39,7 +39,9 @@ struct SyncConflictNotice: View {
             .shadow(color: .black.opacity(0.10), radius: 8, y: 3)
         }
         .buttonStyle(.plain)
-        .accessibilityLabel("A synced version was preserved for review. Open Sync Conflicts to copy or restore it.")
+        .accessibilityLabel(
+            "A synced version was preserved for review. Open Sync Conflicts to copy or restore it within 7 days."
+        )
         .accessibilityIdentifier("sync-conflict-notice")
     }
 }
