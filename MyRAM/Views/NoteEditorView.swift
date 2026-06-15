@@ -1934,31 +1934,42 @@ private struct ExpandedPhotoView: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        NavigationStack {
-            ZStack {
-                Color.black.ignoresSafeArea()
+        ZStack(alignment: .topTrailing) {
+            Color.black
+                .ignoresSafeArea()
+                .onTapGesture {
+                    onDismiss()
+                }
 
-                if let image = UIImage(data: attachment.imageData) {
-                    LiveTextImageView(image: image)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                        .padding()
-                        .background(Color.black)
-                } else {
-                    ContentUnavailableView(
-                        "Photo Unavailable",
-                        systemImage: "exclamationmark.triangle",
-                        description: Text("This attachment could not be loaded.")
-                    )
-                }
+            if let image = UIImage(data: attachment.imageData) {
+                LiveTextImageView(image: image)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding()
+                    .background(Color.black)
+            } else {
+                ContentUnavailableView(
+                    "Photo Unavailable",
+                    systemImage: "exclamationmark.triangle",
+                    description: Text("This attachment could not be loaded.")
+                )
             }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") {
-                        onDismiss()
-                    }
-                }
+
+            Button {
+                onDismiss()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.system(size: 34, weight: .semibold))
+                    .symbolRenderingMode(.hierarchical)
+                    .foregroundStyle(.white)
+                    .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
             }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+            .accessibilityLabel("Close Attachment")
+            .padding(.top, 18)
+            .padding(.trailing, 18)
         }
+        .contentShape(Rectangle())
         .frame(
             minWidth: 320,
             idealWidth: 900,
