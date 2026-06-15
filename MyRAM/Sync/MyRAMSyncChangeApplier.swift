@@ -324,9 +324,18 @@ final class MyRAMSyncChangeApplier {
         remoteRichTextContentData: Data? = nil,
         remoteModifiedAt: Date
     ) {
-        guard localText != remoteText || remoteRichTextContentData != nil else { return }
-
         let now = Date()
+        guard let preservedConflict = SyncTextConflictPolicy.conflictIfTextDiverged(
+            entityType: entityType.syncEntityType,
+            entityID: entityID.uuidString,
+            fieldID: field.rawValue,
+            localText: localText,
+            remoteText: remoteText,
+            remoteData: remoteRichTextContentData,
+            remoteUpdatedAt: remoteModifiedAt,
+            preservedAt: now
+        ) else { return }
+
         let conflict = SyncConflictVersion(
             entityType: entityType,
             entityID: entityID,
@@ -336,8 +345,8 @@ final class MyRAMSyncChangeApplier {
             remoteText: remoteText,
             remoteRichTextContentData: remoteRichTextContentData,
             remoteModifiedAt: remoteModifiedAt,
-            preservedAt: now,
-            expiresAt: now.addingTimeInterval(SyncConflictStore.retention)
+            preservedAt: preservedConflict.preservedAt,
+            expiresAt: preservedConflict.expiresAt
         )
         syncConflicts = conflictStore.preserve(conflict)
     }
@@ -403,6 +412,19 @@ private extension SyncEntityType {
             2
         case .attachment:
             3
+        }
+    }
+}
+
+private extension SyncConflictEntityType {
+    var syncEntityType: SyncEntityType {
+        switch self {
+        case .note:
+            .item
+        case .folder:
+            .collection
+        case .pinnedThought:
+            .marker
         }
     }
 }
