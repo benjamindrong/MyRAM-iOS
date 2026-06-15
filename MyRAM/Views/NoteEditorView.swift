@@ -1942,7 +1942,7 @@ private struct ExpandedPhotoView: View {
                 }
 
             if let image = UIImage(data: attachment.imageData) {
-                LiveTextImageView(image: image)
+                LiveTextImageView(image: image, imageID: attachment.id)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .padding()
                     .background(Color.black)
@@ -1997,13 +1997,14 @@ private struct ReferenceLookupView: UIViewControllerRepresentable {
 @MainActor
 private struct LiveTextImageView: UIViewRepresentable {
     let image: UIImage
+    let imageID: UUID
 
     func makeUIView(context: Context) -> LiveTextEnabledImageView {
         LiveTextEnabledImageView(frame: .zero)
     }
 
     func updateUIView(_ imageView: LiveTextEnabledImageView, context: Context) {
-        imageView.setAnalyzedImage(image)
+        imageView.setAnalyzedImage(image, id: imageID)
     }
 }
 
@@ -2014,6 +2015,7 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
     private let analyzer = ImageAnalyzer()
     private var analysisTask: Task<Void, Never>?
     private var sourceImage: UIImage?
+    private var sourceImageID: UUID?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -2047,7 +2049,10 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
         }
     }
 
-    func setAnalyzedImage(_ image: UIImage) {
+    func setAnalyzedImage(_ image: UIImage, id: UUID) {
+        guard sourceImageID != id else { return }
+
+        sourceImageID = id
         sourceImage = image
         imageView.image = image
         setZoomScale(1.0, animated: false)
