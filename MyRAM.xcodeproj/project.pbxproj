@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		BC24E3052FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */; };
+		BC24E3042FDF8F94004694D1 /* SyncConflictStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */; };
+		BC24E30B2FDF8F94004694D1 /* MyRAMSyncConflictService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */; };
+		BC24E3072FDF8F94004694D1 /* SyncStatusIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */; };
+		BC24E3092FDF8F94004694D1 /* SyncConflictViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E30A2FDF8F94004694D1 /* SyncConflictViews.swift */; };
 		BC7009FE2FBF928500F513B4 /* MyRAMSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC7009FD2FBF927F00F513B4 /* MyRAMSchema.swift */; };
 		BC8A7F8E2FCA1F1200A9C001 /* docs/note-intelligence in Resources */ = {isa = PBXBuildFile; fileRef = BC8A7F8D2FCA1F1200A9C001 /* docs/note-intelligence */; };
 		BC9F1BB02EA47D2E0045FD72 /* MyRAMApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BAF2EA47D2E0045FD72 /* MyRAMApp.swift */; };
@@ -55,6 +60,11 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncChangeApplier.swift; sourceTree = "<group>"; };
+		BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConflictStore.swift; sourceTree = "<group>"; };
+		BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncConflictService.swift; sourceTree = "<group>"; };
+		BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusIndicator.swift; sourceTree = "<group>"; };
+		BC24E30A2FDF8F94004694D1 /* SyncConflictViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConflictViews.swift; sourceTree = "<group>"; };
 		BC7009FD2FBF927F00F513B4 /* MyRAMSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSchema.swift; sourceTree = "<group>"; };
 		BC8A7F8D2FCA1F1200A9C001 /* docs/note-intelligence */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "docs/note-intelligence"; sourceTree = "<group>"; };
 		BC9F1BAC2EA47D2E0045FD72 /* MyRAM.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyRAM.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -198,6 +208,9 @@
 		C07100212FF0000000000001 /* Sync */ = {
 			isa = PBXGroup;
 			children = (
+				BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */,
+				BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */,
+				BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */,
 				C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */,
 				C07100192FF0000000000001 /* MyRAMSyncController.swift */,
 				C07100172FF0000000000001 /* MyRAMSyncModels.swift */,
@@ -228,6 +241,8 @@
 				BCE65D152EA5457600F2D0AA /* NotesListView.swift */,
 				BCE65D192EA545B000F2D0AA /* NoteEditorView.swift */,
 				C071001A2FF0000000000001 /* NearbySyncView.swift */,
+				BC24E30A2FDF8F94004694D1 /* SyncConflictViews.swift */,
+				BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */,
 			);
 			path = Views;
 			sourceTree = "<group>";
@@ -371,13 +386,18 @@
 				BC9F1BB02EA47D2E0045FD72 /* MyRAMApp.swift in Sources */,
 				BC7009FE2FBF928500F513B4 /* MyRAMSchema.swift in Sources */,
 				BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */,
+				BC24E3052FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */,
+				BC24E30B2FDF8F94004694D1 /* MyRAMSyncConflictService.swift in Sources */,
+				BC24E3042FDF8F94004694D1 /* SyncConflictStore.swift in Sources */,
 				C07100012FF0000000000001 /* SyncModels.swift in Sources */,
 				C07100042FF0000000000001 /* SyncQueue.swift in Sources */,
 				BCE65D222EA6000000F2D0AA /* Folder.swift in Sources */,
 				C07100082FF0000000000001 /* MyRAMDeviceIdentity.swift in Sources */,
 				C071000A2FF0000000000001 /* NearbySyncView.swift in Sources */,
+				BC24E3092FDF8F94004694D1 /* SyncConflictViews.swift in Sources */,
 				BCB610022FEC610000610061 /* DebugDemoDataGenerator.swift in Sources */,
 				C07100022FF0000000000001 /* SyncEngine.swift in Sources */,
+				BC24E3072FDF8F94004694D1 /* SyncStatusIndicator.swift in Sources */,
 				C07100032FF0000000000001 /* SyncStore.swift in Sources */,
 				C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */,
 				C07100062FF0000000000001 /* DebouncedChangeSender.swift in Sources */,

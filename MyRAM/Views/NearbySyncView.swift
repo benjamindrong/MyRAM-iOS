@@ -3,6 +3,10 @@ import SwiftUI
 struct NearbySyncView: View {
     @ObservedObject var syncController: MyRAMSyncController
     let style: EditorChromeStyle
+    let conflicts: [SyncConflictVersion]
+    let onCopyConflict: (SyncConflictVersion) -> Void
+    let onRestoreConflict: (SyncConflictVersion) -> Void
+    let onReviewConflict: (SyncConflictVersion) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -46,6 +50,20 @@ struct NearbySyncView: View {
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                     }
+                }
+            }
+
+            section("Sync Conflicts") {
+                if conflicts.isEmpty {
+                    Text("No preserved synced versions")
+                        .foregroundStyle(.secondary)
+                } else {
+                    SyncConflictReviewList(
+                        conflicts: conflicts,
+                        onCopy: onCopyConflict,
+                        onRestore: onRestoreConflict,
+                        onReview: onReviewConflict
+                    )
                 }
             }
 

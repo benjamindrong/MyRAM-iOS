@@ -8,6 +8,7 @@ final class NotesViewModel: ObservableObject {
     @Published var folders: [Folder] = []
     @Published var currentNote: Note? = nil
     @Published var currentFolder: Folder? = nil
+    @Published private(set) var syncConflicts: [SyncConflictVersion] = []
     @Published private(set) var activeNoteSyncRevision = 0
     @Published private(set) var hasUndoableAction = false
     @Published private(set) var hasRedoableAction = false
@@ -15,6 +16,8 @@ final class NotesViewModel: ObservableObject {
     private static let recentlyDeletedRetention: TimeInterval = 7 * 24 * 60 * 60
     private let context: ModelContext
     private let syncController: MyRAMSyncController?
+    private let syncConflictStore = SyncConflictStore()
+    private let syncConflictService: MyRAMSyncConflictService
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
     private var isApplyingRemoteSyncChange = false
@@ -32,9 +35,11 @@ final class NotesViewModel: ObservableObject {
     init(context: ModelContext, syncController: MyRAMSyncController? = nil) {
         self.context = context
         self.syncController = syncController
+        syncConflictService = MyRAMSyncConflictService(context: context, store: syncConflictStore)
         self.syncController?.onChangesReceived = { [weak self] changes in
             await self?.applyIncomingSyncChanges(changes)
         }
+        syncConflicts = syncConflictService.activeConflicts()
         purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
@@ -532,6 +537,33 @@ final class NotesViewModel: ObservableObject {
             }
             return $0.createdAt < $1.createdAt
         }
+    }
+
+    func activeSyncConflicts(for note: Note) -> [SyncConflictVersion] {
+        syncConflictService.activeConflicts(for: note, in: syncConflicts)
+    }
+
+    func markSyncConflictReviewed(_ conflict: SyncConflictVersion) {
+        syncConflicts = syncConflictService.markReviewed(conflict)
+    }
+
+    func restoreSyncConflict(_ conflict: SyncConflictVersion) {
+        guard let result = syncConflictService.restore(conflict, activeNoteID: currentNote?.id) else { return }
+        syncConflicts = result.conflicts
+
+        if let note = result.note {
+            recordNoteSyncChange(note)
+        }
+        if let pinnedThought = result.pinnedThought {
+            recordPinnedThoughtSyncChange(pinnedThought)
+        }
+        if let folder = result.folder {
+            recordFolderSyncChange(folder)
+        }
+        if result.shouldRefreshActiveNote {
+            activeNoteSyncRevision += 1
+        }
+        refreshCurrentFolderContent()
     }
 
     func addPhotoAttachment(to note: Note, imageData: Data) {
@@ -1056,168 +1088,31 @@ final class NotesViewModel: ObservableObject {
     func applyIncomingSyncChanges(_ changes: [SyncChange]) async {
         guard !changes.isEmpty else { return }
         let activeNoteID = currentNote?.id
-        var shouldRefreshActiveNote = false
         isApplyingRemoteSyncChange = true
         defer { isApplyingRemoteSyncChange = false }
 
-        for change in changes {
-            switch change.entityType {
-            case .item:
-                if applyIncomingNoteChange(change, activeNoteID: activeNoteID) {
-                    shouldRefreshActiveNote = true
-                }
-            case .collection:
-                applyIncomingFolderChange(change)
-            case .marker:
-                if applyIncomingPinnedThoughtChange(change, activeNoteID: activeNoteID) {
-                    shouldRefreshActiveNote = true
-                }
-            case .attachment:
-                if applyIncomingPhotoAttachmentChange(change, activeNoteID: activeNoteID) {
-                    shouldRefreshActiveNote = true
-                }
-            }
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: syncConflictStore)
+        let result = applier.apply(
+            changes,
+            activeNoteID: activeNoteID,
+            currentNoteID: currentNote?.id,
+            currentFolderID: currentFolder?.id
+        )
+        syncConflicts = applier.syncConflicts
+
+        if result.deletedCurrentNoteID != nil {
+            currentNote = nil
+            UserDefaults.standard.removeObject(forKey: "lastNoteID")
+        }
+        if let replacementFolderID = result.currentFolderReplacementID {
+            currentFolder = fetchFolder(withID: replacementFolderID)
         }
 
         try? context.save()
         refreshCurrentFolderContent()
-        if shouldRefreshActiveNote {
+        if result.shouldRefreshActiveNote {
             activeNoteSyncRevision += 1
         }
-    }
-
-    private func applyIncomingNoteChange(_ change: SyncChange, activeNoteID: UUID?) -> Bool {
-        guard let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload) else { return false }
-
-        if change.operation == .delete || payload.deletedAt != nil {
-            guard let note = fetchNote(withID: payload.id),
-                  note.modifiedAt <= payload.modifiedAt else { return false }
-            note.deletedAt = payload.deletedAt ?? payload.modifiedAt
-            note.modifiedAt = payload.modifiedAt
-            if currentNote?.id == note.id {
-                currentNote = nil
-                UserDefaults.standard.removeObject(forKey: "lastNoteID")
-            }
-            return activeNoteID == payload.id
-        }
-
-        let note = fetchNote(withID: payload.id) ?? Note(folder: nil)
-        if note.id != payload.id {
-            note.id = payload.id
-            context.insert(note)
-        } else if note.modifiedAt > payload.modifiedAt {
-            return false
-        }
-
-        note.title = payload.title
-        note.content = payload.content
-        note.richTextContentData = payload.richTextContentData
-        note.isPinned = payload.isPinned
-        note.createdAt = payload.createdAt
-        note.modifiedAt = payload.modifiedAt
-        note.deletedAt = payload.deletedAt
-        note.folder = payload.folderID.flatMap(fetchFolder(withID:))
-        return activeNoteID == payload.id
-    }
-
-    private func applyIncomingFolderChange(_ change: SyncChange) {
-        guard let payload = try? MyRAMSyncPayloadCoding.decodeFolder(from: change.payload) else { return }
-
-        if change.operation == .delete || payload.isDeleted {
-            guard let folder = fetchFolder(withID: payload.id),
-                  folder.modifiedAt <= payload.modifiedAt else { return }
-            context.delete(folder)
-            if currentFolder?.id == folder.id {
-                currentFolder = folder.parentFolder
-            }
-            return
-        }
-
-        let folder = fetchFolder(withID: payload.id) ?? Folder(name: payload.name)
-        if folder.id != payload.id {
-            folder.id = payload.id
-            context.insert(folder)
-        } else if folder.modifiedAt > payload.modifiedAt {
-            return
-        }
-
-        folder.name = payload.name
-        folder.createdAt = payload.createdAt
-        folder.modifiedAt = payload.modifiedAt
-        folder.parentFolder = payload.parentFolderID.flatMap(fetchFolder(withID:))
-    }
-
-    private func applyIncomingPinnedThoughtChange(_ change: SyncChange, activeNoteID: UUID?) -> Bool {
-        guard let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) else { return false }
-
-        if change.operation == .delete || payload.isDeleted {
-            guard let thought = fetchPinnedThought(withID: payload.id),
-                  thought.modifiedAt <= payload.modifiedAt else { return false }
-            let note = thought.note
-            note?.pinnedThoughts.removeAll { $0.id == thought.id }
-            context.delete(thought)
-            reorderPinnedThoughts(for: note)
-            return activeNoteID == note?.id
-        }
-
-        let thought = fetchPinnedThought(withID: payload.id) ?? PinnedThought(text: payload.text, order: payload.order)
-        if thought.id != payload.id {
-            thought.id = payload.id
-            context.insert(thought)
-        } else if thought.modifiedAt > payload.modifiedAt {
-            return false
-        }
-
-        let previousNoteID = thought.note?.id
-        let destinationNote = payload.noteID.flatMap(fetchNote(withID:))
-        if previousNoteID != destinationNote?.id {
-            thought.note?.pinnedThoughts.removeAll { $0.id == thought.id }
-        }
-        thought.text = payload.text
-        thought.order = payload.order
-        thought.isCollapsed = payload.isCollapsed
-        thought.createdAt = payload.createdAt
-        thought.modifiedAt = payload.modifiedAt
-        thought.note = destinationNote
-        if let destinationNote,
-           !destinationNote.pinnedThoughts.contains(where: { $0.id == thought.id }) {
-            destinationNote.pinnedThoughts.append(thought)
-        }
-        return activeNoteID == previousNoteID || activeNoteID == destinationNote?.id
-    }
-
-    private func applyIncomingPhotoAttachmentChange(_ change: SyncChange, activeNoteID: UUID?) -> Bool {
-        guard let payload = try? MyRAMSyncPayloadCoding.decodePhotoAttachment(from: change.payload) else { return false }
-
-        if change.operation == .delete || payload.isDeleted {
-            guard let attachment = fetchPhotoAttachment(withID: payload.id) else { return false }
-            let note = attachment.note
-            note?.photoAttachments.removeAll { $0.id == attachment.id }
-            context.delete(attachment)
-            return activeNoteID == note?.id
-        }
-
-        guard let destinationNote = payload.noteID.flatMap(fetchNote(withID:)) else { return false }
-        let previousAttachment = fetchPhotoAttachment(withID: payload.id)
-        let attachment = previousAttachment ?? NotePhotoAttachment(
-            imageData: payload.imageData,
-            note: destinationNote
-        )
-
-        if attachment.id != payload.id {
-            attachment.id = payload.id
-            context.insert(attachment)
-        } else if attachment.note?.id != destinationNote.id {
-            attachment.note?.photoAttachments.removeAll { $0.id == attachment.id }
-        }
-
-        attachment.imageData = payload.imageData
-        attachment.createdAt = payload.createdAt
-        attachment.note = destinationNote
-        if !destinationNote.photoAttachments.contains(where: { $0.id == attachment.id }) {
-            destinationNote.photoAttachments.append(attachment)
-        }
-        return activeNoteID == destinationNote.id
     }
 
     private func removeUndoHistoryReferencingDeletedNote(noteID: UUID) {

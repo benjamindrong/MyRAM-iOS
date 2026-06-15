@@ -1,0 +1,185 @@
+import SwiftUI
+
+struct SyncConflictNotice: View {
+    let conflictCount: Int
+    let onOpen: () -> Void
+
+    var body: some View {
+        Button(action: onOpen) {
+            HStack(spacing: 8) {
+                Image(systemName: "text.badge.checkmark")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.orange)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("A synced version was preserved for review.")
+                        .font(.caption.weight(.semibold))
+                    Text("Open Sync Conflicts to copy or restore it.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 8)
+
+                Text("\(conflictCount)")
+                    .font(.caption2.monospacedDigit().weight(.bold))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.orange.opacity(0.18))
+                    .clipShape(Capsule())
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 9)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.orange.opacity(0.35), lineWidth: 1)
+            }
+            .shadow(color: .black.opacity(0.10), radius: 8, y: 3)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("A synced version was preserved for review. Open Sync Conflicts to copy or restore it.")
+        .accessibilityIdentifier("sync-conflict-notice")
+    }
+}
+
+struct SyncConflictReviewList: View {
+    let conflicts: [SyncConflictVersion]
+    let onCopy: (SyncConflictVersion) -> Void
+    let onRestore: (SyncConflictVersion) -> Void
+    let onReview: (SyncConflictVersion) -> Void
+    @State private var selectedConflict: SyncConflictVersion?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(indexedConflicts, id: \.element.id) { entry in
+                conflictRow(entry.element)
+            }
+        }
+        .sheet(item: $selectedConflict) { conflict in
+            SyncConflictDetailView(
+                conflict: conflict,
+                onCopy: {
+                    onCopy(conflict)
+                },
+                onRestore: {
+                    selectedConflict = nil
+                    onRestore(conflict)
+                },
+                onReview: {
+                    selectedConflict = nil
+                    onReview(conflict)
+                }
+            )
+        }
+    }
+
+    private var indexedConflicts: [(offset: Int, element: SyncConflictVersion)] {
+        Array(conflicts.enumerated())
+    }
+
+    private func conflictRow(_ conflict: SyncConflictVersion) -> some View {
+        Button {
+            selectedConflict = conflict
+        } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(conflict.field.displayTitle)
+                        .font(.subheadline.weight(.semibold))
+                    Spacer()
+                    Text(conflict.preservedAt.formatted(date: .abbreviated, time: .shortened))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Text(conflict.remoteText.isEmpty ? "Empty text" : conflict.remoteText)
+                    .font(.caption)
+                    .foregroundStyle(.primary)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                Label("Review preserved version", systemImage: "doc.text.magnifyingglass")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .padding(10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.08))
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct SyncConflictDetailView: View {
+    let conflict: SyncConflictVersion
+    let onCopy: () -> Void
+    let onRestore: () -> Void
+    let onReview: () -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    conflictTextSection(title: "Preserved Synced Version", text: conflict.remoteText)
+                    conflictTextSection(title: "Current Version", text: conflict.localText)
+                }
+                .padding()
+            }
+            .navigationTitle(conflict.field.displayTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") {
+                        dismiss()
+                    }
+                }
+                ToolbarItemGroup(placement: .bottomBar) {
+                    Button("Copy") {
+                        onCopy()
+                    }
+                    Spacer()
+                    Button("Restore") {
+                        onRestore()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    Button("Reviewed") {
+                        onReview()
+                    }
+                }
+            }
+        }
+    }
+
+    private func conflictTextSection(title: String, text: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title)
+                .font(.headline)
+
+            Text(text.isEmpty ? "Empty text" : text)
+                .font(.body)
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(12)
+                .background(Color.secondary.opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+    }
+}
+
+private extension SyncConflictField {
+    var displayTitle: String {
+        switch self {
+        case .noteTitle:
+            "Note Title"
+        case .noteContent:
+            "Note Text"
+        case .folderTitle:
+            "Folder Title"
+        case .pinnedText:
+            "Pinned Text"
+        }
+    }
+}

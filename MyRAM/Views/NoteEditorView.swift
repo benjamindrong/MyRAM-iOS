@@ -22,6 +22,8 @@ struct NoteEditorView: View {
     var showsTopBar = true
     var toolbarBridge: NoteEditorToolbarBridge?
     var syncController: MyRAMSyncController? = nil
+    var syncConflicts: [SyncConflictVersion] = []
+    var onOpenSyncConflicts: (() -> Void)?
     @StateObject private var formattingController = TextFormattingController()
     
     @State private var title: String = ""
@@ -95,6 +97,13 @@ struct NoteEditorView: View {
                 ZStack(alignment: .bottom) {
                     VStack(spacing: 12) {
                         editorTitleHeader
+
+                        if !syncConflicts.isEmpty, let onOpenSyncConflicts {
+                            SyncConflictNotice(
+                                conflictCount: syncConflicts.count,
+                                onOpen: onOpenSyncConflicts
+                            )
+                        }
 
                         pinnedThoughtsSection
 
@@ -1208,57 +1217,46 @@ struct NoteEditorView: View {
                 increaseFontSizeToggleToken += 1
             }
 
-            desktopColorControls
+            textColorMenu(controlSize: 26, swatchSize: 18)
         }
     }
 
-    private var desktopColorControls: some View {
-        HStack(spacing: 5) {
+    private func textColorMenu(controlSize: CGFloat, swatchSize: CGFloat) -> some View {
+        Menu {
             Button {
                 applyDefaultTextColor()
             } label: {
-                Circle()
-                    .fill(Color(uiColor: editorChromeStyle.editorTextUIColor))
-                    .frame(width: 20, height: 20)
-                    .overlay {
-                        Text("A")
-                            .font(.caption2.weight(.bold))
-                            .foregroundStyle(editorChromeStyle.editorSurfaceColor)
-                    }
-                    .overlay {
-                        Circle()
-                            .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                    }
+                Label("Auto Text Color", systemImage: "textformat")
             }
-            .buttonStyle(.plain)
             .accessibilityIdentifier("format-color-default")
-            .accessibilityLabel("Auto Text Color")
 
             ForEach(textColorSwatches) { swatch in
                 Button {
                     applyTextColor(swatch.uiColor)
                 } label: {
-                    Circle()
-                        .fill(swatch.color)
-                        .frame(width: isSelectedTextColor(swatch.uiColor) ? 18 : 16, height: isSelectedTextColor(swatch.uiColor) ? 18 : 16)
-                        .frame(width: 18, height: 22)
-                        .overlay {
-                            if isSelectedTextColor(swatch.uiColor) {
-                                Circle()
-                                    .stroke(Color.primary, lineWidth: 2)
-                                    .padding(-2)
-                            }
-                        }
-                        .overlay {
-                            Circle()
-                                .stroke(Color.secondary.opacity(0.25), lineWidth: 1)
-                        }
+                    Label(swatch.name, systemImage: "circle.fill")
                 }
-                .buttonStyle(.plain)
                 .accessibilityIdentifier("format-color-\(swatch.id)")
-                .accessibilityLabel(swatch.name)
             }
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(Color(uiColor: selectedTextUIColor ?? editorChromeStyle.editorTextUIColor))
+                    .frame(width: swatchSize, height: swatchSize)
+                    .overlay {
+                        Circle()
+                            .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+                    }
+                Text("A")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(editorChromeStyle.editorSurfaceColor)
+            }
+            .frame(width: controlSize, height: controlSize)
+            .modifier(ChromeControlPlate(style: editorChromeStyle, cornerRadius: 7))
         }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("format-color-menu")
+        .accessibilityLabel("Text Color")
     }
 
     private var overflowFormattingControls: some View {
