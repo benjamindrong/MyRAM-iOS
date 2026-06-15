@@ -21,6 +21,7 @@ struct NoteEditorView: View {
     let onNewNote: (Note) -> Void
     var showsTopBar = true
     var toolbarBridge: NoteEditorToolbarBridge?
+    var syncController: MyRAMSyncController? = nil
     @StateObject private var formattingController = TextFormattingController()
     
     @State private var title: String = ""
@@ -204,6 +205,13 @@ struct NoteEditorView: View {
             .padding()
             .background(editorChromeStyle.editorBackgroundColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
+            .overlay(alignment: .topTrailing) {
+                if let syncController {
+                    SyncStatusIndicator(syncController: syncController)
+                        .padding(.top, showsTopBar ? 58 : 14)
+                        .padding(.trailing, 14)
+                }
+            }
             .presentationDragIndicator(.visible)
             .onAppear {
                 title = note.title
