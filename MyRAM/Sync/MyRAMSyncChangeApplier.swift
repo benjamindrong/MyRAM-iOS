@@ -74,6 +74,9 @@ final class MyRAMSyncChangeApplier {
         if change.operation == .delete {
             guard let note = fetchNote(withID: payload.id),
                   note.modifiedAt <= payload.modifiedAt else { return MyRAMSyncApplyResult() }
+            if preserveNoteDeleteConflictsIfNeeded(note: note, payload: payload) {
+                return MyRAMSyncApplyResult(shouldRefreshActiveNote: activeNoteID == payload.id)
+            }
             note.deletedAt = payload.deletedAt ?? payload.modifiedAt
             note.modifiedAt = payload.modifiedAt
             return MyRAMSyncApplyResult(
@@ -110,6 +113,9 @@ final class MyRAMSyncChangeApplier {
         if change.operation == .delete && payload.isDeleted {
             guard let folder = fetchFolder(withID: payload.id),
                   folder.modifiedAt <= payload.modifiedAt else { return nil }
+            if preserveFolderDeleteConflictIfNeeded(folder: folder, payload: payload) {
+                return nil
+            }
             let replacementFolderID = currentFolderID == folder.id ? folder.parentFolder?.id : nil
             context.delete(folder)
             return replacementFolderID
@@ -151,6 +157,9 @@ final class MyRAMSyncChangeApplier {
         if change.operation == .delete && payload.isDeleted {
             guard let thought = fetchPinnedThought(withID: payload.id),
                   thought.modifiedAt <= payload.modifiedAt else { return false }
+            if preservePinnedThoughtDeleteConflictIfNeeded(thought: thought, payload: payload) {
+                return activeNoteID == thought.note?.id
+            }
             let note = thought.note
             note?.pinnedThoughts.removeAll { $0.id == thought.id }
             context.delete(thought)
@@ -273,6 +282,46 @@ final class MyRAMSyncChangeApplier {
                 remoteModifiedAt: payload.modifiedAt
             )
         }
+    }
+
+    private func preserveNoteDeleteConflictsIfNeeded(note: Note, payload: MyRAMNoteSyncPayload) -> Bool {
+        let hasTextConflict = note.title != payload.title
+            || note.content != payload.content
+            || note.richTextContentData != payload.richTextContentData
+        guard hasTextConflict else { return false }
+        preserveNoteTextConflictsIfNeeded(note: note, payload: payload)
+        return true
+    }
+
+    private func preserveFolderDeleteConflictIfNeeded(folder: Folder, payload: MyRAMFolderSyncPayload) -> Bool {
+        guard folder.name != payload.name else { return false }
+        preserveSyncConflict(
+            entityType: .folder,
+            entityID: folder.id,
+            noteID: nil,
+            field: .folderTitle,
+            localText: folder.name,
+            remoteText: payload.name,
+            remoteModifiedAt: payload.modifiedAt
+        )
+        return true
+    }
+
+    private func preservePinnedThoughtDeleteConflictIfNeeded(
+        thought: PinnedThought,
+        payload: MyRAMPinnedThoughtSyncPayload
+    ) -> Bool {
+        guard thought.text != payload.text else { return false }
+        preserveSyncConflict(
+            entityType: .pinnedThought,
+            entityID: thought.id,
+            noteID: thought.note?.id ?? payload.noteID,
+            field: .pinnedText,
+            localText: thought.text,
+            remoteText: payload.text,
+            remoteModifiedAt: payload.modifiedAt
+        )
+        return true
     }
 
     private func preserveSyncConflict(

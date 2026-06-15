@@ -52,11 +52,15 @@ struct SyncConflictReviewList: View {
     @State private var selectedConflict: SyncConflictVersion?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            ForEach(indexedConflicts, id: \.element.id) { entry in
-                conflictRow(entry.element)
+        ScrollView {
+            LazyVStack(alignment: .leading, spacing: 10) {
+                ForEach(indexedConflicts, id: \.element.id) { entry in
+                    conflictRow(entry.element)
+                }
             }
+            .padding(.vertical, 1)
         }
+        .frame(maxHeight: 360)
         .sheet(item: $selectedConflict) { conflict in
             SyncConflictDetailView(
                 conflict: conflict,
@@ -123,10 +127,31 @@ private struct SyncConflictDetailView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    HStack(alignment: .firstTextBaseline) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(conflict.field.displayTitle)
+                                .font(.title3.weight(.semibold))
+                            Text(conflict.preservedAt.formatted(date: .abbreviated, time: .shortened))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+
+                        Spacer(minLength: 16)
+
+                        Button("Close") {
+                            dismiss()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+
                     conflictTextSection(title: "Preserved Synced Version", text: conflict.remoteText)
                     conflictTextSection(title: "Current Version", text: conflict.localText)
+
+                    actionButtons
                 }
                 .padding()
+                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
             .navigationTitle(conflict.field.displayTitle)
             .navigationBarTitleDisplayMode(.inline)
@@ -136,21 +161,53 @@ private struct SyncConflictDetailView: View {
                         dismiss()
                     }
                 }
-                ToolbarItemGroup(placement: .bottomBar) {
-                    Button("Copy") {
-                        onCopy()
-                    }
-                    Spacer()
-                    Button("Restore") {
-                        onRestore()
-                    }
-                    .buttonStyle(.borderedProminent)
-                    Button("Reviewed") {
-                        onReview()
-                    }
-                }
             }
         }
+    }
+
+    private var actionButtons: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                copyButton
+
+                Spacer(minLength: 8)
+
+                restoreButton
+                reviewedButton
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                copyButton
+                    .frame(maxWidth: .infinity)
+                restoreButton
+                    .frame(maxWidth: .infinity)
+                reviewedButton
+                    .frame(maxWidth: .infinity)
+            }
+        }
+        .controlSize(.regular)
+        .padding(.top, 4)
+    }
+
+    private var copyButton: some View {
+        Button("Copy Preserved Version") {
+            onCopy()
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private var restoreButton: some View {
+        Button("Restore Preserved Version") {
+            onRestore()
+        }
+        .buttonStyle(.borderedProminent)
+    }
+
+    private var reviewedButton: some View {
+        Button("Mark Reviewed") {
+            onReview()
+        }
+        .buttonStyle(.bordered)
     }
 
     private func conflictTextSection(title: String, text: String) -> some View {

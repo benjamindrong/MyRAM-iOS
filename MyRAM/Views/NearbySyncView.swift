@@ -9,71 +9,73 @@ struct NearbySyncView: View {
     let onReviewConflict: (SyncConflictVersion) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            section("Connection") {
-                LabeledContent("Device", value: syncController.localPeerName)
-                LabeledContent("Status", value: syncController.connectionSummary)
-                LabeledContent("Last Event", value: syncController.lastConnectionEvent)
-                LabeledContent("Queued Changes", value: "\(syncController.pendingChangeCount)")
-                if let lastSyncAt = syncController.lastSyncAt {
-                    LabeledContent("Last Sync", value: lastSyncAt.formatted(date: .abbreviated, time: .standard))
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                section("Connection") {
+                    LabeledContent("Device", value: syncController.localPeerName)
+                    LabeledContent("Status", value: syncController.connectionSummary)
+                    LabeledContent("Last Event", value: syncController.lastConnectionEvent)
+                    LabeledContent("Queued Changes", value: "\(syncController.pendingChangeCount)")
+                    if let lastSyncAt = syncController.lastSyncAt {
+                        LabeledContent("Last Sync", value: lastSyncAt.formatted(date: .abbreviated, time: .standard))
+                    }
+
+                    Button("Manual Sync") {
+                        syncController.flushPendingChanges()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(!syncController.hasConnectedPeers)
                 }
 
-                Button("Manual Sync") {
-                    syncController.flushPendingChanges()
-                }
-                .buttonStyle(.borderedProminent)
-                .disabled(!syncController.hasConnectedPeers)
-            }
+                section("Nearby Devices") {
+                    if syncController.availablePeers.isEmpty {
+                        Text("No nearby devices")
+                            .foregroundStyle(.secondary)
+                    }
 
-            section("Nearby Devices") {
-                if syncController.availablePeers.isEmpty {
-                    Text("No nearby devices")
-                        .foregroundStyle(.secondary)
-                }
+                    ForEach(syncController.availablePeers) { peer in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(peer.displayName)
+                                    .font(.subheadline.weight(.semibold))
+                                Text(peer.isTrusted ? "Trusted" : "New device")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
 
-                ForEach(syncController.availablePeers) { peer in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(peer.displayName)
-                                .font(.subheadline.weight(.semibold))
-                            Text(peer.isTrusted ? "Trusted" : "New device")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                            Spacer()
+
+                            Button(peer.isTrusted ? "Reconnect" : "Pair") {
+                                syncController.invite(peer)
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
                         }
-
-                        Spacer()
-
-                        Button(peer.isTrusted ? "Reconnect" : "Pair") {
-                            syncController.invite(peer)
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
                     }
                 }
-            }
 
-            section("Sync Conflicts") {
-                if conflicts.isEmpty {
-                    Text("No preserved synced versions")
-                        .foregroundStyle(.secondary)
-                } else {
-                    SyncConflictReviewList(
-                        conflicts: conflicts,
-                        onCopy: onCopyConflict,
-                        onRestore: onRestoreConflict,
-                        onReview: onReviewConflict
-                    )
+                section("Sync Conflicts") {
+                    if conflicts.isEmpty {
+                        Text("No preserved synced versions")
+                            .foregroundStyle(.secondary)
+                    } else {
+                        SyncConflictReviewList(
+                            conflicts: conflicts,
+                            onCopy: onCopyConflict,
+                            onRestore: onRestoreConflict,
+                            onReview: onReviewConflict
+                        )
+                    }
+                }
+
+                if let lastErrorMessage = syncController.lastErrorMessage {
+                    Text(lastErrorMessage)
+                        .font(.footnote)
+                        .foregroundStyle(.red)
                 }
             }
-
-            if let lastErrorMessage = syncController.lastErrorMessage {
-                Text(lastErrorMessage)
-                    .font(.footnote)
-                    .foregroundStyle(.red)
-            }
+            .padding(16)
         }
-        .padding(16)
         .background(style.appBackgroundColor.ignoresSafeArea())
     }
 
