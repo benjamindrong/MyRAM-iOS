@@ -1,4 +1,5 @@
 import XCTest
+import NearbySyncCore
 import SwiftData
 import SwiftUI
 import UIKit
@@ -415,9 +416,10 @@ final class MyRAMTests: XCTestCase {
             currentFolderID: nil
         )
 
+        let remoteNoteID = remoteNote.id
         let descriptor = FetchDescriptor<Note>(
             predicate: #Predicate { note in
-                note.id == remoteNote.id
+                note.id == remoteNoteID
             }
         )
         let syncedNote = try XCTUnwrap(context.fetch(descriptor).first)
@@ -620,6 +622,52 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 204)).isEmpty)
     }
 
+    func testIncomingPeerConflictMetadataShowsCurrentDeviceLocalAndPeerVersionToSync() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Shared", content: "Mac local edit")
+        note.id = UUID()
+        context.insert(note)
+        let peerConflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: note.id,
+            noteID: note.id,
+            field: .noteContent,
+            localText: "iPhone offline edit",
+            remoteText: "Mac local edit",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        _ = applier.apply(
+            [
+                SyncChange(
+                    entityType: .conflict,
+                    entityID: peerConflict.id.uuidString,
+                    operation: .upsert,
+                    payload: try MyRAMSyncPayloadCoding.encode(
+                        MyRAMSyncConflictPayload(action: .preserved, conflict: peerConflict, updatedAt: peerConflict.preservedAt)
+                    ),
+                    updatedAt: peerConflict.preservedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: note.id,
+            currentNoteID: note.id,
+            currentFolderID: nil
+        )
+
+        let conflict = try XCTUnwrap(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).first)
+        XCTAssertEqual(conflict.localText, "Mac local edit")
+        XCTAssertEqual(conflict.remoteText, "iPhone offline edit")
+        XCTAssertEqual(note.content, "Mac local edit")
+    }
+
     func testSyncConflictResolutionRemovesMatchingPeerConflictWithDifferentLocalID() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -699,6 +747,123 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertTrue(conflictStore.removeResolvedConflict(conflict).isEmpty)
         XCTAssertTrue(conflictStore.preserve(conflict).isEmpty)
+    }
+
+    func testResolvedSyncConflictIgnoresStalePreservedMessageWithDifferentRichTextPayload() throws {
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let noteID = UUID()
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Mac local",
+            remoteText: "iPhone incoming",
+            remoteRichTextContentData: Data("rich-a".utf8),
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let stalePreservedConflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Mac local",
+            remoteText: "iPhone incoming",
+            remoteRichTextContentData: Data("rich-b".utf8),
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 202),
+            expiresAt: Date(timeIntervalSince1970: 1_000)
+        )
+        _ = conflictStore.preserve(conflict)
+
+        XCTAssertTrue(conflictStore.removeResolvedConflict(conflict).isEmpty)
+        XCTAssertTrue(conflictStore.preserve(stalePreservedConflict).isEmpty)
+    }
+
+    func testKeepLocalSyncConflictRecordsResolvedTombstone() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Local title", content: "Mac kept local")
+        note.id = UUID()
+        context.insert(note)
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: note.id,
+            noteID: note.id,
+            field: .noteContent,
+            localText: note.content,
+            remoteText: "iPhone remote version",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: Date(timeIntervalSince1970: 1_000)
+        )
+        _ = conflictStore.preserve(conflict)
+        let service = MyRAMSyncConflictService(context: context, store: conflictStore)
+
+        let result = try XCTUnwrap(service.markReviewed(conflict, activeNoteID: note.id))
+
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertTrue(conflictStore.preserve(conflict).isEmpty)
+        XCTAssertEqual(note.content, "Mac kept local")
+    }
+
+    func testIncomingResolvedSyncConflictAppliesWinnerAndClearsLocalConflict() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Shared", content: "iPhone incoming")
+        note.id = UUID()
+        context.insert(note)
+        let expiresAt = Date().addingTimeInterval(1_000)
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: note.id,
+            noteID: note.id,
+            field: .noteContent,
+            localText: "Mac kept local",
+            remoteText: "iPhone incoming",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: expiresAt
+        )
+        _ = conflictStore.preserve(conflict)
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        _ = applier.apply(
+            [
+                SyncChange(
+                    entityType: .conflict,
+                    entityID: conflict.id.uuidString,
+                    operation: .upsert,
+                    payload: try MyRAMSyncPayloadCoding.encode(
+                        MyRAMSyncConflictPayload(
+                            action: .resolved,
+                            conflict: conflict,
+                            resolvedText: "Mac kept local",
+                            baseText: "iPhone incoming",
+                            updatedAt: Date(timeIntervalSince1970: 300)
+                        )
+                    ),
+                    updatedAt: Date(timeIntervalSince1970: 300),
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: note.id,
+            currentNoteID: note.id,
+            currentFolderID: nil
+        )
+
+        XCTAssertEqual(note.content, "Mac kept local")
+        XCTAssertTrue(conflictStore.activeConflicts().isEmpty)
     }
 
     func testDiscardSyncConflictAdvancesLocalNoteTimestamp() throws {

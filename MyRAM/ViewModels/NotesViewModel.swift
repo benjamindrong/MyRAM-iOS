@@ -565,7 +565,11 @@ final class NotesViewModel: ObservableObject {
         // remote version, and publish the kept local value as the winner.
         guard let result = syncConflictService.markReviewed(conflict, activeNoteID: currentNote?.id) else { return }
         syncConflicts = result.conflicts
-        recordSyncConflictResolution(conflict)
+        recordSyncConflictResolution(
+            conflict,
+            resolvedText: localText(forSyncConflict: conflict),
+            baseText: conflict.remoteText
+        )
         recordKeptLocalSyncConflictResolution(conflict, result: result)
 
         if result.shouldRefreshActiveNote {
@@ -579,7 +583,11 @@ final class NotesViewModel: ObservableObject {
         // bounce the restored value back as a fresh sync edit.
         guard let result = syncConflictService.restore(conflict, activeNoteID: currentNote?.id) else { return }
         syncConflicts = result.conflicts
-        recordSyncConflictResolution(conflict)
+        recordSyncConflictResolution(
+            conflict,
+            resolvedText: conflict.remoteText,
+            baseText: conflict.localText
+        )
 
         if result.shouldRefreshActiveNote {
             activeNoteSyncRevision += 1
@@ -592,7 +600,11 @@ final class NotesViewModel: ObservableObject {
         // winner so peers do not keep replaying the discarded remote version.
         guard let result = syncConflictService.discard(conflict, activeNoteID: currentNote?.id) else { return }
         syncConflicts = result.conflicts
-        recordSyncConflictResolution(conflict)
+        recordSyncConflictResolution(
+            conflict,
+            resolvedText: localText(forSyncConflict: conflict),
+            baseText: conflict.remoteText
+        )
         recordKeptLocalSyncConflictResolution(conflict, result: result)
 
         if result.shouldRefreshActiveNote {
@@ -1135,25 +1147,28 @@ final class NotesViewModel: ObservableObject {
         recordSyncConflictMetadata(MyRAMSyncConflictPayload(action: .preserved, conflict: conflict, updatedAt: conflict.preservedAt))
     }
 
-    private func recordSyncConflictResolution(_ conflict: SyncConflictVersion) {
-        recordSyncConflictMetadata(MyRAMSyncConflictPayload(action: .resolved, conflict: conflict))
+    private func recordSyncConflictResolution(
+        _ conflict: SyncConflictVersion,
+        resolvedText: String,
+        baseText: String
+    ) {
+        recordSyncConflictMetadata(
+            MyRAMSyncConflictPayload(
+                action: .resolved,
+                conflict: conflict,
+                resolvedText: resolvedText,
+                baseText: baseText
+            )
+        )
     }
 
     private func recordKeptLocalSyncConflictResolution(
         _ conflict: SyncConflictVersion,
         result: SyncConflictRestoreResult
     ) {
+        // The resolved-conflict payload is the cross-device winner message.
+        // Sending a second normal entity update can recreate the same conflict.
         saveDiscardedRemoteVersionAsSyncBase(conflict)
-
-        if let note = result.note {
-            recordNoteSyncChange(note)
-        }
-        if let pinnedThought = result.pinnedThought {
-            recordPinnedThoughtSyncChange(pinnedThought)
-        }
-        if let folder = result.folder {
-            recordFolderSyncChange(folder)
-        }
     }
 
     private func saveDiscardedRemoteVersionAsSyncBase(_ conflict: SyncConflictVersion) {

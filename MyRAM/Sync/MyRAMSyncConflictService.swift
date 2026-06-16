@@ -57,7 +57,7 @@ final class MyRAMSyncConflictService {
         }
 
         try? context.save()
-        result.conflicts = store.removeConflict(id: conflict.id)
+        result.conflicts = store.removeResolvedConflict(conflict)
         return result
     }
 
@@ -105,7 +105,7 @@ final class MyRAMSyncConflictService {
         }
 
         try? context.save()
-        result.conflicts = store.removeConflict(id: conflict.id)
+        result.conflicts = store.removeResolvedConflict(conflict)
         return result
     }
 

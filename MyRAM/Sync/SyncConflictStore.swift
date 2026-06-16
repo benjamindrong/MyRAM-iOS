@@ -1,4 +1,5 @@
 import Foundation
+import NearbySyncCore
 
 enum SyncConflictEntityType: String, Codable {
     case note
@@ -62,73 +63,34 @@ struct SyncRemoteTextBaseline: Codable, Equatable {
     let modifiedAt: Date
 }
 
-private struct SyncResolvedConflict: Codable, Equatable {
-    let entityType: SyncConflictEntityType
-    let entityID: UUID
-    let field: SyncConflictField
-    let remoteText: String
-    let remoteRichTextContentData: Data?
-    let remoteModifiedAt: Date
-    let resolvedAt: Date
-    let expiresAt: Date
-}
-
 final class SyncConflictStore {
-    static let retention: TimeInterval = 7 * 24 * 60 * 60
+    static let retention = SyncTextConflictPolicy.retention
 
     private let fileURL: URL
+    private let textConflictStore: SyncTextConflictStore
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
     init(fileURL: URL = SyncConflictStore.defaultFileURL()) {
         self.fileURL = fileURL
+        textConflictStore = SyncTextConflictStore(fileURL: fileURL)
+        migrateLegacyConflictsIfNeeded()
     }
 
     func activeConflicts(now: Date = Date()) -> [SyncConflictVersion] {
-        let active = loadConflicts().filter { $0.expiresAt > now }
-        saveConflicts(active)
-        return active.sorted { lhs, rhs in
-            if lhs.preservedAt == rhs.preservedAt {
-                return lhs.id.uuidString < rhs.id.uuidString
-            }
-            return lhs.preservedAt > rhs.preservedAt
-        }
+        textConflictStore.activeConflicts(now: now).compactMap(SyncConflictVersion.init)
     }
 
     func preserve(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
-        guard !isResolved(conflict) else {
-            return activeConflicts()
-        }
-        var conflicts = activeConflicts()
-        if let index = conflicts.firstIndex(where: {
-            $0.entityType == conflict.entityType
-                && $0.entityID == conflict.entityID
-                && $0.field == conflict.field
-                && $0.remoteModifiedAt == conflict.remoteModifiedAt
-                && $0.remoteText == conflict.remoteText
-        }) {
-            conflicts[index] = conflict
-        } else {
-            conflicts.append(conflict)
-        }
-        saveConflicts(conflicts)
-        return activeConflicts()
+        textConflictStore.preserve(conflict.syncTextConflict).compactMap(SyncConflictVersion.init)
     }
 
     func removeConflict(id: UUID) -> [SyncConflictVersion] {
-        let conflicts = activeConflicts().filter { $0.id != id }
-        saveConflicts(conflicts)
-        return conflicts
+        textConflictStore.removeConflict(id: id).compactMap(SyncConflictVersion.init)
     }
 
     func removeResolvedConflict(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
-        recordResolvedConflict(conflict)
-        let conflicts = activeConflicts().filter {
-            $0.id != conflict.id
-                && !sameRemoteConflict($0, conflict)
-        }
-        saveConflicts(conflicts)
-        return conflicts
+        textConflictStore.removeResolvedConflict(conflict.syncTextConflict).compactMap(SyncConflictVersion.init)
     }
 
     func remoteBaseline(
@@ -155,32 +117,6 @@ final class SyncConflictStore {
             baselines.append(baseline)
         }
         saveBaselines(baselines)
-    }
-
-    private func isResolved(_ conflict: SyncConflictVersion, now: Date = Date()) -> Bool {
-        loadResolvedConflicts(now: now).contains {
-            sameRemoteConflict($0, conflict)
-        }
-    }
-
-    private func recordResolvedConflict(_ conflict: SyncConflictVersion, now: Date = Date()) {
-        var resolvedConflicts = loadResolvedConflicts(now: now)
-        let resolvedConflict = SyncResolvedConflict(
-            entityType: conflict.entityType,
-            entityID: conflict.entityID,
-            field: conflict.field,
-            remoteText: conflict.remoteText,
-            remoteRichTextContentData: conflict.remoteRichTextContentData,
-            remoteModifiedAt: conflict.remoteModifiedAt,
-            resolvedAt: now,
-            expiresAt: now.addingTimeInterval(Self.retention)
-        )
-        if let index = resolvedConflicts.firstIndex(where: { sameRemoteConflict($0, conflict) }) {
-            resolvedConflicts[index] = resolvedConflict
-        } else {
-            resolvedConflicts.append(resolvedConflict)
-        }
-        saveResolvedConflicts(resolvedConflicts)
     }
 
     func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date) {
@@ -222,22 +158,15 @@ final class SyncConflictStore {
         )
     }
 
-    private func loadConflicts() -> [SyncConflictVersion] {
-        guard let data = try? Data(contentsOf: fileURL) else { return [] }
-        return (try? decoder.decode([SyncConflictVersion].self, from: data)) ?? []
-    }
-
-    private func saveConflicts(_ conflicts: [SyncConflictVersion]) {
-        do {
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let data = try encoder.encode(conflicts)
-            try data.write(to: fileURL, options: [.atomic])
-        } catch {
-            assertionFailure("Unable to persist sync conflicts: \(error)")
+    private func migrateLegacyConflictsIfNeeded() {
+        guard let data = try? Data(contentsOf: fileURL) else { return }
+        if (try? decoder.decode([SyncTextConflictVersion].self, from: data)) != nil {
+            return
         }
+        guard let legacyConflicts = try? decoder.decode([SyncConflictVersion].self, from: data) else {
+            return
+        }
+        _ = textConflictStore.replaceConflicts(legacyConflicts.map(\.syncTextConflict))
     }
 
     private func loadBaselines() -> [SyncRemoteTextBaseline] {
@@ -258,53 +187,9 @@ final class SyncConflictStore {
         }
     }
 
-    private func loadResolvedConflicts(now: Date = Date()) -> [SyncResolvedConflict] {
-        guard let data = try? Data(contentsOf: resolvedFileURL) else { return [] }
-        let resolvedConflicts = ((try? decoder.decode([SyncResolvedConflict].self, from: data)) ?? [])
-            .filter { $0.expiresAt > now }
-        saveResolvedConflicts(resolvedConflicts)
-        return resolvedConflicts
-    }
-
-    private func saveResolvedConflicts(_ resolvedConflicts: [SyncResolvedConflict]) {
-        do {
-            try FileManager.default.createDirectory(
-                at: resolvedFileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let data = try encoder.encode(resolvedConflicts)
-            try data.write(to: resolvedFileURL, options: [.atomic])
-        } catch {
-            assertionFailure("Unable to persist resolved sync conflicts: \(error)")
-        }
-    }
-
-    private func sameRemoteConflict(_ lhs: SyncConflictVersion, _ rhs: SyncConflictVersion) -> Bool {
-        lhs.entityType == rhs.entityType
-            && lhs.entityID == rhs.entityID
-            && lhs.field == rhs.field
-            && lhs.remoteModifiedAt == rhs.remoteModifiedAt
-            && lhs.remoteText == rhs.remoteText
-            && lhs.remoteRichTextContentData == rhs.remoteRichTextContentData
-    }
-
-    private func sameRemoteConflict(_ lhs: SyncResolvedConflict, _ rhs: SyncConflictVersion) -> Bool {
-        lhs.entityType == rhs.entityType
-            && lhs.entityID == rhs.entityID
-            && lhs.field == rhs.field
-            && lhs.remoteModifiedAt == rhs.remoteModifiedAt
-            && lhs.remoteText == rhs.remoteText
-            && lhs.remoteRichTextContentData == rhs.remoteRichTextContentData
-    }
-
     private var baselineFileURL: URL {
         fileURL.deletingLastPathComponent()
             .appendingPathComponent("sync-remote-text-baselines.json")
-    }
-
-    private var resolvedFileURL: URL {
-        fileURL.deletingLastPathComponent()
-            .appendingPathComponent("sync-resolved-conflicts.json")
     }
 
     private static func defaultFileURL() -> URL {
@@ -315,5 +200,72 @@ final class SyncConflictStore {
         return supportDirectory
             .appendingPathComponent("MyRAM", isDirectory: true)
             .appendingPathComponent("sync-conflicts.json")
+    }
+}
+
+private extension SyncConflictVersion {
+    init?(_ conflict: SyncTextConflictVersion) {
+        guard let entityID = UUID(uuidString: conflict.entityID),
+              let entityType = SyncConflictEntityType(conflict.entityType),
+              let field = SyncConflictField(rawValue: conflict.fieldID) else {
+            return nil
+        }
+        let noteID = conflict.contextID.flatMap(UUID.init(uuidString:))
+            ?? (entityType == .note ? entityID : nil)
+        self.init(
+            id: conflict.id,
+            entityType: entityType,
+            entityID: entityID,
+            noteID: noteID,
+            field: field,
+            localText: conflict.localText,
+            remoteText: conflict.remoteText,
+            remoteRichTextContentData: conflict.remoteData,
+            remoteModifiedAt: conflict.remoteUpdatedAt,
+            preservedAt: conflict.preservedAt,
+            expiresAt: conflict.expiresAt
+        )
+    }
+
+    var syncTextConflict: SyncTextConflictVersion {
+        SyncTextConflictVersion(
+            id: id,
+            entityType: entityType.syncEntityType,
+            entityID: entityID.uuidString,
+            fieldID: field.rawValue,
+            contextID: noteID?.uuidString,
+            localText: localText,
+            remoteText: remoteText,
+            remoteData: remoteRichTextContentData,
+            remoteUpdatedAt: remoteModifiedAt,
+            preservedAt: preservedAt,
+            expiresAt: expiresAt
+        )
+    }
+}
+
+private extension SyncConflictEntityType {
+    init?(_ entityType: SyncEntityType) {
+        switch entityType {
+        case .item:
+            self = .note
+        case .collection:
+            self = .folder
+        case .marker:
+            self = .pinnedThought
+        case .attachment, .conflict:
+            return nil
+        }
+    }
+
+    var syncEntityType: SyncEntityType {
+        switch self {
+        case .note:
+            .item
+        case .folder:
+            .collection
+        case .pinnedThought:
+            .marker
+        }
     }
 }

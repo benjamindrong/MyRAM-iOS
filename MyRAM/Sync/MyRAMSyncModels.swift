@@ -119,13 +119,23 @@ struct MyRAMSyncConflictPayload: Codable, Equatable {
     let action: MyRAMSyncConflictAction
     let conflict: SyncConflictVersion?
     let conflictID: UUID
+    let resolvedText: String?
+    let baseText: String?
     let updatedAt: Date
 
-    init(action: MyRAMSyncConflictAction, conflict: SyncConflictVersion, updatedAt: Date = Date()) {
+    init(
+        action: MyRAMSyncConflictAction,
+        conflict: SyncConflictVersion,
+        resolvedText: String? = nil,
+        baseText: String? = nil,
+        updatedAt: Date = Date()
+    ) {
         kind = .syncConflict
         self.action = action
         self.conflict = conflict
         conflictID = conflict.id
+        self.resolvedText = resolvedText
+        self.baseText = baseText
         self.updatedAt = updatedAt
     }
 }
