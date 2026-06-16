@@ -70,6 +70,14 @@ struct SyncConflictReviewList: View {
                 SyncConflictDetailView(
                     conflict: conflict,
                     localText: localText(conflict),
+                    isPresented: Binding(
+                        get: { selectedConflict != nil },
+                        set: { isPresented in
+                            if !isPresented {
+                                selectedConflict = nil
+                            }
+                        }
+                    ),
                     onClose: {
                         selectedConflict = nil
                     },
@@ -133,6 +141,7 @@ struct SyncConflictReviewList: View {
 struct SyncConflictDetailView: View {
     let conflict: SyncConflictVersion
     let localText: String
+    @Binding var isPresented: Bool
     let onClose: () -> Void
     let onCopy: () -> Void
     let onRestore: () -> Void
@@ -194,10 +203,16 @@ struct SyncConflictDetailView: View {
 
     private var closeButton: some View {
         Button("Close") {
-            dismiss()
-            onClose()
+            closeDetail()
         }
         .buttonStyle(.bordered)
+        .accessibilityIdentifier("sync-conflict-detail-close")
+    }
+
+    private func closeDetail() {
+        onClose()
+        isPresented = false
+        dismiss()
     }
 
     private var detailPadding: CGFloat {

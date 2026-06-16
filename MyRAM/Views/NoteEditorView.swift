@@ -291,6 +291,14 @@ struct NoteEditorView: View {
                 SyncConflictDetailView(
                     conflict: conflict,
                     localText: vm.localText(forSyncConflict: conflict),
+                    isPresented: Binding(
+                        get: { selectedSyncConflict != nil },
+                        set: { isPresented in
+                            if !isPresented {
+                                selectedSyncConflict = nil
+                            }
+                        }
+                    ),
                     onClose: {
                         selectedSyncConflict = nil
                     },
