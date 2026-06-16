@@ -3,11 +3,6 @@ import SwiftUI
 struct NearbySyncView: View {
     @ObservedObject var syncController: MyRAMSyncController
     let style: EditorChromeStyle
-    let conflicts: [SyncConflictVersion]
-    let localTextForConflict: (SyncConflictVersion) -> String
-    let onCopyConflict: (SyncConflictVersion) -> Void
-    let onRestoreConflict: (SyncConflictVersion) -> Void
-    let onReviewConflict: (SyncConflictVersion) -> Void
 
     var body: some View {
         ScrollView {
@@ -52,21 +47,6 @@ struct NearbySyncView: View {
                             .buttonStyle(.bordered)
                             .controlSize(.small)
                         }
-                    }
-                }
-
-                section("Sync Conflicts") {
-                    if conflicts.isEmpty {
-                        Text("No versions waiting to sync")
-                            .foregroundStyle(.secondary)
-                    } else {
-                        SyncConflictReviewList(
-                            conflicts: conflicts,
-                            localText: localTextForConflict,
-                            onCopy: onCopyConflict,
-                            onRestore: onRestoreConflict,
-                            onReview: onReviewConflict
-                        )
                     }
                 }
 

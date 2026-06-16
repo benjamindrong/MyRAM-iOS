@@ -69,6 +69,7 @@ struct NoteEditorView: View {
     @State private var lookupRequest: LookupRequest?
     @State private var sharePayload: NoteSharePayload?
     @State private var exportErrorMessage: String?
+    @State private var showingNearbySync = false
     @State private var selectedSyncConflict: SyncConflictVersion?
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
@@ -95,7 +96,7 @@ struct NoteEditorView: View {
                     editorTopBar
                 }
 
-                ZStack(alignment: .bottom) {
+                VStack(spacing: 8) {
                     VStack(spacing: 12) {
                         if !showsTitleInTopBar {
                             editorTitleHeader
@@ -119,19 +120,19 @@ struct NoteEditorView: View {
                         SelectableTextView(
                             text: $content,
                             richTextContentData: $richTextContentData,
-                        keyboardFocusToggleToken: keyboardFocusToggleToken,
-                        captureSelectionToggleToken: captureSelectionToggleToken,
-                        selectAllToggleToken: selectAllToggleToken,
-                        pinSelectionToggleToken: pinSelectionToggleToken,
-                        lookupSelectionToggleToken: lookupSelectionToggleToken,
-                        appendUnpinnedThoughtToggleToken: appendUnpinnedThoughtToggleToken,
-                        pendingUnpinnedThoughtText: pendingUnpinnedThoughtText,
-                        restoreContentToggleToken: restoreContentToggleToken,
-                        boldToggleToken: boldToggleToken,
-                        italicToggleToken: italicToggleToken,
-                        underlineToggleToken: underlineToggleToken,
-                        strikethroughToggleToken: strikethroughToggleToken,
-                        checklistToggleToken: checklistToggleToken,
+                            keyboardFocusToggleToken: keyboardFocusToggleToken,
+                            captureSelectionToggleToken: captureSelectionToggleToken,
+                            selectAllToggleToken: selectAllToggleToken,
+                            pinSelectionToggleToken: pinSelectionToggleToken,
+                            lookupSelectionToggleToken: lookupSelectionToggleToken,
+                            appendUnpinnedThoughtToggleToken: appendUnpinnedThoughtToggleToken,
+                            pendingUnpinnedThoughtText: pendingUnpinnedThoughtText,
+                            restoreContentToggleToken: restoreContentToggleToken,
+                            boldToggleToken: boldToggleToken,
+                            italicToggleToken: italicToggleToken,
+                            underlineToggleToken: underlineToggleToken,
+                            strikethroughToggleToken: strikethroughToggleToken,
+                            checklistToggleToken: checklistToggleToken,
                             pasteAndMatchFormattingToggleToken: pasteAndMatchFormattingToggleToken,
                             increaseFontSizeToggleToken: increaseFontSizeToggleToken,
                             decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
@@ -141,18 +142,19 @@ struct NoteEditorView: View {
                             formattingController: formattingController,
                             backgroundColor: editorChromeStyle.editorSurfaceUIColor,
                             textColor: editorChromeStyle.editorTextUIColor,
-                        tintColor: editorChromeStyle.editorTintUIColor,
-                        onContentChanged: handleContentChanged,
-                        onUndoManagerChanged: updateActiveUndoManager,
-                        onFormattingStateChanged: handleFormattingStateChanged,
-                        onPinSelection: pinSelectedText,
-                        onLookupSelection: presentLookup
+                            tintColor: editorChromeStyle.editorTintUIColor,
+                            onContentChanged: handleContentChanged,
+                            onUndoManagerChanged: updateActiveUndoManager,
+                            onFormattingStateChanged: handleFormattingStateChanged,
+                            onPinSelection: pinSelectedText,
+                            onLookupSelection: presentLookup
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
                     .padding(.top, editorChromeStyle.isChromeAccent ? 6 : 0)
                     .padding(.horizontal, editorChromeStyle.isChromeAccent ? 6 : 0)
-                    .padding(.bottom, editorControlOverlayBottomPadding)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .modifier(ChromeEditorTrim(style: editorChromeStyle))
 
                     VStack(spacing: 8) {
                         if showingFormattingControls {
@@ -172,10 +174,8 @@ struct NoteEditorView: View {
                         collapsedEditorControls
                     }
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .zIndex(1)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .modifier(ChromeEditorTrim(style: editorChromeStyle))
 
                 if !sortedAttachments.isEmpty {
                     DisclosureGroup(isExpanded: $areAttachmentsExpanded) {
@@ -227,7 +227,9 @@ struct NoteEditorView: View {
             .toolbar(.hidden, for: .navigationBar)
             .overlay(alignment: .top) {
                 if let syncController {
-                    SyncStatusIndicator(syncController: syncController)
+                    SyncStatusIndicator(syncController: syncController) {
+                        openNearbySync(onFallback: onOpenSyncConflicts)
+                    }
                         .padding(.top, showsTopBar ? 58 : 14)
                         .frame(maxWidth: 180)
                 }
@@ -287,6 +289,25 @@ struct NoteEditorView: View {
             .sheet(item: $sharePayload) { payload in
                 ActivityShareSheet(activityItems: payload.urls)
             }
+            .sheet(isPresented: $showingNearbySync) {
+                NavigationStack {
+                    if let syncController {
+                        NearbySyncView(
+                            syncController: syncController,
+                            style: editorChromeStyle
+                        )
+                        .navigationTitle("Nearby Sync")
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") {
+                                    showingNearbySync = false
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             .sheet(item: $selectedSyncConflict) { conflict in
                 SyncConflictDetailView(
                     conflict: conflict,
@@ -303,7 +324,7 @@ struct NoteEditorView: View {
                         selectedSyncConflict = nil
                     },
                     onCopy: {
-                        UIPasteboard.general.string = conflict.remoteText
+                        copySyncConflict(conflict)
                     },
                     onRestore: {
                         selectedSyncConflict = nil
@@ -384,10 +405,6 @@ struct NoteEditorView: View {
 
     private var canPerformRedo: Bool {
         canRedo
-    }
-
-    private var editorControlOverlayBottomPadding: CGFloat {
-        showingFormattingControls ? 136 : 54
     }
 
     @ViewBuilder
@@ -1125,6 +1142,22 @@ struct NoteEditorView: View {
     private func normalizedImageData(from data: Data) -> Data? {
         guard let image = UIImage(data: data) else { return nil }
         return image.jpegData(compressionQuality: 0.85) ?? data
+    }
+
+    private func openNearbySync(onFallback: (() -> Void)? = nil) {
+#if targetEnvironment(macCatalyst)
+        onFallback?()
+#else
+        if syncController != nil {
+            showingNearbySync = true
+        } else {
+            onFallback?()
+        }
+#endif
+    }
+
+    private func copySyncConflict(_ conflict: SyncConflictVersion) {
+        UIPasteboard.general.string = conflict.remoteText
     }
 
     private var collapsedEditorControls: some View {

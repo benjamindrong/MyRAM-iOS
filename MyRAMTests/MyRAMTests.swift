@@ -2659,6 +2659,26 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(preview, "- [ ] Pending")
     }
 
+    func testNoteSearchMatchesTitleContentAndPinnedText() {
+        let note = Note(title: "Trip Ideas", content: "Book the lakeside cabin")
+        note.pinnedThoughts = [
+            PinnedThought(text: "Reserve kayak", order: 0, note: note)
+        ]
+
+        XCTAssertTrue(noteMatchesSearch(note, query: "trip"))
+        XCTAssertTrue(noteMatchesSearch(note, query: "lakeside"))
+        XCTAssertTrue(noteMatchesSearch(note, query: "kayak"))
+        XCTAssertTrue(noteMatchesSearch(note, query: "trip kayak"))
+        XCTAssertFalse(noteMatchesSearch(note, query: "invoice"))
+    }
+
+    func testNoteSearchIgnoresCompletedChecklistLinesHiddenFromPreview() {
+        let note = Note(title: "Errands", content: "☑︎ Completed receipt\n☐ Pending groceries")
+
+        XCTAssertFalse(noteMatchesSearch(note, query: "receipt"))
+        XCTAssertTrue(noteMatchesSearch(note, query: "groceries"))
+    }
+
     private func makeContainer(
         isStoredInMemoryOnly: Bool,
         configurationName: String = "MyRAMTests"
