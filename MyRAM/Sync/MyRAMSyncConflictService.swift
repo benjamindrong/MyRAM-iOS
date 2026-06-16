@@ -1,8 +1,10 @@
 import Foundation
+import NearbySyncCore
 import SwiftData
 
 struct SyncConflictRestoreResult {
     var conflicts: [SyncConflictVersion]
+    var resolution: SyncTextConflictResolution
     var note: Note?
     var folder: Folder?
     var pinnedThought: PinnedThought?
@@ -29,46 +31,34 @@ final class MyRAMSyncConflictService {
         }
     }
 
-    func markReviewed(_ conflict: SyncConflictVersion, activeNoteID: UUID?) -> SyncConflictRestoreResult? {
-        let now = Date()
-        var result = SyncConflictRestoreResult(conflicts: store.activeConflicts())
-
-        switch conflict.field {
-        case .noteTitle, .noteContent:
-            guard let note = fetchNote(withID: conflict.entityID) else { return nil }
-            note.modifiedAt = now
-            result.note = note
-            result.folder = note.folder
-            result.shouldRefreshActiveNote = activeNoteID == note.id
-
-        case .folderTitle:
-            guard let folder = fetchFolder(withID: conflict.entityID) else { return nil }
-            folder.modifiedAt = now
-            result.folder = folder
-
-        case .pinnedText:
-            guard let thought = fetchPinnedThought(withID: conflict.entityID) else { return nil }
-            thought.modifiedAt = now
-            thought.note?.modifiedAt = now
-            result.pinnedThought = thought
-            result.note = thought.note
-            result.folder = thought.note?.folder
-            result.shouldRefreshActiveNote = activeNoteID == thought.note?.id
-        }
-
-        try? context.save()
-        result.conflicts = store.removeConflict(id: conflict.id)
-        return result
+    func keepLocal(_ conflict: SyncConflictVersion, activeNoteID: UUID?) -> SyncConflictRestoreResult? {
+        resolve(
+            conflict,
+            choice: .keepLocal(
+                currentLocalText: currentText(for: conflict),
+                currentLocalData: currentData(for: conflict)
+            ),
+            activeNoteID: activeNoteID
+        )
     }
 
-    func restore(_ conflict: SyncConflictVersion, activeNoteID: UUID?) -> SyncConflictRestoreResult? {
+    func acceptIncoming(_ conflict: SyncConflictVersion, activeNoteID: UUID?) -> SyncConflictRestoreResult? {
+        resolve(conflict, choice: .acceptIncoming, activeNoteID: activeNoteID)
+    }
+
+    private func resolve(
+        _ conflict: SyncConflictVersion,
+        choice: SyncTextConflictResolutionChoice,
+        activeNoteID: UUID?
+    ) -> SyncConflictRestoreResult? {
         let now = Date()
-        var result = SyncConflictRestoreResult(conflicts: store.activeConflicts())
+        let resolution = SyncTextConflictResolver.resolve(conflict.syncTextConflict, choice: choice)
+        var result = SyncConflictRestoreResult(conflicts: store.activeConflicts(), resolution: resolution)
 
         switch conflict.field {
         case .noteTitle:
             guard let note = fetchNote(withID: conflict.entityID) else { return nil }
-            note.title = conflict.remoteText
+            note.title = resolution.resolvedText
             note.modifiedAt = now
             result.note = note
             result.folder = note.folder
@@ -76,8 +66,10 @@ final class MyRAMSyncConflictService {
 
         case .noteContent:
             guard let note = fetchNote(withID: conflict.entityID) else { return nil }
-            note.content = conflict.remoteText
-            note.richTextContentData = conflict.remoteRichTextContentData
+            note.content = resolution.resolvedText
+            if resolution.usesRemoteData {
+                note.richTextContentData = resolution.resolvedData
+            }
             note.modifiedAt = now
             result.note = note
             result.folder = note.folder
@@ -85,13 +77,13 @@ final class MyRAMSyncConflictService {
 
         case .folderTitle:
             guard let folder = fetchFolder(withID: conflict.entityID) else { return nil }
-            folder.name = conflict.remoteText
+            folder.name = resolution.resolvedText
             folder.modifiedAt = now
             result.folder = folder
 
         case .pinnedText:
             guard let thought = fetchPinnedThought(withID: conflict.entityID) else { return nil }
-            thought.text = conflict.remoteText
+            thought.text = resolution.resolvedText
             thought.modifiedAt = now
             thought.note?.modifiedAt = now
             result.pinnedThought = thought
@@ -101,8 +93,42 @@ final class MyRAMSyncConflictService {
         }
 
         try? context.save()
-        result.conflicts = store.removeConflict(id: conflict.id)
+        result.conflicts = store.removeResolvedConflict(conflict)
         return result
+    }
+
+    func markReviewed(_ conflict: SyncConflictVersion, activeNoteID: UUID?) -> SyncConflictRestoreResult? {
+        keepLocal(conflict, activeNoteID: activeNoteID)
+    }
+
+    func discard(_ conflict: SyncConflictVersion, activeNoteID: UUID?) -> SyncConflictRestoreResult? {
+        keepLocal(conflict, activeNoteID: activeNoteID)
+    }
+
+    func restore(_ conflict: SyncConflictVersion, activeNoteID: UUID?) -> SyncConflictRestoreResult? {
+        acceptIncoming(conflict, activeNoteID: activeNoteID)
+    }
+
+    private func currentText(for conflict: SyncConflictVersion) -> String {
+        switch conflict.field {
+        case .noteTitle:
+            fetchNote(withID: conflict.entityID)?.title ?? conflict.localText
+        case .noteContent:
+            fetchNote(withID: conflict.entityID)?.content ?? conflict.localText
+        case .folderTitle:
+            fetchFolder(withID: conflict.entityID)?.name ?? conflict.localText
+        case .pinnedText:
+            fetchPinnedThought(withID: conflict.entityID)?.text ?? conflict.localText
+        }
+    }
+
+    private func currentData(for conflict: SyncConflictVersion) -> Data? {
+        switch conflict.field {
+        case .noteContent:
+            fetchNote(withID: conflict.entityID)?.richTextContentData
+        case .noteTitle, .folderTitle, .pinnedText:
+            nil
+        }
     }
 
     private func fetchNote(withID noteID: UUID) -> Note? {

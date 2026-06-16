@@ -97,7 +97,9 @@ struct NoteEditorView: View {
 
                 ZStack(alignment: .bottom) {
                     VStack(spacing: 12) {
-                        editorTitleHeader
+                        if !showsTitleInTopBar {
+                            editorTitleHeader
+                        }
 
                         if !syncConflicts.isEmpty, let onOpenSyncConflicts {
                             SyncConflictNotice(
@@ -148,6 +150,8 @@ struct NoteEditorView: View {
                         )
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                     }
+                    .padding(.top, editorChromeStyle.isChromeAccent ? 6 : 0)
+                    .padding(.horizontal, editorChromeStyle.isChromeAccent ? 6 : 0)
                     .padding(.bottom, editorControlOverlayBottomPadding)
 
                     VStack(spacing: 8) {
@@ -221,11 +225,11 @@ struct NoteEditorView: View {
             .padding()
             .background(editorChromeStyle.editorBackgroundColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
-            .overlay(alignment: .topTrailing) {
+            .overlay(alignment: .top) {
                 if let syncController {
                     SyncStatusIndicator(syncController: syncController)
                         .padding(.top, showsTopBar ? 58 : 14)
-                        .padding(.trailing, 14)
+                        .frame(maxWidth: 180)
                 }
             }
             .presentationDragIndicator(.visible)
@@ -286,6 +290,18 @@ struct NoteEditorView: View {
             .sheet(item: $selectedSyncConflict) { conflict in
                 SyncConflictDetailView(
                     conflict: conflict,
+                    localText: vm.localText(forSyncConflict: conflict),
+                    isPresented: Binding(
+                        get: { selectedSyncConflict != nil },
+                        set: { isPresented in
+                            if !isPresented {
+                                selectedSyncConflict = nil
+                            }
+                        }
+                    ),
+                    onClose: {
+                        selectedSyncConflict = nil
+                    },
                     onCopy: {
                         UIPasteboard.general.string = conflict.remoteText
                     },
@@ -646,6 +662,11 @@ struct NoteEditorView: View {
         GeometryReader { proxy in
             let layout = topBarActionLayout(totalWidth: proxy.size.width)
             ChromeActionBar(style: editorChromeStyle) {
+                if showsTitleInTopBar {
+                    titleEditorButton
+                        .frame(maxWidth: max(130, estimatedTitleWidth), alignment: .leading)
+                }
+
                 Spacer(minLength: 0)
 
                 ForEach(layout.visibleActions, id: \.self) { action in
@@ -670,6 +691,14 @@ struct NoteEditorView: View {
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
         }
         .frame(height: 42)
+    }
+
+    private var showsTitleInTopBar: Bool {
+#if targetEnvironment(macCatalyst)
+        false
+#else
+        showsTopBar
+#endif
     }
 
     private var editorTitleHeader: some View {
@@ -1227,18 +1256,6 @@ struct NoteEditorView: View {
 
             inlineActionButton(systemImage: "checkmark.square", identifier: "format-checklist-toggle") {
                 checklistToggleToken += 1
-            }
-
-            inlineActionButton(systemImage: "minus.circle.fill", identifier: "format-font-smaller") {
-                decreaseFontSizeToggleToken += 1
-            }
-
-            Text("\(Int(formattingState.fontSize.rounded()))")
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .frame(width: 30, height: 26)
-
-            inlineActionButton(systemImage: "plus.circle.fill", identifier: "format-font-larger") {
-                increaseFontSizeToggleToken += 1
             }
 
             textColorMenu(controlSize: 26, swatchSize: 18)

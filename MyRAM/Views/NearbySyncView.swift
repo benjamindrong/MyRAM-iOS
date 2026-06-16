@@ -4,6 +4,7 @@ struct NearbySyncView: View {
     @ObservedObject var syncController: MyRAMSyncController
     let style: EditorChromeStyle
     let conflicts: [SyncConflictVersion]
+    let localTextForConflict: (SyncConflictVersion) -> String
     let onCopyConflict: (SyncConflictVersion) -> Void
     let onRestoreConflict: (SyncConflictVersion) -> Void
     let onReviewConflict: (SyncConflictVersion) -> Void
@@ -56,11 +57,12 @@ struct NearbySyncView: View {
 
                 section("Sync Conflicts") {
                     if conflicts.isEmpty {
-                        Text("No preserved synced versions")
+                        Text("No versions waiting to sync")
                             .foregroundStyle(.secondary)
                     } else {
                         SyncConflictReviewList(
                             conflicts: conflicts,
+                            localText: localTextForConflict,
                             onCopy: onCopyConflict,
                             onRestore: onRestoreConflict,
                             onReview: onReviewConflict

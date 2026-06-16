@@ -6,6 +6,7 @@ struct MyRAMSyncApplyResult {
     var shouldRefreshActiveNote = false
     var deletedCurrentNoteID: UUID?
     var currentFolderReplacementID: UUID?
+    var preservedConflicts: [SyncConflictVersion] = []
 }
 
 @MainActor
@@ -13,6 +14,7 @@ final class MyRAMSyncChangeApplier {
     private let context: ModelContext
     private let conflictStore: SyncConflictStore
     private(set) var syncConflicts: [SyncConflictVersion]
+    private var newlyPreservedConflicts: [SyncConflictVersion] = []
 
     init(context: ModelContext, conflictStore: SyncConflictStore) {
         self.context = context
@@ -31,6 +33,7 @@ final class MyRAMSyncChangeApplier {
         currentFolderID: UUID?
     ) -> MyRAMSyncApplyResult {
         refreshConflicts()
+        newlyPreservedConflicts = []
         var result = MyRAMSyncApplyResult()
 
         for change in changes.sorted(by: syncApplyOrder) {
@@ -50,13 +53,22 @@ final class MyRAMSyncChangeApplier {
                 if applyIncomingPhotoAttachmentChange(change, activeNoteID: activeNoteID) {
                     result.shouldRefreshActiveNote = true
                 }
+            case .conflict:
+                if applyIncomingConflictChange(change) {
+                    result.shouldRefreshActiveNote = true
+                }
             }
         }
+
+        result.preservedConflicts = newlyPreservedConflicts
 
         return result
     }
 
     private func syncApplyOrder(_ lhs: SyncChange, _ rhs: SyncChange) -> Bool {
+        if lhs.isResolvedConflictMetadata != rhs.isResolvedConflictMetadata {
+            return lhs.isResolvedConflictMetadata
+        }
         if lhs.entityType.applyPriority == rhs.entityType.applyPriority {
             return lhs.updatedAt < rhs.updatedAt
         }
@@ -162,6 +174,7 @@ final class MyRAMSyncChangeApplier {
         if existingThought == nil {
             thought.id = payload.id
             context.insert(thought)
+            savePinnedTextBaseline(thoughtID: thought.id, payload: payload)
         } else if thought.modifiedAt > payload.modifiedAt {
             return false
         }
@@ -180,6 +193,7 @@ final class MyRAMSyncChangeApplier {
         thought.createdAt = payload.createdAt
         thought.modifiedAt = max(thought.modifiedAt, payload.modifiedAt)
         thought.note = destinationNote
+        savePinnedTextBaseline(thoughtID: thought.id, payload: payload)
         if let destinationNote,
            !destinationNote.pinnedThoughts.contains(where: { $0.id == thought.id }) {
             destinationNote.pinnedThoughts.append(thought)
@@ -223,13 +237,17 @@ final class MyRAMSyncChangeApplier {
 
     private func applyTextPayload(to note: Note, payload: MyRAMNoteSyncPayload, isNewEntity: Bool) {
         if isNewEntity {
+            // First sight of a remote note establishes the remote baseline. The
+            // user's later local edits are compared against this before conflicting.
             note.title = payload.title
             note.content = payload.content
             note.richTextContentData = payload.richTextContentData
+            saveNoteTitleBaseline(note: note, payload: payload)
+            saveNoteContentBaseline(note: note, payload: payload)
             return
         }
 
-        preserveNoteTextConflictsIfNeeded(note: note, payload: payload)
+        applyOrPreserveNoteText(note: note, payload: payload)
     }
 
     // Sync text is intentionally local-first. An incoming device event may create
@@ -237,29 +255,256 @@ final class MyRAMSyncChangeApplier {
     // existing editable text. When incoming note titles, note body text, folder
     // titles, or pinned text diverge from local state, keep the user's current
     // text untouched and save the remote version for non-blocking review.
-    private func preserveNoteTextConflictsIfNeeded(note: Note, payload: MyRAMNoteSyncPayload) {
+    private func applyOrPreserveNoteText(note: Note, payload: MyRAMNoteSyncPayload) {
         if note.title != payload.title {
-            preserveSyncConflict(
+            switch remoteTextResolution(
                 entityType: .note,
                 entityID: note.id,
-                noteID: note.id,
                 field: .noteTitle,
                 localText: note.title,
+                localData: nil,
+                remoteBaseText: payload.baseTitle,
+                remoteBaseData: nil,
                 remoteText: payload.title,
-                remoteModifiedAt: payload.modifiedAt
-            )
+                remoteData: nil
+            ) {
+            case .apply(let text):
+                note.title = text
+                saveNoteTitleBaseline(note: note, payload: payload)
+            case .conflict:
+                preserveSyncConflict(
+                    entityType: .note,
+                    entityID: note.id,
+                    noteID: note.id,
+                    field: .noteTitle,
+                    localText: note.title,
+                    remoteText: payload.title,
+                    remoteModifiedAt: payload.modifiedAt
+                )
+            }
+        } else {
+            saveNoteTitleBaseline(note: note, payload: payload)
         }
 
         if note.content != payload.content || note.richTextContentData != payload.richTextContentData {
-            preserveSyncConflict(
+            switch remoteTextResolution(
                 entityType: .note,
                 entityID: note.id,
-                noteID: note.id,
                 field: .noteContent,
                 localText: note.content,
+                localData: note.richTextContentData,
+                remoteBaseText: payload.baseContent,
+                remoteBaseData: payload.baseRichTextContentData,
                 remoteText: payload.content,
-                remoteRichTextContentData: payload.richTextContentData,
-                remoteModifiedAt: payload.modifiedAt
+                remoteData: payload.richTextContentData
+            ) {
+            case .apply(let text):
+                note.content = text
+                note.richTextContentData = text == payload.content ? payload.richTextContentData : note.richTextContentData
+                saveNoteContentBaseline(note: note, payload: payload)
+            case .conflict:
+                preserveSyncConflict(
+                    entityType: .note,
+                    entityID: note.id,
+                    noteID: note.id,
+                    field: .noteContent,
+                    localText: note.content,
+                    remoteText: payload.content,
+                    remoteRichTextContentData: payload.richTextContentData,
+                    remoteModifiedAt: payload.modifiedAt
+                )
+            }
+        } else {
+            saveNoteContentBaseline(note: note, payload: payload)
+        }
+    }
+
+    private func remoteTextResolution(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField,
+        localText: String,
+        localData: Data?,
+        remoteBaseText: String? = nil,
+        remoteBaseData: Data? = nil,
+        remoteText: String,
+        remoteData: Data?
+    ) -> RemoteTextResolution {
+        if localData != remoteBaseData || remoteData != remoteBaseData {
+            if localText == remoteBaseText {
+                return .apply(remoteText)
+            }
+            return .conflict
+        }
+
+        let baseText = remoteBaseText ?? conflictStore.remoteBaseline(
+            entityType: entityType,
+            entityID: entityID,
+            field: field
+        )?.text
+
+        switch SyncThreeWayTextMergePolicy.merge(base: baseText, local: localText, remote: remoteText) {
+        case .apply(let text), .merged(let text):
+            return .apply(text)
+        case .noOp:
+            return .apply(localText)
+        case .conflict:
+            return .conflict
+        }
+    }
+
+    private func canApplyRemoteText(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField,
+        localText: String,
+        localData: Data?,
+        remoteBaseText: String? = nil,
+        remoteBaseData: Data? = nil
+    ) -> Bool {
+        let baseline = conflictStore.remoteBaseline(entityType: entityType, entityID: entityID, field: field)
+        return remoteTextResolution(
+            entityType: entityType,
+            entityID: entityID,
+            field: field,
+            localText: localText,
+            localData: localData,
+            remoteBaseText: remoteBaseText ?? baseline?.text,
+            remoteBaseData: remoteBaseData ?? baseline?.richTextContentData,
+            remoteText: baseline?.text ?? remoteBaseText ?? localText,
+            remoteData: baseline?.richTextContentData ?? remoteBaseData
+        ) != .conflict
+    }
+
+    private func saveNoteTitleBaseline(note: Note, payload: MyRAMNoteSyncPayload) {
+        conflictStore.saveNoteTitleBaseline(
+            noteID: note.id,
+            title: payload.title,
+            modifiedAt: payload.modifiedAt
+        )
+    }
+
+    private func saveNoteContentBaseline(note: Note, payload: MyRAMNoteSyncPayload) {
+        conflictStore.saveNoteContentBaseline(
+            noteID: note.id,
+            content: payload.content,
+            richTextContentData: payload.richTextContentData,
+            modifiedAt: payload.modifiedAt
+        )
+    }
+
+    private func savePinnedTextBaseline(thoughtID: UUID, payload: MyRAMPinnedThoughtSyncPayload) {
+        conflictStore.savePinnedTextBaseline(
+            thoughtID: thoughtID,
+            text: payload.text,
+            modifiedAt: payload.modifiedAt
+        )
+    }
+
+    private func applyIncomingConflictChange(_ change: SyncChange) -> Bool {
+        guard let payload = try? MyRAMSyncPayloadCoding.decodeSyncConflict(from: change.payload) else { return false }
+        switch payload.action {
+        case .preserved:
+            guard let conflict = payload.conflict else { return false }
+            syncConflicts = conflictStore.preserve(normalizedIncomingConflict(conflict))
+            return true
+        case .resolved:
+            // Resolved metadata carries the winning text. Apply that winner
+            // before clearing the local review row so peers converge.
+            if let conflict = payload.conflict,
+               let resolvedText = payload.resolvedText,
+               !applyResolvedConflictText(conflict, resolvedText: resolvedText, baseText: payload.baseText) {
+                return false
+            }
+            if let conflict = payload.conflict {
+                syncConflicts = conflictStore.removeResolvedConflict(conflict)
+            } else {
+                syncConflicts = conflictStore.removeConflict(id: payload.conflictID)
+            }
+            return true
+        }
+    }
+
+    private func applyResolvedConflictText(
+        _ conflict: SyncConflictVersion,
+        resolvedText: String,
+        baseText: String?
+    ) -> Bool {
+        guard let localText = currentText(for: conflict) else {
+            return true
+        }
+
+        switch SyncThreeWayTextMergePolicy.merge(base: baseText, local: localText, remote: resolvedText) {
+        case .apply(let text), .merged(let text):
+            applyResolvedText(text, conflict: conflict)
+            return true
+        case .noOp:
+            saveResolvedTextBaseline(resolvedText, conflict: conflict)
+            return true
+        case .conflict:
+            applyResolvedText(resolvedText, conflict: conflict)
+            return true
+        }
+    }
+
+    private func applyResolvedText(_ text: String, conflict: SyncConflictVersion) {
+        switch conflict.field {
+        case .noteTitle:
+            guard let note = fetchNote(withID: conflict.entityID) else { return }
+            note.title = text
+            note.modifiedAt = Date()
+            saveResolvedTextBaseline(text, conflict: conflict)
+
+        case .noteContent:
+            guard let note = fetchNote(withID: conflict.entityID) else { return }
+            note.content = text
+            if text == conflict.remoteText {
+                note.richTextContentData = conflict.remoteRichTextContentData
+            }
+            note.modifiedAt = Date()
+            saveResolvedTextBaseline(text, conflict: conflict)
+
+        case .folderTitle:
+            guard let folder = fetchFolder(withID: conflict.entityID) else { return }
+            folder.name = text
+            folder.modifiedAt = Date()
+
+        case .pinnedText:
+            guard let thought = fetchPinnedThought(withID: conflict.entityID) else { return }
+            thought.text = text
+            thought.modifiedAt = Date()
+            thought.note?.modifiedAt = thought.modifiedAt
+            saveResolvedTextBaseline(text, conflict: conflict)
+        }
+    }
+
+    private func saveResolvedTextBaseline(_ text: String, conflict: SyncConflictVersion) {
+        // Resolved metadata is terminal for this text value. Even when the
+        // visible text already matches, the baseline must advance or the next
+        // ordinary edit will compare against the stale pre-conflict version.
+        switch conflict.field {
+        case .noteTitle:
+            guard let note = fetchNote(withID: conflict.entityID) else { return }
+            conflictStore.saveNoteTitleBaseline(noteID: note.id, title: text, modifiedAt: note.modifiedAt)
+
+        case .noteContent:
+            guard let note = fetchNote(withID: conflict.entityID) else { return }
+            conflictStore.saveNoteContentBaseline(
+                noteID: note.id,
+                content: text,
+                richTextContentData: note.richTextContentData,
+                modifiedAt: note.modifiedAt
+            )
+
+        case .folderTitle:
+            break
+
+        case .pinnedText:
+            guard let thought = fetchPinnedThought(withID: conflict.entityID) else { return }
+            conflictStore.savePinnedTextBaseline(
+                thoughtID: thought.id,
+                text: text,
+                modifiedAt: thought.modifiedAt
             )
         }
     }
@@ -283,6 +528,24 @@ final class MyRAMSyncChangeApplier {
         payload: MyRAMPinnedThoughtSyncPayload
     ) -> Bool {
         guard thought.text != payload.text else { return false }
+        switch remoteTextResolution(
+            entityType: .pinnedThought,
+            entityID: thought.id,
+            field: .pinnedText,
+            localText: thought.text,
+            localData: nil,
+            remoteBaseText: payload.baseText,
+            remoteBaseData: nil,
+            remoteText: payload.text,
+            remoteData: nil
+        ) {
+        case .apply(let text):
+            thought.text = text
+            savePinnedTextBaseline(thoughtID: thought.id, payload: payload)
+            return false
+        case .conflict:
+            break
+        }
         preserveSyncConflict(
             entityType: .pinnedThought,
             entityID: thought.id,
@@ -296,11 +559,31 @@ final class MyRAMSyncChangeApplier {
     }
 
     private func preserveNoteDeleteConflictsIfNeeded(note: Note, payload: MyRAMNoteSyncPayload) -> Bool {
-        let hasTextConflict = note.title != payload.title
-            || note.content != payload.content
-            || note.richTextContentData != payload.richTextContentData
-        guard hasTextConflict else { return false }
-        preserveNoteTextConflictsIfNeeded(note: note, payload: payload)
+        // A remote delete should not be blocked just because the sender included
+        // newer text. It is a conflict only when local text diverged from the
+        // last remote baseline.
+        let titleDiverged = note.title != payload.title
+            && !canApplyRemoteText(
+                entityType: .note,
+                entityID: note.id,
+                field: .noteTitle,
+                localText: note.title,
+                localData: nil,
+                remoteBaseText: payload.baseTitle,
+                remoteBaseData: nil
+            )
+        let bodyDiverged = (note.content != payload.content || note.richTextContentData != payload.richTextContentData)
+            && !canApplyRemoteText(
+                entityType: .note,
+                entityID: note.id,
+                field: .noteContent,
+                localText: note.content,
+                localData: note.richTextContentData,
+                remoteBaseText: payload.baseContent,
+                remoteBaseData: payload.baseRichTextContentData
+            )
+        guard titleDiverged || bodyDiverged else { return false }
+        applyOrPreserveNoteText(note: note, payload: payload)
         return true
     }
 
@@ -350,6 +633,53 @@ final class MyRAMSyncChangeApplier {
             expiresAt: preservedConflict.expiresAt
         )
         syncConflicts = conflictStore.preserve(conflict)
+        newlyPreservedConflicts.append(conflict)
+    }
+
+    private func normalizedIncomingConflict(_ conflict: SyncConflictVersion) -> SyncConflictVersion {
+        guard let currentLocalText = currentText(for: conflict) else {
+            return conflict
+        }
+        let normalizedConflict = SyncTextConflictVersion(
+            id: conflict.id,
+            entityType: conflict.entityType.syncEntityType,
+            entityID: conflict.entityID.uuidString,
+            fieldID: conflict.field.rawValue,
+            contextID: conflict.noteID?.uuidString,
+            localText: conflict.localText,
+            remoteText: conflict.remoteText,
+            remoteData: conflict.remoteRichTextContentData,
+            remoteUpdatedAt: conflict.remoteModifiedAt,
+            preservedAt: conflict.preservedAt,
+            expiresAt: conflict.expiresAt
+        ).normalizedForPeerPreservedConflict(currentLocalText: currentLocalText)
+
+        return SyncConflictVersion(
+            id: normalizedConflict.id,
+            entityType: conflict.entityType,
+            entityID: conflict.entityID,
+            noteID: conflict.noteID,
+            field: conflict.field,
+            localText: normalizedConflict.localText,
+            remoteText: normalizedConflict.remoteText,
+            remoteRichTextContentData: normalizedConflict.remoteData,
+            remoteModifiedAt: normalizedConflict.remoteUpdatedAt,
+            preservedAt: normalizedConflict.preservedAt,
+            expiresAt: normalizedConflict.expiresAt
+        )
+    }
+
+    private func currentText(for conflict: SyncConflictVersion) -> String? {
+        switch conflict.field {
+        case .noteTitle:
+            return fetchNote(withID: conflict.entityID)?.title
+        case .noteContent:
+            return fetchNote(withID: conflict.entityID)?.content
+        case .folderTitle:
+            return fetchFolder(withID: conflict.entityID)?.name
+        case .pinnedText:
+            return fetchPinnedThought(withID: conflict.entityID)?.text
+        }
     }
 
     private func reorderPinnedThoughts(for note: Note?) {
@@ -413,7 +743,19 @@ private extension SyncEntityType {
             2
         case .attachment:
             3
+        case .conflict:
+            4
         }
+    }
+}
+
+private extension SyncChange {
+    var isResolvedConflictMetadata: Bool {
+        guard entityType == .conflict,
+              let payload = try? MyRAMSyncPayloadCoding.decodeSyncConflict(from: payload) else {
+            return false
+        }
+        return payload.action == .resolved
     }
 }
 
@@ -428,4 +770,9 @@ private extension SyncConflictEntityType {
             .marker
         }
     }
+}
+
+private enum RemoteTextResolution: Equatable {
+    case apply(String)
+    case conflict
 }

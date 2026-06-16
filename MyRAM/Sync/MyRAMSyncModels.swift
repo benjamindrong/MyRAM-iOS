@@ -5,6 +5,7 @@ enum MyRAMSyncPayloadKind: String, Codable {
     case folder
     case pinnedThought
     case photoAttachment
+    case syncConflict
 }
 
 struct MyRAMNoteSyncPayload: Codable, Equatable {
@@ -18,8 +19,16 @@ struct MyRAMNoteSyncPayload: Codable, Equatable {
     let modifiedAt: Date
     let deletedAt: Date?
     let folderID: UUID?
+    let baseTitle: String?
+    let baseContent: String?
+    let baseRichTextContentData: Data?
 
-    init(note: Note) {
+    init(
+        note: Note,
+        baseTitle: String? = nil,
+        baseContent: String? = nil,
+        baseRichTextContentData: Data? = nil
+    ) {
         kind = .note
         id = note.id
         title = note.title
@@ -30,6 +39,9 @@ struct MyRAMNoteSyncPayload: Codable, Equatable {
         modifiedAt = note.modifiedAt
         deletedAt = note.deletedAt
         folderID = note.folder?.id
+        self.baseTitle = baseTitle
+        self.baseContent = baseContent
+        self.baseRichTextContentData = baseRichTextContentData
     }
 }
 
@@ -63,8 +75,9 @@ struct MyRAMPinnedThoughtSyncPayload: Codable, Equatable {
     let createdAt: Date
     let modifiedAt: Date
     let isDeleted: Bool
+    let baseText: String?
 
-    init(thought: PinnedThought, isDeleted: Bool = false) {
+    init(thought: PinnedThought, isDeleted: Bool = false, baseText: String? = nil) {
         kind = .pinnedThought
         id = thought.id
         noteID = thought.note?.id
@@ -74,6 +87,7 @@ struct MyRAMPinnedThoughtSyncPayload: Codable, Equatable {
         createdAt = thought.createdAt
         modifiedAt = thought.modifiedAt
         self.isDeleted = isDeleted
+        self.baseText = baseText
     }
 }
 
@@ -92,6 +106,37 @@ struct MyRAMPhotoAttachmentSyncPayload: Codable, Equatable {
         imageData = attachment.imageData
         createdAt = attachment.createdAt
         self.isDeleted = isDeleted
+    }
+}
+
+enum MyRAMSyncConflictAction: String, Codable {
+    case preserved
+    case resolved
+}
+
+struct MyRAMSyncConflictPayload: Codable, Equatable {
+    let kind: MyRAMSyncPayloadKind
+    let action: MyRAMSyncConflictAction
+    let conflict: SyncConflictVersion?
+    let conflictID: UUID
+    let resolvedText: String?
+    let baseText: String?
+    let updatedAt: Date
+
+    init(
+        action: MyRAMSyncConflictAction,
+        conflict: SyncConflictVersion,
+        resolvedText: String? = nil,
+        baseText: String? = nil,
+        updatedAt: Date = Date()
+    ) {
+        kind = .syncConflict
+        self.action = action
+        self.conflict = conflict
+        conflictID = conflict.id
+        self.resolvedText = resolvedText
+        self.baseText = baseText
+        self.updatedAt = updatedAt
     }
 }
 
@@ -115,6 +160,10 @@ enum MyRAMSyncPayloadCoding {
         try encoder.encode(payload)
     }
 
+    static func encode(_ payload: MyRAMSyncConflictPayload) throws -> Data {
+        try encoder.encode(payload)
+    }
+
     static func decodeNote(from data: Data) throws -> MyRAMNoteSyncPayload {
         try decoder.decode(MyRAMNoteSyncPayload.self, from: data)
     }
@@ -129,5 +178,9 @@ enum MyRAMSyncPayloadCoding {
 
     static func decodePhotoAttachment(from data: Data) throws -> MyRAMPhotoAttachmentSyncPayload {
         try decoder.decode(MyRAMPhotoAttachmentSyncPayload.self, from: data)
+    }
+
+    static func decodeSyncConflict(from data: Data) throws -> MyRAMSyncConflictPayload {
+        try decoder.decode(MyRAMSyncConflictPayload.self, from: data)
     }
 }

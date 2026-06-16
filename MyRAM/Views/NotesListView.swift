@@ -135,6 +135,7 @@ struct NotesListView: View {
                         syncController: syncController,
                         style: editorChromeStyle,
                         conflicts: vm.syncConflicts,
+                        localTextForConflict: vm.localText(forSyncConflict:),
                         onCopyConflict: copySyncConflict,
                         onRestoreConflict: vm.restoreSyncConflict,
                         onReviewConflict: vm.markSyncConflictReviewed

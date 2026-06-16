@@ -13,9 +13,9 @@ struct SyncConflictNotice: View {
                     .foregroundStyle(.orange)
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("A synced version was preserved for review.")
+                    Text("A version is ready for review.")
                         .font(.caption.weight(.semibold))
-                    Text("Open Sync Conflicts to copy or restore it within 7 days.")
+                    Text("Open Sync Conflicts to copy, accept, or discard it within 7 days.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -41,7 +41,7 @@ struct SyncConflictNotice: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(
-            "A synced version was preserved for review. Open Sync Conflicts to copy or restore it within 7 days."
+            "A version is ready for review. Open Sync Conflicts to copy, accept, or discard it within 7 days."
         )
         .accessibilityIdentifier("sync-conflict-notice")
     }
@@ -49,6 +49,7 @@ struct SyncConflictNotice: View {
 
 struct SyncConflictReviewList: View {
     let conflicts: [SyncConflictVersion]
+    let localText: (SyncConflictVersion) -> String
     let onCopy: (SyncConflictVersion) -> Void
     let onRestore: (SyncConflictVersion) -> Void
     let onReview: (SyncConflictVersion) -> Void
@@ -65,11 +66,23 @@ struct SyncConflictReviewList: View {
         }
         .frame(maxHeight: 360)
         .sheet(item: $selectedConflict) { conflict in
-            SyncConflictDetailView(
-                conflict: conflict,
-                onCopy: {
-                    onCopy(conflict)
-                },
+                SyncConflictDetailView(
+                    conflict: conflict,
+                    localText: localText(conflict),
+                    isPresented: Binding(
+                        get: { selectedConflict != nil },
+                        set: { isPresented in
+                            if !isPresented {
+                                selectedConflict = nil
+                            }
+                        }
+                    ),
+                    onClose: {
+                        selectedConflict = nil
+                    },
+                    onCopy: {
+                        onCopy(conflict)
+                    },
                 onRestore: {
                     selectedConflict = nil
                     onRestore(conflict)
@@ -107,7 +120,7 @@ struct SyncConflictReviewList: View {
                     .lineLimit(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
 
-                Label("Review preserved version", systemImage: "doc.text.magnifyingglass")
+                Label("Review version to sync", systemImage: "doc.text.magnifyingglass")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
             }
@@ -122,11 +135,14 @@ struct SyncConflictReviewList: View {
 
 struct SyncConflictDetailView: View {
     let conflict: SyncConflictVersion
+    let localText: String
+    @Binding var isPresented: Bool
+    let onClose: () -> Void
     let onCopy: () -> Void
     let onRestore: () -> Void
     let onReview: () -> Void
-    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
 
     var body: some View {
         NavigationStack {
@@ -137,8 +153,8 @@ struct SyncConflictDetailView: View {
                         headerStack
                     }
 
-                    conflictTextSection(title: "Preserved Synced Version", text: conflict.remoteText)
-                    conflictTextSection(title: "Current Version", text: conflict.localText)
+                    conflictTextSection(title: "Local Version", text: localText)
+                    conflictTextSection(title: "Version to Sync", text: conflict.remoteText)
 
                     actionButtons
                 }
@@ -148,13 +164,6 @@ struct SyncConflictDetailView: View {
             }
             .navigationTitle(conflict.field.displayTitle)
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") {
-                        dismiss()
-                    }
-                }
-            }
         }
         .modifier(SyncConflictDetailFrame())
     }
@@ -188,9 +197,16 @@ struct SyncConflictDetailView: View {
 
     private var closeButton: some View {
         Button("Close") {
-            dismiss()
+            closeDetail()
         }
         .buttonStyle(.bordered)
+        .accessibilityIdentifier("sync-conflict-detail-close")
+    }
+
+    private func closeDetail() {
+        onClose()
+        isPresented = false
+        dismiss()
     }
 
     private var detailPadding: CGFloat {
@@ -236,14 +252,14 @@ struct SyncConflictDetailView: View {
     }
 
     private var copyButton: some View {
-        Button("Copy Preserved Version") {
+        Button("Copy Version to Sync") {
             onCopy()
         }
         .buttonStyle(.bordered)
     }
 
     private var restoreButton: some View {
-        Button("Restore Preserved Version") {
+        Button("Accept Version to Sync") {
             onRestore()
         }
         .buttonStyle(.borderedProminent)
