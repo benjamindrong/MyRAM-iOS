@@ -101,6 +101,7 @@ final class MyRAMSyncChangeApplier {
 
         let existingNote = fetchNote(withID: payload.id)
         let note = existingNote ?? Note(title: payload.title, content: payload.content, folder: nil)
+        let isNewNote = existingNote == nil
         if existingNote == nil {
             note.id = payload.id
             context.insert(note)
@@ -115,7 +116,7 @@ final class MyRAMSyncChangeApplier {
         )
         note.isPinned = payload.isPinned
         note.createdAt = payload.createdAt
-        note.modifiedAt = max(note.modifiedAt, payload.modifiedAt)
+        note.modifiedAt = isNewNote ? payload.modifiedAt : max(note.modifiedAt, payload.modifiedAt)
         note.deletedAt = payload.deletedAt
         note.folder = payload.folderID.flatMap(fetchFolder(withID:))
         return MyRAMSyncApplyResult(shouldRefreshActiveNote: activeNoteID == payload.id)
@@ -137,6 +138,7 @@ final class MyRAMSyncChangeApplier {
 
         let existingFolder = fetchFolder(withID: payload.id)
         let folder = existingFolder ?? Folder(name: payload.name)
+        let isNewFolder = existingFolder == nil
         if existingFolder == nil {
             folder.id = payload.id
             context.insert(folder)
@@ -148,7 +150,7 @@ final class MyRAMSyncChangeApplier {
             return nil
         }
         folder.createdAt = payload.createdAt
-        folder.modifiedAt = max(folder.modifiedAt, payload.modifiedAt)
+        folder.modifiedAt = isNewFolder ? payload.modifiedAt : max(folder.modifiedAt, payload.modifiedAt)
         folder.parentFolder = payload.parentFolderID.flatMap(fetchFolder(withID:))
         return nil
     }
@@ -171,6 +173,7 @@ final class MyRAMSyncChangeApplier {
 
         let existingThought = fetchPinnedThought(withID: payload.id)
         let thought = existingThought ?? PinnedThought(text: payload.text, order: payload.order)
+        let isNewThought = existingThought == nil
         if existingThought == nil {
             thought.id = payload.id
             context.insert(thought)
@@ -191,7 +194,7 @@ final class MyRAMSyncChangeApplier {
         thought.order = payload.order
         thought.isCollapsed = payload.isCollapsed
         thought.createdAt = payload.createdAt
-        thought.modifiedAt = max(thought.modifiedAt, payload.modifiedAt)
+        thought.modifiedAt = isNewThought ? payload.modifiedAt : max(thought.modifiedAt, payload.modifiedAt)
         thought.note = destinationNote
         savePinnedTextBaseline(thoughtID: thought.id, payload: payload)
         if let destinationNote,
