@@ -620,6 +620,119 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 204)).isEmpty)
     }
 
+    func testSyncConflictResolutionRemovesMatchingPeerConflictWithDifferentLocalID() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let noteID = UUID()
+        let resolvedConflict = SyncConflictVersion(
+            id: UUID(),
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Device A local",
+            remoteText: "Device B remote",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: Date(timeIntervalSince1970: 1_000)
+        )
+        let peerConflict = SyncConflictVersion(
+            id: UUID(),
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Device A local edited again",
+            remoteText: resolvedConflict.remoteText,
+            remoteModifiedAt: resolvedConflict.remoteModifiedAt,
+            preservedAt: Date(timeIntervalSince1970: 202),
+            expiresAt: Date(timeIntervalSince1970: 1_000)
+        )
+        _ = conflictStore.preserve(peerConflict)
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        _ = applier.apply(
+            [
+                SyncChange(
+                    entityType: .conflict,
+                    entityID: resolvedConflict.id.uuidString,
+                    operation: .upsert,
+                    payload: try MyRAMSyncPayloadCoding.encode(
+                        MyRAMSyncConflictPayload(
+                            action: .resolved,
+                            conflict: resolvedConflict,
+                            updatedAt: Date(timeIntervalSince1970: 203)
+                        )
+                    ),
+                    updatedAt: Date(timeIntervalSince1970: 203),
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: noteID,
+            currentNoteID: noteID,
+            currentFolderID: nil
+        )
+
+        XCTAssertTrue(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 204)).isEmpty)
+    }
+
+    func testResolvedSyncConflictDoesNotPreserveAgainFromStaleMessage() throws {
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let noteID = UUID()
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Local body",
+            remoteText: "Remote body",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: Date(timeIntervalSince1970: 1_000)
+        )
+        _ = conflictStore.preserve(conflict)
+
+        XCTAssertTrue(conflictStore.removeResolvedConflict(conflict).isEmpty)
+        XCTAssertTrue(conflictStore.preserve(conflict).isEmpty)
+    }
+
+    func testDiscardSyncConflictAdvancesLocalNoteTimestamp() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Local title", content: "Local body")
+        note.id = UUID()
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: note.id,
+            noteID: note.id,
+            field: .noteContent,
+            localText: note.content,
+            remoteText: "Remote body",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: Date(timeIntervalSince1970: 1_000)
+        )
+        _ = conflictStore.preserve(conflict)
+        let service = MyRAMSyncConflictService(context: context, store: conflictStore)
+
+        let result = try XCTUnwrap(service.discard(conflict, activeNoteID: note.id))
+
+        XCTAssertTrue(result.conflicts.isEmpty)
+        XCTAssertEqual(note.content, "Local body")
+        XCTAssertGreaterThan(note.modifiedAt, Date(timeIntervalSince1970: 100))
+        XCTAssertTrue(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).isEmpty)
+    }
+
     func testIncomingFolderDeletePreservesRenamedFolderAsConflict() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext

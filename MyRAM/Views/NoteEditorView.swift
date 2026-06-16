@@ -312,10 +312,6 @@ struct NoteEditorView: View {
                     onReview: {
                         selectedSyncConflict = nil
                         vm.markSyncConflictReviewed(conflict)
-                    },
-                    onDiscard: {
-                        selectedSyncConflict = nil
-                        vm.discardSyncConflict(conflict)
                     }
                 )
                 .presentationDetents([.large])

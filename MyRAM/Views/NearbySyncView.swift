@@ -8,7 +8,6 @@ struct NearbySyncView: View {
     let onCopyConflict: (SyncConflictVersion) -> Void
     let onRestoreConflict: (SyncConflictVersion) -> Void
     let onReviewConflict: (SyncConflictVersion) -> Void
-    let onDiscardConflict: (SyncConflictVersion) -> Void
 
     var body: some View {
         ScrollView {
@@ -66,8 +65,7 @@ struct NearbySyncView: View {
                             localText: localTextForConflict,
                             onCopy: onCopyConflict,
                             onRestore: onRestoreConflict,
-                            onReview: onReviewConflict,
-                            onDiscard: onDiscardConflict
+                            onReview: onReviewConflict
                         )
                     }
                 }

@@ -561,11 +561,12 @@ final class NotesViewModel: ObservableObject {
     }
 
     func markSyncConflictReviewed(_ conflict: SyncConflictVersion) {
-        // Terminal conflict action: keep the local model and remove the saved
-        // remote version without publishing another content change.
+        // Terminal conflict action: keep the local model, remove the saved
+        // remote version, and publish the kept local value as the winner.
         guard let result = syncConflictService.markReviewed(conflict, activeNoteID: currentNote?.id) else { return }
         syncConflicts = result.conflicts
         recordSyncConflictResolution(conflict)
+        recordKeptLocalSyncConflictResolution(conflict, result: result)
 
         if result.shouldRefreshActiveNote {
             activeNoteSyncRevision += 1
@@ -587,10 +588,16 @@ final class NotesViewModel: ObservableObject {
     }
 
     func discardSyncConflict(_ conflict: SyncConflictVersion) {
-        // Discard means throw away only the remote preserved version. Do not
-        // touch local timestamps or enqueue sync work.
-        syncConflicts = syncConflictService.discard(conflict)
+        // Discard keeps the local model and publishes that local value as the
+        // winner so peers do not keep replaying the discarded remote version.
+        guard let result = syncConflictService.discard(conflict, activeNoteID: currentNote?.id) else { return }
+        syncConflicts = result.conflicts
         recordSyncConflictResolution(conflict)
+        recordKeptLocalSyncConflictResolution(conflict, result: result)
+
+        if result.shouldRefreshActiveNote {
+            activeNoteSyncRevision += 1
+        }
         refreshCurrentFolderContent()
     }
 
@@ -1130,6 +1137,52 @@ final class NotesViewModel: ObservableObject {
 
     private func recordSyncConflictResolution(_ conflict: SyncConflictVersion) {
         recordSyncConflictMetadata(MyRAMSyncConflictPayload(action: .resolved, conflict: conflict))
+    }
+
+    private func recordKeptLocalSyncConflictResolution(
+        _ conflict: SyncConflictVersion,
+        result: SyncConflictRestoreResult
+    ) {
+        saveDiscardedRemoteVersionAsSyncBase(conflict)
+
+        if let note = result.note {
+            recordNoteSyncChange(note)
+        }
+        if let pinnedThought = result.pinnedThought {
+            recordPinnedThoughtSyncChange(pinnedThought)
+        }
+        if let folder = result.folder {
+            recordFolderSyncChange(folder)
+        }
+    }
+
+    private func saveDiscardedRemoteVersionAsSyncBase(_ conflict: SyncConflictVersion) {
+        switch conflict.field {
+        case .noteTitle:
+            syncConflictStore.saveNoteTitleBaseline(
+                noteID: conflict.entityID,
+                title: conflict.remoteText,
+                modifiedAt: conflict.remoteModifiedAt
+            )
+
+        case .noteContent:
+            syncConflictStore.saveNoteContentBaseline(
+                noteID: conflict.entityID,
+                content: conflict.remoteText,
+                richTextContentData: conflict.remoteRichTextContentData,
+                modifiedAt: conflict.remoteModifiedAt
+            )
+
+        case .folderTitle:
+            break
+
+        case .pinnedText:
+            syncConflictStore.savePinnedTextBaseline(
+                thoughtID: conflict.entityID,
+                text: conflict.remoteText,
+                modifiedAt: conflict.remoteModifiedAt
+            )
+        }
     }
 
     private func recordSyncConflictMetadata(_ payload: MyRAMSyncConflictPayload) {

@@ -124,7 +124,7 @@ struct MyRAMSyncConflictPayload: Codable, Equatable {
     init(action: MyRAMSyncConflictAction, conflict: SyncConflictVersion, updatedAt: Date = Date()) {
         kind = .syncConflict
         self.action = action
-        self.conflict = action == .preserved ? conflict : nil
+        self.conflict = conflict
         conflictID = conflict.id
         self.updatedAt = updatedAt
     }

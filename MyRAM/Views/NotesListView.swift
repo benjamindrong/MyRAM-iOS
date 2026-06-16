@@ -138,8 +138,7 @@ struct NotesListView: View {
                         localTextForConflict: vm.localText(forSyncConflict:),
                         onCopyConflict: copySyncConflict,
                         onRestoreConflict: vm.restoreSyncConflict,
-                        onReviewConflict: vm.markSyncConflictReviewed,
-                        onDiscardConflict: vm.discardSyncConflict
+                        onReviewConflict: vm.markSyncConflictReviewed
                     )
                         .navigationTitle("Nearby Sync")
                         .navigationBarTitleDisplayMode(.inline)

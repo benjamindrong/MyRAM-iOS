@@ -406,7 +406,11 @@ final class MyRAMSyncChangeApplier {
             syncConflicts = conflictStore.preserve(conflict)
             return true
         case .resolved:
-            syncConflicts = conflictStore.removeConflict(id: payload.conflictID)
+            if let conflict = payload.conflict {
+                syncConflicts = conflictStore.removeResolvedConflict(conflict)
+            } else {
+                syncConflicts = conflictStore.removeConflict(id: payload.conflictID)
+            }
             return true
         }
     }
