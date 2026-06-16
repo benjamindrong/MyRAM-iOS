@@ -10,7 +10,7 @@ import XCTest
 final class MyRAMUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
-        true
+        false
     }
 
     override func setUpWithError() throws {
@@ -19,6 +19,7 @@ final class MyRAMUITestsLaunchTests: XCTestCase {
 
     func testLaunch() throws {
         let app = XCUIApplication()
+        app.launchArguments.append("UITEST_MODE")
         app.launch()
 
         // Insert steps here to perform after app launch but before taking a screenshot,

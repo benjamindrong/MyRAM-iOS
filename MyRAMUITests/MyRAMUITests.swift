@@ -8,34 +8,16 @@
 import XCTest
 
 final class MyRAMUITests: XCTestCase {
-    private var initialAppearanceRaw = "system"
+    private enum Timeout {
+        static let short: TimeInterval = 1
+        static let standard: TimeInterval = 2
+    }
 
     override func setUpWithError() throws {
-        // Put setup code here. This method is called before the invocation of each test method in the class.
-
-        // In UI tests it is usually best to stop immediately when a failure occurs.
         continueAfterFailure = false
-
-        // In UI tests it’s important to set the initial state - such as interface orientation - required for your tests before they run. The setUp method is a good place to do this.
-        let app = makeApp()
-        app.launch()
-        initialAppearanceRaw = currentAppearanceRaw(in: app) ?? "system"
-        app.terminate()
     }
 
     override func tearDownWithError() throws {
-        let app = makeApp(forcedAppearanceRaw: initialAppearanceRaw)
-        app.launch()
-        Thread.sleep(forTimeInterval: 0.4)
-        app.terminate()
-    }
-
-    func testExample() throws {
-        // UI tests must launch the application that they test.
-        let app = makeApp()
-        app.launch()
-
-        // Use XCTAssert and related functions to verify your tests produce the correct results.
     }
 
     func testNewNoteOpensWithoutAttachments() throws {
@@ -44,7 +26,7 @@ final class MyRAMUITests: XCTestCase {
 
         openNewNote(in: app)
 
-        XCTAssertTrue(app.buttons["edit-note-title"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["edit-note-title"].waitForExistence(timeout: Timeout.standard))
         XCTAssertTrue(app.staticTexts["Untitled"].exists)
 
         XCTAssertFalse(app.staticTexts["Attachments"].exists)
@@ -57,10 +39,10 @@ final class MyRAMUITests: XCTestCase {
         openNewNote(in: app)
 
         let editTitleButton = app.buttons["edit-note-title"]
-        XCTAssertTrue(editTitleButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(editTitleButton.waitForExistence(timeout: Timeout.standard))
         editTitleButton.tap()
 
-        XCTAssertTrue(app.alerts["Edit Title"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.alerts["Edit Title"].waitForExistence(timeout: Timeout.standard))
         XCTAssertTrue(app.buttons["Save"].exists)
         XCTAssertTrue(app.buttons["Save"].exists)
     }
@@ -71,7 +53,7 @@ final class MyRAMUITests: XCTestCase {
 
         openNewNote(in: app)
 
-        XCTAssertTrue(findElement("keyboard-control-bar", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(findElement("keyboard-control-bar", in: app).waitForExistence(timeout: Timeout.standard))
         XCTAssertTrue(app.buttons["edit-note-title"].exists)
         XCTAssertFalse(findElement("format-bold-toggle", in: app).exists)
         XCTAssertFalse(findElement("keyboard-control-overflow-panel", in: app).exists)
@@ -84,14 +66,14 @@ final class MyRAMUITests: XCTestCase {
         openNewNote(in: app)
 
         let controlBar = findElement("keyboard-control-bar", in: app)
-        XCTAssertTrue(controlBar.waitForExistence(timeout: 5))
+        XCTAssertTrue(controlBar.waitForExistence(timeout: Timeout.standard))
         controlBar.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
 
-        XCTAssertTrue(findElement("keyboard-control-overflow-panel", in: app).waitForExistence(timeout: 5))
+        XCTAssertTrue(findElement("keyboard-control-overflow-panel", in: app).waitForExistence(timeout: Timeout.standard))
         XCTAssertTrue(findElement("format-bold-toggle", in: app).exists)
 
         controlBar.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
-        XCTAssertFalse(findElement("keyboard-control-overflow-panel", in: app).waitForExistence(timeout: 1))
+        XCTAssertFalse(findElement("keyboard-control-overflow-panel", in: app).waitForExistence(timeout: Timeout.short))
     }
 
     func testFolderTitleCanBeRenamedFromTopBar() throws {
@@ -105,11 +87,11 @@ final class MyRAMUITests: XCTestCase {
         openFolder(named: originalName, in: app)
 
         let editFolderTitleButton = app.buttons["edit-folder-title"]
-        XCTAssertTrue(editFolderTitleButton.waitForExistence(timeout: 5))
+        XCTAssertTrue(editFolderTitleButton.waitForExistence(timeout: Timeout.standard))
         editFolderTitleButton.tap()
 
         let renameAlert = app.alerts["Rename Folder"]
-        XCTAssertTrue(renameAlert.waitForExistence(timeout: 5))
+        XCTAssertTrue(renameAlert.waitForExistence(timeout: Timeout.standard))
         let nameField = renameAlert.textFields["Folder Name"]
         XCTAssertTrue(nameField.exists)
         nameField.tap()
@@ -117,84 +99,70 @@ final class MyRAMUITests: XCTestCase {
         nameField.typeText(renamedName)
         renameAlert.buttons["Save"].tap()
 
-        XCTAssertTrue(app.staticTexts[renamedName].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[renamedName].waitForExistence(timeout: Timeout.standard))
     }
 
-    private func makeApp(forcedAppearanceRaw: String? = nil) -> XCUIApplication {
+    private func makeApp() -> XCUIApplication {
         let app = XCUIApplication()
         app.launchArguments.append("UITEST_MODE")
-        if let forcedAppearanceRaw {
-            app.launchEnvironment["UITEST_FORCE_APPEARANCE"] = forcedAppearanceRaw
-        }
         return app
     }
 
     private func openNewNote(in app: XCUIApplication) {
         let quickActionButton = app.buttons["notes-topbar-new-note"]
-        if quickActionButton.waitForExistence(timeout: 2) {
+        if quickActionButton.waitForExistence(timeout: Timeout.short) {
             quickActionButton.tap()
         } else {
             let overflowButton = app.buttons["notes-list-more"]
-            XCTAssertTrue(overflowButton.waitForExistence(timeout: 5))
+            XCTAssertTrue(overflowButton.waitForExistence(timeout: Timeout.standard))
             overflowButton.tap()
 
             let menuNewNoteButton = app.buttons["New Note"]
-            XCTAssertTrue(menuNewNoteButton.waitForExistence(timeout: 5))
+            XCTAssertTrue(menuNewNoteButton.waitForExistence(timeout: Timeout.standard))
             menuNewNoteButton.tap()
         }
 
-        XCTAssertTrue(app.buttons["edit-note-title"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.buttons["edit-note-title"].waitForExistence(timeout: Timeout.standard))
         let controlBar = app.descendants(matching: .any)["keyboard-control-bar"]
         let pinButton = app.buttons["keyboard-control-pin"]
         XCTAssertTrue(
-            controlBar.waitForExistence(timeout: 5) || pinButton.waitForExistence(timeout: 5),
+            controlBar.waitForExistence(timeout: Timeout.standard) || pinButton.waitForExistence(timeout: Timeout.standard),
             "Expected note editor controls to appear after opening a note."
         )
     }
 
     private func createFolder(named folderName: String, in app: XCUIApplication) {
         let newFolderButton = app.buttons["notes-topbar-new-folder"]
-        if newFolderButton.waitForExistence(timeout: 2) {
+        if newFolderButton.waitForExistence(timeout: Timeout.short) {
             newFolderButton.tap()
         } else {
             let overflowButton = app.buttons["notes-list-more"]
-            XCTAssertTrue(overflowButton.waitForExistence(timeout: 5))
+            XCTAssertTrue(overflowButton.waitForExistence(timeout: Timeout.standard))
             overflowButton.tap()
 
             let menuNewFolderButton = app.buttons["New Folder"]
-            XCTAssertTrue(menuNewFolderButton.waitForExistence(timeout: 5))
+            XCTAssertTrue(menuNewFolderButton.waitForExistence(timeout: Timeout.standard))
             menuNewFolderButton.tap()
         }
 
         let newFolderAlert = app.alerts["New Folder"]
-        XCTAssertTrue(newFolderAlert.waitForExistence(timeout: 5))
+        XCTAssertTrue(newFolderAlert.waitForExistence(timeout: Timeout.standard))
         let folderNameField = newFolderAlert.textFields["Folder Name"]
         XCTAssertTrue(folderNameField.exists)
         folderNameField.tap()
         folderNameField.typeText(folderName)
         newFolderAlert.buttons["Create"].tap()
-        XCTAssertTrue(app.staticTexts[folderName].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts[folderName].waitForExistence(timeout: Timeout.standard))
     }
 
     private func openFolder(named folderName: String, in app: XCUIApplication) {
         let folderCell = app.staticTexts[folderName]
-        XCTAssertTrue(folderCell.waitForExistence(timeout: 5))
+        XCTAssertTrue(folderCell.waitForExistence(timeout: Timeout.standard))
         folderCell.tap()
-        XCTAssertTrue(app.buttons["edit-folder-title"].waitForExistence(timeout: 5))
-    }
-
-    private func currentAppearanceRaw(in app: XCUIApplication) -> String? {
-        let probe = app.otherElements["appearance-setting-raw"]
-        guard probe.waitForExistence(timeout: 2) else { return nil }
-        let value = probe.label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        if ["system", "light", "dark"].contains(value) {
-            return value
-        }
-        return nil
+        XCTAssertTrue(app.buttons["edit-folder-title"].waitForExistence(timeout: Timeout.standard))
     }
 
     private func findElement(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)[identifier]
     }
-
 }

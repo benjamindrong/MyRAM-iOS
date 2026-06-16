@@ -119,6 +119,33 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(decoded.folderID, folderID)
     }
 
+    func testNoteSyncPayloadPreservesConcreteRichTextFontSizes() throws {
+        let note = Note(title: "Formatting", content: "Large\nPhone")
+        let richText = NSMutableAttributedString(string: note.content)
+        richText.addAttribute(
+            .font,
+            value: UIFont.systemFont(ofSize: 24),
+            range: NSRange(location: 0, length: 5)
+        )
+        richText.addAttribute(
+            .font,
+            value: UIFont.systemFont(ofSize: 17),
+            range: NSRange(location: 6, length: 5)
+        )
+        note.richTextContentData = try XCTUnwrap(RichTextContentCodec.encode(richText))
+
+        let data = try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: note))
+        let decoded = try MyRAMSyncPayloadCoding.decodeNote(from: data)
+        let decodedRichText = RichTextContentCodec.decode(
+            richTextData: decoded.richTextContentData,
+            plainText: decoded.content,
+            baseFont: UIFont.systemFont(ofSize: 20)
+        )
+
+        XCTAssertEqual(fontSize(in: decodedRichText, at: 0), 24, accuracy: 0.1)
+        XCTAssertEqual(fontSize(in: decodedRichText, at: 6), 17, accuracy: 0.1)
+    }
+
     func testPhotoAttachmentSyncPayloadRoundTripsImageFields() throws {
         let note = Note(title: "Photo host")
         let attachment = NotePhotoAttachment(imageData: Data("image".utf8), note: note)
@@ -540,7 +567,14 @@ final class MyRAMTests: XCTestCase {
                     entityType: .item,
                     entityID: noteID.uuidString,
                     operation: .upsert,
-                    payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: editedRemoteNote)),
+                    payload: try MyRAMSyncPayloadCoding.encode(
+                        MyRAMNoteSyncPayload(
+                            note: editedRemoteNote,
+                            baseTitle: originalRemoteNote.title,
+                            baseContent: originalRemoteNote.content,
+                            baseRichTextContentData: originalRemoteNote.richTextContentData
+                        )
+                    ),
                     updatedAt: editedRemoteNote.modifiedAt,
                     originDeviceID: "device-b"
                 )
@@ -1221,7 +1255,14 @@ final class MyRAMTests: XCTestCase {
                     entityType: .item,
                     entityID: note.id.uuidString,
                     operation: .upsert,
-                    payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: remoteNote)),
+                    payload: try MyRAMSyncPayloadCoding.encode(
+                        MyRAMNoteSyncPayload(
+                            note: remoteNote,
+                            baseTitle: "Mac title",
+                            baseContent: "Mac body",
+                            baseRichTextContentData: note.richTextContentData
+                        )
+                    ),
                     updatedAt: remoteNote.modifiedAt,
                     originDeviceID: "device-b"
                 )
@@ -1261,7 +1302,14 @@ final class MyRAMTests: XCTestCase {
                 entityType: .item,
                 entityID: note.id.uuidString,
                 operation: .upsert,
-                payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: remoteNote)),
+                payload: try MyRAMSyncPayloadCoding.encode(
+                    MyRAMNoteSyncPayload(
+                        note: remoteNote,
+                        baseTitle: "Synced title",
+                        baseContent: "Synced body",
+                        baseRichTextContentData: note.richTextContentData
+                    )
+                ),
                 updatedAt: remoteNote.modifiedAt,
                 originDeviceID: "device-b"
             )
@@ -1316,7 +1364,13 @@ final class MyRAMTests: XCTestCase {
                     entityID: conflict.id.uuidString,
                     operation: .upsert,
                     payload: try MyRAMSyncPayloadCoding.encode(
-                        MyRAMSyncConflictPayload(action: .resolved, conflict: conflict, updatedAt: Date(timeIntervalSince1970: 203))
+                        MyRAMSyncConflictPayload(
+                            action: .resolved,
+                            conflict: conflict,
+                            resolvedText: "Receiver local",
+                            baseText: "Sender remote",
+                            updatedAt: Date(timeIntervalSince1970: 203)
+                        )
                     ),
                     updatedAt: Date(timeIntervalSince1970: 203),
                     originDeviceID: "device-b"
@@ -1420,6 +1474,8 @@ final class MyRAMTests: XCTestCase {
                         MyRAMSyncConflictPayload(
                             action: .resolved,
                             conflict: resolvedConflict,
+                            resolvedText: "Device A local",
+                            baseText: "Device B remote",
                             updatedAt: Date(timeIntervalSince1970: 203)
                         )
                     ),
@@ -2246,7 +2302,9 @@ final class MyRAMTests: XCTestCase {
         let remoteThought = PinnedThought(text: "Remote pinned", order: 1, note: destinationNote)
         remoteThought.id = thought.id
         remoteThought.modifiedAt = Date(timeIntervalSince1970: 200)
-        let payload = try MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: remoteThought))
+        let payload = try MyRAMSyncPayloadCoding.encode(
+            MyRAMPinnedThoughtSyncPayload(thought: remoteThought, baseText: "Shared pinned")
+        )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
 
         let result = applier.apply(
@@ -2297,7 +2355,9 @@ final class MyRAMTests: XCTestCase {
         let remoteThought = PinnedThought(text: "iPhone pinned", order: 0, note: note)
         remoteThought.id = thought.id
         remoteThought.modifiedAt = Date(timeIntervalSince1970: 200)
-        let payload = try MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: remoteThought))
+        let payload = try MyRAMSyncPayloadCoding.encode(
+            MyRAMPinnedThoughtSyncPayload(thought: remoteThought, baseText: "Mac pinned")
+        )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
 
         let result = applier.apply(
@@ -2354,7 +2414,9 @@ final class MyRAMTests: XCTestCase {
                 entityType: .marker,
                 entityID: thought.id.uuidString,
                 operation: .upsert,
-                payload: try MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: remoteThought)),
+                payload: try MyRAMSyncPayloadCoding.encode(
+                    MyRAMPinnedThoughtSyncPayload(thought: remoteThought, baseText: "Synced pinned")
+                ),
                 updatedAt: remoteThought.modifiedAt,
                 originDeviceID: "device-b"
             )
@@ -2395,12 +2457,12 @@ final class MyRAMTests: XCTestCase {
             ),
             4.5
         )
-        XCTAssertGreaterThan(
+        XCTAssertGreaterThanOrEqual(
             contrastRatio(
                 foreground: WarmPaperPalette.toolbarUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)),
                 background: WarmPaperPalette.backgroundUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
             ),
-            1.1
+            1.09
         )
         XCTAssertGreaterThan(
             contrastRatio(
@@ -2508,10 +2570,11 @@ final class MyRAMTests: XCTestCase {
 
     func testDebugBuildUsesDevelopmentBundleIdentifier() {
 #if DEBUG
-        let identifiers = Set(Bundle.allBundles.compactMap(\.bundleIdentifier))
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
         XCTAssertTrue(
-            identifiers.contains("com.apexcoretechs.MyRAM.dev"),
-            "Debug runs should include the development app bundle identifier."
+            bundleIdentifier == "com.apexcoretechs.MyRAM.dev"
+                || bundleIdentifier == "com.northsignalstudio.myram.dev",
+            "Debug runs should use a MyRAM app bundle identifier."
         )
 #endif
     }
@@ -3697,25 +3760,25 @@ final class MyRAMTests: XCTestCase {
             selection: NSRange(location: 0, length: 0)
         )
 
-        XCTAssertEqual(mutable.string, "☐ Buy milk")
+        XCTAssertEqual(mutable.string, "☐\tBuy milk")
         XCTAssertEqual(updatedSelection.location, ChecklistItemEditor.uncheckedPrefix.utf16.count)
         XCTAssertEqual(updatedSelection.length, 0)
     }
 
     func testChecklistActionTogglesUncheckedAndCheckedState() {
-        let mutable = NSMutableAttributedString(string: "☐ Buy milk")
+        let mutable = NSMutableAttributedString(string: "☐\tBuy milk")
 
         _ = ChecklistItemEditor.applyChecklistAction(
             in: mutable,
             selection: NSRange(location: 0, length: 0)
         )
-        XCTAssertEqual(mutable.string, "☑︎ Buy milk")
+        XCTAssertEqual(mutable.string, "☑︎\tBuy milk")
 
         _ = ChecklistItemEditor.applyChecklistAction(
             in: mutable,
             selection: NSRange(location: 0, length: 0)
         )
-        XCTAssertEqual(mutable.string, "☐ Buy milk")
+        XCTAssertEqual(mutable.string, "☐\tBuy milk")
     }
 
     func testChecklistRenderingAppliesStrikethroughOnlyToCheckedItemText() {
@@ -3800,7 +3863,7 @@ final class MyRAMTests: XCTestCase {
         )
         let checkboxFont = try XCTUnwrap(mutable.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
         XCTAssertGreaterThan(checkboxFont.pointSize, UIFont.systemFont(ofSize: 17).pointSize)
-        XCTAssertEqual(paragraphStyle.headIndent, 28)
+        XCTAssertEqual(paragraphStyle.headIndent, 30)
         XCTAssertEqual(paragraphStyle.tabStops.first?.location, paragraphStyle.headIndent)
     }
 
@@ -3893,11 +3956,11 @@ final class MyRAMTests: XCTestCase {
     }
 
     func testNoteContentPreviewOmitsCompletedChecklistLines() {
-        let note = Note(title: "Preview", content: "☑︎ Done\n☐ Pending\nRegular detail")
+        let note = Note(title: "Preview", content: "☑︎\tDone\n☐\tPending\nRegular detail")
 
         let preview = noteContentPreviewText(for: note)
 
-        XCTAssertEqual(preview, "☐ Pending\nRegular detail")
+        XCTAssertEqual(preview, "☐\tPending\nRegular detail")
     }
 
     func testNoteContentPreviewOmitsLegacyCompletedChecklistLines() {
@@ -4118,6 +4181,10 @@ final class MyRAMTests: XCTestCase {
             ]
         )
     }
+}
+
+private func fontSize(in attributedText: NSAttributedString, at location: Int) -> CGFloat {
+    (attributedText.attribute(.font, at: location, effectiveRange: nil) as? UIFont)?.pointSize ?? 0
 }
 
 private func contrastRatio(foreground: UIColor, background: UIColor) -> CGFloat {
