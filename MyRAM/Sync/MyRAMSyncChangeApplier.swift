@@ -436,6 +436,7 @@ final class MyRAMSyncChangeApplier {
             applyResolvedText(text, conflict: conflict)
             return true
         case .noOp:
+            saveResolvedTextBaseline(resolvedText, conflict: conflict)
             return true
         case .conflict:
             preserveSyncConflict(
@@ -458,7 +459,7 @@ final class MyRAMSyncChangeApplier {
             guard let note = fetchNote(withID: conflict.entityID) else { return }
             note.title = text
             note.modifiedAt = Date()
-            conflictStore.saveNoteTitleBaseline(noteID: note.id, title: text, modifiedAt: note.modifiedAt)
+            saveResolvedTextBaseline(text, conflict: conflict)
 
         case .noteContent:
             guard let note = fetchNote(withID: conflict.entityID) else { return }
@@ -467,12 +468,7 @@ final class MyRAMSyncChangeApplier {
                 note.richTextContentData = conflict.remoteRichTextContentData
             }
             note.modifiedAt = Date()
-            conflictStore.saveNoteContentBaseline(
-                noteID: note.id,
-                content: text,
-                richTextContentData: note.richTextContentData,
-                modifiedAt: note.modifiedAt
-            )
+            saveResolvedTextBaseline(text, conflict: conflict)
 
         case .folderTitle:
             guard let folder = fetchFolder(withID: conflict.entityID) else { return }
@@ -484,6 +480,33 @@ final class MyRAMSyncChangeApplier {
             thought.text = text
             thought.modifiedAt = Date()
             thought.note?.modifiedAt = thought.modifiedAt
+            saveResolvedTextBaseline(text, conflict: conflict)
+        }
+    }
+
+    private func saveResolvedTextBaseline(_ text: String, conflict: SyncConflictVersion) {
+        // Resolved metadata is terminal for this text value. Even when the
+        // visible text already matches, the baseline must advance or the next
+        // ordinary edit will compare against the stale pre-conflict version.
+        switch conflict.field {
+        case .noteTitle:
+            guard let note = fetchNote(withID: conflict.entityID) else { return }
+            conflictStore.saveNoteTitleBaseline(noteID: note.id, title: text, modifiedAt: note.modifiedAt)
+
+        case .noteContent:
+            guard let note = fetchNote(withID: conflict.entityID) else { return }
+            conflictStore.saveNoteContentBaseline(
+                noteID: note.id,
+                content: text,
+                richTextContentData: note.richTextContentData,
+                modifiedAt: note.modifiedAt
+            )
+
+        case .folderTitle:
+            break
+
+        case .pinnedText:
+            guard let thought = fetchPinnedThought(withID: conflict.entityID) else { return }
             conflictStore.savePinnedTextBaseline(
                 thoughtID: thought.id,
                 text: text,
