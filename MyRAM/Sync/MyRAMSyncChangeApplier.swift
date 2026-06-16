@@ -66,6 +66,9 @@ final class MyRAMSyncChangeApplier {
     }
 
     private func syncApplyOrder(_ lhs: SyncChange, _ rhs: SyncChange) -> Bool {
+        if lhs.isResolvedConflictMetadata != rhs.isResolvedConflictMetadata {
+            return lhs.isResolvedConflictMetadata
+        }
         if lhs.entityType.applyPriority == rhs.entityType.applyPriority {
             return lhs.updatedAt < rhs.updatedAt
         }
@@ -328,7 +331,7 @@ final class MyRAMSyncChangeApplier {
         remoteData: Data?
     ) -> RemoteTextResolution {
         if localData != remoteBaseData || remoteData != remoteBaseData {
-            if localText == remoteBaseText && localData == remoteBaseData {
+            if localText == remoteBaseText {
                 return .apply(remoteText)
             }
             return .conflict
@@ -439,17 +442,8 @@ final class MyRAMSyncChangeApplier {
             saveResolvedTextBaseline(resolvedText, conflict: conflict)
             return true
         case .conflict:
-            preserveSyncConflict(
-                entityType: conflict.entityType,
-                entityID: conflict.entityID,
-                noteID: conflict.noteID,
-                field: conflict.field,
-                localText: localText,
-                remoteText: resolvedText,
-                remoteRichTextContentData: resolvedText == conflict.remoteText ? conflict.remoteRichTextContentData : nil,
-                remoteModifiedAt: Date()
-            )
-            return false
+            applyResolvedText(resolvedText, conflict: conflict)
+            return true
         }
     }
 
@@ -752,6 +746,16 @@ private extension SyncEntityType {
         case .conflict:
             4
         }
+    }
+}
+
+private extension SyncChange {
+    var isResolvedConflictMetadata: Bool {
+        guard entityType == .conflict,
+              let payload = try? MyRAMSyncPayloadCoding.decodeSyncConflict(from: payload) else {
+            return false
+        }
+        return payload.action == .resolved
     }
 }
 

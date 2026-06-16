@@ -203,7 +203,7 @@ final class SyncConflictStore {
     }
 }
 
-private extension SyncConflictVersion {
+extension SyncConflictVersion {
     init?(_ conflict: SyncTextConflictVersion) {
         guard let entityID = UUID(uuidString: conflict.entityID),
               let entityType = SyncConflictEntityType(conflict.entityType),
