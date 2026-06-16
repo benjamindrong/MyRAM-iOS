@@ -97,7 +97,9 @@ struct NoteEditorView: View {
 
                 ZStack(alignment: .bottom) {
                     VStack(spacing: 12) {
-                        editorTitleHeader
+                        if !showsTitleInTopBar {
+                            editorTitleHeader
+                        }
 
                         if !syncConflicts.isEmpty, let onOpenSyncConflicts {
                             SyncConflictNotice(
@@ -288,6 +290,10 @@ struct NoteEditorView: View {
             .sheet(item: $selectedSyncConflict) { conflict in
                 SyncConflictDetailView(
                     conflict: conflict,
+                    localText: vm.localText(forSyncConflict: conflict),
+                    onClose: {
+                        selectedSyncConflict = nil
+                    },
                     onCopy: {
                         UIPasteboard.general.string = conflict.remoteText
                     },
@@ -652,6 +658,11 @@ struct NoteEditorView: View {
         GeometryReader { proxy in
             let layout = topBarActionLayout(totalWidth: proxy.size.width)
             ChromeActionBar(style: editorChromeStyle) {
+                if showsTitleInTopBar {
+                    titleEditorButton
+                        .frame(maxWidth: max(130, estimatedTitleWidth), alignment: .leading)
+                }
+
                 Spacer(minLength: 0)
 
                 ForEach(layout.visibleActions, id: \.self) { action in
@@ -676,6 +687,14 @@ struct NoteEditorView: View {
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
         }
         .frame(height: 42)
+    }
+
+    private var showsTitleInTopBar: Bool {
+#if targetEnvironment(macCatalyst)
+        false
+#else
+        showsTopBar
+#endif
     }
 
     private var editorTitleHeader: some View {
@@ -1233,18 +1252,6 @@ struct NoteEditorView: View {
 
             inlineActionButton(systemImage: "checkmark.square", identifier: "format-checklist-toggle") {
                 checklistToggleToken += 1
-            }
-
-            inlineActionButton(systemImage: "minus.circle.fill", identifier: "format-font-smaller") {
-                decreaseFontSizeToggleToken += 1
-            }
-
-            Text("\(Int(formattingState.fontSize.rounded()))")
-                .font(.subheadline.weight(.semibold).monospacedDigit())
-                .frame(width: 30, height: 26)
-
-            inlineActionButton(systemImage: "plus.circle.fill", identifier: "format-font-larger") {
-                increaseFontSizeToggleToken += 1
             }
 
             textColorMenu(controlSize: 26, swatchSize: 18)

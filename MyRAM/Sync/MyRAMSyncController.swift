@@ -13,6 +13,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     let localPeerName: String
     var onChangesReceived: (([SyncChange]) async -> Void)?
+    var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
 
     private let serviceType = "myram-sync"
     private let peerID: MCPeerID
@@ -207,6 +208,9 @@ extension MyRAMSyncController: MCSessionDelegate {
         Task { @MainActor in
             guard let envelope = try? JSONDecoder().decode(SyncEnvelope.self, from: data) else { return }
             let result = await syncEngine.applyIncomingEnvelope(envelope)
+            if !result.acknowledgedLocalChanges.isEmpty {
+                await onLocalChangesAcknowledged?(result.acknowledgedLocalChanges)
+            }
             let changesByID = Dictionary(uniqueKeysWithValues: envelope.changes.map { ($0.id, $0) })
             let appliedChanges = result.appliedChangeIDs.compactMap { changesByID[$0] }
             await onChangesReceived?(appliedChanges)

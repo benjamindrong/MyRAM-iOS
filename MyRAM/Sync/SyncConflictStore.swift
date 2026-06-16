@@ -133,6 +133,45 @@ final class SyncConflictStore {
         saveBaselines(baselines)
     }
 
+    func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date) {
+        saveRemoteBaseline(
+            SyncRemoteTextBaseline(
+                entityType: .note,
+                entityID: noteID,
+                field: .noteTitle,
+                text: title,
+                richTextContentData: nil,
+                modifiedAt: modifiedAt
+            )
+        )
+    }
+
+    func saveNoteContentBaseline(noteID: UUID, content: String, richTextContentData: Data?, modifiedAt: Date) {
+        saveRemoteBaseline(
+            SyncRemoteTextBaseline(
+                entityType: .note,
+                entityID: noteID,
+                field: .noteContent,
+                text: content,
+                richTextContentData: richTextContentData,
+                modifiedAt: modifiedAt
+            )
+        )
+    }
+
+    func savePinnedTextBaseline(thoughtID: UUID, text: String, modifiedAt: Date) {
+        saveRemoteBaseline(
+            SyncRemoteTextBaseline(
+                entityType: .pinnedThought,
+                entityID: thoughtID,
+                field: .pinnedText,
+                text: text,
+                richTextContentData: nil,
+                modifiedAt: modifiedAt
+            )
+        )
+    }
+
     private func loadConflicts() -> [SyncConflictVersion] {
         guard let data = try? Data(contentsOf: fileURL) else { return [] }
         return (try? decoder.decode([SyncConflictVersion].self, from: data)) ?? []

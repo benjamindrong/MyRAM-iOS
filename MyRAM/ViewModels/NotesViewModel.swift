@@ -40,6 +40,9 @@ final class NotesViewModel: ObservableObject {
         self.syncController?.onChangesReceived = { [weak self] changes in
             await self?.applyIncomingSyncChanges(changes)
         }
+        self.syncController?.onLocalChangesAcknowledged = { [weak self] changes in
+            await self?.advanceSyncBaselines(forAcknowledgedLocalChanges: changes)
+        }
         syncConflicts = syncConflictService.activeConflicts()
         purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
@@ -544,9 +547,25 @@ final class NotesViewModel: ObservableObject {
         syncConflictService.activeConflicts(for: note, in: syncConflicts)
     }
 
+    func localText(forSyncConflict conflict: SyncConflictVersion) -> String {
+        switch conflict.field {
+        case .noteTitle:
+            return fetchNote(withID: conflict.entityID)?.title ?? conflict.localText
+        case .noteContent:
+            return fetchNote(withID: conflict.entityID)?.content ?? conflict.localText
+        case .folderTitle:
+            return fetchFolder(withID: conflict.entityID)?.name ?? conflict.localText
+        case .pinnedText:
+            return fetchPinnedThought(withID: conflict.entityID)?.text ?? conflict.localText
+        }
+    }
+
     func markSyncConflictReviewed(_ conflict: SyncConflictVersion) {
+        // Terminal conflict action: keep the local model and remove the saved
+        // remote version without publishing another content change.
         guard let result = syncConflictService.markReviewed(conflict, activeNoteID: currentNote?.id) else { return }
         syncConflicts = result.conflicts
+        recordSyncConflictResolution(conflict)
 
         if result.shouldRefreshActiveNote {
             activeNoteSyncRevision += 1
@@ -555,8 +574,11 @@ final class NotesViewModel: ObservableObject {
     }
 
     func restoreSyncConflict(_ conflict: SyncConflictVersion) {
+        // Restore is local and terminal for this preserved conflict. It does not
+        // bounce the restored value back as a fresh sync edit.
         guard let result = syncConflictService.restore(conflict, activeNoteID: currentNote?.id) else { return }
         syncConflicts = result.conflicts
+        recordSyncConflictResolution(conflict)
 
         if result.shouldRefreshActiveNote {
             activeNoteSyncRevision += 1
@@ -565,7 +587,10 @@ final class NotesViewModel: ObservableObject {
     }
 
     func discardSyncConflict(_ conflict: SyncConflictVersion) {
+        // Discard means throw away only the remote preserved version. Do not
+        // touch local timestamps or enqueue sync work.
         syncConflicts = syncConflictService.discard(conflict)
+        recordSyncConflictResolution(conflict)
         refreshCurrentFolderContent()
     }
 
@@ -1001,8 +1026,17 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func recordNoteSyncChange(_ note: Note, operation: SyncOperation = .upsert) {
+        let titleBaseline = syncConflictStore.remoteBaseline(entityType: .note, entityID: note.id, field: .noteTitle)
+        let contentBaseline = syncConflictStore.remoteBaseline(entityType: .note, entityID: note.id, field: .noteContent)
         guard !isApplyingRemoteSyncChange,
-              let payload = try? MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: note)) else { return }
+              let payload = try? MyRAMSyncPayloadCoding.encode(
+                MyRAMNoteSyncPayload(
+                    note: note,
+                    baseTitle: titleBaseline?.text,
+                    baseContent: contentBaseline?.text,
+                    baseRichTextContentData: contentBaseline?.richTextContentData
+                )
+              ) else { return }
 
         syncController?.recordLocalChange(
             entityType: .item,
@@ -1039,9 +1073,11 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func recordPinnedThoughtSyncChange(_ thought: PinnedThought) {
+        let baseline = syncConflictStore.remoteBaseline(entityType: .pinnedThought, entityID: thought.id, field: .pinnedText)
         guard !isApplyingRemoteSyncChange,
-              let payload = try? MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: thought)) else { return }
-
+              let payload = try? MyRAMSyncPayloadCoding.encode(
+                MyRAMPinnedThoughtSyncPayload(thought: thought, baseText: baseline?.text)
+              ) else { return }
         syncController?.recordLocalChange(
             entityType: .marker,
             entityID: thought.id.uuidString,
@@ -1088,6 +1124,55 @@ final class NotesViewModel: ObservableObject {
         )
     }
 
+    private func recordSyncConflictPreserved(_ conflict: SyncConflictVersion) {
+        recordSyncConflictMetadata(MyRAMSyncConflictPayload(action: .preserved, conflict: conflict, updatedAt: conflict.preservedAt))
+    }
+
+    private func recordSyncConflictResolution(_ conflict: SyncConflictVersion) {
+        recordSyncConflictMetadata(MyRAMSyncConflictPayload(action: .resolved, conflict: conflict))
+    }
+
+    private func recordSyncConflictMetadata(_ payload: MyRAMSyncConflictPayload) {
+        guard let data = try? MyRAMSyncPayloadCoding.encode(payload) else { return }
+        syncController?.recordLocalChange(
+            entityType: .conflict,
+            entityID: payload.conflictID.uuidString,
+            payload: data,
+            updatedAt: payload.updatedAt
+        )
+    }
+
+    func advanceSyncBaselines(forAcknowledgedLocalChanges changes: [SyncChange]) async {
+        for change in changes where change.operation == .upsert {
+            switch change.entityType {
+            case .item:
+                guard let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload) else { continue }
+                syncConflictStore.saveNoteTitleBaseline(
+                    noteID: payload.id,
+                    title: payload.title,
+                    modifiedAt: payload.modifiedAt
+                )
+                syncConflictStore.saveNoteContentBaseline(
+                    noteID: payload.id,
+                    content: payload.content,
+                    richTextContentData: payload.richTextContentData,
+                    modifiedAt: payload.modifiedAt
+                )
+
+            case .marker:
+                guard let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) else { continue }
+                syncConflictStore.savePinnedTextBaseline(
+                    thoughtID: payload.id,
+                    text: payload.text,
+                    modifiedAt: payload.modifiedAt
+                )
+
+            case .collection, .attachment, .conflict:
+                continue
+            }
+        }
+    }
+
     func applyIncomingSyncChanges(_ changes: [SyncChange]) async {
         guard !changes.isEmpty else { return }
         let activeNoteID = currentNote?.id
@@ -1102,6 +1187,7 @@ final class NotesViewModel: ObservableObject {
             currentFolderID: currentFolder?.id
         )
         syncConflicts = applier.syncConflicts
+        result.preservedConflicts.forEach(recordSyncConflictPreserved)
 
         if result.deletedCurrentNoteID != nil {
             currentNote = nil
