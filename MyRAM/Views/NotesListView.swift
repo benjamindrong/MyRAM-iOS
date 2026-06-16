@@ -59,7 +59,9 @@ struct NotesListView: View {
     @State private var rootTitleRedoHistory: [String] = []
     @State private var showingListUndoRedoActions = false
     @State private var showingNearbySync = false
+    @State private var searchText = ""
     @State private var noteActionDialogContext: NoteActionDialogContext?
+    @FocusState private var isSearchFocused: Bool
 #if targetEnvironment(macCatalyst)
     @State private var desktopSidebarWidth: CGFloat = 340
     @State private var desktopSidebarDragStartWidth: CGFloat?
@@ -81,10 +83,13 @@ struct NotesListView: View {
     
     var body: some View {
         NavigationStack {
-            VStack(spacing: 10) {
+            VStack(spacing: 6) {
                 notesListTopBar
                     .padding(.horizontal)
                     .padding(.top, 6)
+
+                notesSearchField
+                    .padding(.horizontal)
 
 #if targetEnvironment(macCatalyst)
                 HStack(spacing: 0) {
@@ -133,12 +138,7 @@ struct NotesListView: View {
                 NavigationStack {
                     NearbySyncView(
                         syncController: syncController,
-                        style: editorChromeStyle,
-                        conflicts: vm.syncConflicts,
-                        localTextForConflict: vm.localText(forSyncConflict:),
-                        onCopyConflict: copySyncConflict,
-                        onRestoreConflict: vm.restoreSyncConflict,
-                        onReviewConflict: vm.markSyncConflictReviewed
+                        style: editorChromeStyle
                     )
                         .navigationTitle("Nearby Sync")
                         .navigationBarTitleDisplayMode(.inline)
@@ -416,6 +416,47 @@ struct NotesListView: View {
         .listStyle(.insetGrouped)
         .environment(\.editMode, $editMode)
         .scrollContentBackground(editorChromeStyle.isWarmPaper ? .hidden : .automatic)
+        .contentMargins(.top, 0, for: .scrollContent)
+    }
+
+    private var notesSearchField: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            TextField("Search Notes", text: $searchText)
+                .textInputAutocapitalization(.never)
+                .disableAutocorrection(true)
+                .submitLabel(.search)
+                .focused($isSearchFocused)
+                .accessibilityIdentifier("notes-search-field")
+
+            if isSearching {
+                Button {
+                    searchText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clear search")
+                .accessibilityIdentifier("notes-search-clear")
+            }
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 38)
+        .background(editorChromeStyle.toolbarFillColor)
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+    }
+
+    private var isSearching: Bool {
+        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     private var notesListSelection: Binding<Set<UUID>> {
@@ -766,7 +807,21 @@ struct NotesListView: View {
     }
 
     private var listItems: [NotesListItem] {
-        vm.folders.map(NotesListItem.folder) + vm.notes.map(NotesListItem.note)
+        if isSearching {
+            return searchResultNotes.map(NotesListItem.note)
+        }
+
+        return vm.folders.map(NotesListItem.folder) + vm.notes.map(NotesListItem.note)
+    }
+
+    private var searchResultNotes: [Note] {
+        guard isSearching else { return [] }
+        return vm.fetchSearchableNotes()
+            .filter { noteMatchesSearch($0, query: searchText) }
+    }
+
+    private var actionableNotes: [Note] {
+        isSearching ? searchResultNotes : vm.notes
     }
 
     @ViewBuilder
@@ -979,15 +1034,15 @@ struct NotesListView: View {
     }
 
     private var selectedNotes: [Note] {
-        vm.notes.filter { selectedNoteIDs.contains($0.id) }
+        actionableNotes.filter { selectedNoteIDs.contains($0.id) }
     }
 
     private func note(for noteID: UUID) -> Note? {
-        vm.notes.first { $0.id == noteID }
+        actionableNotes.first { $0.id == noteID }
     }
 
     private func notes(for noteIDs: Set<UUID>) -> [Note] {
-        vm.notes.filter { noteIDs.contains($0.id) }
+        actionableNotes.filter { noteIDs.contains($0.id) }
     }
 
     private var shouldPinSelectedNotes: Bool {
@@ -1231,7 +1286,7 @@ struct NotesListView: View {
     }
 
     private func exportSelectedNotes() {
-        let notesToExport = vm.notes.filter { selectedNoteIDs.contains($0.id) }
+        let notesToExport = actionableNotes.filter { selectedNoteIDs.contains($0.id) }
         do {
             let exportURLs = try vm.exportNotesForSharing(notesToExport)
             sharePayload = SharePayload(urls: exportURLs)
@@ -1523,6 +1578,26 @@ func noteContentPreviewText(for note: Note) -> String {
         .trimmingCharacters(in: .whitespacesAndNewlines)
 
     return previewLines
+}
+
+func noteMatchesSearch(_ note: Note, query: String) -> Bool {
+    let terms = query
+        .split { $0.isWhitespace || $0.isNewline }
+        .map(String.init)
+    guard !terms.isEmpty else { return true }
+
+    let searchableText = [
+        note.title,
+        noteContentPreviewText(for: note),
+        note.pinnedThoughts
+            .map(\.text)
+            .joined(separator: " ")
+    ]
+    .joined(separator: " ")
+
+    return terms.allSatisfy {
+        searchableText.range(of: $0, options: [.caseInsensitive, .diacriticInsensitive]) != nil
+    }
 }
 
 func isCompletedChecklistPreviewLine(_ line: String) -> Bool {

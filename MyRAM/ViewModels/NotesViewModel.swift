@@ -121,6 +121,16 @@ final class NotesViewModel: ObservableObject {
         return (try? context.fetch(descriptor)) ?? []
     }
 
+    func fetchSearchableNotes() -> [Note] {
+        let descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { note in
+                note.deletedAt == nil
+            },
+            sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)]
+        )
+        return ((try? context.fetch(descriptor)) ?? []).sorted(by: sortNotes)
+    }
+
     func refreshRecentlyDeletedNotes() {
         purgeExpiredDeletedNotes()
     }
