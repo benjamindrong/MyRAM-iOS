@@ -53,6 +53,7 @@ struct SyncConflictReviewList: View {
     let onCopy: (SyncConflictVersion) -> Void
     let onRestore: (SyncConflictVersion) -> Void
     let onReview: (SyncConflictVersion) -> Void
+    let onSaveMerged: (SyncConflictVersion, String) -> Void
     @State private var selectedConflict: SyncConflictVersion?
 
     var body: some View {
@@ -69,14 +70,6 @@ struct SyncConflictReviewList: View {
                 SyncConflictDetailView(
                     conflict: conflict,
                     localText: localText(conflict),
-                    isPresented: Binding(
-                        get: { selectedConflict != nil },
-                        set: { isPresented in
-                            if !isPresented {
-                                selectedConflict = nil
-                            }
-                        }
-                    ),
                     onClose: {
                         selectedConflict = nil
                     },
@@ -90,9 +83,13 @@ struct SyncConflictReviewList: View {
                 onReview: {
                     selectedConflict = nil
                     onReview(conflict)
+                },
+                onSaveMerged: { mergedText in
+                    selectedConflict = nil
+                    onSaveMerged(conflict, mergedText)
                 }
             )
-            .presentationDetents([.large])
+            .syncConflictPresentationSizing()
         }
     }
 
@@ -136,34 +133,50 @@ struct SyncConflictReviewList: View {
 struct SyncConflictDetailView: View {
     let conflict: SyncConflictVersion
     let localText: String
-    @Binding var isPresented: Bool
     let onClose: () -> Void
     let onCopy: () -> Void
     let onRestore: () -> Void
     let onReview: () -> Void
+    let onSaveMerged: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @State private var mergedText = ""
 
     var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    ViewThatFits(in: .horizontal) {
-                        headerRow
-                        headerStack
+            GeometryReader { geometry in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) {
+                        ViewThatFits(in: .horizontal) {
+                            headerRow
+                            headerStack
+                        }
+
+                        conflictTextSection(title: "Local Version", text: localText)
+                        conflictTextSection(title: "Version to Sync", text: conflict.remoteText)
+                        mergedResultSection
+
+                        actionButtons
                     }
-
-                    conflictTextSection(title: "Local Version", text: localText)
-                    conflictTextSection(title: "Version to Sync", text: conflict.remoteText)
-
-                    actionButtons
+                    .padding(detailPadding)
+                    .frame(width: detailContentWidth(for: geometry.size.width), alignment: .leading)
+                    .frame(maxWidth: .infinity)
                 }
-                .padding(detailPadding)
-                .frame(maxWidth: detailMaxWidth, alignment: .leading)
-                .frame(maxWidth: .infinity)
             }
             .navigationTitle(conflict.field.displayTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+#if targetEnvironment(macCatalyst)
+                ToolbarItem(placement: .cancellationAction) {
+                    closeButton
+                }
+#endif
+            }
+        }
+        .onAppear {
+            if mergedText.isEmpty {
+                mergedText = conflict.remoteText
+            }
         }
         .modifier(SyncConflictDetailFrame())
     }
@@ -174,14 +187,18 @@ struct SyncConflictDetailView: View {
 
             Spacer(minLength: 16)
 
+#if !targetEnvironment(macCatalyst)
             closeButton
+#endif
         }
     }
 
     private var headerStack: some View {
         VStack(alignment: .leading, spacing: 10) {
             headerTitle
+#if !targetEnvironment(macCatalyst)
             closeButton
+#endif
         }
     }
 
@@ -196,25 +213,55 @@ struct SyncConflictDetailView: View {
     }
 
     private var closeButton: some View {
-        Button("Close") {
+        Button {
             closeDetail()
+        } label: {
+            Image(systemName: "xmark")
         }
         .buttonStyle(.bordered)
+        .help("Close")
         .accessibilityIdentifier("sync-conflict-detail-close")
+        .accessibilityLabel("Close")
     }
 
     private func closeDetail() {
+#if targetEnvironment(macCatalyst)
+        topPresentedViewController()?.dismiss(animated: true) {
+            onClose()
+        }
+#else
         onClose()
-        isPresented = false
-        dismiss()
+#endif
     }
+
+#if targetEnvironment(macCatalyst)
+    private func topPresentedViewController() -> UIViewController? {
+        let foregroundScene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+        let rootViewController = foregroundScene?.windows
+            .first { $0.isKeyWindow }?
+            .rootViewController
+
+        var presentedViewController = rootViewController
+        while let nextPresentedViewController = presentedViewController?.presentedViewController {
+            presentedViewController = nextPresentedViewController
+        }
+        return presentedViewController
+    }
+#endif
 
     private var detailPadding: CGFloat {
         horizontalSizeClass == .compact ? 16 : 24
     }
 
     private var detailMaxWidth: CGFloat {
-        horizontalSizeClass == .compact ? .infinity : 1_020
+        horizontalSizeClass == .compact ? 600 : 1_020
+    }
+
+    private func detailContentWidth(for availableWidth: CGFloat) -> CGFloat {
+        let paddedWidth = max(availableWidth - detailPadding * 2, 0)
+        return min(paddedWidth, detailMaxWidth)
     }
 
     private var actionButtons: some View {
@@ -228,6 +275,7 @@ struct SyncConflictDetailView: View {
 
                     restoreButton
                     reviewedButton
+                    saveMergedButton
                 }
 
                 stackedActionButtons
@@ -247,6 +295,8 @@ struct SyncConflictDetailView: View {
             restoreButton
                 .frame(maxWidth: .infinity)
             reviewedButton
+                .frame(maxWidth: .infinity)
+            saveMergedButton
                 .frame(maxWidth: .infinity)
         }
     }
@@ -272,26 +322,71 @@ struct SyncConflictDetailView: View {
         .buttonStyle(.bordered)
     }
 
+    private var saveMergedButton: some View {
+        Button("Save Merged Result") {
+            onSaveMerged(mergedText)
+        }
+        .buttonStyle(.borderedProminent)
+    }
+
     private func conflictTextSection(title: String, text: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.headline)
 
             SelectableConflictText(text: text.isEmpty ? "Empty text" : text)
-                .frame(minHeight: 160)
+                .frame(height: textBoxHeight(text))
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .clipped()
                 .background(Color.secondary.opacity(0.10))
                 .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+    }
+
+    private var mergedResultSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Merged Result")
+                .font(.headline)
+
+            TextEditor(text: $mergedText)
+                .frame(height: textBoxHeight(mergedText))
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .clipped()
+                .padding(8)
+                .background(Color.secondary.opacity(0.10))
+                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+    }
+
+    private func textBoxHeight(_ text: String) -> CGFloat {
+#if targetEnvironment(macCatalyst)
+        return 220
+#else
+        let explicitLines = max(text.components(separatedBy: .newlines).count, 1)
+        let wrappedLines = max(text.count / 72, 1)
+        let estimatedLines = max(explicitLines, wrappedLines)
+        return max(120, CGFloat(estimatedLines) * 24 + 40)
+#endif
     }
 }
 
 private struct SyncConflictDetailFrame: ViewModifier {
     func body(content: Content) -> some View {
 #if targetEnvironment(macCatalyst)
-        content.frame(minWidth: 860, minHeight: 680)
+        content.frame(minHeight: 680)
 #else
         content
+#endif
+    }
+}
+
+extension View {
+    @ViewBuilder
+    func syncConflictPresentationSizing() -> some View {
+#if targetEnvironment(macCatalyst)
+        presentationDetents([.large])
+#else
+        self
 #endif
     }
 }
@@ -303,11 +398,13 @@ private struct SelectableConflictText: UIViewRepresentable {
         let textView = UITextView()
         textView.isEditable = false
         textView.isSelectable = true
-        textView.isScrollEnabled = true
+        textView.showsVerticalScrollIndicator = true
         textView.adjustsFontForContentSizeCategory = true
         textView.backgroundColor = .clear
         textView.textContainerInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
         textView.textContainer.lineFragmentPadding = 0
+        textView.textContainer.widthTracksTextView = true
+        textView.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         textView.font = UIFont.preferredFont(forTextStyle: .body)
         textView.textColor = .label
         return textView
@@ -317,6 +414,7 @@ private struct SelectableConflictText: UIViewRepresentable {
         textView.text = text
         textView.font = UIFont.preferredFont(forTextStyle: .body)
     }
+
 }
 
 private extension SyncConflictField {

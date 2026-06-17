@@ -387,6 +387,57 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(conflicts.contains { $0.localText == "Local body" && $0.remoteText == "Remote body" })
     }
 
+    func testIncomingBlankNoteBodyDuringActiveEditIsPreservedForReview() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Shared title", content: "Local typing")
+        note.id = UUID()
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        let remoteNote = Note(title: "Shared title", content: "")
+        remoteNote.id = note.id
+        remoteNote.modifiedAt = Date(timeIntervalSince1970: 200)
+        let payload = try MyRAMSyncPayloadCoding.encode(
+            MyRAMNoteSyncPayload(
+                note: remoteNote,
+                baseTitle: "Shared title",
+                baseContent: "Local typing"
+            )
+        )
+        let applier = MyRAMSyncChangeApplier(
+            context: context,
+            conflictStore: conflictStore,
+            isTextApplicationUnsafe: { entityType, entityID, field in
+                entityType == .note && entityID == note.id && field == .noteContent
+            }
+        )
+
+        _ = applier.apply(
+            [
+                SyncChange(
+                    entityType: .item,
+                    entityID: note.id.uuidString,
+                    operation: .upsert,
+                    payload: payload,
+                    updatedAt: remoteNote.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: note.id,
+            currentNoteID: note.id,
+            currentFolderID: nil
+        )
+
+        XCTAssertEqual(note.content, "Local typing")
+        let conflicts = conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 201))
+        XCTAssertEqual(conflicts.first?.field, .noteContent)
+        XCTAssertEqual(conflicts.first?.localText, "Local typing")
+        XCTAssertEqual(conflicts.first?.remoteText, "")
+    }
+
     func testIncomingNewNoteAppliesWithoutConflict() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext

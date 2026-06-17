@@ -46,6 +46,18 @@ final class MyRAMSyncConflictService {
         resolve(conflict, choice: .acceptIncoming, activeNoteID: activeNoteID)
     }
 
+    func saveMergedText(
+        _ conflict: SyncConflictVersion,
+        text: String,
+        activeNoteID: UUID?
+    ) -> SyncConflictRestoreResult? {
+        resolve(
+            conflict,
+            choice: .merged(text: text, data: currentData(for: conflict)),
+            activeNoteID: activeNoteID
+        )
+    }
+
     private func resolve(
         _ conflict: SyncConflictVersion,
         choice: SyncTextConflictResolutionChoice,

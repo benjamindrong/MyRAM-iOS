@@ -15,6 +15,7 @@ final class NotesViewModel: ObservableObject {
     @Published private(set) var hasRedoableAction = false
     
     private static let recentlyDeletedRetention: TimeInterval = 7 * 24 * 60 * 60
+    private static let syncTextQuietPeriod: TimeInterval = 2
     private let context: ModelContext
     private let syncController: MyRAMSyncController?
     private let syncConflictStore = SyncConflictStore()
@@ -22,6 +23,7 @@ final class NotesViewModel: ObservableObject {
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
     private var isApplyingRemoteSyncChange = false
+    private var recentTextEditByNoteID: [UUID: Date] = [:]
     private var undoStack: [UndoAction] = [] {
         didSet {
             hasUndoableAction = !undoStack.isEmpty
@@ -342,6 +344,10 @@ final class NotesViewModel: ObservableObject {
         noteIntelligenceService.recordNoteEdited(note)
     }
 
+    func recordActiveNoteTextEdited(_ note: Note) {
+        recentTextEditByNoteID[note.id] = Date()
+    }
+
     func refreshedNote(withID noteID: UUID) -> Note? {
         fetchNote(withID: noteID)
     }
@@ -577,7 +583,6 @@ final class NotesViewModel: ObservableObject {
         let resolution = result.resolution
         syncConflicts = result.conflicts
         saveResolvedVersionAsSyncBase(conflict, resolvedText: resolution.resolvedText, result: result)
-        recordResolvedEntitySyncChange(conflict, resolution: resolution, result: result)
         recordSyncConflictResolution(
             conflict,
             resolvedText: resolution.resolvedText,
@@ -597,7 +602,27 @@ final class NotesViewModel: ObservableObject {
         let resolution = result.resolution
         syncConflicts = result.conflicts
         saveResolvedVersionAsSyncBase(conflict, resolvedText: resolution.resolvedText, result: result)
-        recordResolvedEntitySyncChange(conflict, resolution: resolution, result: result)
+        recordSyncConflictResolution(
+            conflict,
+            resolvedText: resolution.resolvedText,
+            baseText: resolution.baseText
+        )
+
+        if result.shouldRefreshActiveNote {
+            activeNoteSyncRevision += 1
+        }
+        refreshCurrentFolderContent()
+    }
+
+    func saveMergedSyncConflict(_ conflict: SyncConflictVersion, mergedText: String) {
+        guard let result = syncConflictService.saveMergedText(
+            conflict,
+            text: mergedText,
+            activeNoteID: currentNote?.id
+        ) else { return }
+        let resolution = result.resolution
+        syncConflicts = result.conflicts
+        saveResolvedVersionAsSyncBase(conflict, resolvedText: resolution.resolvedText, result: result)
         recordSyncConflictResolution(
             conflict,
             resolvedText: resolution.resolvedText,
@@ -617,7 +642,6 @@ final class NotesViewModel: ObservableObject {
         let resolution = result.resolution
         syncConflicts = result.conflicts
         saveResolvedVersionAsSyncBase(conflict, resolvedText: resolution.resolvedText, result: result)
-        recordResolvedEntitySyncChange(conflict, resolution: resolution, result: result)
         recordSyncConflictResolution(
             conflict,
             resolvedText: resolution.resolvedText,
@@ -1218,82 +1242,6 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func recordResolvedEntitySyncChange(
-        _ conflict: SyncConflictVersion,
-        resolution: SyncTextConflictResolution,
-        result: SyncConflictRestoreResult
-    ) {
-        switch conflict.field {
-        case .noteTitle:
-            guard let note = result.note,
-                  let payload = try? MyRAMSyncPayloadCoding.encode(
-                    MyRAMNoteSyncPayload(
-                        note: note,
-                        baseTitle: resolution.baseText,
-                        baseContent: syncConflictStore.remoteBaseline(
-                            entityType: .note,
-                            entityID: note.id,
-                            field: .noteContent
-                        )?.text,
-                        baseRichTextContentData: syncConflictStore.remoteBaseline(
-                            entityType: .note,
-                            entityID: note.id,
-                            field: .noteContent
-                        )?.richTextContentData
-                    )
-                  ) else { return }
-            syncController?.recordLocalChange(
-                entityType: .item,
-                entityID: note.id.uuidString,
-                payload: payload,
-                updatedAt: note.modifiedAt
-            )
-
-        case .noteContent:
-            guard let note = result.note,
-                  let payload = try? MyRAMSyncPayloadCoding.encode(
-                    MyRAMNoteSyncPayload(
-                        note: note,
-                        baseTitle: syncConflictStore.remoteBaseline(
-                            entityType: .note,
-                            entityID: note.id,
-                            field: .noteTitle
-                        )?.text,
-                        baseContent: resolution.baseText,
-                        baseRichTextContentData: conflict.remoteRichTextContentData
-                    )
-                  ) else { return }
-            syncController?.recordLocalChange(
-                entityType: .item,
-                entityID: note.id.uuidString,
-                payload: payload,
-                updatedAt: note.modifiedAt
-            )
-
-        case .folderTitle:
-            guard let folder = result.folder,
-                  let payload = try? MyRAMSyncPayloadCoding.encode(MyRAMFolderSyncPayload(folder: folder)) else { return }
-            syncController?.recordLocalChange(
-                entityType: .collection,
-                entityID: folder.id.uuidString,
-                payload: payload,
-                updatedAt: folder.modifiedAt
-            )
-
-        case .pinnedText:
-            guard let pinnedThought = result.pinnedThought,
-                  let payload = try? MyRAMSyncPayloadCoding.encode(
-                    MyRAMPinnedThoughtSyncPayload(thought: pinnedThought, baseText: resolution.baseText)
-                  ) else { return }
-            syncController?.recordLocalChange(
-                entityType: .marker,
-                entityID: pinnedThought.id.uuidString,
-                payload: payload,
-                updatedAt: pinnedThought.modifiedAt
-            )
-        }
-    }
-
     private func recordSyncConflictMetadata(_ payload: MyRAMSyncConflictPayload) {
         guard let data = try? MyRAMSyncPayloadCoding.encode(payload) else { return }
         syncController?.recordLocalChange(
@@ -1341,7 +1289,13 @@ final class NotesViewModel: ObservableObject {
         isApplyingRemoteSyncChange = true
         defer { isApplyingRemoteSyncChange = false }
 
-        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: syncConflictStore)
+        let applier = MyRAMSyncChangeApplier(
+            context: context,
+            conflictStore: syncConflictStore,
+            isTextApplicationUnsafe: { [weak self] entityType, entityID, field in
+                self?.isIncomingTextUnsafe(entityType: entityType, entityID: entityID, field: field) ?? false
+            }
+        )
         let result = applier.apply(
             changes,
             activeNoteID: activeNoteID,
@@ -1364,6 +1318,28 @@ final class NotesViewModel: ObservableObject {
         if result.shouldRefreshActiveNote {
             activeNoteSyncRevision += 1
         }
+    }
+
+    private func isIncomingTextUnsafe(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField
+    ) -> Bool {
+        guard let activeNoteID = currentNote?.id else { return false }
+        let affectedNoteID: UUID?
+        switch (entityType, field) {
+        case (.note, .noteTitle), (.note, .noteContent):
+            affectedNoteID = entityID
+        case (.pinnedThought, .pinnedText):
+            affectedNoteID = fetchPinnedThought(withID: entityID)?.note?.id
+        case (.folder, .folderTitle):
+            affectedNoteID = nil
+        default:
+            affectedNoteID = nil
+        }
+        guard affectedNoteID == activeNoteID else { return false }
+        guard let lastEditAt = recentTextEditByNoteID[activeNoteID] else { return false }
+        return Date().timeIntervalSince(lastEditAt) < Self.syncTextQuietPeriod
     }
 
     private func removeUndoHistoryReferencingDeletedNote(noteID: UUID) {
