@@ -1094,7 +1094,7 @@ final class NotesViewModel: ObservableObject {
         let titleBaseline = syncConflictStore.remoteBaseline(entityType: .note, entityID: note.id, field: .noteTitle)
         let contentBaseline = syncConflictStore.remoteBaseline(entityType: .note, entityID: note.id, field: .noteContent)
         guard !isApplyingRemoteSyncChange,
-              !shouldBlockOrdinaryNoteSync(note, operation: operation),
+              !hasActiveNoteTextConflict(note),
               let payload = try? MyRAMSyncPayloadCoding.encode(
                 MyRAMNoteSyncPayload(
                     note: note,
@@ -1141,7 +1141,7 @@ final class NotesViewModel: ObservableObject {
     private func recordPinnedThoughtSyncChange(_ thought: PinnedThought) {
         let baseline = syncConflictStore.remoteBaseline(entityType: .pinnedThought, entityID: thought.id, field: .pinnedText)
         guard !isApplyingRemoteSyncChange,
-              !syncConflictStore.hasActiveConflict(entityType: .pinnedThought, entityID: thought.id, field: .pinnedText),
+              !hasActivePinnedTextConflict(thought),
               let payload = try? MyRAMSyncPayloadCoding.encode(
                 MyRAMPinnedThoughtSyncPayload(thought: thought, baseText: baseline?.text)
               ) else { return }
@@ -1155,6 +1155,7 @@ final class NotesViewModel: ObservableObject {
 
     private func recordPinnedThoughtSyncDeletion(_ payload: MyRAMPinnedThoughtSyncPayload) {
         guard !isApplyingRemoteSyncChange,
+              !syncConflictStore.hasActiveConflict(entityType: .pinnedThought, entityID: payload.id, field: .pinnedText),
               let data = try? MyRAMSyncPayloadCoding.encode(payload) else { return }
 
         syncController?.recordLocalChange(
@@ -1166,10 +1167,13 @@ final class NotesViewModel: ObservableObject {
         )
     }
 
-    private func shouldBlockOrdinaryNoteSync(_ note: Note, operation: SyncOperation) -> Bool {
-        guard operation == .upsert else { return false }
+    private func hasActiveNoteTextConflict(_ note: Note) -> Bool {
         return syncConflictStore.hasActiveConflict(entityType: .note, entityID: note.id, field: .noteTitle)
             || syncConflictStore.hasActiveConflict(entityType: .note, entityID: note.id, field: .noteContent)
+    }
+
+    private func hasActivePinnedTextConflict(_ thought: PinnedThought) -> Bool {
+        syncConflictStore.hasActiveConflict(entityType: .pinnedThought, entityID: thought.id, field: .pinnedText)
     }
 
     private func recordPhotoAttachmentSyncChange(_ attachment: NotePhotoAttachment, updatedAt: Date) {

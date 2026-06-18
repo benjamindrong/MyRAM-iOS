@@ -94,6 +94,10 @@ final class MyRAMSyncChangeApplier {
             guard let note = fetchNote(withID: payload.id),
                   payload.deletedAt != nil,
                   note.modifiedAt <= payload.modifiedAt else { return MyRAMSyncApplyResult() }
+            if shouldFreezeIncomingNotePayload(note: note, payload: payload) {
+                preserveIncomingNoteTextConflictsIfNeeded(note: note, payload: payload)
+                return MyRAMSyncApplyResult(shouldRefreshActiveNote: activeNoteID == payload.id)
+            }
             if preserveNoteDeleteConflictsIfNeeded(note: note, payload: payload) {
                 return MyRAMSyncApplyResult(shouldRefreshActiveNote: activeNoteID == payload.id)
             }
@@ -113,6 +117,12 @@ final class MyRAMSyncChangeApplier {
             context.insert(note)
         } else if note.modifiedAt > payload.modifiedAt {
             return MyRAMSyncApplyResult()
+        }
+
+        if !isNewNote,
+           shouldFreezeIncomingNotePayload(note: note, payload: payload) {
+            preserveIncomingNoteTextConflictsIfNeeded(note: note, payload: payload)
+            return MyRAMSyncApplyResult(shouldRefreshActiveNote: activeNoteID == payload.id)
         }
 
         applyTextPayload(
@@ -167,6 +177,10 @@ final class MyRAMSyncChangeApplier {
         if change.operation == .delete && payload.isDeleted {
             guard let thought = fetchPinnedThought(withID: payload.id),
                   thought.modifiedAt <= payload.modifiedAt else { return false }
+            if shouldFreezeIncomingPinnedThoughtPayload(thought: thought, payload: payload) {
+                preserveIncomingPinnedTextConflictIfNeeded(thought: thought, payload: payload)
+                return activeNoteID == thought.note?.id
+            }
             if preservePinnedThoughtDeleteConflictIfNeeded(thought: thought, payload: payload) {
                 return activeNoteID == thought.note?.id
             }
@@ -186,6 +200,12 @@ final class MyRAMSyncChangeApplier {
             savePinnedTextBaseline(thoughtID: thought.id, payload: payload)
         } else if thought.modifiedAt > payload.modifiedAt {
             return false
+        }
+
+        if !isNewThought,
+           shouldFreezeIncomingPinnedThoughtPayload(thought: thought, payload: payload) {
+            preserveIncomingPinnedTextConflictIfNeeded(thought: thought, payload: payload)
+            return activeNoteID == thought.note?.id || activeNoteID == payload.noteID
         }
 
         if preservePinnedTextConflictIfNeeded(thought: thought, payload: payload) {
@@ -259,6 +279,58 @@ final class MyRAMSyncChangeApplier {
         applyOrPreserveNoteText(note: note, payload: payload)
     }
 
+    private func shouldFreezeIncomingNotePayload(note: Note, payload: MyRAMNoteSyncPayload) -> Bool {
+        if hasActiveNoteTextConflict(noteID: note.id) {
+            return true
+        }
+
+        if note.title != payload.title,
+           noteTitleResolution(note: note, payload: payload).freezesOrdinaryPayload {
+            return true
+        }
+
+        if (note.content != payload.content || note.richTextContentData != payload.richTextContentData),
+           noteContentResolution(note: note, payload: payload).freezesOrdinaryPayload {
+            return true
+        }
+
+        return false
+    }
+
+    private func preserveIncomingNoteTextConflictsIfNeeded(note: Note, payload: MyRAMNoteSyncPayload) {
+        if note.title != payload.title,
+           noteTitleResolution(note: note, payload: payload) == .conflict {
+            preserveSyncConflict(
+                entityType: .note,
+                entityID: note.id,
+                noteID: note.id,
+                field: .noteTitle,
+                localText: note.title,
+                remoteText: payload.title,
+                remoteModifiedAt: payload.modifiedAt
+            )
+        }
+
+        if note.content != payload.content || note.richTextContentData != payload.richTextContentData,
+           noteContentResolution(note: note, payload: payload) == .conflict {
+            preserveSyncConflict(
+                entityType: .note,
+                entityID: note.id,
+                noteID: note.id,
+                field: .noteContent,
+                localText: note.content,
+                remoteText: payload.content,
+                remoteRichTextContentData: payload.richTextContentData,
+                remoteModifiedAt: payload.modifiedAt
+            )
+        }
+    }
+
+    private func hasActiveNoteTextConflict(noteID: UUID) -> Bool {
+        conflictStore.hasActiveConflict(entityType: .note, entityID: noteID, field: .noteTitle)
+            || conflictStore.hasActiveConflict(entityType: .note, entityID: noteID, field: .noteContent)
+    }
+
     // Sync text is intentionally local-first. An incoming device event may create
     // text for a brand-new entity, but it must not replace, remove, or delete
     // existing editable text. When incoming note titles, note body text, folder
@@ -330,6 +402,34 @@ final class MyRAMSyncChangeApplier {
         } else {
             saveNoteContentBaseline(note: note, payload: payload)
         }
+    }
+
+    private func noteTitleResolution(note: Note, payload: MyRAMNoteSyncPayload) -> RemoteTextResolution {
+        gatedRemoteTextResolution(
+            entityType: .note,
+            entityID: note.id,
+            field: .noteTitle,
+            localText: note.title,
+            localData: nil,
+            remoteBaseText: payload.baseTitle,
+            remoteBaseData: nil,
+            remoteText: payload.title,
+            remoteData: nil
+        )
+    }
+
+    private func noteContentResolution(note: Note, payload: MyRAMNoteSyncPayload) -> RemoteTextResolution {
+        gatedRemoteTextResolution(
+            entityType: .note,
+            entityID: note.id,
+            field: .noteContent,
+            localText: note.content,
+            localData: note.richTextContentData,
+            remoteBaseText: payload.baseContent,
+            remoteBaseData: payload.baseRichTextContentData,
+            remoteText: payload.content,
+            remoteData: payload.richTextContentData
+        )
     }
 
     private func gatedRemoteTextResolution(
@@ -634,6 +734,51 @@ final class MyRAMSyncChangeApplier {
         return true
     }
 
+    private func shouldFreezeIncomingPinnedThoughtPayload(
+        thought: PinnedThought,
+        payload: MyRAMPinnedThoughtSyncPayload
+    ) -> Bool {
+        if conflictStore.hasActiveConflict(entityType: .pinnedThought, entityID: thought.id, field: .pinnedText) {
+            return true
+        }
+        guard thought.text != payload.text else { return false }
+        return pinnedTextResolution(thought: thought, payload: payload).freezesOrdinaryPayload
+    }
+
+    private func preserveIncomingPinnedTextConflictIfNeeded(
+        thought: PinnedThought,
+        payload: MyRAMPinnedThoughtSyncPayload
+    ) {
+        guard thought.text != payload.text,
+              pinnedTextResolution(thought: thought, payload: payload) == .conflict else { return }
+        preserveSyncConflict(
+            entityType: .pinnedThought,
+            entityID: thought.id,
+            noteID: thought.note?.id ?? payload.noteID,
+            field: .pinnedText,
+            localText: thought.text,
+            remoteText: payload.text,
+            remoteModifiedAt: payload.modifiedAt
+        )
+    }
+
+    private func pinnedTextResolution(
+        thought: PinnedThought,
+        payload: MyRAMPinnedThoughtSyncPayload
+    ) -> RemoteTextResolution {
+        gatedRemoteTextResolution(
+            entityType: .pinnedThought,
+            entityID: thought.id,
+            field: .pinnedText,
+            localText: thought.text,
+            localData: nil,
+            remoteBaseText: payload.baseText,
+            remoteBaseData: nil,
+            remoteText: payload.text,
+            remoteData: nil
+        )
+    }
+
     private func preserveNoteDeleteConflictsIfNeeded(note: Note, payload: MyRAMNoteSyncPayload) -> Bool {
         // A remote delete should not be blocked just because the sender included
         // newer text. It is a conflict only when local text diverged from the
@@ -855,4 +1000,13 @@ private enum RemoteTextResolution: Equatable {
     case apply(String)
     case deferIncoming
     case conflict
+
+    var freezesOrdinaryPayload: Bool {
+        switch self {
+        case .apply:
+            false
+        case .deferIncoming, .conflict:
+            true
+        }
+    }
 }

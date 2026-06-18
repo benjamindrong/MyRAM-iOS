@@ -968,6 +968,73 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).first, conflict)
     }
 
+    func testNoteDeleteSyncIsBlockedWhileContentConflictIsActive() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let recorder = RecordingSyncController()
+        let note = Note(title: "Shared", content: "Local-only text")
+        note.id = UUID()
+        context.insert(note)
+        let expiresAt = Date().addingTimeInterval(1_000)
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: note.id,
+            noteID: note.id,
+            field: .noteContent,
+            localText: "Local-only text",
+            remoteText: "Version to Sync",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: expiresAt
+        )
+        _ = conflictStore.preserve(conflict)
+        let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: conflictStore)
+
+        vm.deleteNote(note)
+
+        XCTAssertNotNil(note.deletedAt)
+        XCTAssertTrue(recorder.recordedChanges.isEmpty)
+        XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).first, conflict)
+    }
+
+    func testPinnedThoughtDeleteSyncIsBlockedWhilePinnedConflictIsActive() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let recorder = RecordingSyncController()
+        let note = Note(title: "Pinned host")
+        note.id = UUID()
+        let thought = PinnedThought(text: "Local pinned", order: 0, note: note)
+        thought.id = UUID()
+        note.pinnedThoughts.append(thought)
+        context.insert(note)
+        let expiresAt = Date().addingTimeInterval(1_000)
+        let conflict = SyncConflictVersion(
+            entityType: .pinnedThought,
+            entityID: thought.id,
+            noteID: note.id,
+            field: .pinnedText,
+            localText: "Local pinned",
+            remoteText: "Version to Sync",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: expiresAt
+        )
+        _ = conflictStore.preserve(conflict)
+        let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: conflictStore)
+
+        vm.deletePinnedParagraph(thought)
+
+        XCTAssertFalse(note.pinnedThoughts.contains { $0.id == thought.id })
+        XCTAssertFalse(recorder.recordedChanges.contains { $0.entityType == .marker })
+        XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).first, conflict)
+    }
+
     func testIncomingOrdinaryTextQueuesBehindActiveContentConflict() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -991,10 +1058,11 @@ final class MyRAMTests: XCTestCase {
             expiresAt: expiresAt
         )
         _ = conflictStore.preserve(conflict)
-        let remoteNote = Note(title: "Shared", content: "Latest Version to Sync")
+        let remoteNote = Note(title: "Remote title", content: "Latest Version to Sync")
         remoteNote.id = note.id
         remoteNote.createdAt = note.createdAt
         remoteNote.modifiedAt = Date(timeIntervalSince1970: 300)
+        remoteNote.isPinned = true
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
 
         let result = applier.apply(
@@ -1003,7 +1071,13 @@ final class MyRAMTests: XCTestCase {
                     entityType: .item,
                     entityID: note.id.uuidString,
                     operation: .upsert,
-                    payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: remoteNote)),
+                    payload: try MyRAMSyncPayloadCoding.encode(
+                        MyRAMNoteSyncPayload(
+                            note: remoteNote,
+                            baseTitle: "Shared",
+                            baseContent: "Version to Sync"
+                        )
+                    ),
                     updatedAt: remoteNote.modifiedAt,
                     originDeviceID: "device-b"
                 )
@@ -1014,12 +1088,67 @@ final class MyRAMTests: XCTestCase {
         )
 
         XCTAssertEqual(note.content, "Local-only text")
+        XCTAssertEqual(note.title, "Shared")
+        XCTAssertEqual(note.isPinned, false)
+        XCTAssertEqual(note.modifiedAt, Date(timeIntervalSince1970: 100))
         XCTAssertTrue(result.preservedConflicts.isEmpty)
         XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 301)).first?.remoteText, "Version to Sync")
         XCTAssertEqual(
             conflictStore.queuedConflict(entityType: .note, entityID: note.id, field: .noteContent)?.conflict.remoteText,
             "Latest Version to Sync"
         )
+    }
+
+    func testIncomingNoteDeleteIsBlockedWhileContentConflictIsActive() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Shared", content: "Local-only text")
+        note.id = UUID()
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        let expiresAt = Date().addingTimeInterval(1_000)
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: note.id,
+            noteID: note.id,
+            field: .noteContent,
+            localText: "Local-only text",
+            remoteText: "Version to Sync",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: expiresAt
+        )
+        _ = conflictStore.preserve(conflict)
+        let remoteNote = Note(title: "Shared", content: "Local-only text")
+        remoteNote.id = note.id
+        remoteNote.createdAt = note.createdAt
+        remoteNote.modifiedAt = Date(timeIntervalSince1970: 300)
+        remoteNote.deletedAt = Date(timeIntervalSince1970: 300)
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        let result = applier.apply(
+            [
+                SyncChange(
+                    entityType: .item,
+                    entityID: note.id.uuidString,
+                    operation: .delete,
+                    payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: remoteNote)),
+                    updatedAt: remoteNote.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: note.id,
+            currentNoteID: note.id,
+            currentFolderID: nil
+        )
+
+        XCTAssertNil(note.deletedAt)
+        XCTAssertNil(result.deletedCurrentNoteID)
+        XCTAssertEqual(note.modifiedAt, Date(timeIntervalSince1970: 100))
+        XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 301)).first, conflict)
     }
 
     func testIncomingResolvedSyncConflictAppliesWinnerAndClearsLocalConflict() throws {
