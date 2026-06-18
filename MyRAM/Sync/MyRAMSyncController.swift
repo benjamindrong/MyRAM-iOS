@@ -3,6 +3,37 @@ import MultipeerConnectivity
 import NearbySyncCore
 
 @MainActor
+protocol MyRAMSyncControlling: AnyObject {
+    var onChangesReceived: (([SyncChange]) async -> Void)? { get set }
+    var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)? { get set }
+
+    func recordLocalChange(
+        entityType: SyncEntityType,
+        entityID: String,
+        operation: SyncOperation,
+        payload: Data,
+        updatedAt: Date
+    )
+}
+
+extension MyRAMSyncControlling {
+    func recordLocalChange(
+        entityType: SyncEntityType,
+        entityID: String,
+        payload: Data,
+        updatedAt: Date
+    ) {
+        recordLocalChange(
+            entityType: entityType,
+            entityID: entityID,
+            operation: .upsert,
+            payload: payload,
+            updatedAt: updatedAt
+        )
+    }
+}
+
+@MainActor
 final class MyRAMSyncController: NSObject, ObservableObject {
     @Published private(set) var availablePeers: [MyRAMDiscoveredPeer] = []
     @Published private(set) var connectedPeers: [String] = []
@@ -190,6 +221,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
     }
 }
+
+extension MyRAMSyncController: MyRAMSyncControlling {}
 
 extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {

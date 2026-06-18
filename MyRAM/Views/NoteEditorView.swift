@@ -90,253 +90,12 @@ struct NoteEditorView: View {
     
     var body: some View {
         NavigationStack {
-            ZStack {
-                VStack(spacing: 12) {
-                if showsTopBar {
-                    editorTopBar
-                }
+            configuredEditorContent
+        }
+    }
 
-                VStack(spacing: 8) {
-                    VStack(spacing: 12) {
-                        if !showsTitleInTopBar {
-                            editorTitleHeader
-                        }
-
-                        if !syncConflicts.isEmpty, let onOpenSyncConflicts {
-                            SyncConflictNotice(
-                                conflictCount: syncConflicts.count,
-                                onOpen: {
-                                    if let firstConflict = syncConflicts.first {
-                                        selectedSyncConflict = firstConflict
-                                    } else {
-                                        onOpenSyncConflicts()
-                                    }
-                                }
-                            )
-                        }
-
-                        pinnedThoughtsSection
-
-                        SelectableTextView(
-                            text: $content,
-                            richTextContentData: $richTextContentData,
-                            keyboardFocusToggleToken: keyboardFocusToggleToken,
-                            captureSelectionToggleToken: captureSelectionToggleToken,
-                            selectAllToggleToken: selectAllToggleToken,
-                            pinSelectionToggleToken: pinSelectionToggleToken,
-                            lookupSelectionToggleToken: lookupSelectionToggleToken,
-                            appendUnpinnedThoughtToggleToken: appendUnpinnedThoughtToggleToken,
-                            pendingUnpinnedThoughtText: pendingUnpinnedThoughtText,
-                            restoreContentToggleToken: restoreContentToggleToken,
-                            boldToggleToken: boldToggleToken,
-                            italicToggleToken: italicToggleToken,
-                            underlineToggleToken: underlineToggleToken,
-                            strikethroughToggleToken: strikethroughToggleToken,
-                            checklistToggleToken: checklistToggleToken,
-                            pasteAndMatchFormattingToggleToken: pasteAndMatchFormattingToggleToken,
-                            increaseFontSizeToggleToken: increaseFontSizeToggleToken,
-                            decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
-                            textColorToggleToken: textColorToggleToken,
-                            pendingTextUIColor: pendingTextUIColor,
-                            pendingTextColorUsesDefault: pendingTextColorUsesDefault,
-                            formattingController: formattingController,
-                            backgroundColor: editorChromeStyle.editorSurfaceUIColor,
-                            textColor: editorChromeStyle.editorTextUIColor,
-                            tintColor: editorChromeStyle.editorTintUIColor,
-                            onContentChanged: handleContentChanged,
-                            onUndoManagerChanged: updateActiveUndoManager,
-                            onFormattingStateChanged: handleFormattingStateChanged,
-                            onPinSelection: pinSelectedText,
-                            onLookupSelection: presentLookup
-                        )
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-                    .padding(.top, editorChromeStyle.isChromeAccent ? 6 : 0)
-                    .padding(.horizontal, editorChromeStyle.isChromeAccent ? 6 : 0)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .modifier(ChromeEditorTrim(style: editorChromeStyle))
-
-                    VStack(spacing: 8) {
-                        if showingFormattingControls {
-                            overflowFormattingControls
-                                .transition(.move(edge: .bottom).combined(with: .opacity))
-                        }
-
-                        if let keyboardToast {
-                            Text(keyboardToast.message)
-                                .font(.caption.weight(.semibold))
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(.ultraThinMaterial, in: Capsule())
-                                .transition(.opacity.combined(with: .move(edge: .bottom)))
-                        }
-
-                        collapsedEditorControls
-                    }
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if !sortedAttachments.isEmpty {
-                    DisclosureGroup(isExpanded: $areAttachmentsExpanded) {
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 10) {
-                                ForEach(sortedAttachments, id: \.id) { attachment in
-                                    ZStack(alignment: .topTrailing) {
-                                        AttachmentThumbnail(attachment: attachment, size: 64)
-                                            .onTapGesture {
-                                                expandedAttachment = attachment
-                                            }
-
-                                        Button {
-                                            vm.removePhotoAttachment(attachment, from: note)
-                                        } label: {
-                                            Image(systemName: "xmark.circle.fill")
-                                                .font(.body)
-                                                .foregroundStyle(.white, .black.opacity(0.7))
-                                                .padding(4)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        .padding(.top, 8)
-                    } label: {
-                        HStack(spacing: 8) {
-                            Label("Attachments", systemImage: "paperclip")
-                                .font(.subheadline.weight(.medium))
-                                .foregroundStyle(.primary)
-                            Text("\(sortedAttachments.count)")
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(.primary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 3)
-                                .background(Color.secondary.opacity(0.2))
-                                .clipShape(Capsule())
-                        }
-                    }
-                    .tint(.primary)
-                    .padding(10)
-                    .background(editorChromeStyle.editorSurfaceColor)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                }
-
-            }
-            .padding()
-            .background(editorChromeStyle.editorBackgroundColor.ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
-            .overlay(alignment: .top) {
-                if let syncController {
-                    SyncStatusIndicator(syncController: syncController) {
-                        openNearbySync(onFallback: onOpenSyncConflicts)
-                    }
-                        .padding(.top, showsTopBar ? 58 : 14)
-                        .frame(maxWidth: 180)
-                }
-            }
-            .presentationDragIndicator(.visible)
-            .onAppear {
-                title = note.title
-                content = note.content
-                richTextContentData = note.richTextContentData
-                lastSnapshot = currentNoteSnapshot()
-                vm.recordNoteOpened(note)
-                arePinnedThoughtsExpanded = vm.isPinnedThoughtsSectionExpanded(for: note)
-                configureToolbarBridge()
-            }
-            .onChange(of: title) { handleEditorChange() }
-            .onChange(of: scenePhase) { _, newPhase in
-                if newPhase != .active {
-                    commitPendingNoteEdit()
-                }
-            }
-            .onDisappear {
-                commitPendingNoteEdit()
-            }
-            .onChange(of: vm.activeNoteSyncRevision) {
-                reloadNoteFromSync()
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                isKeyboardVisible = true
-            }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                isKeyboardVisible = false
-            }
-            .onChange(of: selectedPickerItems) { _, newItems in
-                guard !newItems.isEmpty else { return }
-                Task {
-                    await importSelectedPickerItems(newItems)
-                    selectedPickerItems = []
-                }
-            }
-            .photosPicker(
-                isPresented: $showingPhotoPicker,
-                selection: $selectedPickerItems,
-                matching: .images,
-                preferredItemEncoding: .automatic
-            )
-            .fileImporter(
-                isPresented: $showingFileImporter,
-                allowedContentTypes: [.image],
-                allowsMultipleSelection: true
-            ) { result in
-                guard case let .success(urls) = result else { return }
-                importImageFiles(from: urls)
-            }
-            .sheet(item: $lookupRequest) { request in
-                ReferenceLookupView(term: request.term)
-            }
-            .sheet(item: $sharePayload) { payload in
-                ActivityShareSheet(activityItems: payload.urls)
-            }
-            .sheet(isPresented: $showingNearbySync) {
-                NavigationStack {
-                    if let syncController {
-                        NearbySyncView(
-                            syncController: syncController,
-                            style: editorChromeStyle
-                        )
-                        .navigationTitle("Nearby Sync")
-                        .navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .confirmationAction) {
-                                Button("Done") {
-                                    showingNearbySync = false
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            .sheet(item: $selectedSyncConflict) { conflict in
-                SyncConflictDetailView(
-                    conflict: conflict,
-                    localText: vm.localText(forSyncConflict: conflict),
-                    isPresented: Binding(
-                        get: { selectedSyncConflict != nil },
-                        set: { isPresented in
-                            if !isPresented {
-                                selectedSyncConflict = nil
-                            }
-                        }
-                    ),
-                    onClose: {
-                        selectedSyncConflict = nil
-                    },
-                    onCopy: {
-                        copySyncConflict(conflict)
-                    },
-                    onRestore: {
-                        selectedSyncConflict = nil
-                        vm.restoreSyncConflict(conflict)
-                    },
-                    onReview: {
-                        selectedSyncConflict = nil
-                        vm.markSyncConflictReviewed(conflict)
-                    }
-                )
-                .presentationDetents([.large])
-            }
+    private var configuredEditorContent: some View {
+        editorPresentationContent
             .confirmationDialog("Edit History", isPresented: $showingUndoRedoActions, titleVisibility: .visible) {
                 Button("Undo") {
                     performUndo()
@@ -378,21 +137,286 @@ struct NoteEditorView: View {
             } message: {
                 Text("Update the note title.")
             }
+    }
 
-                if let expandedAttachment {
-                    ExpandedPhotoView(attachment: expandedAttachment) {
-                        self.expandedAttachment = nil
+    private var editorPresentationContent: some View {
+        editorLifecycleContent
+            .photosPicker(
+                isPresented: $showingPhotoPicker,
+                selection: $selectedPickerItems,
+                matching: .images,
+                preferredItemEncoding: .automatic
+            )
+            .fileImporter(
+                isPresented: $showingFileImporter,
+                allowedContentTypes: [.image],
+                allowsMultipleSelection: true
+            ) { result in
+                guard case let .success(urls) = result else { return }
+                importImageFiles(from: urls)
+            }
+            .sheet(item: $lookupRequest) { request in
+                ReferenceLookupView(term: request.term)
+            }
+            .sheet(item: $sharePayload) { payload in
+                ActivityShareSheet(activityItems: payload.urls)
+            }
+            .sheet(isPresented: $showingNearbySync) {
+                nearbySyncSheet
+            }
+            .sheet(item: $selectedSyncConflict) { conflict in
+                syncConflictSheet(for: conflict)
+            }
+    }
+
+    private var editorLifecycleContent: some View {
+        editorChromeContent
+            .onAppear(perform: initializeEditor)
+            .onChange(of: title) { handleEditorChange() }
+            .onChange(of: scenePhase) { _, newPhase in
+                if newPhase != .active {
+                    commitPendingNoteEdit()
+                }
+            }
+            .onDisappear {
+                commitPendingNoteEdit()
+            }
+            .onChange(of: vm.activeNoteSyncRevision) {
+                reloadNoteFromSync()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                isKeyboardVisible = true
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                isKeyboardVisible = false
+            }
+            .onChange(of: selectedPickerItems) { _, newItems in
+                guard !newItems.isEmpty else { return }
+                Task {
+                    await importSelectedPickerItems(newItems)
+                    selectedPickerItems = []
+                }
+            }
+    }
+
+    private var editorChromeContent: some View {
+        editorContent
+            .padding()
+            .background(editorChromeStyle.editorBackgroundColor.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+            .overlay(alignment: .top) {
+                syncStatusOverlay
+            }
+            .presentationDragIndicator(.visible)
+    }
+
+    @ViewBuilder
+    private var syncStatusOverlay: some View {
+        if let syncController {
+            SyncStatusIndicator(syncController: syncController) {
+                openNearbySync(onFallback: onOpenSyncConflicts)
+            }
+            .padding(.top, showsTopBar ? 58 : 14)
+            .frame(maxWidth: 180)
+        }
+    }
+
+    private func initializeEditor() {
+        title = note.title
+        content = note.content
+        richTextContentData = note.richTextContentData
+        lastSnapshot = currentNoteSnapshot()
+        vm.recordNoteOpened(note)
+        arePinnedThoughtsExpanded = vm.isPinnedThoughtsSectionExpanded(for: note)
+        configureToolbarBridge()
+    }
+
+    @ViewBuilder
+    private var nearbySyncSheet: some View {
+        NavigationStack {
+            if let syncController {
+                NearbySyncView(
+                    syncController: syncController,
+                    style: editorChromeStyle
+                )
+                .navigationTitle("Nearby Sync")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            showingNearbySync = false
+                        }
                     }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .ignoresSafeArea()
-                    .zIndex(10)
                 }
             }
         }
     }
 
+    private func syncConflictSheet(for conflict: SyncConflictVersion) -> some View {
+        SyncConflictDetailView(
+            conflict: conflict,
+            localText: vm.localText(forSyncConflict: conflict),
+            onClose: {
+                selectedSyncConflict = nil
+            },
+            onCopy: {
+                copySyncConflict(conflict)
+            },
+            onRestore: {
+                selectedSyncConflict = nil
+                vm.restoreSyncConflict(conflict)
+            },
+            onReview: {
+                selectedSyncConflict = nil
+                vm.markSyncConflictReviewed(conflict)
+            },
+            onSaveMerged: { mergedText in
+                selectedSyncConflict = nil
+                vm.saveMergedSyncConflict(conflict, mergedText: mergedText)
+            }
+        )
+        .syncConflictPresentationSizing()
+    }
+
+    private var editorContent: some View {
+        ZStack {
+            editorMainColumn
+
+            if let expandedAttachment {
+                ExpandedPhotoView(attachment: expandedAttachment) {
+                    self.expandedAttachment = nil
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
+                .zIndex(10)
+            }
+        }
+    }
+
+    private var editorMainColumn: some View {
+        VStack(spacing: 12) {
+            if showsTopBar {
+                editorTopBar
+            }
+
+            VStack(spacing: 8) {
+                editorSurface
+                editorControlStrip
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            attachmentStrip
+        }
+    }
+
+    private var editorSurface: some View {
+        VStack(spacing: 12) {
+            if !showsTitleInTopBar {
+                editorTitleHeader
+            }
+
+            syncConflictNotice
+            pinnedThoughtsSection
+            editorTextView
+        }
+        .padding(.top, editorChromeStyle.isChromeAccent ? 6 : 0)
+        .padding(.horizontal, editorChromeStyle.isChromeAccent ? 6 : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .modifier(ChromeEditorTrim(style: editorChromeStyle))
+    }
+
+    private var editorTextView: some View {
+        SelectableTextView(
+            text: $content,
+            richTextContentData: $richTextContentData,
+            keyboardFocusToggleToken: keyboardFocusToggleToken,
+            captureSelectionToggleToken: captureSelectionToggleToken,
+            selectAllToggleToken: selectAllToggleToken,
+            pinSelectionToggleToken: pinSelectionToggleToken,
+            lookupSelectionToggleToken: lookupSelectionToggleToken,
+            appendUnpinnedThoughtToggleToken: appendUnpinnedThoughtToggleToken,
+            pendingUnpinnedThoughtText: pendingUnpinnedThoughtText,
+            restoreContentToggleToken: restoreContentToggleToken,
+            boldToggleToken: boldToggleToken,
+            italicToggleToken: italicToggleToken,
+            underlineToggleToken: underlineToggleToken,
+            strikethroughToggleToken: strikethroughToggleToken,
+            checklistToggleToken: checklistToggleToken,
+            pasteAndMatchFormattingToggleToken: pasteAndMatchFormattingToggleToken,
+            increaseFontSizeToggleToken: increaseFontSizeToggleToken,
+            decreaseFontSizeToggleToken: decreaseFontSizeToggleToken,
+            textColorToggleToken: textColorToggleToken,
+            pendingTextUIColor: pendingTextUIColor,
+            pendingTextColorUsesDefault: pendingTextColorUsesDefault,
+            formattingController: formattingController,
+            backgroundColor: editorChromeStyle.editorSurfaceUIColor,
+            textColor: editorChromeStyle.editorTextUIColor,
+            tintColor: editorChromeStyle.editorTintUIColor,
+            onContentChanged: handleContentChanged,
+            onUndoManagerChanged: updateActiveUndoManager,
+            onFormattingStateChanged: handleFormattingStateChanged,
+            onPinSelection: pinSelectedText,
+            onLookupSelection: presentLookup
+        )
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    @ViewBuilder
+    private var syncConflictNotice: some View {
+        if !syncConflicts.isEmpty, let onOpenSyncConflicts {
+            SyncConflictNotice(
+                conflictCount: syncConflicts.count,
+                onOpen: {
+                    if let firstConflict = syncConflicts.first {
+                        selectedSyncConflict = firstConflict
+                    } else {
+                        onOpenSyncConflicts()
+                    }
+                }
+            )
+        }
+    }
+
+    private var editorControlStrip: some View {
+        VStack(spacing: 8) {
+            if showingFormattingControls {
+                overflowFormattingControls
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+
+            if let keyboardToast {
+                Text(keyboardToast.message)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+
+            collapsedEditorControls
+        }
+        .frame(maxWidth: .infinity, alignment: .trailing)
+    }
+
     private var sortedAttachments: [NotePhotoAttachment] {
         note.photoAttachments.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    @ViewBuilder
+    private var attachmentStrip: some View {
+        if !sortedAttachments.isEmpty {
+            AttachmentStrip(
+                attachments: sortedAttachments,
+                isExpanded: $areAttachmentsExpanded,
+                backgroundColor: editorChromeStyle.editorSurfaceColor,
+                onOpen: { attachment in
+                    expandedAttachment = attachment
+                },
+                onDelete: { attachment in
+                    vm.removePhotoAttachment(attachment, from: note)
+                }
+            )
+        }
     }
 
     private var sortedPinnedThoughts: [PinnedThought] {
@@ -933,6 +957,7 @@ struct NoteEditorView: View {
             }
         }
         lastSnapshot = currentSnapshot
+        vm.recordActiveNoteTextEdited(note)
         scheduleNoteCommit()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
@@ -2005,6 +2030,72 @@ private struct AttachmentThumbnail: View {
                     Image(systemName: "photo")
                         .foregroundStyle(.secondary)
                 }
+        }
+    }
+}
+
+private struct AttachmentStrip: View {
+    let attachments: [NotePhotoAttachment]
+    @Binding var isExpanded: Bool
+    let backgroundColor: Color
+    let onOpen: (NotePhotoAttachment) -> Void
+    let onDelete: (NotePhotoAttachment) -> Void
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 10) {
+                    ForEach(attachments, id: \.id) { attachment in
+                        AttachmentStripItem(
+                            attachment: attachment,
+                            onOpen: onOpen,
+                            onDelete: onDelete
+                        )
+                    }
+                }
+            }
+            .padding(.top, 8)
+        } label: {
+            HStack(spacing: 8) {
+                Label("Attachments", systemImage: "paperclip")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                Text("\(attachments.count)")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 3)
+                    .background(Color.secondary.opacity(0.2))
+                    .clipShape(Capsule())
+            }
+        }
+        .tint(.primary)
+        .padding(10)
+        .background(backgroundColor)
+        .clipShape(RoundedRectangle(cornerRadius: 10))
+    }
+}
+
+private struct AttachmentStripItem: View {
+    let attachment: NotePhotoAttachment
+    let onOpen: (NotePhotoAttachment) -> Void
+    let onDelete: (NotePhotoAttachment) -> Void
+
+    var body: some View {
+        ZStack(alignment: .topTrailing) {
+            AttachmentThumbnail(attachment: attachment, size: 64)
+                .onTapGesture {
+                    onOpen(attachment)
+                }
+
+            Button {
+                onDelete(attachment)
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.body)
+                    .foregroundStyle(.white, .black.opacity(0.7))
+                    .padding(4)
+            }
         }
     }
 }

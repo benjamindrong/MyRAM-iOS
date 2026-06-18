@@ -93,6 +93,32 @@ final class SyncConflictStore {
         textConflictStore.removeResolvedConflict(conflict.syncTextConflict).compactMap(SyncConflictVersion.init)
     }
 
+    func hasActiveConflict(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField,
+        now: Date = Date()
+    ) -> Bool {
+        textConflictStore.hasActiveConflict(
+            entityType: entityType.syncEntityType,
+            entityID: entityID.uuidString,
+            fieldID: field.rawValue,
+            now: now
+        )
+    }
+
+    func queuedConflict(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField
+    ) -> SyncTextQueuedConflict? {
+        textConflictStore.queuedConflict(
+            entityType: entityType.syncEntityType,
+            entityID: entityID.uuidString,
+            fieldID: field.rawValue
+        )
+    }
+
     func remoteBaseline(
         entityType: SyncConflictEntityType,
         entityID: UUID,
