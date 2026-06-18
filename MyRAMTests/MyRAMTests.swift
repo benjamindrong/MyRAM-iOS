@@ -43,6 +43,31 @@ final class MyRAMTests: XCTestCase {
         let notes: [NoteRecord]
     }
 
+    private final class RecordingSyncController: MyRAMSyncControlling {
+        var onChangesReceived: (([SyncChange]) async -> Void)?
+        var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
+        private(set) var recordedChanges: [SyncChange] = []
+
+        func recordLocalChange(
+            entityType: SyncEntityType,
+            entityID: String,
+            operation: SyncOperation,
+            payload: Data,
+            updatedAt: Date
+        ) {
+            recordedChanges.append(
+                SyncChange(
+                    entityType: entityType,
+                    entityID: entityID,
+                    operation: operation,
+                    payload: payload,
+                    updatedAt: updatedAt,
+                    originDeviceID: "test-device"
+                )
+            )
+        }
+    }
+
     func testPinnedHighlightPaletteUsesReadableTextColor() {
         XCTAssertGreaterThan(
             contrastRatio(
@@ -865,6 +890,138 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.content, "Mac kept local")
     }
 
+    func testSaveMergedSyncConflictWritesEditableTextAndOnlyEmitsResolvedMetadata() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let recorder = RecordingSyncController()
+        let note = Note(title: "Shared", content: "Local-only text")
+        note.id = UUID()
+        note.richTextContentData = Data("stale rich text".utf8)
+        context.insert(note)
+        let expiresAt = Date().addingTimeInterval(1_000)
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: note.id,
+            noteID: note.id,
+            field: .noteContent,
+            localText: "Local-only text",
+            remoteText: "Version to Sync",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: expiresAt
+        )
+        _ = conflictStore.preserve(conflict)
+        let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: conflictStore)
+        let mergedText = "Local-only text\nVersion to Sync"
+
+        vm.saveMergedSyncConflict(conflict, mergedText: mergedText)
+
+        XCTAssertEqual(note.content, mergedText)
+        XCTAssertNil(note.richTextContentData)
+        XCTAssertTrue(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).isEmpty)
+        XCTAssertEqual(
+            conflictStore.remoteBaseline(entityType: .note, entityID: note.id, field: .noteContent)?.text,
+            mergedText
+        )
+        XCTAssertEqual(recorder.recordedChanges.count, 1)
+        let change = try XCTUnwrap(recorder.recordedChanges.first)
+        XCTAssertEqual(change.entityType, .conflict)
+        XCTAssertFalse(recorder.recordedChanges.contains { $0.entityType == .item })
+        let payload = try MyRAMSyncPayloadCoding.decodeSyncConflict(from: change.payload)
+        XCTAssertEqual(payload.action, .resolved)
+        XCTAssertEqual(payload.resolvedText, mergedText)
+        XCTAssertEqual(payload.baseText, "Version to Sync")
+    }
+
+    func testOrdinaryNoteSyncIsBlockedWhileContentConflictIsActive() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let recorder = RecordingSyncController()
+        let note = Note(title: "Shared", content: "Local-only text")
+        note.id = UUID()
+        context.insert(note)
+        let expiresAt = Date().addingTimeInterval(1_000)
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: note.id,
+            noteID: note.id,
+            field: .noteContent,
+            localText: "Local-only text",
+            remoteText: "Version to Sync",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: expiresAt
+        )
+        _ = conflictStore.preserve(conflict)
+        let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: conflictStore)
+
+        vm.commitNoteEdit(note, title: "Shared", content: "typed during review")
+
+        XCTAssertEqual(note.content, "typed during review")
+        XCTAssertTrue(recorder.recordedChanges.isEmpty)
+        XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).first, conflict)
+    }
+
+    func testIncomingOrdinaryTextQueuesBehindActiveContentConflict() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Shared", content: "Local-only text")
+        note.id = UUID()
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        let expiresAt = Date().addingTimeInterval(1_000)
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: note.id,
+            noteID: note.id,
+            field: .noteContent,
+            localText: "Local-only text",
+            remoteText: "Version to Sync",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: expiresAt
+        )
+        _ = conflictStore.preserve(conflict)
+        let remoteNote = Note(title: "Shared", content: "Latest Version to Sync")
+        remoteNote.id = note.id
+        remoteNote.createdAt = note.createdAt
+        remoteNote.modifiedAt = Date(timeIntervalSince1970: 300)
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        let result = applier.apply(
+            [
+                SyncChange(
+                    entityType: .item,
+                    entityID: note.id.uuidString,
+                    operation: .upsert,
+                    payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: remoteNote)),
+                    updatedAt: remoteNote.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: note.id,
+            currentNoteID: note.id,
+            currentFolderID: nil
+        )
+
+        XCTAssertEqual(note.content, "Local-only text")
+        XCTAssertTrue(result.preservedConflicts.isEmpty)
+        XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 301)).first?.remoteText, "Version to Sync")
+        XCTAssertEqual(
+            conflictStore.queuedConflict(entityType: .note, entityID: note.id, field: .noteContent)?.conflict.remoteText,
+            "Latest Version to Sync"
+        )
+    }
+
     func testIncomingResolvedSyncConflictAppliesWinnerAndClearsLocalConflict() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -873,6 +1030,7 @@ final class MyRAMTests: XCTestCase {
         let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
         let note = Note(title: "Shared", content: "iPhone incoming")
         note.id = UUID()
+        note.richTextContentData = Data("stale incoming rich text".utf8)
         context.insert(note)
         let expiresAt = Date().addingTimeInterval(1_000)
         let conflict = SyncConflictVersion(
@@ -888,6 +1046,7 @@ final class MyRAMTests: XCTestCase {
         )
         _ = conflictStore.preserve(conflict)
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+        let resolvedText = "Mac kept local\niPhone incoming"
 
         _ = applier.apply(
             [
@@ -899,7 +1058,7 @@ final class MyRAMTests: XCTestCase {
                         MyRAMSyncConflictPayload(
                             action: .resolved,
                             conflict: conflict,
-                            resolvedText: "Mac kept local",
+                            resolvedText: resolvedText,
                             baseText: "iPhone incoming",
                             updatedAt: Date(timeIntervalSince1970: 300)
                         )
@@ -913,7 +1072,8 @@ final class MyRAMTests: XCTestCase {
             currentFolderID: nil
         )
 
-        XCTAssertEqual(note.content, "Mac kept local")
+        XCTAssertEqual(note.content, resolvedText)
+        XCTAssertNil(note.richTextContentData)
         XCTAssertTrue(conflictStore.activeConflicts().isEmpty)
     }
 

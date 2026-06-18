@@ -17,8 +17,8 @@ final class NotesViewModel: ObservableObject {
     private static let recentlyDeletedRetention: TimeInterval = 7 * 24 * 60 * 60
     private static let syncTextQuietPeriod: TimeInterval = 2
     private let context: ModelContext
-    private let syncController: MyRAMSyncController?
-    private let syncConflictStore = SyncConflictStore()
+    private let syncController: MyRAMSyncControlling?
+    private let syncConflictStore: SyncConflictStore
     private let syncConflictService: MyRAMSyncConflictService
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
@@ -35,9 +35,14 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    init(context: ModelContext, syncController: MyRAMSyncController? = nil) {
+    init(
+        context: ModelContext,
+        syncController: MyRAMSyncControlling? = nil,
+        syncConflictStore: SyncConflictStore = SyncConflictStore()
+    ) {
         self.context = context
         self.syncController = syncController
+        self.syncConflictStore = syncConflictStore
         syncConflictService = MyRAMSyncConflictService(context: context, store: syncConflictStore)
         self.syncController?.onChangesReceived = { [weak self] changes in
             await self?.applyIncomingSyncChanges(changes)
@@ -1089,6 +1094,7 @@ final class NotesViewModel: ObservableObject {
         let titleBaseline = syncConflictStore.remoteBaseline(entityType: .note, entityID: note.id, field: .noteTitle)
         let contentBaseline = syncConflictStore.remoteBaseline(entityType: .note, entityID: note.id, field: .noteContent)
         guard !isApplyingRemoteSyncChange,
+              !shouldBlockOrdinaryNoteSync(note, operation: operation),
               let payload = try? MyRAMSyncPayloadCoding.encode(
                 MyRAMNoteSyncPayload(
                     note: note,
@@ -1135,6 +1141,7 @@ final class NotesViewModel: ObservableObject {
     private func recordPinnedThoughtSyncChange(_ thought: PinnedThought) {
         let baseline = syncConflictStore.remoteBaseline(entityType: .pinnedThought, entityID: thought.id, field: .pinnedText)
         guard !isApplyingRemoteSyncChange,
+              !syncConflictStore.hasActiveConflict(entityType: .pinnedThought, entityID: thought.id, field: .pinnedText),
               let payload = try? MyRAMSyncPayloadCoding.encode(
                 MyRAMPinnedThoughtSyncPayload(thought: thought, baseText: baseline?.text)
               ) else { return }
@@ -1157,6 +1164,12 @@ final class NotesViewModel: ObservableObject {
             payload: data,
             updatedAt: payload.modifiedAt
         )
+    }
+
+    private func shouldBlockOrdinaryNoteSync(_ note: Note, operation: SyncOperation) -> Bool {
+        guard operation == .upsert else { return false }
+        return syncConflictStore.hasActiveConflict(entityType: .note, entityID: note.id, field: .noteTitle)
+            || syncConflictStore.hasActiveConflict(entityType: .note, entityID: note.id, field: .noteContent)
     }
 
     private func recordPhotoAttachmentSyncChange(_ attachment: NotePhotoAttachment, updatedAt: Date) {

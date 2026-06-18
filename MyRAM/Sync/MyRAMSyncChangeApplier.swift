@@ -528,9 +528,12 @@ final class MyRAMSyncChangeApplier {
 
         case .noteContent:
             guard let note = fetchNote(withID: conflict.entityID) else { return }
+            let previousContent = note.content
             note.content = text
             if text == conflict.remoteText {
                 note.richTextContentData = conflict.remoteRichTextContentData
+            } else if previousContent != text {
+                note.richTextContentData = nil
             }
             note.modifiedAt = Date()
             saveResolvedTextBaseline(text, conflict: conflict)
@@ -705,8 +708,11 @@ final class MyRAMSyncChangeApplier {
             preservedAt: preservedConflict.preservedAt,
             expiresAt: preservedConflict.expiresAt
         )
+        let conflictsBeforePreserve = syncConflicts
         syncConflicts = conflictStore.preserve(conflict)
-        newlyPreservedConflicts.append(conflict)
+        if syncConflicts != conflictsBeforePreserve {
+            newlyPreservedConflicts.append(conflict)
+        }
     }
 
     private func normalizedIncomingConflict(_ conflict: SyncConflictVersion) -> SyncConflictVersion {

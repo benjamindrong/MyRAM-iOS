@@ -107,6 +107,18 @@ final class SyncConflictStore {
         )
     }
 
+    func queuedConflict(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField
+    ) -> SyncTextQueuedConflict? {
+        textConflictStore.queuedConflict(
+            entityType: entityType.syncEntityType,
+            entityID: entityID.uuidString,
+            fieldID: field.rawValue
+        )
+    }
+
     func remoteBaseline(
         entityType: SyncConflictEntityType,
         entityID: UUID,
