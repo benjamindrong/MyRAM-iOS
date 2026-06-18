@@ -968,6 +968,105 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).first, conflict)
     }
 
+    func testKeepLocalConflictPreservesTextTypedAfterConflictCreation() throws {
+        let fixture = try makeActiveNoteContentConflictFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
+        let typedAfterConflict = "Local before conflict\nTyped after conflict"
+
+        fixture.vm.commitNoteEdit(fixture.note, title: "Shared", content: typedAfterConflict)
+
+        XCTAssertEqual(fixture.note.content, typedAfterConflict)
+        XCTAssertEqual(fixture.vm.localText(forSyncConflict: fixture.conflict), typedAfterConflict)
+        XCTAssertTrue(fixture.recorder.recordedChanges.isEmpty)
+
+        fixture.vm.markSyncConflictReviewed(fixture.conflict)
+
+        XCTAssertEqual(fixture.note.content, typedAfterConflict)
+        XCTAssertTrue(fixture.conflictStore.activeConflicts().isEmpty)
+        XCTAssertEqual(
+            fixture.conflictStore.remoteBaseline(
+                entityType: .note,
+                entityID: fixture.note.id,
+                field: .noteContent
+            )?.text,
+            typedAfterConflict
+        )
+        XCTAssertEqual(fixture.recorder.recordedChanges.count, 1)
+        let change = try XCTUnwrap(fixture.recorder.recordedChanges.first)
+        XCTAssertEqual(change.entityType, .conflict)
+        XCTAssertFalse(fixture.recorder.recordedChanges.contains { $0.entityType == .item })
+        let payload = try MyRAMSyncPayloadCoding.decodeSyncConflict(from: change.payload)
+        XCTAssertEqual(payload.action, .resolved)
+        XCTAssertEqual(payload.resolvedText, typedAfterConflict)
+        XCTAssertEqual(payload.baseText, fixture.conflict.remoteText)
+    }
+
+    func testRestoreConflictReplacesTextTypedAfterConflictOnlyWhenIncomingIsSelected() throws {
+        let fixture = try makeActiveNoteContentConflictFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
+        let typedAfterConflict = "Local before conflict\nTyped after conflict"
+
+        fixture.vm.commitNoteEdit(fixture.note, title: "Shared", content: typedAfterConflict)
+
+        XCTAssertEqual(fixture.note.content, typedAfterConflict)
+        XCTAssertTrue(fixture.recorder.recordedChanges.isEmpty)
+
+        fixture.vm.restoreSyncConflict(fixture.conflict)
+
+        XCTAssertEqual(fixture.note.content, fixture.conflict.remoteText)
+        XCTAssertTrue(fixture.conflictStore.activeConflicts().isEmpty)
+        XCTAssertEqual(
+            fixture.conflictStore.remoteBaseline(
+                entityType: .note,
+                entityID: fixture.note.id,
+                field: .noteContent
+            )?.text,
+            fixture.conflict.remoteText
+        )
+        XCTAssertEqual(fixture.recorder.recordedChanges.count, 1)
+        let change = try XCTUnwrap(fixture.recorder.recordedChanges.first)
+        XCTAssertEqual(change.entityType, .conflict)
+        XCTAssertFalse(fixture.recorder.recordedChanges.contains { $0.entityType == .item })
+        let payload = try MyRAMSyncPayloadCoding.decodeSyncConflict(from: change.payload)
+        XCTAssertEqual(payload.action, .resolved)
+        XCTAssertEqual(payload.resolvedText, fixture.conflict.remoteText)
+        XCTAssertEqual(payload.baseText, fixture.conflict.localText)
+    }
+
+    func testSaveMergedConflictUsesMergedTextAfterPostConflictTyping() throws {
+        let fixture = try makeActiveNoteContentConflictFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
+        let typedAfterConflict = "Local before conflict\nTyped after conflict"
+        let mergedText = "\(typedAfterConflict)\nVersion to Sync"
+
+        fixture.vm.commitNoteEdit(fixture.note, title: "Shared", content: typedAfterConflict)
+
+        XCTAssertEqual(fixture.note.content, typedAfterConflict)
+        XCTAssertTrue(fixture.recorder.recordedChanges.isEmpty)
+
+        fixture.vm.saveMergedSyncConflict(fixture.conflict, mergedText: mergedText)
+
+        XCTAssertEqual(fixture.note.content, mergedText)
+        XCTAssertNotEqual(fixture.note.content, fixture.conflict.localText)
+        XCTAssertTrue(fixture.conflictStore.activeConflicts().isEmpty)
+        XCTAssertEqual(
+            fixture.conflictStore.remoteBaseline(
+                entityType: .note,
+                entityID: fixture.note.id,
+                field: .noteContent
+            )?.text,
+            mergedText
+        )
+        XCTAssertEqual(fixture.recorder.recordedChanges.count, 1)
+        let change = try XCTUnwrap(fixture.recorder.recordedChanges.first)
+        XCTAssertEqual(change.entityType, .conflict)
+        XCTAssertFalse(fixture.recorder.recordedChanges.contains { $0.entityType == .item })
+        let payload = try MyRAMSyncPayloadCoding.decodeSyncConflict(from: change.payload)
+        XCTAssertEqual(payload.action, .resolved)
+        XCTAssertEqual(payload.resolvedText, mergedText)
+        XCTAssertEqual(payload.baseText, fixture.conflict.remoteText)
+    }
+
     func testNoteDeleteSyncIsBlockedWhileContentConflictIsActive() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -3056,6 +3155,54 @@ final class MyRAMTests: XCTestCase {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("sync-conflicts.json")
+    }
+
+    private func makeActiveNoteContentConflictFixture(
+        initialContent: String = "Local before conflict",
+        remoteText: String = "Version to Sync"
+    ) throws -> (
+        container: ModelContainer,
+        context: ModelContext,
+        conflictFileURL: URL,
+        conflictStore: SyncConflictStore,
+        recorder: RecordingSyncController,
+        vm: NotesViewModel,
+        note: Note,
+        conflict: SyncConflictVersion
+    ) {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let recorder = RecordingSyncController()
+        let note = Note(title: "Shared", content: initialContent)
+        note.id = UUID()
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: note.id,
+            noteID: note.id,
+            field: .noteContent,
+            localText: initialContent,
+            remoteText: remoteText,
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: Date().addingTimeInterval(1_000)
+        )
+        _ = conflictStore.preserve(conflict)
+        let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: conflictStore)
+
+        return (
+            container: container,
+            context: context,
+            conflictFileURL: conflictFileURL,
+            conflictStore: conflictStore,
+            recorder: recorder,
+            vm: vm,
+            note: note,
+            conflict: conflict
+        )
     }
 
     private func iso8601String(_ date: Date) -> String {
