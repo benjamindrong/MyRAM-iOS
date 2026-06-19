@@ -3453,6 +3453,36 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)
     }
 
+    func testRichTextStorageNormalizationRemovesPrimaryTextColorButKeepsFormatting() {
+        let mutable = NSMutableAttributedString(string: "Task")
+        mutable.addAttribute(.foregroundColor, value: UIColor.black, range: NSRange(location: 0, length: 4))
+        mutable.addAttribute(
+            .underlineStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 0, length: 4)
+        )
+
+        let normalized = RichTextContentCodec.normalizedForStorage(mutable)
+
+        XCTAssertNil(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        let underline = normalized.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
+        XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)
+    }
+
+    func testRichTextStorageNormalizationKeepsIntentionalAccentColor() {
+        let mutable = NSMutableAttributedString(string: "AB")
+        mutable.addAttribute(.foregroundColor, value: UIColor.black, range: NSRange(location: 0, length: 1))
+        mutable.addAttribute(.foregroundColor, value: UIColor.systemRed, range: NSRange(location: 1, length: 1))
+
+        let normalized = RichTextContentCodec.normalizedForStorage(mutable)
+
+        XCTAssertNil(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        XCTAssertEqual(
+            normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
+            UIColor.systemRed
+        )
+    }
+
     func testPasteMatcherUsesTypingAttributesOverDefaults() throws {
         let defaultFont = UIFont.systemFont(ofSize: 17)
         let typingFont = UIFont.boldSystemFont(ofSize: 22)

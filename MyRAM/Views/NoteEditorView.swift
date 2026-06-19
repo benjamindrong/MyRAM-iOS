@@ -4142,6 +4142,25 @@ enum RichTextContentCodec {
 
         return mutable
     }
+
+    static func normalizedForStorage(_ attributedText: NSAttributedString) -> NSAttributedString {
+        let mutable = NSMutableAttributedString(attributedString: attributedText)
+        let fullRange = NSRange(location: 0, length: mutable.length)
+        let darkTraits = UITraitCollection(userInterfaceStyle: .dark)
+        let lightTraits = UITraitCollection(userInterfaceStyle: .light)
+
+        mutable.enumerateAttribute(.foregroundColor, in: fullRange) { value, range, _ in
+            guard let color = value as? UIColor else { return }
+            let darkColor = color.resolvedColor(with: darkTraits)
+            let lightColor = color.resolvedColor(with: lightTraits)
+            if darkColor.isPrimaryTextCandidate(in: .dark)
+                || lightColor.isPrimaryTextCandidate(in: .light) {
+                mutable.removeAttribute(.foregroundColor, range: range)
+            }
+        }
+
+        return mutable
+    }
 }
 
 private extension UIColor {

@@ -1,6 +1,7 @@
 import Foundation
 import NearbySyncCore
 import SwiftData
+import UIKit
 
 struct MyRAMSyncApplyResult {
     var shouldRefreshActiveNote = false
@@ -694,7 +695,10 @@ final class MyRAMSyncChangeApplier {
             let previousContent = note.content
             note.content = text
             if text == conflict.remoteText {
-                note.richTextContentData = conflict.remoteRichTextContentData
+                note.richTextContentData = normalizedConflictRichTextData(
+                    conflict.remoteRichTextContentData,
+                    plainText: conflict.remoteText
+                )
             } else if previousContent != text {
                 note.richTextContentData = nil
             }
@@ -918,13 +922,17 @@ final class MyRAMSyncChangeApplier {
         remoteModifiedAt: Date
     ) {
         let now = Date()
+        let normalizedRemoteRichTextData = normalizedConflictRichTextData(
+            remoteRichTextContentData,
+            plainText: remoteText
+        )
         guard let preservedConflict = SyncTextConflictPolicy.conflictIfTextDiverged(
             entityType: entityType.syncEntityType,
             entityID: entityID.uuidString,
             fieldID: field.rawValue,
             localText: localText,
             remoteText: remoteText,
-            remoteData: remoteRichTextContentData,
+            remoteData: normalizedRemoteRichTextData,
             remoteUpdatedAt: remoteModifiedAt,
             preservedAt: now
         ) else { return }
@@ -936,7 +944,7 @@ final class MyRAMSyncChangeApplier {
             field: field,
             localText: localText,
             remoteText: remoteText,
-            remoteRichTextContentData: remoteRichTextContentData,
+            remoteRichTextContentData: normalizedRemoteRichTextData,
             remoteModifiedAt: remoteModifiedAt,
             preservedAt: preservedConflict.preservedAt,
             expiresAt: preservedConflict.expiresAt
@@ -946,6 +954,16 @@ final class MyRAMSyncChangeApplier {
         if syncConflicts != conflictsBeforePreserve {
             newlyPreservedConflicts.append(conflict)
         }
+    }
+
+    private func normalizedConflictRichTextData(_ richTextData: Data?, plainText: String) -> Data? {
+        guard let richTextData else { return nil }
+        let attributedText = RichTextContentCodec.decode(
+            richTextData: richTextData,
+            plainText: plainText,
+            baseFont: UIFont.preferredFont(forTextStyle: .body)
+        )
+        return RichTextContentCodec.encode(RichTextContentCodec.normalizedForStorage(attributedText))
     }
 
     private func normalizedIncomingConflict(_ conflict: SyncConflictVersion) -> SyncConflictVersion {
