@@ -368,6 +368,7 @@ final class NotesViewModel: ObservableObject {
         note.content = content
         note.richTextContentData = richTextContentData
         note.modifiedAt = .now
+        recordActiveNoteTextEdited(note)
         try? context.save()
         recordNoteSyncChange(note)
     }

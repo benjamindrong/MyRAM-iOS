@@ -1592,6 +1592,46 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).first, conflict)
     }
 
+    func testIncomingNoteSyncDoesNotOverwriteImmediateLocalTextEdit() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let recorder = RecordingSyncController()
+        let note = Note(title: "Shared", content: "Shared body")
+        note.id = UUID()
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        let vm = NotesViewModel(context: context, syncController: recorder, syncConflictStore: conflictStore)
+        vm.selectNote(note)
+
+        vm.commitNoteEdit(note, title: "Shared", content: "Shared body\nDevice B text")
+
+        let deviceANote = Note(title: "Shared", content: "Shared body\nDevice A text")
+        deviceANote.id = note.id
+        deviceANote.createdAt = note.createdAt
+        deviceANote.modifiedAt = note.modifiedAt.addingTimeInterval(1)
+
+        await vm.applyIncomingSyncChanges([
+            SyncChange(
+                entityType: .item,
+                entityID: note.id.uuidString,
+                operation: .upsert,
+                payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: deviceANote)),
+                updatedAt: deviceANote.modifiedAt,
+                originDeviceID: "device-a"
+            )
+        ])
+
+        let conflicts = conflictStore.activeConflicts()
+        XCTAssertEqual(note.content, "Shared body\nDevice B text")
+        XCTAssertEqual(conflicts.count, 1)
+        XCTAssertEqual(conflicts.first?.localText, "Shared body\nDevice B text")
+        XCTAssertEqual(conflicts.first?.remoteText, "Shared body\nDevice A text")
+        XCTAssertEqual(recorder.recordedChanges.count, 1)
+    }
+
     func testKeepLocalConflictPreservesTextTypedAfterConflictCreation() throws {
         let fixture = try makeActiveNoteContentConflictFixture()
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }

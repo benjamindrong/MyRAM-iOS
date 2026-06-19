@@ -495,7 +495,16 @@ final class MyRAMSyncChangeApplier {
             remoteBaseData: remoteBaseData,
             originDeviceID: originDeviceID
            ) {
-            return .deferIncoming
+            return hasLocalTextDivergedFromRemoteBase(
+                entityType: entityType,
+                entityID: entityID,
+                field: field,
+                localText: localText,
+                localData: localData,
+                remoteBaseText: remoteBaseText,
+                remoteBaseData: remoteBaseData,
+                originDeviceID: originDeviceID
+            ) ? .conflict : .deferIncoming
         }
 
         let resolution = remoteTextResolution(
@@ -533,6 +542,29 @@ final class MyRAMSyncChangeApplier {
             return true
         }
         return remoteBaseText == baseline.text && remoteBaseData == baseline.richTextContentData
+    }
+
+    private func hasLocalTextDivergedFromRemoteBase(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField,
+        localText: String,
+        localData: Data?,
+        remoteBaseText: String?,
+        remoteBaseData: Data?,
+        originDeviceID: String
+    ) -> Bool {
+        let trackedBaseline = conflictStore.remoteBaseline(entityType: entityType, entityID: entityID, field: field)
+        let baseText: String?
+        let baseData: Data?
+        if trackedBaseline?.originDeviceID == originDeviceID {
+            baseText = trackedBaseline?.text
+            baseData = trackedBaseline?.richTextContentData
+        } else {
+            baseText = remoteBaseText ?? trackedBaseline?.text
+            baseData = remoteBaseData ?? trackedBaseline?.richTextContentData
+        }
+        return localText != baseText || localData != baseData
     }
 
     private func remoteTextResolution(

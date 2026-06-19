@@ -2848,10 +2848,12 @@ private struct SelectableTextView: UIViewRepresentable {
                     // keeps UIKit readable now without saving light/dark colors
                     // as explicit formatting.
                     typingAttributes[.foregroundColor] = defaultTextColor
+                    typingAttributes[.autoTextColorDisplay] = true
                     syncDecorationColorsWithForeground(in: &typingAttributes, color: defaultTextColor)
                 } else {
                     let resolvedColor = color ?? textView.textColor ?? defaultTextColor
                     typingAttributes[.foregroundColor] = resolvedColor
+                    typingAttributes.removeValue(forKey: .autoTextColorDisplay)
                     syncDecorationColorsWithForeground(in: &typingAttributes, color: resolvedColor)
                 }
                 textView.typingAttributes = typingAttributes
@@ -2869,10 +2871,12 @@ private struct SelectableTextView: UIViewRepresentable {
                 // default for the live view; storage encoding removes this
                 // default color so Auto remains unformatted in synced RTF.
                 textView.textStorage.addAttribute(.foregroundColor, value: defaultTextColor, range: selectedRange)
+                textView.textStorage.addAttribute(.autoTextColorDisplay, value: true, range: selectedRange)
                 syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: defaultTextColor)
             } else {
                 let resolvedColor = color ?? textView.textColor ?? defaultTextColor
                 textView.textStorage.addAttribute(.foregroundColor, value: resolvedColor, range: selectedRange)
+                textView.textStorage.removeAttribute(.autoTextColorDisplay, range: selectedRange)
                 syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: resolvedColor)
             }
             textView.textStorage.endEditing()
@@ -2975,13 +2979,14 @@ private struct SelectableTextView: UIViewRepresentable {
             // UIKit does not show black attributed text in dark mode. Before
             // save/sync, remove that display-only color so Auto is stored as no
             // explicit foreground attribute.
-            mutable.enumerateAttribute(.foregroundColor, in: fullRange) { value, range, _ in
-                guard let color = value as? UIColor,
-                      isEditorDefaultTextColor(color, in: textView) else { return }
+            mutable.enumerateAttribute(.autoTextColorDisplay, in: fullRange) { value, range, _ in
+                guard value != nil else { return }
                 mutable.removeAttribute(.foregroundColor, range: range)
+                stripDefaultDecorationColor(.underlineColor, in: mutable, range: range, textView: textView)
+                stripDefaultDecorationColor(.strikethroughColor, in: mutable, range: range, textView: textView)
+                mutable.removeAttribute(.autoTextColorDisplay, range: range)
             }
-            stripDefaultDecorationColor(.underlineColor, in: mutable, range: fullRange, textView: textView)
-            stripDefaultDecorationColor(.strikethroughColor, in: mutable, range: fullRange, textView: textView)
+            mutable.removeAttribute(.autoTextColorDisplay, range: fullRange)
 
             return mutable
         }
@@ -4175,6 +4180,7 @@ enum RichTextContentCodec {
         mutable.enumerateAttribute(.foregroundColor, in: fullRange) { value, range, _ in
             guard value == nil else { return }
             mutable.addAttribute(.foregroundColor, value: defaultTextColor, range: range)
+            mutable.addAttribute(.autoTextColorDisplay, value: true, range: range)
         }
         return mutable
     }
@@ -4211,6 +4217,10 @@ private extension UIColor {
         let ciColor = CIColor(color: self)
         return RGBAComponents(red: ciColor.red, green: ciColor.green, blue: ciColor.blue, alpha: ciColor.alpha)
     }
+}
+
+private extension NSAttributedString.Key {
+    static let autoTextColorDisplay = NSAttributedString.Key("com.myram.autoTextColorDisplay")
 }
 
 private struct RGBAComponents {
