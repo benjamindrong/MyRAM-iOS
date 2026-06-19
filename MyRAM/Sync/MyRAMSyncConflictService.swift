@@ -81,7 +81,11 @@ final class MyRAMSyncConflictService {
             let previousContent = note.content
             note.content = resolution.resolvedText
             if resolution.usesRemoteData {
-                note.richTextContentData = resolution.resolvedData
+                // Incoming conflict snapshots may contain old RTF that
+                // materialized Auto text as an explicit black foreground.
+                // Accepting the incoming version should choose its text, not
+                // replay stale color attributes into the editor.
+                note.richTextContentData = nil
             } else if previousContent != resolution.resolvedText {
                 note.richTextContentData = resolution.resolvedData
             }

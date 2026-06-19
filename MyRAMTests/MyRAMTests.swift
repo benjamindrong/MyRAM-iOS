@@ -1626,9 +1626,11 @@ final class MyRAMTests: XCTestCase {
     }
 
     func testRestoreConflictReplacesTextTypedAfterConflictOnlyWhenIncomingIsSelected() throws {
-        let fixture = try makeActiveNoteContentConflictFixture()
+        let staleIncomingRichTextData = Data("incoming rtf with explicit black foreground".utf8)
+        let fixture = try makeActiveNoteContentConflictFixture(remoteRichTextContentData: staleIncomingRichTextData)
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
         let typedAfterConflict = "Local before conflict\nTyped after conflict"
+        fixture.note.richTextContentData = Data("local editor formatting".utf8)
 
         fixture.vm.commitNoteEdit(fixture.note, title: "Shared", content: typedAfterConflict)
 
@@ -1638,6 +1640,7 @@ final class MyRAMTests: XCTestCase {
         fixture.vm.restoreSyncConflict(fixture.conflict)
 
         XCTAssertEqual(fixture.note.content, fixture.conflict.remoteText)
+        XCTAssertNil(fixture.note.richTextContentData)
         XCTAssertTrue(fixture.conflictStore.activeConflicts().isEmpty)
         XCTAssertEqual(
             fixture.conflictStore.remoteBaseline(
@@ -1892,6 +1895,7 @@ final class MyRAMTests: XCTestCase {
             field: .noteContent,
             localText: "Mac kept local",
             remoteText: "iPhone incoming",
+            remoteRichTextContentData: Data("incoming rtf with explicit black foreground".utf8),
             remoteModifiedAt: Date(timeIntervalSince1970: 200),
             preservedAt: Date(timeIntervalSince1970: 201),
             expiresAt: expiresAt
@@ -3071,7 +3075,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(alpha, 1, accuracy: 0.01)
     }
 
-    func testRichTextDisplayNormalizationRemovesNearBlackColorInDarkMode() {
+    func testRichTextDisplayNormalizationPreservesExplicitBlackInDarkMode() {
         let mutable = NSMutableAttributedString(string: "AB")
         mutable.addAttribute(.foregroundColor, value: UIColor.black, range: NSRange(location: 0, length: 1))
         mutable.addAttribute(.foregroundColor, value: UIColor.systemRed, range: NSRange(location: 1, length: 1))
@@ -3083,7 +3087,7 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
-            UIColor.label
+            UIColor.black
         )
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
@@ -3091,7 +3095,28 @@ final class MyRAMTests: XCTestCase {
         )
     }
 
-    func testRichTextDisplayNormalizationRemovesNearWhiteColorInLightMode() {
+    func testRichTextDisplayNormalizationPaintsAutoTextWithCurrentDefaultColor() {
+        let mutable = NSMutableAttributedString(string: "AB")
+        mutable.addAttribute(.foregroundColor, value: UIColor.black, range: NSRange(location: 1, length: 1))
+        let defaultTextColor = UIColor.label
+
+        let normalized = RichTextContentCodec.normalizedForDisplay(
+            mutable,
+            traitCollection: UITraitCollection(userInterfaceStyle: .dark),
+            defaultTextColor: defaultTextColor
+        )
+
+        XCTAssertEqual(
+            normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
+            defaultTextColor
+        )
+        XCTAssertEqual(
+            normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
+            UIColor.black
+        )
+    }
+
+    func testRichTextDisplayNormalizationPreservesExplicitWhiteInLightMode() {
         let mutable = NSMutableAttributedString(string: "AB")
         mutable.addAttribute(.foregroundColor, value: UIColor.white, range: NSRange(location: 0, length: 1))
         mutable.addAttribute(.foregroundColor, value: UIColor.systemBlue, range: NSRange(location: 1, length: 1))
@@ -3103,7 +3128,7 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
-            UIColor.label
+            UIColor.white
         )
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
@@ -3111,11 +3136,12 @@ final class MyRAMTests: XCTestCase {
         )
     }
 
-    func testRichTextDisplayNormalizationRemovesDarkGrayInDarkMode() {
+    func testRichTextDisplayNormalizationPreservesExplicitDarkGrayInDarkMode() {
+        let expectedColor = UIColor(white: 0.2, alpha: 1)
         let mutable = NSMutableAttributedString(string: "AB")
         mutable.addAttribute(
             .foregroundColor,
-            value: UIColor(white: 0.2, alpha: 1),
+            value: expectedColor,
             range: NSRange(location: 0, length: 1)
         )
         mutable.addAttribute(.foregroundColor, value: UIColor.systemGreen, range: NSRange(location: 1, length: 1))
@@ -3127,7 +3153,7 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor,
-            UIColor.label
+            expectedColor
         )
         XCTAssertEqual(
             normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
@@ -3428,7 +3454,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(strikethrough, NSUnderlineStyle.single.rawValue)
     }
 
-    func testRichTextDisplayNormalizationKeepsFormattingWhileNormalizingLegacyTextColor() {
+    func testRichTextDisplayNormalizationKeepsFormattingAndExplicitTextColor() {
         let baseFont = UIFont.systemFont(ofSize: 17)
         let mutable = NSMutableAttributedString(
             string: "Task",
@@ -3447,40 +3473,30 @@ final class MyRAMTests: XCTestCase {
         )
 
         let color = normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? UIColor
-        XCTAssertNotNil(color)
+        XCTAssertEqual(color, UIColor.black)
 
         let underline = normalized.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
         XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)
     }
 
-    func testRichTextStorageNormalizationRemovesPrimaryTextColorButKeepsFormatting() {
+    func testRichTextRoundTripKeepsAutoTextColorAsMissingForegroundAttribute() throws {
         let mutable = NSMutableAttributedString(string: "Task")
-        mutable.addAttribute(.foregroundColor, value: UIColor.black, range: NSRange(location: 0, length: 4))
         mutable.addAttribute(
             .underlineStyle,
             value: NSUnderlineStyle.single.rawValue,
             range: NSRange(location: 0, length: 4)
         )
 
-        let normalized = RichTextContentCodec.normalizedForStorage(mutable)
-
-        XCTAssertNil(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil))
-        let underline = normalized.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
-        XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)
-    }
-
-    func testRichTextStorageNormalizationKeepsIntentionalAccentColor() {
-        let mutable = NSMutableAttributedString(string: "AB")
-        mutable.addAttribute(.foregroundColor, value: UIColor.black, range: NSRange(location: 0, length: 1))
-        mutable.addAttribute(.foregroundColor, value: UIColor.systemRed, range: NSRange(location: 1, length: 1))
-
-        let normalized = RichTextContentCodec.normalizedForStorage(mutable)
-
-        XCTAssertNil(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil))
-        XCTAssertEqual(
-            normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? UIColor,
-            UIColor.systemRed
+        let data = try XCTUnwrap(RichTextContentCodec.encode(mutable))
+        let decoded = RichTextContentCodec.decode(
+            richTextData: data,
+            plainText: "Task",
+            baseFont: UIFont.systemFont(ofSize: 17)
         )
+
+        XCTAssertNil(decoded.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        let underline = decoded.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int
+        XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)
     }
 
     func testPasteMatcherUsesTypingAttributesOverDefaults() throws {
@@ -3813,7 +3829,8 @@ final class MyRAMTests: XCTestCase {
 
     private func makeActiveNoteContentConflictFixture(
         initialContent: String = "Local before conflict",
-        remoteText: String = "Version to Sync"
+        remoteText: String = "Version to Sync",
+        remoteRichTextContentData: Data? = nil
     ) throws -> (
         container: ModelContainer,
         context: ModelContext,
@@ -3840,6 +3857,7 @@ final class MyRAMTests: XCTestCase {
             field: .noteContent,
             localText: initialContent,
             remoteText: remoteText,
+            remoteRichTextContentData: remoteRichTextContentData,
             remoteModifiedAt: Date(timeIntervalSince1970: 200),
             preservedAt: Date(timeIntervalSince1970: 201),
             expiresAt: Date().addingTimeInterval(1_000)

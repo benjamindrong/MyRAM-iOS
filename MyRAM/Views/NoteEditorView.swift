@@ -2839,14 +2839,21 @@ private struct SelectableTextView: UIViewRepresentable {
             usesDefaultColor: Bool = false
         ) {
             let selectedRange = formattingActionRange(in: textView)
-            let resolvedColor = usesDefaultColor
-                ? defaultTextColor
-                : color ?? textView.textColor ?? defaultTextColor
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
-                typingAttributes[.foregroundColor] = resolvedColor
-                syncDecorationColorsWithForeground(in: &typingAttributes, color: resolvedColor)
+                if usesDefaultColor {
+                    // Auto uses the editor default for display, but syncContent
+                    // strips this default foreground before RTF encoding. That
+                    // keeps UIKit readable now without saving light/dark colors
+                    // as explicit formatting.
+                    typingAttributes[.foregroundColor] = defaultTextColor
+                    syncDecorationColorsWithForeground(in: &typingAttributes, color: defaultTextColor)
+                } else {
+                    let resolvedColor = color ?? textView.textColor ?? defaultTextColor
+                    typingAttributes[.foregroundColor] = resolvedColor
+                    syncDecorationColorsWithForeground(in: &typingAttributes, color: resolvedColor)
+                }
                 textView.typingAttributes = typingAttributes
                 textView.becomeFirstResponder()
                 reportFormattingState(from: textView)
@@ -2856,8 +2863,18 @@ private struct SelectableTextView: UIViewRepresentable {
             textView.textStorage.beginEditing()
             let previousText = NSAttributedString(attributedString: textView.attributedText)
             let previousSelection = textView.selectedRange
-            textView.textStorage.addAttribute(.foregroundColor, value: resolvedColor, range: selectedRange)
-            syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: resolvedColor)
+            if usesDefaultColor {
+                // UITextView can render attributed ranges without foreground
+                // attributes as black. Paint the selected text with the editor
+                // default for the live view; storage encoding removes this
+                // default color so Auto remains unformatted in synced RTF.
+                textView.textStorage.addAttribute(.foregroundColor, value: defaultTextColor, range: selectedRange)
+                syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: defaultTextColor)
+            } else {
+                let resolvedColor = color ?? textView.textColor ?? defaultTextColor
+                textView.textStorage.addAttribute(.foregroundColor, value: resolvedColor, range: selectedRange)
+                syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: resolvedColor)
+            }
             textView.textStorage.endEditing()
 
             restoreSelectionWithoutScrolling(selectedRange, in: textView)
@@ -2915,24 +2932,12 @@ private struct SelectableTextView: UIViewRepresentable {
             typingAttributes[.paragraphStyle] = ChecklistItemEditor.bodyParagraphStyle(
                 hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
             )
-
-            if let color = typingAttributes[.foregroundColor] as? UIColor {
-                let resolvedColor = color.resolvedColor(with: textView.traitCollection)
-                if textView.traitCollection.userInterfaceStyle == .dark
-                    && resolvedColor.isPrimaryTextCandidate(in: .dark) {
-                    typingAttributes[.foregroundColor] = defaultTextColor
-                }
-                if textView.traitCollection.userInterfaceStyle == .light
-                    && resolvedColor.isPrimaryTextCandidate(in: .light) {
-                    typingAttributes[.foregroundColor] = defaultTextColor
-                }
-            }
             textView.typingAttributes = typingAttributes
         }
 
         private func syncContent(from textView: UITextView) {
             let plainText = textView.text ?? ""
-            let encodedRichText = RichTextContentCodec.encode(textView.attributedText)
+            let encodedRichText = RichTextContentCodec.encode(storageAttributedText(from: textView))
             guard text.wrappedValue != plainText || richTextContentData.wrappedValue != encodedRichText else {
                 clearAppliedContentIfSynced()
                 return
@@ -2960,6 +2965,43 @@ private struct SelectableTextView: UIViewRepresentable {
             richTextContentData.wrappedValue = encodedRichText
             onContentChanged(plainText, encodedRichText)
             clearAppliedContentIfSynced()
+        }
+
+        private func storageAttributedText(from textView: UITextView) -> NSAttributedString {
+            let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
+            let fullRange = NSRange(location: 0, length: mutable.length)
+
+            // Auto text is painted with defaultTextColor for the live editor so
+            // UIKit does not show black attributed text in dark mode. Before
+            // save/sync, remove that display-only color so Auto is stored as no
+            // explicit foreground attribute.
+            mutable.enumerateAttribute(.foregroundColor, in: fullRange) { value, range, _ in
+                guard let color = value as? UIColor,
+                      isEditorDefaultTextColor(color, in: textView) else { return }
+                mutable.removeAttribute(.foregroundColor, range: range)
+            }
+            stripDefaultDecorationColor(.underlineColor, in: mutable, range: fullRange, textView: textView)
+            stripDefaultDecorationColor(.strikethroughColor, in: mutable, range: fullRange, textView: textView)
+
+            return mutable
+        }
+
+        private func stripDefaultDecorationColor(
+            _ key: NSAttributedString.Key,
+            in attributedText: NSMutableAttributedString,
+            range: NSRange,
+            textView: UITextView
+        ) {
+            attributedText.enumerateAttribute(key, in: range) { value, range, _ in
+                guard let color = value as? UIColor,
+                      isEditorDefaultTextColor(color, in: textView) else { return }
+                attributedText.removeAttribute(key, range: range)
+            }
+        }
+
+        private func isEditorDefaultTextColor(_ color: UIColor, in textView: UITextView) -> Bool {
+            color.resolvedColor(with: textView.traitCollection)
+                .isApproximatelyEqual(to: defaultTextColor.resolvedColor(with: textView.traitCollection))
         }
 
         var hasUnsyncedAppliedContent: Bool {
@@ -4124,43 +4166,19 @@ enum RichTextContentCodec {
         traitCollection: UITraitCollection,
         defaultTextColor: UIColor = .label
     ) -> NSAttributedString {
+        // Preserve explicit colors exactly. Missing foreground means Auto, so
+        // paint it with the current editor default for display only; syncContent
+        // strips that default color back out before saving/syncing.
+        _ = traitCollection
         let mutable = NSMutableAttributedString(attributedString: attributedText)
         let fullRange = NSRange(location: 0, length: mutable.length)
-
         mutable.enumerateAttribute(.foregroundColor, in: fullRange) { value, range, _ in
-            guard let color = value as? UIColor else { return }
-            let resolvedColor = color.resolvedColor(with: traitCollection)
-            if traitCollection.userInterfaceStyle == .dark
-                && resolvedColor.isPrimaryTextCandidate(in: .dark) {
-                mutable.addAttribute(.foregroundColor, value: defaultTextColor, range: range)
-            }
-            if traitCollection.userInterfaceStyle == .light
-                && resolvedColor.isPrimaryTextCandidate(in: .light) {
-                mutable.addAttribute(.foregroundColor, value: defaultTextColor, range: range)
-            }
+            guard value == nil else { return }
+            mutable.addAttribute(.foregroundColor, value: defaultTextColor, range: range)
         }
-
         return mutable
     }
 
-    static func normalizedForStorage(_ attributedText: NSAttributedString) -> NSAttributedString {
-        let mutable = NSMutableAttributedString(attributedString: attributedText)
-        let fullRange = NSRange(location: 0, length: mutable.length)
-        let darkTraits = UITraitCollection(userInterfaceStyle: .dark)
-        let lightTraits = UITraitCollection(userInterfaceStyle: .light)
-
-        mutable.enumerateAttribute(.foregroundColor, in: fullRange) { value, range, _ in
-            guard let color = value as? UIColor else { return }
-            let darkColor = color.resolvedColor(with: darkTraits)
-            let lightColor = color.resolvedColor(with: lightTraits)
-            if darkColor.isPrimaryTextCandidate(in: .dark)
-                || lightColor.isPrimaryTextCandidate(in: .light) {
-                mutable.removeAttribute(.foregroundColor, range: range)
-            }
-        }
-
-        return mutable
-    }
 }
 
 private extension UIColor {
@@ -4174,22 +4192,6 @@ private extension UIColor {
             && abs(lhs.green - rhs.green) <= 0.02
             && abs(lhs.blue - rhs.blue) <= 0.02
             && abs(lhs.alpha - rhs.alpha) <= 0.02
-    }
-
-    func isPrimaryTextCandidate(in interfaceStyle: UIUserInterfaceStyle) -> Bool {
-        guard let components = rgbaComponents, components.alpha > 0.6 else { return false }
-
-        let saturation = components.saturation
-        let luminance = components.luminance
-
-        switch interfaceStyle {
-        case .dark:
-            return saturation <= 0.08 && luminance <= 0.42
-        case .light:
-            return saturation <= 0.08 && luminance >= 0.58
-        default:
-            return false
-        }
     }
 
     private var rgbaComponents: RGBAComponents? {

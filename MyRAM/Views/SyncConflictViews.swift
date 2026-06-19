@@ -153,11 +153,7 @@ struct SyncConflictDetailView: View {
                         }
 
                         conflictTextSection(title: "Local Version", text: localText)
-                        conflictTextSection(
-                            title: "Version to Sync",
-                            text: conflict.remoteText,
-                            richTextData: conflict.remoteRichTextContentData
-                        )
+                        conflictTextSection(title: "Version to Sync", text: conflict.remoteText)
                         mergedResultSection
 
                         actionButtons
@@ -333,12 +329,12 @@ struct SyncConflictDetailView: View {
         .buttonStyle(.borderedProminent)
     }
 
-    private func conflictTextSection(title: String, text: String, richTextData: Data? = nil) -> some View {
+    private func conflictTextSection(title: String, text: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title)
                 .font(.headline)
 
-            SelectableConflictText(text: text.isEmpty ? "Empty text" : text, richTextData: richTextData)
+            SelectableConflictText(text: text.isEmpty ? "Empty text" : text)
                 .frame(height: textBoxHeight(text))
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .clipped()
@@ -397,7 +393,6 @@ extension View {
 
 private struct SelectableConflictText: UIViewRepresentable {
     let text: String
-    let richTextData: Data?
 
     func makeUIView(context: Context) -> UITextView {
         let textView = UITextView()
@@ -418,15 +413,11 @@ private struct SelectableConflictText: UIViewRepresentable {
     func updateUIView(_ textView: UITextView, context: Context) {
         textView.font = UIFont.preferredFont(forTextStyle: .body)
         textView.textColor = .label
-        let attributedText = RichTextContentCodec.decode(
-            richTextData: richTextData,
-            plainText: text,
-            baseFont: textView.font ?? UIFont.preferredFont(forTextStyle: .body)
-        )
-        textView.attributedText = RichTextContentCodec.normalizedForDisplay(
-            attributedText,
-            traitCollection: textView.traitCollection
-        )
+        // Conflict review intentionally shows plain selectable text here.
+        // The editor owns rich-text defaults; replaying synced RTF in this
+        // view can surface stale explicit foreground colors, such as black
+        // text captured before Auto was cleared correctly.
+        textView.text = text
     }
 
 }
