@@ -61,6 +61,17 @@ struct SyncRemoteTextBaseline: Codable, Equatable {
     let text: String
     let richTextContentData: Data?
     let modifiedAt: Date
+    let originDeviceID: String?
+}
+
+extension SyncRemoteTextBaseline {
+    var syncTextBaseline: SyncTextTrackedBaseline {
+        SyncTextTrackedBaseline(
+            text: text,
+            data: richTextContentData,
+            originDeviceID: originDeviceID
+        )
+    }
 }
 
 final class SyncConflictStore {
@@ -145,7 +156,7 @@ final class SyncConflictStore {
         saveBaselines(baselines)
     }
 
-    func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date) {
+    func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date, originDeviceID: String?) {
         saveRemoteBaseline(
             SyncRemoteTextBaseline(
                 entityType: .note,
@@ -153,12 +164,19 @@ final class SyncConflictStore {
                 field: .noteTitle,
                 text: title,
                 richTextContentData: nil,
-                modifiedAt: modifiedAt
+                modifiedAt: modifiedAt,
+                originDeviceID: originDeviceID
             )
         )
     }
 
-    func saveNoteContentBaseline(noteID: UUID, content: String, richTextContentData: Data?, modifiedAt: Date) {
+    func saveNoteContentBaseline(
+        noteID: UUID,
+        content: String,
+        richTextContentData: Data?,
+        modifiedAt: Date,
+        originDeviceID: String?
+    ) {
         saveRemoteBaseline(
             SyncRemoteTextBaseline(
                 entityType: .note,
@@ -166,12 +184,13 @@ final class SyncConflictStore {
                 field: .noteContent,
                 text: content,
                 richTextContentData: richTextContentData,
-                modifiedAt: modifiedAt
+                modifiedAt: modifiedAt,
+                originDeviceID: originDeviceID
             )
         )
     }
 
-    func savePinnedTextBaseline(thoughtID: UUID, text: String, modifiedAt: Date) {
+    func savePinnedTextBaseline(thoughtID: UUID, text: String, modifiedAt: Date, originDeviceID: String?) {
         saveRemoteBaseline(
             SyncRemoteTextBaseline(
                 entityType: .pinnedThought,
@@ -179,7 +198,8 @@ final class SyncConflictStore {
                 field: .pinnedText,
                 text: text,
                 richTextContentData: nil,
-                modifiedAt: modifiedAt
+                modifiedAt: modifiedAt,
+                originDeviceID: originDeviceID
             )
         )
     }

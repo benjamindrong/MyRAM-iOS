@@ -81,7 +81,10 @@ final class MyRAMSyncConflictService {
             let previousContent = note.content
             note.content = resolution.resolvedText
             if resolution.usesRemoteData {
-                note.richTextContentData = resolution.resolvedData
+                note.richTextContentData = RichTextContentCodec.sanitizedConflictRichTextData(
+                    resolution.resolvedData,
+                    plainText: resolution.resolvedText
+                )
             } else if previousContent != resolution.resolvedText {
                 note.richTextContentData = resolution.resolvedData
             }

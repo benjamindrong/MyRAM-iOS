@@ -411,8 +411,13 @@ private struct SelectableConflictText: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
-        textView.text = text
         textView.font = UIFont.preferredFont(forTextStyle: .body)
+        textView.textColor = .label
+        // Conflict review intentionally shows plain selectable text here.
+        // The editor owns rich-text defaults; replaying synced RTF in this
+        // view can surface stale explicit foreground colors, such as black
+        // text captured before Auto was cleared correctly.
+        textView.text = text
     }
 
 }
