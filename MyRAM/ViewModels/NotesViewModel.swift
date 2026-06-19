@@ -1235,7 +1235,8 @@ final class NotesViewModel: ObservableObject {
             syncConflictStore.saveNoteTitleBaseline(
                 noteID: conflict.entityID,
                 title: resolvedText,
-                modifiedAt: note.modifiedAt
+                modifiedAt: note.modifiedAt,
+                originDeviceID: nil
             )
 
         case .noteContent:
@@ -1244,7 +1245,8 @@ final class NotesViewModel: ObservableObject {
                 noteID: conflict.entityID,
                 content: resolvedText,
                 richTextContentData: note.richTextContentData,
-                modifiedAt: note.modifiedAt
+                modifiedAt: note.modifiedAt,
+                originDeviceID: nil
             )
 
         case .folderTitle:
@@ -1255,7 +1257,8 @@ final class NotesViewModel: ObservableObject {
             syncConflictStore.savePinnedTextBaseline(
                 thoughtID: conflict.entityID,
                 text: resolvedText,
-                modifiedAt: pinnedThought.modifiedAt
+                modifiedAt: pinnedThought.modifiedAt,
+                originDeviceID: nil
             )
         }
     }
@@ -1278,13 +1281,15 @@ final class NotesViewModel: ObservableObject {
                 syncConflictStore.saveNoteTitleBaseline(
                     noteID: payload.id,
                     title: payload.title,
-                    modifiedAt: payload.modifiedAt
+                    modifiedAt: payload.modifiedAt,
+                    originDeviceID: change.originDeviceID
                 )
                 syncConflictStore.saveNoteContentBaseline(
                     noteID: payload.id,
                     content: payload.content,
                     richTextContentData: payload.richTextContentData,
-                    modifiedAt: payload.modifiedAt
+                    modifiedAt: payload.modifiedAt,
+                    originDeviceID: change.originDeviceID
                 )
 
             case .marker:
@@ -1292,7 +1297,8 @@ final class NotesViewModel: ObservableObject {
                 syncConflictStore.savePinnedTextBaseline(
                     thoughtID: payload.id,
                     text: payload.text,
-                    modifiedAt: payload.modifiedAt
+                    modifiedAt: payload.modifiedAt,
+                    originDeviceID: change.originDeviceID
                 )
 
             case .collection, .attachment, .conflict:

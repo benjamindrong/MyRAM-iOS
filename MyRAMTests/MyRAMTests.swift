@@ -578,12 +578,13 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
-        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt)
+        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt, originDeviceID: "device-a")
         conflictStore.saveNoteContentBaseline(
             noteID: note.id,
             content: note.content,
             richTextContentData: nil,
-            modifiedAt: note.modifiedAt
+            modifiedAt: note.modifiedAt,
+            originDeviceID: "device-a"
         )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
         let firstKeystrokeBurst = Note(title: "Shared title", content: "hello")
@@ -642,12 +643,13 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
-        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt)
+        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt, originDeviceID: "device-a")
         conflictStore.saveNoteContentBaseline(
             noteID: note.id,
             content: note.content,
             richTextContentData: nil,
-            modifiedAt: note.modifiedAt
+            modifiedAt: note.modifiedAt,
+            originDeviceID: "device-a"
         )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
         // Peer typed a typo and sent it before noticing.
@@ -708,12 +710,13 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
-        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt)
+        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt, originDeviceID: "device-a")
         conflictStore.saveNoteContentBaseline(
             noteID: note.id,
             content: note.content,
             richTextContentData: nil,
-            modifiedAt: note.modifiedAt
+            modifiedAt: note.modifiedAt,
+            originDeviceID: "device-a"
         )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
         let firstDelete = Note(title: "Shared title", content: "alpha beta gamma")
@@ -780,12 +783,13 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
-        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt)
+        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt, originDeviceID: "device-a")
         conflictStore.saveNoteContentBaseline(
             noteID: note.id,
             content: note.content,
             richTextContentData: nil,
-            modifiedAt: note.modifiedAt
+            modifiedAt: note.modifiedAt,
+            originDeviceID: "device-a"
         )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
         let deletion = Note(title: "Shared title", content: "alpha gamma")
@@ -848,12 +852,13 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
-        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt)
+        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt, originDeviceID: "device-a")
         conflictStore.saveNoteContentBaseline(
             noteID: note.id,
             content: note.content,
             richTextContentData: nil,
-            modifiedAt: note.modifiedAt
+            modifiedAt: note.modifiedAt,
+            originDeviceID: "device-a"
         )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
         let autocorrect = Note(title: "Shared title", content: "I went there")
@@ -912,12 +917,13 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
-        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt)
+        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt, originDeviceID: "device-a")
         conflictStore.saveNoteContentBaseline(
             noteID: note.id,
             content: note.content,
             richTextContentData: nil,
-            modifiedAt: note.modifiedAt
+            modifiedAt: note.modifiedAt,
+            originDeviceID: "device-a"
         )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
         let firstLine = Note(title: "Shared title", content: "Notes:\nitem1")
@@ -976,12 +982,13 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
-        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt)
+        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt, originDeviceID: "device-a")
         conflictStore.saveNoteContentBaseline(
             noteID: note.id,
             content: note.content,
             richTextContentData: nil,
-            modifiedAt: note.modifiedAt
+            modifiedAt: note.modifiedAt,
+            originDeviceID: "device-a"
         )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
         // This device makes a genuine local edit the peer does not know about yet.
@@ -1027,7 +1034,7 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
-        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt)
+        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt, originDeviceID: "device-a")
         conflictStore.saveNoteContentBaseline(
             noteID: note.id,
             content: note.content,
@@ -1195,12 +1202,13 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
-        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt)
+        conflictStore.saveNoteTitleBaseline(noteID: note.id, title: note.title, modifiedAt: note.modifiedAt, originDeviceID: "device-a")
         conflictStore.saveNoteContentBaseline(
             noteID: note.id,
             content: note.content,
             richTextContentData: note.richTextContentData,
-            modifiedAt: note.modifiedAt
+            modifiedAt: note.modifiedAt,
+            originDeviceID: "device-a"
         )
         let remoteNote = Note(title: "Mac title", content: "iPhone body")
         remoteNote.id = note.id
@@ -1700,6 +1708,32 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(payload.baseText, fixture.conflict.localText)
     }
 
+    func testRestoreConflictPreservesRichTextFormattingWithoutDefaultTextColor() throws {
+        let remoteText = "Version to Sync"
+        let incomingRichTextData = try makeConflictRichTextData(text: remoteText)
+        let fixture = try makeActiveNoteContentConflictFixture(
+            remoteText: remoteText,
+            remoteRichTextContentData: incomingRichTextData
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
+
+        fixture.vm.restoreSyncConflict(fixture.conflict)
+
+        let richTextData = try XCTUnwrap(fixture.note.richTextContentData)
+        let attributedText = try decodeRichTextData(richTextData)
+        XCTAssertEqual(attributedText.string, remoteText)
+        XCTAssertNil(attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        XCTAssertEqual(
+            attributedText.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int,
+            NSUnderlineStyle.single.rawValue
+        )
+        XCTAssertNotNil(attributedText.attribute(.font, at: 0, effectiveRange: nil))
+        XCTAssertEqual(
+            (attributedText.attribute(.foregroundColor, at: 8, effectiveRange: nil) as? UIColor)?.rgbaTestComponents,
+            UIColor.systemRed.rgbaTestComponents
+        )
+    }
+
     func testSaveMergedConflictUsesMergedTextAfterPostConflictTyping() throws {
         let fixture = try makeActiveNoteContentConflictFixture()
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
@@ -1973,6 +2007,71 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(conflictStore.activeConflicts().isEmpty)
     }
 
+    func testIncomingResolvedSyncConflictPreservesRichTextFormattingWithoutDefaultTextColor() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let resolvedText = "Version to Sync"
+        let note = Note(title: "Shared", content: "Local-only text")
+        note.id = UUID()
+        context.insert(note)
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: note.id,
+            noteID: note.id,
+            field: .noteContent,
+            localText: "Local-only text",
+            remoteText: resolvedText,
+            remoteRichTextContentData: try makeConflictRichTextData(text: resolvedText),
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 201),
+            expiresAt: Date(timeIntervalSince1970: 1_000)
+        )
+        _ = conflictStore.preserve(conflict)
+        let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+
+        _ = applier.apply(
+            [
+                SyncChange(
+                    entityType: .conflict,
+                    entityID: conflict.id.uuidString,
+                    operation: .upsert,
+                    payload: try MyRAMSyncPayloadCoding.encode(
+                        MyRAMSyncConflictPayload(
+                            action: .resolved,
+                            conflict: conflict,
+                            resolvedText: resolvedText,
+                            baseText: "Local-only text",
+                            updatedAt: Date(timeIntervalSince1970: 300)
+                        )
+                    ),
+                    updatedAt: Date(timeIntervalSince1970: 300),
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: note.id,
+            currentNoteID: note.id,
+            currentFolderID: nil
+        )
+
+        let richTextData = try XCTUnwrap(note.richTextContentData)
+        let attributedText = try decodeRichTextData(richTextData)
+        XCTAssertEqual(attributedText.string, resolvedText)
+        XCTAssertNil(attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        XCTAssertEqual(
+            attributedText.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int,
+            NSUnderlineStyle.single.rawValue
+        )
+        XCTAssertNotNil(attributedText.attribute(.font, at: 0, effectiveRange: nil))
+        XCTAssertEqual(
+            (attributedText.attribute(.foregroundColor, at: 8, effectiveRange: nil) as? UIColor)?.rgbaTestComponents,
+            UIColor.systemRed.rgbaTestComponents
+        )
+        XCTAssertTrue(conflictStore.activeConflicts().isEmpty)
+    }
+
     func testDiscardSyncConflictAdvancesLocalNoteTimestamp() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -2192,7 +2291,8 @@ final class MyRAMTests: XCTestCase {
         conflictStore.savePinnedTextBaseline(
             thoughtID: thought.id,
             text: "Mac pinned",
-            modifiedAt: thought.modifiedAt
+            modifiedAt: thought.modifiedAt,
+            originDeviceID: "device-a"
         )
         let remoteThought = PinnedThought(text: "iPhone pinned", order: 0, note: note)
         remoteThought.id = thought.id
@@ -3917,6 +4017,27 @@ final class MyRAMTests: XCTestCase {
         )
     }
 
+    private func makeConflictRichTextData(text: String) throws -> Data {
+        let attributedText = NSMutableAttributedString(string: text)
+        let fullRange = NSRange(location: 0, length: attributedText.length)
+        attributedText.addAttribute(.foregroundColor, value: UIColor.black, range: fullRange)
+        attributedText.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: fullRange)
+        attributedText.addAttribute(.font, value: UIFont.boldSystemFont(ofSize: 18), range: fullRange)
+
+        let redRange = (text as NSString).range(of: "to")
+        attributedText.addAttribute(.foregroundColor, value: UIColor.systemRed, range: redRange)
+
+        return try XCTUnwrap(RichTextContentCodec.encode(attributedText))
+    }
+
+    private func decodeRichTextData(_ data: Data) throws -> NSAttributedString {
+        try NSAttributedString(
+            data: data,
+            options: [.documentType: NSAttributedString.DocumentType.rtf],
+            documentAttributes: nil
+        )
+    }
+
     private func iso8601String(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
@@ -4021,4 +4142,15 @@ private func relativeLuminance(for color: UIColor) -> CGFloat {
     }
 
     return 0.2126 * adjusted(red) + 0.7152 * adjusted(green) + 0.0722 * adjusted(blue)
+}
+
+private extension UIColor {
+    var rgbaTestComponents: [CGFloat]? {
+        var red: CGFloat = 0
+        var green: CGFloat = 0
+        var blue: CGFloat = 0
+        var alpha: CGFloat = 0
+        guard getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return nil }
+        return [red, green, blue, alpha].map { ($0 * 1_000).rounded() / 1_000 }
+    }
 }

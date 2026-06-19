@@ -535,13 +535,14 @@ final class MyRAMSyncChangeApplier {
         remoteBaseData: Data?,
         originDeviceID: String
     ) -> Bool {
-        guard let baseline = conflictStore.remoteBaseline(entityType: entityType, entityID: entityID, field: field) else {
-            return remoteBaseText == nil && remoteBaseData == nil
-        }
-        if baseline.originDeviceID == originDeviceID {
-            return true
-        }
-        return remoteBaseText == baseline.text && remoteBaseData == baseline.richTextContentData
+        selectedBaseline(
+            entityType: entityType,
+            entityID: entityID,
+            field: field,
+            remoteBaseText: remoteBaseText,
+            remoteBaseData: remoteBaseData,
+            originDeviceID: originDeviceID
+        ).matchesIncomingBase
     }
 
     private func hasLocalTextDivergedFromRemoteBase(
@@ -554,17 +555,14 @@ final class MyRAMSyncChangeApplier {
         remoteBaseData: Data?,
         originDeviceID: String
     ) -> Bool {
-        let trackedBaseline = conflictStore.remoteBaseline(entityType: entityType, entityID: entityID, field: field)
-        let baseText: String?
-        let baseData: Data?
-        if trackedBaseline?.originDeviceID == originDeviceID {
-            baseText = trackedBaseline?.text
-            baseData = trackedBaseline?.richTextContentData
-        } else {
-            baseText = remoteBaseText ?? trackedBaseline?.text
-            baseData = remoteBaseData ?? trackedBaseline?.richTextContentData
-        }
-        return localText != baseText || localData != baseData
+        selectedBaseline(
+            entityType: entityType,
+            entityID: entityID,
+            field: field,
+            remoteBaseText: remoteBaseText,
+            remoteBaseData: remoteBaseData,
+            originDeviceID: originDeviceID
+        ).localHasDiverged(text: localText, data: localData)
     }
 
     private func remoteTextResolution(
@@ -579,28 +577,23 @@ final class MyRAMSyncChangeApplier {
         remoteData: Data?,
         originDeviceID: String
     ) -> RemoteTextResolution {
-        let trackedBaseline = conflictStore.remoteBaseline(entityType: entityType, entityID: entityID, field: field)
-        let baseText: String?
-        let baseData: Data?
-        if trackedBaseline?.originDeviceID == originDeviceID {
-            // Same-peer edit bursts can carry a pre-burst base until they are
-            // acknowledged. Use our applied same-peer baseline so local churn
-            // arrives as continuation, not a false conflict.
-            baseText = trackedBaseline?.text
-            baseData = trackedBaseline?.richTextContentData
-        } else {
-            baseText = remoteBaseText ?? trackedBaseline?.text
-            baseData = remoteBaseData ?? trackedBaseline?.richTextContentData
-        }
+        let baseline = selectedBaseline(
+            entityType: entityType,
+            entityID: entityID,
+            field: field,
+            remoteBaseText: remoteBaseText,
+            remoteBaseData: remoteBaseData,
+            originDeviceID: originDeviceID
+        )
 
-        if localData != baseData || remoteData != baseData {
-            if localText == baseText {
+        if localData != baseline.data || remoteData != baseline.data {
+            if localText == baseline.text {
                 return .apply(remoteText)
             }
             return .conflict
         }
 
-        switch SyncThreeWayTextMergePolicy.merge(base: baseText, local: localText, remote: remoteText) {
+        switch SyncThreeWayTextMergePolicy.merge(base: baseline.text, local: localText, remote: remoteText) {
         case .apply(let text), .merged(let text):
             return .apply(text)
         case .noOp:
@@ -608,6 +601,26 @@ final class MyRAMSyncChangeApplier {
         case .conflict:
             return .conflict
         }
+    }
+
+    private func selectedBaseline(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField,
+        remoteBaseText: String?,
+        remoteBaseData: Data?,
+        originDeviceID: String
+    ) -> SyncTextSelectedBaseline {
+        SyncTextBaselineSelector.select(
+            trackedBaseline: conflictStore.remoteBaseline(
+                entityType: entityType,
+                entityID: entityID,
+                field: field
+            )?.syncTextBaseline,
+            incomingBaseText: remoteBaseText,
+            incomingBaseData: remoteBaseData,
+            incomingOriginDeviceID: originDeviceID
+        )
     }
 
     private func canApplyRemoteText(
@@ -726,11 +739,10 @@ final class MyRAMSyncChangeApplier {
             let previousContent = note.content
             note.content = text
             if text == conflict.remoteText {
-                // A resolved conflict carries text as the durable decision.
-                // Do not restore the preserved remote RTF here: older conflict
-                // snapshots can contain Auto text captured as explicit black,
-                // which would make accepted text unreadable in dark mode.
-                note.richTextContentData = nil
+                note.richTextContentData = RichTextContentCodec.sanitizedConflictRichTextData(
+                    conflict.remoteRichTextContentData,
+                    plainText: conflict.remoteText
+                )
             } else if previousContent != text {
                 note.richTextContentData = nil
             }
@@ -758,7 +770,12 @@ final class MyRAMSyncChangeApplier {
         switch conflict.field {
         case .noteTitle:
             guard let note = fetchNote(withID: conflict.entityID) else { return }
-            conflictStore.saveNoteTitleBaseline(noteID: note.id, title: text, modifiedAt: note.modifiedAt)
+            conflictStore.saveNoteTitleBaseline(
+                noteID: note.id,
+                title: text,
+                modifiedAt: note.modifiedAt,
+                originDeviceID: nil
+            )
 
         case .noteContent:
             guard let note = fetchNote(withID: conflict.entityID) else { return }
@@ -766,7 +783,8 @@ final class MyRAMSyncChangeApplier {
                 noteID: note.id,
                 content: text,
                 richTextContentData: note.richTextContentData,
-                modifiedAt: note.modifiedAt
+                modifiedAt: note.modifiedAt,
+                originDeviceID: nil
             )
 
         case .folderTitle:
@@ -777,7 +795,8 @@ final class MyRAMSyncChangeApplier {
             conflictStore.savePinnedTextBaseline(
                 thoughtID: thought.id,
                 text: text,
-                modifiedAt: thought.modifiedAt
+                modifiedAt: thought.modifiedAt,
+                originDeviceID: nil
             )
         }
     }

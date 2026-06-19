@@ -4185,6 +4185,42 @@ enum RichTextContentCodec {
         return mutable
     }
 
+    static func sanitizedConflictRichTextData(_ richTextData: Data?, plainText: String) -> Data? {
+        guard let richTextData,
+              let attributedText = try? NSAttributedString(
+                data: richTextData,
+                options: [.documentType: NSAttributedString.DocumentType.rtf],
+                documentAttributes: nil
+              ),
+              attributedText.string == plainText else { return nil }
+        let mutable = NSMutableAttributedString(attributedString: attributedText)
+        let fullRange = NSRange(location: 0, length: mutable.length)
+        stripLegacyDefaultTextColors(from: mutable, range: fullRange)
+        return encode(mutable)
+    }
+
+    private static func stripLegacyDefaultTextColors(from attributedText: NSMutableAttributedString, range: NSRange) {
+        attributedText.enumerateAttribute(.foregroundColor, in: range) { value, range, _ in
+            guard let color = value as? UIColor,
+                  color.looksLikeLegacyDefaultTextColor else { return }
+            attributedText.removeAttribute(.foregroundColor, range: range)
+        }
+        stripLegacyDefaultDecorationColor(.underlineColor, from: attributedText, range: range)
+        stripLegacyDefaultDecorationColor(.strikethroughColor, from: attributedText, range: range)
+    }
+
+    private static func stripLegacyDefaultDecorationColor(
+        _ key: NSAttributedString.Key,
+        from attributedText: NSMutableAttributedString,
+        range: NSRange
+    ) {
+        attributedText.enumerateAttribute(key, in: range) { value, range, _ in
+            guard let color = value as? UIColor,
+                  color.looksLikeLegacyDefaultTextColor else { return }
+            attributedText.removeAttribute(key, range: range)
+        }
+    }
+
 }
 
 private extension UIColor {
@@ -4198,6 +4234,12 @@ private extension UIColor {
             && abs(lhs.green - rhs.green) <= 0.02
             && abs(lhs.blue - rhs.blue) <= 0.02
             && abs(lhs.alpha - rhs.alpha) <= 0.02
+    }
+
+    var looksLikeLegacyDefaultTextColor: Bool {
+        guard let components = rgbaComponents, components.alpha > 0.6 else { return false }
+        return components.saturation <= 0.08
+            && (components.luminance <= 0.42 || components.luminance >= 0.58)
     }
 
     private var rgbaComponents: RGBAComponents? {

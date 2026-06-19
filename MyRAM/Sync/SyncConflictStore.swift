@@ -64,6 +64,16 @@ struct SyncRemoteTextBaseline: Codable, Equatable {
     let originDeviceID: String?
 }
 
+extension SyncRemoteTextBaseline {
+    var syncTextBaseline: SyncTextTrackedBaseline {
+        SyncTextTrackedBaseline(
+            text: text,
+            data: richTextContentData,
+            originDeviceID: originDeviceID
+        )
+    }
+}
+
 final class SyncConflictStore {
     static let retention = SyncTextConflictPolicy.retention
 
@@ -146,7 +156,7 @@ final class SyncConflictStore {
         saveBaselines(baselines)
     }
 
-    func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date, originDeviceID: String? = nil) {
+    func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date, originDeviceID: String?) {
         saveRemoteBaseline(
             SyncRemoteTextBaseline(
                 entityType: .note,
@@ -165,7 +175,7 @@ final class SyncConflictStore {
         content: String,
         richTextContentData: Data?,
         modifiedAt: Date,
-        originDeviceID: String? = nil
+        originDeviceID: String?
     ) {
         saveRemoteBaseline(
             SyncRemoteTextBaseline(
@@ -180,7 +190,7 @@ final class SyncConflictStore {
         )
     }
 
-    func savePinnedTextBaseline(thoughtID: UUID, text: String, modifiedAt: Date, originDeviceID: String? = nil) {
+    func savePinnedTextBaseline(thoughtID: UUID, text: String, modifiedAt: Date, originDeviceID: String?) {
         saveRemoteBaseline(
             SyncRemoteTextBaseline(
                 entityType: .pinnedThought,
