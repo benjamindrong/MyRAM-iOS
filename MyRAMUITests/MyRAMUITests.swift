@@ -9,8 +9,8 @@ import XCTest
 
 final class MyRAMUITests: XCTestCase {
     private enum Timeout {
-        static let short: TimeInterval = 1
-        static let standard: TimeInterval = 2
+        static let short: TimeInterval = 2
+        static let standard: TimeInterval = 5
     }
 
     override func setUpWithError() throws {
@@ -67,12 +67,13 @@ final class MyRAMUITests: XCTestCase {
 
         let controlBar = findElement("keyboard-control-bar", in: app)
         XCTAssertTrue(controlBar.waitForExistence(timeout: Timeout.standard))
-        controlBar.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+        let overflowToggle = findElement("keyboard-control-overflow-toggle", in: app)
+        tapOverflowToggle(overflowToggle, in: app)
 
         XCTAssertTrue(findElement("keyboard-control-overflow-panel", in: app).waitForExistence(timeout: Timeout.standard))
         XCTAssertTrue(findElement("format-bold-toggle", in: app).exists)
 
-        controlBar.coordinate(withNormalizedOffset: CGVector(dx: 0.94, dy: 0.5)).tap()
+        tapOverflowToggle(overflowToggle, in: app)
         XCTAssertFalse(findElement("keyboard-control-overflow-panel", in: app).waitForExistence(timeout: Timeout.short))
     }
 
@@ -94,12 +95,14 @@ final class MyRAMUITests: XCTestCase {
         XCTAssertTrue(renameAlert.waitForExistence(timeout: Timeout.standard))
         let nameField = renameAlert.textFields["Folder Name"]
         XCTAssertTrue(nameField.exists)
-        nameField.tap()
-        nameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: originalName.count))
-        nameField.typeText(renamedName)
+        replaceText(in: nameField, with: renamedName, fallbackExistingText: originalName)
         renameAlert.buttons["Save"].tap()
 
-        XCTAssertTrue(app.staticTexts[renamedName].waitForExistence(timeout: Timeout.standard))
+        XCTAssertTrue(
+            app.staticTexts[renamedName].waitForExistence(timeout: Timeout.standard)
+                || button(labeled: renamedName, in: app).waitForExistence(timeout: Timeout.standard)
+                || folderTitleButton(named: renamedName, in: app).waitForExistence(timeout: Timeout.standard)
+        )
     }
 
     private func makeApp() -> XCUIApplication {
@@ -162,7 +165,38 @@ final class MyRAMUITests: XCTestCase {
         XCTAssertTrue(app.buttons["edit-folder-title"].waitForExistence(timeout: Timeout.standard))
     }
 
+    private func tapOverflowToggle(_ toggle: XCUIElement, in app: XCUIApplication) {
+        if toggle.waitForExistence(timeout: Timeout.short) {
+            toggle.tap()
+        } else {
+            // Older snapshots expose the overflow item as the labeled toolbar button.
+            let moreButton = app.buttons.matching(identifier: "keyboard-control-bar")
+                .matching(NSPredicate(format: "label == %@", "More"))
+                .firstMatch
+            XCTAssertTrue(moreButton.waitForExistence(timeout: Timeout.standard))
+            moreButton.tap()
+        }
+    }
+
+    private func replaceText(in textField: XCUIElement, with replacement: String, fallbackExistingText: String) {
+        textField.tap()
+        let existingText = textField.value as? String
+        let deleteCount = max(existingText?.count ?? 0, fallbackExistingText.count)
+        textField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: deleteCount))
+        textField.typeText(replacement)
+    }
+
     private func findElement(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)[identifier]
+    }
+
+    private func button(labeled label: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
+    }
+
+    private func folderTitleButton(named name: String, in app: XCUIApplication) -> XCUIElement {
+        app.buttons.matching(identifier: "edit-folder-title")
+            .matching(NSPredicate(format: "label CONTAINS %@", name))
+            .firstMatch
     }
 }

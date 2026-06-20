@@ -1205,6 +1205,7 @@ struct NoteEditorView: View {
                         .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
                 }
             }
+            .accessibilityElement(children: .contain)
             .accessibilityIdentifier("keyboard-control-bar")
     }
 
@@ -1496,6 +1497,7 @@ struct NoteEditorView: View {
             }
         }
         .frame(maxWidth: min(UIScreen.main.bounds.width * 0.9, 340))
+        .accessibilityElement(children: .contain)
         .accessibilityIdentifier("keyboard-control-overflow-panel")
     }
     
