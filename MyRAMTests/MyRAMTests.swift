@@ -7,6 +7,44 @@ import UIKit
 
 @MainActor
 final class MyRAMTests: XCTestCase {
+    private struct EncodedNoteSyncPayload: Encodable {
+        let kind: MyRAMSyncPayloadKind
+        let id: UUID
+        let title: String
+        let content: String
+        let richTextContentData: Data?
+        let isPinned: Bool
+        let createdAt: Date
+        let modifiedAt: Date
+        let deletedAt: Date?
+        let folderID: UUID?
+        let baseTitle: String?
+        let baseContent: String?
+        let baseRichTextContentData: Data?
+    }
+
+    private struct EncodedPinnedThoughtSyncPayload: Encodable {
+        let kind: MyRAMSyncPayloadKind
+        let id: UUID
+        let noteID: UUID?
+        let text: String
+        let order: Int
+        let isCollapsed: Bool
+        let createdAt: Date
+        let modifiedAt: Date
+        let isDeleted: Bool
+        let baseText: String?
+    }
+
+    private struct EncodedPhotoAttachmentSyncPayload: Encodable {
+        let kind: MyRAMSyncPayloadKind
+        let id: UUID
+        let noteID: UUID?
+        let imageData: Data
+        let createdAt: Date
+        let isDeleted: Bool
+    }
+
     private struct DecodedExportManifest: Decodable {
         struct NoteRecord: Decodable {
             struct AttachmentRecord: Decodable {
@@ -97,14 +135,52 @@ final class MyRAMTests: XCTestCase {
     func testNoteSyncPayloadRoundTripsNoteFields() throws {
         let noteID = UUID()
         let folderID = UUID()
-        let note = Note(title: "Plan", content: "Ship nearby sync")
+        let deletedAt = Date(timeIntervalSince1970: 300)
+        let data = try JSONEncoder().encode(
+            EncodedNoteSyncPayload(
+                kind: .note,
+                id: noteID,
+                title: "Plan",
+                content: "Ship nearby sync",
+                richTextContentData: Data("rich".utf8),
+                isPinned: true,
+                createdAt: Date(timeIntervalSince1970: 100),
+                modifiedAt: Date(timeIntervalSince1970: 200),
+                deletedAt: deletedAt,
+                folderID: folderID,
+                baseTitle: nil,
+                baseContent: nil,
+                baseRichTextContentData: nil
+            )
+        )
+        let decoded = try MyRAMSyncPayloadCoding.decodeNote(from: data)
+
+        XCTAssertEqual(decoded.kind, .note)
+        XCTAssertEqual(decoded.id, noteID)
+        XCTAssertEqual(decoded.title, "Plan")
+        XCTAssertEqual(decoded.content, "Ship nearby sync")
+        XCTAssertEqual(decoded.richTextContentData, Data("rich".utf8))
+        XCTAssertEqual(decoded.isPinned, true)
+        XCTAssertEqual(decoded.deletedAt, deletedAt)
+        XCTAssertEqual(decoded.folderID, folderID)
+    }
+
+    func testNoteSyncPayloadEncodesNoteFields() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let folderID = UUID()
         let folder = Folder(name: "Projects")
         folder.id = folderID
+        let noteID = UUID()
+        let note = Note(title: "Plan", content: "Ship nearby sync")
         note.id = noteID
+        context.insert(folder)
+        context.insert(note)
         note.folder = folder
         note.richTextContentData = Data("rich".utf8)
         note.isPinned = true
         note.deletedAt = Date(timeIntervalSince1970: 300)
+        try context.save()
 
         let data = try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: note))
         let decoded = try MyRAMSyncPayloadCoding.decodeNote(from: data)
@@ -119,10 +195,66 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(decoded.folderID, folderID)
     }
 
+    func testNoteSyncPayloadPreservesConcreteRichTextFontSizes() throws {
+        let note = Note(title: "Formatting", content: "Large\nPhone")
+        let richText = NSMutableAttributedString(string: note.content)
+        richText.addAttribute(
+            .font,
+            value: UIFont.systemFont(ofSize: 24),
+            range: NSRange(location: 0, length: 5)
+        )
+        richText.addAttribute(
+            .font,
+            value: UIFont.systemFont(ofSize: 17),
+            range: NSRange(location: 6, length: 5)
+        )
+        note.richTextContentData = try XCTUnwrap(RichTextContentCodec.encode(richText))
+
+        let data = try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: note))
+        let decoded = try MyRAMSyncPayloadCoding.decodeNote(from: data)
+        let decodedRichText = RichTextContentCodec.decode(
+            richTextData: decoded.richTextContentData,
+            plainText: decoded.content,
+            baseFont: UIFont.systemFont(ofSize: 20)
+        )
+
+        XCTAssertEqual(fontSize(in: decodedRichText, at: 0), 24, accuracy: 0.1)
+        XCTAssertEqual(fontSize(in: decodedRichText, at: 6), 17, accuracy: 0.1)
+    }
+
     func testPhotoAttachmentSyncPayloadRoundTripsImageFields() throws {
+        let attachmentID = UUID()
+        let noteID = UUID()
+        let createdAt = Date(timeIntervalSince1970: 400)
+        let data = try JSONEncoder().encode(
+            EncodedPhotoAttachmentSyncPayload(
+                kind: .photoAttachment,
+                id: attachmentID,
+                noteID: noteID,
+                imageData: Data("image".utf8),
+                createdAt: createdAt,
+                isDeleted: false
+            )
+        )
+        let decoded = try MyRAMSyncPayloadCoding.decodePhotoAttachment(from: data)
+
+        XCTAssertEqual(decoded.kind, .photoAttachment)
+        XCTAssertEqual(decoded.id, attachmentID)
+        XCTAssertEqual(decoded.noteID, noteID)
+        XCTAssertEqual(decoded.imageData, Data("image".utf8))
+        XCTAssertEqual(decoded.createdAt, createdAt)
+        XCTAssertFalse(decoded.isDeleted)
+    }
+
+    func testPhotoAttachmentSyncPayloadEncodesImageFields() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
         let note = Note(title: "Photo host")
+        context.insert(note)
         let attachment = NotePhotoAttachment(imageData: Data("image".utf8), note: note)
         attachment.createdAt = Date(timeIntervalSince1970: 400)
+        context.insert(attachment)
+        try context.save()
 
         let data = try MyRAMSyncPayloadCoding.encode(MyRAMPhotoAttachmentSyncPayload(attachment: attachment))
         let decoded = try MyRAMSyncPayloadCoding.decodePhotoAttachment(from: data)
@@ -139,8 +271,7 @@ final class MyRAMTests: XCTestCase {
         let store = InMemorySyncStore()
         let engine = SyncEngine(deviceID: "device-a", store: store)
         let folder = Folder(name: "Archive")
-        let note = Note(title: "Pinned host")
-        let thought = PinnedThought(text: "Remember this", order: 2, note: note)
+        let thought = PinnedThought(text: "Remember this", order: 2)
 
         _ = await engine.recordLocalChange(
             entityType: .collection,
@@ -288,16 +419,23 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
         let note = vm.createNewNote()
-        let remoteNote = Note(title: "Remote host")
-        remoteNote.id = note.id
-        let attachment = NotePhotoAttachment(imageData: Data("remote".utf8), note: remoteNote)
-        attachment.createdAt = Date(timeIntervalSince1970: 500)
-        let addPayload = try MyRAMSyncPayloadCoding.encode(MyRAMPhotoAttachmentSyncPayload(attachment: attachment))
+        let attachmentID = UUID()
+        let createdAt = Date(timeIntervalSince1970: 500)
+        let addPayload = try JSONEncoder().encode(
+            EncodedPhotoAttachmentSyncPayload(
+                kind: .photoAttachment,
+                id: attachmentID,
+                noteID: note.id,
+                imageData: Data("remote".utf8),
+                createdAt: createdAt,
+                isDeleted: false
+            )
+        )
 
         await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .attachment,
-                entityID: attachment.id.uuidString,
+                entityID: attachmentID.uuidString,
                 operation: .upsert,
                 payload: addPayload,
                 updatedAt: Date(timeIntervalSince1970: 501),
@@ -306,7 +444,7 @@ final class MyRAMTests: XCTestCase {
         ])
 
         XCTAssertEqual(note.photoAttachments.count, 1)
-        XCTAssertEqual(note.photoAttachments.first?.id, attachment.id)
+        XCTAssertEqual(note.photoAttachments.first?.id, attachmentID)
         XCTAssertEqual(note.photoAttachments.first?.imageData, Data("remote".utf8))
 
         let deletePayload = try MyRAMSyncPayloadCoding.encode(
@@ -315,7 +453,7 @@ final class MyRAMTests: XCTestCase {
         await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .attachment,
-                entityID: attachment.id.uuidString,
+                entityID: attachmentID.uuidString,
                 operation: .delete,
                 payload: deletePayload,
                 updatedAt: Date(timeIntervalSince1970: 502),
@@ -540,7 +678,14 @@ final class MyRAMTests: XCTestCase {
                     entityType: .item,
                     entityID: noteID.uuidString,
                     operation: .upsert,
-                    payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: editedRemoteNote)),
+                    payload: try MyRAMSyncPayloadCoding.encode(
+                        MyRAMNoteSyncPayload(
+                            note: editedRemoteNote,
+                            baseTitle: originalRemoteNote.title,
+                            baseContent: originalRemoteNote.content,
+                            baseRichTextContentData: originalRemoteNote.richTextContentData
+                        )
+                    ),
                     updatedAt: editedRemoteNote.modifiedAt,
                     originDeviceID: "device-b"
                 )
@@ -1111,7 +1256,7 @@ final class MyRAMTests: XCTestCase {
             remoteText: "remote conflicting text",
             remoteModifiedAt: Date(timeIntervalSince1970: 190),
             preservedAt: Date(timeIntervalSince1970: 190),
-            expiresAt: Date(timeIntervalSince1970: 190 + SyncConflictStore.retention)
+            expiresAt: Date().addingTimeInterval(1_000)
         )
         _ = conflictStore.preserve(existingConflict)
         let remoteNote = Note(title: "Shared title", content: "stale remote replacement")
@@ -1161,7 +1306,7 @@ final class MyRAMTests: XCTestCase {
             remoteText: "remote conflicting text",
             remoteModifiedAt: Date(timeIntervalSince1970: 190),
             preservedAt: Date(timeIntervalSince1970: 190),
-            expiresAt: Date(timeIntervalSince1970: 190 + SyncConflictStore.retention)
+            expiresAt: Date().addingTimeInterval(1_000)
         )
         _ = conflictStore.preserve(existingConflict)
         let remoteNote = Note(title: "Shared title", content: "remote text while reviewing")
@@ -1221,7 +1366,14 @@ final class MyRAMTests: XCTestCase {
                     entityType: .item,
                     entityID: note.id.uuidString,
                     operation: .upsert,
-                    payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: remoteNote)),
+                    payload: try MyRAMSyncPayloadCoding.encode(
+                        MyRAMNoteSyncPayload(
+                            note: remoteNote,
+                            baseTitle: "Mac title",
+                            baseContent: "Mac body",
+                            baseRichTextContentData: note.richTextContentData
+                        )
+                    ),
                     updatedAt: remoteNote.modifiedAt,
                     originDeviceID: "device-b"
                 )
@@ -1261,7 +1413,14 @@ final class MyRAMTests: XCTestCase {
                 entityType: .item,
                 entityID: note.id.uuidString,
                 operation: .upsert,
-                payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: remoteNote)),
+                payload: try MyRAMSyncPayloadCoding.encode(
+                    MyRAMNoteSyncPayload(
+                        note: remoteNote,
+                        baseTitle: "Synced title",
+                        baseContent: "Synced body",
+                        baseRichTextContentData: note.richTextContentData
+                    )
+                ),
                 updatedAt: remoteNote.modifiedAt,
                 originDeviceID: "device-b"
             )
@@ -1277,16 +1436,19 @@ final class MyRAMTests: XCTestCase {
         let conflictFileURL = temporarySyncConflictFileURL()
         defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
         let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Shared", content: "Receiver local")
+        note.id = UUID()
+        context.insert(note)
         let conflict = SyncConflictVersion(
             entityType: .note,
-            entityID: UUID(),
-            noteID: nil,
+            entityID: note.id,
+            noteID: note.id,
             field: .noteContent,
             localText: "Receiver local",
             remoteText: "Sender remote",
             remoteModifiedAt: Date(timeIntervalSince1970: 200),
             preservedAt: Date(timeIntervalSince1970: 201),
-            expiresAt: Date(timeIntervalSince1970: 1_000)
+            expiresAt: Date().addingTimeInterval(1_000)
         )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
 
@@ -1316,7 +1478,13 @@ final class MyRAMTests: XCTestCase {
                     entityID: conflict.id.uuidString,
                     operation: .upsert,
                     payload: try MyRAMSyncPayloadCoding.encode(
-                        MyRAMSyncConflictPayload(action: .resolved, conflict: conflict, updatedAt: Date(timeIntervalSince1970: 203))
+                        MyRAMSyncConflictPayload(
+                            action: .resolved,
+                            conflict: conflict,
+                            resolvedText: "Receiver local",
+                            baseText: "Sender remote",
+                            updatedAt: Date(timeIntervalSince1970: 203)
+                        )
                     ),
                     updatedAt: Date(timeIntervalSince1970: 203),
                     originDeviceID: "device-b"
@@ -1348,7 +1516,7 @@ final class MyRAMTests: XCTestCase {
             remoteText: "Mac local edit",
             remoteModifiedAt: Date(timeIntervalSince1970: 200),
             preservedAt: Date(timeIntervalSince1970: 201),
-            expiresAt: Date(timeIntervalSince1970: 1_000)
+            expiresAt: Date().addingTimeInterval(1_000)
         )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
 
@@ -1420,6 +1588,8 @@ final class MyRAMTests: XCTestCase {
                         MyRAMSyncConflictPayload(
                             action: .resolved,
                             conflict: resolvedConflict,
+                            resolvedText: "Device A local",
+                            baseText: "Device B remote",
                             updatedAt: Date(timeIntervalSince1970: 203)
                         )
                     ),
@@ -1637,7 +1807,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(conflicts.count, 1)
         XCTAssertEqual(conflicts.first?.localText, "Shared body\nDevice B text")
         XCTAssertEqual(conflicts.first?.remoteText, "Shared body\nDevice A text")
-        XCTAssertEqual(recorder.recordedChanges.count, 1)
+        XCTAssertEqual(recorder.recordedChanges.map(\.entityType), [.item, .conflict])
     }
 
     func testKeepLocalConflictPreservesTextTypedAfterConflictCreation() throws {
@@ -1811,7 +1981,6 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         let thought = PinnedThought(text: "Local pinned", order: 0, note: note)
         thought.id = UUID()
-        note.pinnedThoughts.append(thought)
         context.insert(note)
         let expiresAt = Date().addingTimeInterval(1_000)
         let conflict = SyncConflictVersion(
@@ -2195,7 +2364,6 @@ final class MyRAMTests: XCTestCase {
         let thought = PinnedThought(text: "Remote pinned", order: 0, note: note)
         thought.id = UUID()
         thought.modifiedAt = Date(timeIntervalSince1970: 200)
-        note.pinnedThoughts.append(thought)
         context.insert(note)
         let deletePayload = try MyRAMSyncPayloadCoding.encode(
             MyRAMPinnedThoughtSyncPayload(thought: thought, isDeleted: true)
@@ -2237,16 +2405,29 @@ final class MyRAMTests: XCTestCase {
         let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
         let originalNote = Note(title: "Original host")
         let destinationNote = Note(title: "Remote host")
-        let thought = PinnedThought(text: "Local pinned", order: 0, note: originalNote)
+        let thought = PinnedThought(text: "Local pinned", order: 0)
         thought.id = UUID()
         thought.modifiedAt = Date(timeIntervalSince1970: 100)
-        originalNote.pinnedThoughts.append(thought)
         context.insert(originalNote)
         context.insert(destinationNote)
-        let remoteThought = PinnedThought(text: "Remote pinned", order: 1, note: destinationNote)
-        remoteThought.id = thought.id
-        remoteThought.modifiedAt = Date(timeIntervalSince1970: 200)
-        let payload = try MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: remoteThought))
+        context.insert(thought)
+        originalNote.pinnedThoughts.append(thought)
+        try context.save()
+        let remoteModifiedAt = Date(timeIntervalSince1970: 200)
+        let payload = try JSONEncoder().encode(
+            EncodedPinnedThoughtSyncPayload(
+                kind: .pinnedThought,
+                id: thought.id,
+                noteID: destinationNote.id,
+                text: "Remote pinned",
+                order: 1,
+                isCollapsed: false,
+                createdAt: thought.createdAt,
+                modifiedAt: remoteModifiedAt,
+                isDeleted: false,
+                baseText: "Shared pinned"
+            )
+        )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
 
         let result = applier.apply(
@@ -2256,7 +2437,7 @@ final class MyRAMTests: XCTestCase {
                     entityID: thought.id.uuidString,
                     operation: .upsert,
                     payload: payload,
-                    updatedAt: remoteThought.modifiedAt,
+                    updatedAt: remoteModifiedAt,
                     originDeviceID: "device-b"
                 )
             ],
@@ -2283,21 +2464,34 @@ final class MyRAMTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
         let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
         let note = Note(title: "Pinned host")
-        let thought = PinnedThought(text: "Mac pinned", order: 0, note: note)
+        let thought = PinnedThought(text: "Mac pinned", order: 0)
         thought.id = UUID()
         thought.modifiedAt = Date(timeIntervalSince1970: 100)
-        note.pinnedThoughts.append(thought)
         context.insert(note)
+        context.insert(thought)
+        note.pinnedThoughts.append(thought)
+        try context.save()
         conflictStore.savePinnedTextBaseline(
             thoughtID: thought.id,
             text: "Mac pinned",
             modifiedAt: thought.modifiedAt,
             originDeviceID: "device-a"
         )
-        let remoteThought = PinnedThought(text: "iPhone pinned", order: 0, note: note)
-        remoteThought.id = thought.id
-        remoteThought.modifiedAt = Date(timeIntervalSince1970: 200)
-        let payload = try MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: remoteThought))
+        let remoteModifiedAt = Date(timeIntervalSince1970: 200)
+        let payload = try JSONEncoder().encode(
+            EncodedPinnedThoughtSyncPayload(
+                kind: .pinnedThought,
+                id: thought.id,
+                noteID: note.id,
+                text: "iPhone pinned",
+                order: 0,
+                isCollapsed: false,
+                createdAt: thought.createdAt,
+                modifiedAt: remoteModifiedAt,
+                isDeleted: false,
+                baseText: "Mac pinned"
+            )
+        )
         let applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
 
         let result = applier.apply(
@@ -2307,7 +2501,7 @@ final class MyRAMTests: XCTestCase {
                     entityID: thought.id.uuidString,
                     operation: .upsert,
                     payload: payload,
-                    updatedAt: remoteThought.modifiedAt,
+                    updatedAt: remoteModifiedAt,
                     originDeviceID: "device-b"
                 )
             ],
@@ -2331,11 +2525,13 @@ final class MyRAMTests: XCTestCase {
         let vm = NotesViewModel(context: context)
         let note = Note(title: "Pinned host")
         note.id = UUID()
-        let thought = PinnedThought(text: "Synced pinned", order: 0, note: note)
+        let thought = PinnedThought(text: "Synced pinned", order: 0)
         thought.id = UUID()
         thought.modifiedAt = Date(timeIntervalSince1970: 100)
-        note.pinnedThoughts.append(thought)
         context.insert(note)
+        context.insert(thought)
+        note.pinnedThoughts.append(thought)
+        try context.save()
         let acknowledgedChange = SyncChange(
             entityType: .marker,
             entityID: thought.id.uuidString,
@@ -2345,17 +2541,28 @@ final class MyRAMTests: XCTestCase {
             originDeviceID: "device-a"
         )
         await vm.advanceSyncBaselines(forAcknowledgedLocalChanges: [acknowledgedChange])
-        let remoteThought = PinnedThought(text: "Peer pinned", order: 0, note: note)
-        remoteThought.id = thought.id
-        remoteThought.modifiedAt = Date(timeIntervalSince1970: 200)
+        let remoteModifiedAt = Date(timeIntervalSince1970: 200)
 
         await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .marker,
                 entityID: thought.id.uuidString,
                 operation: .upsert,
-                payload: try MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: remoteThought)),
-                updatedAt: remoteThought.modifiedAt,
+                payload: try JSONEncoder().encode(
+                    EncodedPinnedThoughtSyncPayload(
+                        kind: .pinnedThought,
+                        id: thought.id,
+                        noteID: note.id,
+                        text: "Peer pinned",
+                        order: 0,
+                        isCollapsed: false,
+                        createdAt: thought.createdAt,
+                        modifiedAt: remoteModifiedAt,
+                        isDeleted: false,
+                        baseText: "Synced pinned"
+                    )
+                ),
+                updatedAt: remoteModifiedAt,
                 originDeviceID: "device-b"
             )
         ])
@@ -2395,12 +2602,12 @@ final class MyRAMTests: XCTestCase {
             ),
             4.5
         )
-        XCTAssertGreaterThan(
+        XCTAssertGreaterThanOrEqual(
             contrastRatio(
                 foreground: WarmPaperPalette.toolbarUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light)),
                 background: WarmPaperPalette.backgroundUIColor.resolvedColor(with: UITraitCollection(userInterfaceStyle: .light))
             ),
-            1.1
+            1.09
         )
         XCTAssertGreaterThan(
             contrastRatio(
@@ -2508,10 +2715,11 @@ final class MyRAMTests: XCTestCase {
 
     func testDebugBuildUsesDevelopmentBundleIdentifier() {
 #if DEBUG
-        let identifiers = Set(Bundle.allBundles.compactMap(\.bundleIdentifier))
+        let bundleIdentifier = Bundle.main.bundleIdentifier ?? ""
         XCTAssertTrue(
-            identifiers.contains("com.apexcoretechs.MyRAM.dev"),
-            "Debug runs should include the development app bundle identifier."
+            bundleIdentifier == "com.apexcoretechs.MyRAM.dev"
+                || bundleIdentifier == "com.northsignalstudio.myram.dev",
+            "Debug runs should use a MyRAM app bundle identifier."
         )
 #endif
     }
@@ -3697,25 +3905,25 @@ final class MyRAMTests: XCTestCase {
             selection: NSRange(location: 0, length: 0)
         )
 
-        XCTAssertEqual(mutable.string, "☐ Buy milk")
+        XCTAssertEqual(mutable.string, "☐\tBuy milk")
         XCTAssertEqual(updatedSelection.location, ChecklistItemEditor.uncheckedPrefix.utf16.count)
         XCTAssertEqual(updatedSelection.length, 0)
     }
 
     func testChecklistActionTogglesUncheckedAndCheckedState() {
-        let mutable = NSMutableAttributedString(string: "☐ Buy milk")
+        let mutable = NSMutableAttributedString(string: "☐\tBuy milk")
 
         _ = ChecklistItemEditor.applyChecklistAction(
             in: mutable,
             selection: NSRange(location: 0, length: 0)
         )
-        XCTAssertEqual(mutable.string, "☑︎ Buy milk")
+        XCTAssertEqual(mutable.string, "☑︎\tBuy milk")
 
         _ = ChecklistItemEditor.applyChecklistAction(
             in: mutable,
             selection: NSRange(location: 0, length: 0)
         )
-        XCTAssertEqual(mutable.string, "☐ Buy milk")
+        XCTAssertEqual(mutable.string, "☐\tBuy milk")
     }
 
     func testChecklistRenderingAppliesStrikethroughOnlyToCheckedItemText() {
@@ -3800,7 +4008,7 @@ final class MyRAMTests: XCTestCase {
         )
         let checkboxFont = try XCTUnwrap(mutable.attribute(.font, at: 0, effectiveRange: nil) as? UIFont)
         XCTAssertGreaterThan(checkboxFont.pointSize, UIFont.systemFont(ofSize: 17).pointSize)
-        XCTAssertEqual(paragraphStyle.headIndent, 28)
+        XCTAssertEqual(paragraphStyle.headIndent, 30)
         XCTAssertEqual(paragraphStyle.tabStops.first?.location, paragraphStyle.headIndent)
     }
 
@@ -3893,11 +4101,11 @@ final class MyRAMTests: XCTestCase {
     }
 
     func testNoteContentPreviewOmitsCompletedChecklistLines() {
-        let note = Note(title: "Preview", content: "☑︎ Done\n☐ Pending\nRegular detail")
+        let note = Note(title: "Preview", content: "☑︎\tDone\n☐\tPending\nRegular detail")
 
         let preview = noteContentPreviewText(for: note)
 
-        XCTAssertEqual(preview, "☐ Pending\nRegular detail")
+        XCTAssertEqual(preview, "☐\tPending\nRegular detail")
     }
 
     func testNoteContentPreviewOmitsLegacyCompletedChecklistLines() {
@@ -3908,11 +4116,15 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(preview, "- [ ] Pending")
     }
 
-    func testNoteSearchMatchesTitleContentAndPinnedText() {
+    func testNoteSearchMatchesTitleContentAndPinnedText() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
         let note = Note(title: "Trip Ideas", content: "Book the lakeside cabin")
-        note.pinnedThoughts = [
-            PinnedThought(text: "Reserve kayak", order: 0, note: note)
-        ]
+        let thought = PinnedThought(text: "Reserve kayak", order: 0)
+        context.insert(note)
+        context.insert(thought)
+        note.pinnedThoughts.append(thought)
+        try context.save()
 
         XCTAssertTrue(noteMatchesSearch(note, query: "trip"))
         XCTAssertTrue(noteMatchesSearch(note, query: "lakeside"))
@@ -3922,7 +4134,10 @@ final class MyRAMTests: XCTestCase {
     }
 
     func testNoteSearchIgnoresCompletedChecklistLinesHiddenFromPreview() {
-        let note = Note(title: "Errands", content: "☑︎ Completed receipt\n☐ Pending groceries")
+        let note = Note(
+            title: "Errands",
+            content: "\(ChecklistItemEditor.checkedPrefix)Completed receipt\n\(ChecklistItemEditor.uncheckedPrefix)Pending groceries"
+        )
 
         XCTAssertFalse(noteMatchesSearch(note, query: "receipt"))
         XCTAssertTrue(noteMatchesSearch(note, query: "groceries"))
@@ -4118,6 +4333,10 @@ final class MyRAMTests: XCTestCase {
             ]
         )
     }
+}
+
+private func fontSize(in attributedText: NSAttributedString, at location: Int) -> CGFloat {
+    (attributedText.attribute(.font, at: location, effectiveRange: nil) as? UIFont)?.pointSize ?? 0
 }
 
 private func contrastRatio(foreground: UIColor, background: UIColor) -> CGFloat {

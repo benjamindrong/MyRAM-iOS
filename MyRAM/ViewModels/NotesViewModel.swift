@@ -311,7 +311,9 @@ final class NotesViewModel: ObservableObject {
             note.modifiedAt = deletedAt
         }
 
-        context.delete(folder)
+        for folderToDelete in subtreeFolders.sorted(by: { depth(for: $0) > depth(for: $1) }) {
+            context.delete(folderToDelete)
+        }
         try? context.save()
         for noteMove in folderSnapshot.noteMoves {
             guard let note = fetchNote(withID: noteMove.noteID) else { continue }
