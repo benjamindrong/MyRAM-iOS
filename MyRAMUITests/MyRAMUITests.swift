@@ -17,9 +17,6 @@ final class MyRAMUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    override func tearDownWithError() throws {
-    }
-
     func testNewNoteOpensWithoutAttachments() throws {
         let app = makeApp()
         app.launch()
@@ -98,11 +95,10 @@ final class MyRAMUITests: XCTestCase {
         replaceText(in: nameField, with: renamedName, fallbackExistingText: originalName)
         renameAlert.buttons["Save"].tap()
 
-        XCTAssertTrue(
-            app.staticTexts[renamedName].waitForExistence(timeout: Timeout.standard)
-                || button(labeled: renamedName, in: app).waitForExistence(timeout: Timeout.standard)
-                || folderTitleButton(named: renamedName, in: app).waitForExistence(timeout: Timeout.standard)
-        )
+        // After a rename we're still on the folder-detail screen, where the title
+        // is the "edit-folder-title" button (confirmed by openFolder's own check
+        // above) — not a static text, so only this locator can ever match here.
+        XCTAssertTrue(folderTitleButton(named: renamedName, in: app).waitForExistence(timeout: Timeout.standard))
     }
 
     private func makeApp() -> XCUIApplication {
@@ -180,10 +176,6 @@ final class MyRAMUITests: XCTestCase {
 
     private func findElement(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)[identifier]
-    }
-
-    private func button(labeled label: String, in app: XCUIApplication) -> XCUIElement {
-        app.buttons.matching(NSPredicate(format: "label == %@", label)).firstMatch
     }
 
     private func folderTitleButton(named name: String, in app: XCUIApplication) -> XCUIElement {
