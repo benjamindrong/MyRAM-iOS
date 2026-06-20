@@ -68,12 +68,12 @@ final class MyRAMUITests: XCTestCase {
         let controlBar = findElement("keyboard-control-bar", in: app)
         XCTAssertTrue(controlBar.waitForExistence(timeout: Timeout.standard))
         let overflowToggle = findElement("keyboard-control-overflow-toggle", in: app)
-        tapOverflowToggle(overflowToggle, in: app)
+        tapOverflowToggle(overflowToggle)
 
         XCTAssertTrue(findElement("keyboard-control-overflow-panel", in: app).waitForExistence(timeout: Timeout.standard))
         XCTAssertTrue(findElement("format-bold-toggle", in: app).exists)
 
-        tapOverflowToggle(overflowToggle, in: app)
+        tapOverflowToggle(overflowToggle)
         XCTAssertFalse(findElement("keyboard-control-overflow-panel", in: app).waitForExistence(timeout: Timeout.short))
     }
 
@@ -165,17 +165,9 @@ final class MyRAMUITests: XCTestCase {
         XCTAssertTrue(app.buttons["edit-folder-title"].waitForExistence(timeout: Timeout.standard))
     }
 
-    private func tapOverflowToggle(_ toggle: XCUIElement, in app: XCUIApplication) {
-        if toggle.waitForExistence(timeout: Timeout.short) {
-            toggle.tap()
-        } else {
-            // Older snapshots expose the overflow item as the labeled toolbar button.
-            let moreButton = app.buttons.matching(identifier: "keyboard-control-bar")
-                .matching(NSPredicate(format: "label == %@", "More"))
-                .firstMatch
-            XCTAssertTrue(moreButton.waitForExistence(timeout: Timeout.standard))
-            moreButton.tap()
-        }
+    private func tapOverflowToggle(_ toggle: XCUIElement) {
+        XCTAssertTrue(toggle.waitForExistence(timeout: Timeout.short), "keyboard-control-overflow-toggle not found")
+        toggle.tap()
     }
 
     private func replaceText(in textField: XCUIElement, with replacement: String, fallbackExistingText: String) {

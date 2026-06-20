@@ -165,6 +165,36 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(decoded.folderID, folderID)
     }
 
+    func testNoteSyncPayloadEncodesNoteFields() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let folderID = UUID()
+        let folder = Folder(name: "Projects")
+        folder.id = folderID
+        let noteID = UUID()
+        let note = Note(title: "Plan", content: "Ship nearby sync")
+        note.id = noteID
+        context.insert(folder)
+        context.insert(note)
+        note.folder = folder
+        note.richTextContentData = Data("rich".utf8)
+        note.isPinned = true
+        note.deletedAt = Date(timeIntervalSince1970: 300)
+        try context.save()
+
+        let data = try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: note))
+        let decoded = try MyRAMSyncPayloadCoding.decodeNote(from: data)
+
+        XCTAssertEqual(decoded.kind, .note)
+        XCTAssertEqual(decoded.id, noteID)
+        XCTAssertEqual(decoded.title, "Plan")
+        XCTAssertEqual(decoded.content, "Ship nearby sync")
+        XCTAssertEqual(decoded.richTextContentData, Data("rich".utf8))
+        XCTAssertEqual(decoded.isPinned, true)
+        XCTAssertEqual(decoded.deletedAt, note.deletedAt)
+        XCTAssertEqual(decoded.folderID, folderID)
+    }
+
     func testNoteSyncPayloadPreservesConcreteRichTextFontSizes() throws {
         let note = Note(title: "Formatting", content: "Large\nPhone")
         let richText = NSMutableAttributedString(string: note.content)
@@ -213,6 +243,27 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(decoded.noteID, noteID)
         XCTAssertEqual(decoded.imageData, Data("image".utf8))
         XCTAssertEqual(decoded.createdAt, createdAt)
+        XCTAssertFalse(decoded.isDeleted)
+    }
+
+    func testPhotoAttachmentSyncPayloadEncodesImageFields() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let note = Note(title: "Photo host")
+        context.insert(note)
+        let attachment = NotePhotoAttachment(imageData: Data("image".utf8), note: note)
+        attachment.createdAt = Date(timeIntervalSince1970: 400)
+        context.insert(attachment)
+        try context.save()
+
+        let data = try MyRAMSyncPayloadCoding.encode(MyRAMPhotoAttachmentSyncPayload(attachment: attachment))
+        let decoded = try MyRAMSyncPayloadCoding.decodePhotoAttachment(from: data)
+
+        XCTAssertEqual(decoded.kind, .photoAttachment)
+        XCTAssertEqual(decoded.id, attachment.id)
+        XCTAssertEqual(decoded.noteID, note.id)
+        XCTAssertEqual(decoded.imageData, Data("image".utf8))
+        XCTAssertEqual(decoded.createdAt, attachment.createdAt)
         XCTAssertFalse(decoded.isDeleted)
     }
 
