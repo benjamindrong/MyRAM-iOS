@@ -2891,6 +2891,25 @@ final class MyRAMTests: XCTestCase {
         XCTAssertFalse(visibleNoteIDs.contains(unpinnedWorkNote.id))
     }
 
+    func testCurrentFolderListItemsOrdersPinnedNotesFoldersThenRegularNotes() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+
+        let regularRootNote = vm.createNewNote()
+        let pinnedRootNote = vm.createNewNote()
+        vm.setNotePinned(pinnedRootNote, isPinned: true)
+        vm.createFolder(named: "Work")
+        let workFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Work" }))
+
+        let listItemIDs = vm.currentFolderListItems().map(\.id)
+
+        XCTAssertEqual(listItemIDs, [
+            "note-\(pinnedRootNote.id.uuidString)",
+            "folder-\(workFolder.id.uuidString)",
+            "note-\(regularRootNote.id.uuidString)"
+        ])
+    }
+
     func testActiveNoteCountInFolderExcludesDeletedNotesAndOtherFolders() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)

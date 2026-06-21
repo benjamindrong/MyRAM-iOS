@@ -32,6 +32,7 @@ struct NotesListView: View {
 #if targetEnvironment(macCatalyst)
     private let desktopSidebarDefaultWidth: CGFloat = 300
     private let desktopSidebarMinimumWidth: CGFloat = 0
+    private let desktopSidebarMinimumExpandedWidth: CGFloat = 220
     private let desktopSidebarMaximumWidth: CGFloat = 520
     private let desktopSidebarDividerWidth: CGFloat = 1
     private let desktopSidebarHandleHitWidth: CGFloat = 44
@@ -401,6 +402,7 @@ struct NotesListView: View {
                         let didDrag = abs(value.translation.width) > desktopSidebarToggleDragThreshold
                             || abs(value.translation.height) > desktopSidebarToggleDragThreshold
                         if didDrag {
+                            snapDesktopSidebarWidthIfNeeded()
                             if desktopSidebarWidth > 0 {
                                 lastExpandedDesktopSidebarWidth = desktopSidebarWidth
                             }
@@ -422,11 +424,21 @@ struct NotesListView: View {
         min(max(width, desktopSidebarMinimumWidth), desktopSidebarMaximumWidth)
     }
 
+    private func snapDesktopSidebarWidthIfNeeded() {
+        guard desktopSidebarWidth > 0,
+              desktopSidebarWidth < desktopSidebarMinimumExpandedWidth else {
+            return
+        }
+        desktopSidebarWidth = 0
+    }
+
     private func toggleDesktopSidebar() {
         if desktopSidebarWidth == 0 {
-            desktopSidebarWidth = clampedDesktopSidebarWidth(lastExpandedDesktopSidebarWidth > 0
+            let savedWidth = lastExpandedDesktopSidebarWidth > 0
                 ? lastExpandedDesktopSidebarWidth
-                : desktopSidebarDefaultWidth)
+                : desktopSidebarDefaultWidth
+            let restoredWidth = max(savedWidth, desktopSidebarMinimumExpandedWidth)
+            desktopSidebarWidth = clampedDesktopSidebarWidth(restoredWidth)
         } else {
             lastExpandedDesktopSidebarWidth = desktopSidebarWidth
             desktopSidebarWidth = 0
@@ -861,12 +873,7 @@ struct NotesListView: View {
             return searchResultNotes.map(NotesListItem.note)
         }
 
-        let pinnedNotes = vm.notes.filter { $0.isPinned ?? false }
-        let regularNotes = vm.notes.filter { !($0.isPinned ?? false) }
-
-        return pinnedNotes.map(NotesListItem.note)
-            + vm.folders.map(NotesListItem.folder)
-            + regularNotes.map(NotesListItem.note)
+        return vm.currentFolderListItems()
     }
 
     private var searchResultNotes: [Note] {
@@ -1693,20 +1700,6 @@ func isCompletedChecklistPreviewLine(_ line: String) -> Bool {
             of: #"^-\s+\[[xX]\]\s+"#,
             options: .regularExpression
         ) != nil
-}
-
-private enum NotesListItem: Identifiable {
-    case folder(Folder)
-    case note(Note)
-
-    var id: String {
-        switch self {
-        case .folder(let folder):
-            return "folder-\(folder.id.uuidString)"
-        case .note(let note):
-            return "note-\(note.id.uuidString)"
-        }
-    }
 }
 
 private enum NotesListTopBarAction: String, CaseIterable {
