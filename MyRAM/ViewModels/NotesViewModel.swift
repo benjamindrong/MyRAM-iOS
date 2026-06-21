@@ -108,12 +108,24 @@ final class NotesViewModel: ObservableObject {
 
         if let currentFolder {
             notes = allNotes
-                .filter { $0.folder?.id == currentFolder.id }
+                .filter { note in
+                    let noteIsPinned = note.isPinned ?? false
+                    let noteBelongsToCurrentFolder = note.folder?.id == currentFolder.id
+
+                    // Pinned notes are global quick access; regular notes stay folder-scoped.
+                    return noteIsPinned || noteBelongsToCurrentFolder
+                }
                 .sorted(by: sortNotes)
             folders = allFolders.filter { $0.parentFolder?.id == currentFolder.id }
         } else {
             notes = allNotes
-                .filter { $0.folder == nil }
+                .filter { note in
+                    let noteIsPinned = note.isPinned ?? false
+                    let noteBelongsToRoot = note.folder == nil
+
+                    // Root shows all pinned notes plus regular root notes.
+                    return noteIsPinned || noteBelongsToRoot
+                }
                 .sorted(by: sortNotes)
             folders = allFolders.filter { $0.parentFolder == nil }
         }
