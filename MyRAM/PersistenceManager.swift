@@ -1,4 +1,5 @@
 // PersistenceManager.swift
+import Foundation
 import SwiftData
 
 @MainActor
@@ -10,10 +11,11 @@ final class PersistenceManager {
 
     private init() {
         do {
+            let isUITestMode = ProcessInfo.processInfo.arguments.contains("UITEST_MODE")
             let configuration = ModelConfiguration(
-                "MyRAM_Main",
+                isUITestMode ? "MyRAM_UITests" : "MyRAM_Main",
                 schema: Schema([Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self]),
-                isStoredInMemoryOnly: false
+                isStoredInMemoryOnly: isUITestMode
             )
             
             container = try ModelContainer(

@@ -41,7 +41,6 @@ final class MyRAMUITests: XCTestCase {
 
         XCTAssertTrue(app.alerts["Edit Title"].waitForExistence(timeout: Timeout.standard))
         XCTAssertTrue(app.buttons["Save"].exists)
-        XCTAssertTrue(app.buttons["Save"].exists)
     }
 
     func testKeyboardControlsAreCollapsedByDefault() throws {
@@ -125,7 +124,7 @@ final class MyRAMUITests: XCTestCase {
         let controlBar = app.descendants(matching: .any)["keyboard-control-bar"]
         let pinButton = app.buttons["keyboard-control-pin"]
         XCTAssertTrue(
-            controlBar.waitForExistence(timeout: Timeout.standard) || pinButton.waitForExistence(timeout: Timeout.standard),
+            waitForAnyElement([controlBar, pinButton], timeout: Timeout.standard),
             "Expected note editor controls to appear after opening a note."
         )
     }
@@ -176,6 +175,17 @@ final class MyRAMUITests: XCTestCase {
 
     private func findElement(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)[identifier]
+    }
+
+    private func waitForAnyElement(_ elements: [XCUIElement], timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if elements.contains(where: \.exists) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return elements.contains(where: \.exists)
     }
 
     private func folderTitleButton(named name: String, in app: XCUIApplication) -> XCUIElement {
