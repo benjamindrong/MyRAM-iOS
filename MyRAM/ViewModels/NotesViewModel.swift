@@ -3,6 +3,20 @@ import NearbySyncCore
 import SwiftUI
 import SwiftData
 
+enum NotesListItem: Identifiable {
+    case folder(Folder)
+    case note(Note)
+
+    var id: String {
+        switch self {
+        case .folder(let folder):
+            return "folder-\(folder.id.uuidString)"
+        case .note(let note):
+            return "note-\(note.id.uuidString)"
+        }
+    }
+}
+
 @MainActor
 final class NotesViewModel: ObservableObject {
     @Published var notes: [Note] = []
@@ -108,15 +122,36 @@ final class NotesViewModel: ObservableObject {
 
         if let currentFolder {
             notes = allNotes
-                .filter { $0.folder?.id == currentFolder.id }
+                .filter { note in
+                    let noteIsPinned = note.isPinned ?? false
+                    let noteBelongsToCurrentFolder = note.folder?.id == currentFolder.id
+
+                    // Pinned notes are global quick access; regular notes stay folder-scoped.
+                    return noteIsPinned || noteBelongsToCurrentFolder
+                }
                 .sorted(by: sortNotes)
             folders = allFolders.filter { $0.parentFolder?.id == currentFolder.id }
         } else {
             notes = allNotes
-                .filter { $0.folder == nil }
+                .filter { note in
+                    let noteIsPinned = note.isPinned ?? false
+                    let noteBelongsToRoot = note.folder == nil
+
+                    // Root shows all pinned notes plus regular root notes.
+                    return noteIsPinned || noteBelongsToRoot
+                }
                 .sorted(by: sortNotes)
             folders = allFolders.filter { $0.parentFolder == nil }
         }
+    }
+
+    func currentFolderListItems() -> [NotesListItem] {
+        let pinnedNotes = notes.filter { $0.isPinned ?? false }
+        let regularNotes = notes.filter { !($0.isPinned ?? false) }
+
+        return pinnedNotes.map(NotesListItem.note)
+            + folders.map(NotesListItem.folder)
+            + regularNotes.map(NotesListItem.note)
     }
 
     func fetchRecentlyDeletedNotes() -> [Note] {

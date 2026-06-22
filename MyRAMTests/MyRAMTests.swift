@@ -2843,6 +2843,73 @@ final class MyRAMTests: XCTestCase {
         XCTAssertNil(rootNote.folder)
     }
 
+    func testRootListIncludesPinnedNotesFromOtherFoldersOnly() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+
+        let rootNote = vm.createNewNote()
+
+        vm.createFolder(named: "Work")
+        let workFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Work" }))
+        vm.openFolder(workFolder)
+        let pinnedWorkNote = vm.createNewNote()
+        let unpinnedWorkNote = vm.createNewNote()
+        vm.setNotePinned(pinnedWorkNote, isPinned: true)
+
+        vm.navigateToParentFolder()
+        vm.refreshCurrentFolderContent()
+
+        let visibleNoteIDs = Set(vm.notes.map(\.id))
+        XCTAssertTrue(visibleNoteIDs.contains(rootNote.id))
+        XCTAssertTrue(visibleNoteIDs.contains(pinnedWorkNote.id))
+        XCTAssertFalse(visibleNoteIDs.contains(unpinnedWorkNote.id))
+    }
+
+    func testFolderListIncludesPinnedNotesFromOtherFoldersOnly() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+
+        let rootNote = vm.createNewNote()
+
+        vm.createFolder(named: "Work")
+        let workFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Work" }))
+        vm.openFolder(workFolder)
+        let pinnedWorkNote = vm.createNewNote()
+        let unpinnedWorkNote = vm.createNewNote()
+        vm.setNotePinned(pinnedWorkNote, isPinned: true)
+
+        vm.navigateToParentFolder()
+        vm.createFolder(named: "Personal")
+        let personalFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Personal" }))
+        vm.openFolder(personalFolder)
+        let personalNote = vm.createNewNote()
+
+        let visibleNoteIDs = Set(vm.notes.map(\.id))
+        XCTAssertTrue(visibleNoteIDs.contains(pinnedWorkNote.id))
+        XCTAssertTrue(visibleNoteIDs.contains(personalNote.id))
+        XCTAssertFalse(visibleNoteIDs.contains(rootNote.id))
+        XCTAssertFalse(visibleNoteIDs.contains(unpinnedWorkNote.id))
+    }
+
+    func testCurrentFolderListItemsOrdersPinnedNotesFoldersThenRegularNotes() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+
+        let regularRootNote = vm.createNewNote()
+        let pinnedRootNote = vm.createNewNote()
+        vm.setNotePinned(pinnedRootNote, isPinned: true)
+        vm.createFolder(named: "Work")
+        let workFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Work" }))
+
+        let listItemIDs = vm.currentFolderListItems().map(\.id)
+
+        XCTAssertEqual(listItemIDs, [
+            "note-\(pinnedRootNote.id.uuidString)",
+            "folder-\(workFolder.id.uuidString)",
+            "note-\(regularRootNote.id.uuidString)"
+        ])
+    }
+
     func testActiveNoteCountInFolderExcludesDeletedNotesAndOtherFolders() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)

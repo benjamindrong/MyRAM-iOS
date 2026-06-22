@@ -30,10 +30,14 @@ struct NotesListView: View {
     private let topBarIconSize: CGFloat = 20
     private let topBarHeight: CGFloat = 44
 #if targetEnvironment(macCatalyst)
+    private let desktopSidebarDefaultWidth: CGFloat = 300
     private let desktopSidebarMinimumWidth: CGFloat = 0
+    private let desktopSidebarMinimumExpandedWidth: CGFloat = 220
     private let desktopSidebarMaximumWidth: CGFloat = 520
-    private let desktopSidebarResizeHandleWidth: CGFloat = 10
-    private let desktopSidebarCollapsedHandleWidth: CGFloat = 24
+    private let desktopSidebarDividerWidth: CGFloat = 1
+    private let desktopSidebarResizeHitWidth: CGFloat = 10
+    private let desktopSidebarHandleSize: CGFloat = 30
+    private let desktopSidebarToggleDragThreshold: CGFloat = 4
 #endif
     @ObservedObject private var state: NotesListState
     @StateObject private var editorToolbarBridge = NoteEditorToolbarBridge()
@@ -63,7 +67,8 @@ struct NotesListView: View {
     @State private var noteActionDialogContext: NoteActionDialogContext?
     @FocusState private var isSearchFocused: Bool
 #if targetEnvironment(macCatalyst)
-    @State private var desktopSidebarWidth: CGFloat = 340
+    @State private var desktopSidebarWidth: CGFloat = 300
+    @State private var lastExpandedDesktopSidebarWidth: CGFloat = 300
     @State private var desktopSidebarDragStartWidth: CGFloat?
 #endif
 #if DEBUG
@@ -92,14 +97,22 @@ struct NotesListView: View {
                     .padding(.horizontal)
 
 #if targetEnvironment(macCatalyst)
-                HStack(spacing: 0) {
-                    notesListContent
-                        .frame(width: desktopSidebarWidth)
+                ZStack(alignment: .topLeading) {
+                    HStack(spacing: 0) {
+                        notesListContent
+                            .frame(width: desktopSidebarWidth)
+
+                        desktopEditorDetail
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    }
+
+                    desktopSidebarDivider
+                        .offset(x: desktopSidebarWidth)
+                        .zIndex(1)
 
                     desktopSidebarResizeHandle
-
-                    desktopEditorDetail
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .offset(x: desktopSidebarWidth)
+                        .zIndex(2)
                 }
 #else
                 notesListContent
@@ -349,38 +362,95 @@ struct NotesListView: View {
     }
 
 #if targetEnvironment(macCatalyst)
-    private var desktopSidebarResizeHandle: some View {
+    private var desktopSidebarDivider: some View {
         Rectangle()
             .fill(Color.secondary.opacity(desktopSidebarWidth == 0 ? 0.30 : 0.22))
-            .frame(width: desktopSidebarHandleWidth)
-            .overlay(
-                Rectangle()
-                    .fill(Color.secondary.opacity(0.45))
-                    .frame(width: 1)
-            )
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let startWidth = desktopSidebarDragStartWidth ?? desktopSidebarWidth
-                        desktopSidebarDragStartWidth = startWidth
-                        desktopSidebarWidth = clampedDesktopSidebarWidth(
-                            startWidth + value.translation.width
-                        )
-                    }
-                    .onEnded { _ in
-                        desktopSidebarDragStartWidth = nil
-                    }
-            )
-            .accessibilityLabel("Resize sidebar")
+            .frame(width: desktopSidebarDividerWidth)
+            .frame(maxHeight: .infinity)
     }
 
-    private var desktopSidebarHandleWidth: CGFloat {
-        desktopSidebarWidth == 0 ? desktopSidebarCollapsedHandleWidth : desktopSidebarResizeHandleWidth
+    private var desktopSidebarResizeHandle: some View {
+        ZStack {
+            // Keep resize hit testing near the divider so editor clicks are not intercepted.
+            Color.clear
+                .frame(width: desktopSidebarResizeHitWidth)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let startWidth = desktopSidebarDragStartWidth ?? desktopSidebarWidth
+                            desktopSidebarDragStartWidth = startWidth
+                            desktopSidebarWidth = clampedDesktopSidebarWidth(
+                                startWidth + value.translation.width
+                            )
+                        }
+                        .onEnded { value in
+                            desktopSidebarDragStartWidth = nil
+
+                            let didDrag = abs(value.translation.width) > desktopSidebarToggleDragThreshold
+                                || abs(value.translation.height) > desktopSidebarToggleDragThreshold
+                            if didDrag {
+                                snapDesktopSidebarWidthIfNeeded()
+                                if desktopSidebarWidth > 0 {
+                                    lastExpandedDesktopSidebarWidth = desktopSidebarWidth
+                                }
+                            }
+                        }
+                )
+                .accessibilityHidden(true)
+
+            Button {
+                toggleDesktopSidebar()
+            } label: {
+                Image(systemName: desktopSidebarWidth == 0 ? "chevron.right" : "chevron.left")
+                    .font(.caption.weight(.bold))
+                    .frame(width: desktopSidebarHandleSize, height: desktopSidebarHandleSize)
+                    .background(.thinMaterial)
+                    .clipShape(Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
+                    }
+                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.30 : 0.12), radius: 4, x: 0, y: 1)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(desktopSidebarWidth == 0 ? "Show notes sidebar" : "Hide notes sidebar")
+            .accessibilityHint("Drag the divider to resize the notes sidebar.")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityAction {
+                toggleDesktopSidebar()
+            }
+        }
+            .frame(width: desktopSidebarHandleSize)
+            .frame(maxHeight: .infinity)
+            .offset(x: -(desktopSidebarHandleSize - desktopSidebarResizeHitWidth) / 2)
     }
 
     private func clampedDesktopSidebarWidth(_ width: CGFloat) -> CGFloat {
         min(max(width, desktopSidebarMinimumWidth), desktopSidebarMaximumWidth)
+    }
+
+    private func snapDesktopSidebarWidthIfNeeded() {
+        guard desktopSidebarWidth > 0,
+              desktopSidebarWidth < desktopSidebarMinimumExpandedWidth else {
+            return
+        }
+        desktopSidebarWidth = 0
+    }
+
+    private func toggleDesktopSidebar() {
+        if desktopSidebarWidth == 0 {
+            let savedWidth = lastExpandedDesktopSidebarWidth > 0
+                ? lastExpandedDesktopSidebarWidth
+                : desktopSidebarDefaultWidth
+            let restoredWidth = max(savedWidth, desktopSidebarMinimumExpandedWidth)
+            desktopSidebarWidth = clampedDesktopSidebarWidth(restoredWidth)
+        } else {
+            lastExpandedDesktopSidebarWidth = desktopSidebarWidth
+            desktopSidebarWidth = 0
+        }
     }
 #endif
 
@@ -811,7 +881,7 @@ struct NotesListView: View {
             return searchResultNotes.map(NotesListItem.note)
         }
 
-        return vm.folders.map(NotesListItem.folder) + vm.notes.map(NotesListItem.note)
+        return vm.currentFolderListItems()
     }
 
     private var searchResultNotes: [Note] {
@@ -915,11 +985,21 @@ struct NotesListView: View {
     }
 
     private func noteRowContent(_ note: Note) -> some View {
-        HStack(spacing: 10) {
+        HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(note.title.isEmpty ? "Untitled" : note.title)
                     .font(.headline)
                     .foregroundStyle(.primary)
+                    .lineLimit(2)
+
+                if let folderHint = pinnedNoteFolderHint(for: note) {
+                    Text("📁 \(folderHint)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .accessibilityLabel("Pinned note from \(folderHint)")
+                }
+
                 let pinnedThoughtPreview = pinnedThoughtPreviewText(for: note)
                 if !pinnedThoughtPreview.isEmpty {
                     Text(pinnedThoughtPreview)
@@ -938,16 +1018,17 @@ struct NotesListView: View {
                         .foregroundStyle(notePreviewContentTextColor)
                 }
             }
-
-            Spacer()
+            .frame(maxWidth: .infinity, alignment: .leading)
 
             if note.isPinned == true {
                 Image(systemName: "pin.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(Color.accentColor)
+                    .padding(.top, 2)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
         .modifier(ChromeListRowSurface(style: editorChromeStyle))
         .contentShape(Rectangle())
     }
@@ -1265,6 +1346,21 @@ struct NotesListView: View {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 noteActionDialogContext = .single(note)
             }
+    }
+
+    private func pinnedNoteFolderHint(for note: Note) -> String? {
+        guard note.isPinned ?? false else { return nil }
+
+        let noteFolderID = note.folder?.id
+        let currentFolderID = vm.currentFolder?.id
+
+        // Only cross-context pinned notes need a location hint.
+        guard noteFolderID != currentFolderID else { return nil }
+
+        if let folder = note.folder {
+            return buildFolderPath(for: folder)
+        }
+        return mainListTitle
     }
 
     private func presentNextFolderDeletionPromptIfNeeded() {
@@ -1612,20 +1708,6 @@ func isCompletedChecklistPreviewLine(_ line: String) -> Bool {
             of: #"^-\s+\[[xX]\]\s+"#,
             options: .regularExpression
         ) != nil
-}
-
-private enum NotesListItem: Identifiable {
-    case folder(Folder)
-    case note(Note)
-
-    var id: String {
-        switch self {
-        case .folder(let folder):
-            return "folder-\(folder.id.uuidString)"
-        case .note(let note):
-            return "note-\(note.id.uuidString)"
-        }
-    }
 }
 
 private enum NotesListTopBarAction: String, CaseIterable {
