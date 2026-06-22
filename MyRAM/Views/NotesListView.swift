@@ -35,7 +35,7 @@ struct NotesListView: View {
     private let desktopSidebarMinimumExpandedWidth: CGFloat = 220
     private let desktopSidebarMaximumWidth: CGFloat = 520
     private let desktopSidebarDividerWidth: CGFloat = 1
-    private let desktopSidebarHandleHitWidth: CGFloat = 44
+    private let desktopSidebarResizeHitWidth: CGFloat = 10
     private let desktopSidebarHandleSize: CGFloat = 30
     private let desktopSidebarToggleDragThreshold: CGFloat = 4
 #endif
@@ -371,53 +371,61 @@ struct NotesListView: View {
 
     private var desktopSidebarResizeHandle: some View {
         ZStack {
+            // Keep resize hit testing near the divider so editor clicks are not intercepted.
             Color.clear
-
-            Image(systemName: desktopSidebarWidth == 0 ? "chevron.right" : "chevron.left")
-                .font(.caption.weight(.bold))
-                .frame(width: desktopSidebarHandleSize, height: desktopSidebarHandleSize)
-                .background(.thinMaterial)
-                .clipShape(Circle())
-                .overlay {
-                    Circle()
-                        .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
-                }
-                .shadow(color: .black.opacity(colorScheme == .dark ? 0.30 : 0.12), radius: 4, x: 0, y: 1)
-        }
-            .frame(width: desktopSidebarHandleHitWidth)
-            .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
-            .gesture(
-                DragGesture(minimumDistance: 0)
-                    .onChanged { value in
-                        let startWidth = desktopSidebarDragStartWidth ?? desktopSidebarWidth
-                        desktopSidebarDragStartWidth = startWidth
-                        desktopSidebarWidth = clampedDesktopSidebarWidth(
-                            startWidth + value.translation.width
-                        )
-                    }
-                    .onEnded { value in
-                        desktopSidebarDragStartWidth = nil
-
-                        let didDrag = abs(value.translation.width) > desktopSidebarToggleDragThreshold
-                            || abs(value.translation.height) > desktopSidebarToggleDragThreshold
-                        if didDrag {
-                            snapDesktopSidebarWidthIfNeeded()
-                            if desktopSidebarWidth > 0 {
-                                lastExpandedDesktopSidebarWidth = desktopSidebarWidth
-                            }
-                        } else {
-                            toggleDesktopSidebar()
+                .frame(width: desktopSidebarResizeHitWidth)
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            let startWidth = desktopSidebarDragStartWidth ?? desktopSidebarWidth
+                            desktopSidebarDragStartWidth = startWidth
+                            desktopSidebarWidth = clampedDesktopSidebarWidth(
+                                startWidth + value.translation.width
+                            )
                         }
+                        .onEnded { value in
+                            desktopSidebarDragStartWidth = nil
+
+                            let didDrag = abs(value.translation.width) > desktopSidebarToggleDragThreshold
+                                || abs(value.translation.height) > desktopSidebarToggleDragThreshold
+                            if didDrag {
+                                snapDesktopSidebarWidthIfNeeded()
+                                if desktopSidebarWidth > 0 {
+                                    lastExpandedDesktopSidebarWidth = desktopSidebarWidth
+                                }
+                            }
+                        }
+                )
+                .accessibilityHidden(true)
+
+            Button {
+                toggleDesktopSidebar()
+            } label: {
+                Image(systemName: desktopSidebarWidth == 0 ? "chevron.right" : "chevron.left")
+                    .font(.caption.weight(.bold))
+                    .frame(width: desktopSidebarHandleSize, height: desktopSidebarHandleSize)
+                    .background(.thinMaterial)
+                    .clipShape(Circle())
+                    .overlay {
+                        Circle()
+                            .stroke(Color.secondary.opacity(0.35), lineWidth: 1)
                     }
-            )
-            .accessibilityElement(children: .ignore)
+                    .shadow(color: .black.opacity(colorScheme == .dark ? 0.30 : 0.12), radius: 4, x: 0, y: 1)
+                    .contentShape(Circle())
+            }
+            .buttonStyle(.plain)
             .accessibilityLabel(desktopSidebarWidth == 0 ? "Show notes sidebar" : "Hide notes sidebar")
-            .accessibilityHint("Drag to resize the notes sidebar.")
+            .accessibilityHint("Drag the divider to resize the notes sidebar.")
             .accessibilityAddTraits(.isButton)
             .accessibilityAction {
                 toggleDesktopSidebar()
             }
+        }
+            .frame(width: desktopSidebarHandleSize)
+            .frame(maxHeight: .infinity)
+            .offset(x: -(desktopSidebarHandleSize - desktopSidebarResizeHitWidth) / 2)
     }
 
     private func clampedDesktopSidebarWidth(_ width: CGFloat) -> CGFloat {
