@@ -1,6 +1,62 @@
 import Foundation
-import MultipeerConnectivity
+@preconcurrency import MultipeerConnectivity
 import NearbySyncCore
+
+// Keeps trusted-peer auto-reconnect idempotent while Multipeer is still negotiating.
+struct TrustedPeerReconnectTracker {
+    private var connectingPeerIDs: Set<String> = []
+
+    mutating func beginConnecting(to peerID: String) -> Bool {
+        connectingPeerIDs.insert(peerID).inserted
+    }
+
+    mutating func finishConnecting(to peerID: String) {
+        connectingPeerIDs.remove(peerID)
+    }
+
+    func isConnecting(to peerID: String) -> Bool {
+        connectingPeerIDs.contains(peerID)
+    }
+}
+
+// Runs potentially blocking Multipeer operations away from SwiftUI's main actor.
+private final class MyRAMMultipeerTransport {
+    private let browser: MCNearbyServiceBrowser
+    private let session: MCSession
+    private let queue = DispatchQueue(label: "com.myram.nearby-sync.transport")
+
+    init(browser: MCNearbyServiceBrowser, session: MCSession) {
+        self.browser = browser
+        self.session = session
+    }
+
+    func invite(_ peerID: MCPeerID, timeout: TimeInterval) {
+        queue.async { [browser, session] in
+            browser.invitePeer(peerID, to: session, withContext: nil, timeout: timeout)
+        }
+    }
+
+    func connectedPeers() async -> [MCPeerID] {
+        await withCheckedContinuation { continuation in
+            queue.async { [session] in
+                continuation.resume(returning: session.connectedPeers)
+            }
+        }
+    }
+
+    func send(_ data: Data, toPeers peers: [MCPeerID], mode: MCSessionSendDataMode) async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            queue.async { [session] in
+                do {
+                    try session.send(data, toPeers: peers, with: mode)
+                    continuation.resume()
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+}
 
 @MainActor
 protocol MyRAMSyncControlling: AnyObject {
@@ -54,6 +110,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private let session: MCSession
     private let advertiser: MCNearbyServiceAdvertiser
     private let browser: MCNearbyServiceBrowser
+    private lazy var transport = MyRAMMultipeerTransport(browser: browser, session: session)
+    private var reconnectTracker = TrustedPeerReconnectTracker()
     private lazy var debouncedSender = DebouncedChangeSender { [weak self] in
         await self?.sendPendingChanges()
     }
@@ -103,8 +161,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func invite(_ peer: MyRAMDiscoveredPeer) {
+        guard reconnectTracker.beginConnecting(to: peer.deviceID) else { return }
+
         lastConnectionEvent = "Inviting \(peer.displayName)"
-        browser.invitePeer(peer.peerID, to: session, withContext: nil, timeout: 12)
+        let timeout: TimeInterval = 12
+        transport.invite(peer.peerID, timeout: timeout)
+        clearConnectingStateAfterInviteTimeout(for: peer.deviceID, timeout: timeout)
     }
 
     func recordLocalChange(
@@ -134,7 +196,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func sendPendingChanges() async {
-        guard !session.connectedPeers.isEmpty else {
+        let peers = await transport.connectedPeers()
+        guard !peers.isEmpty else {
             await updatePendingCount()
             return
         }
@@ -146,7 +209,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
         do {
             let data = try JSONEncoder().encode(envelope)
-            try session.send(data, toPeers: session.connectedPeers, with: .reliable)
+            try await transport.send(data, toPeers: peers, mode: .reliable)
             lastSyncAt = envelope.sentAt
             lastErrorMessage = nil
         } catch {
@@ -160,6 +223,18 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         pendingChangeCount = await syncEngine.pendingChangeCount()
     }
 
+    private func clearConnectingStateAfterInviteTimeout(for deviceID: String, timeout: TimeInterval) {
+        Task { [weak self] in
+            let nanoseconds = UInt64((timeout + 1) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanoseconds)
+            self?.clearConnectingState(for: deviceID)
+        }
+    }
+
+    private func clearConnectingState(for deviceID: String) {
+        reconnectTracker.finishConnecting(to: deviceID)
+    }
+
     private func sendAcknowledgement(for changes: [SyncChange], to peerID: MCPeerID) async {
         guard !changes.isEmpty else { return }
 
@@ -171,7 +246,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
         do {
             let data = try JSONEncoder().encode(envelope)
-            try session.send(data, toPeers: [peerID], with: .reliable)
+            try await transport.send(data, toPeers: [peerID], mode: .reliable)
             await syncEngine.markAcknowledgementSent(changes.map(\.id))
             lastErrorMessage = nil
         } catch {
@@ -204,6 +279,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
     }
 
+    private func addOrUpdateAvailablePeer(_ peer: MyRAMDiscoveredPeer) {
+        if let index = availablePeers.firstIndex(where: { $0.deviceID == peer.deviceID }) {
+            availablePeers[index] = peer
+        } else {
+            availablePeers.append(peer)
+        }
+    }
+
     private func displayName(for peerID: MCPeerID) -> String {
         MyRAMPeerIdentity(peerID: peerID).displayName
     }
@@ -230,9 +313,15 @@ extension MyRAMSyncController: MCSessionDelegate {
             connectedPeers = session.connectedPeers.map { MyRAMPeerIdentity(peerID: $0).displayName }
             lastConnectionEvent = "\(description(for: state)): \(displayName(for: peerID))"
 
+            if state == .connected || state == .notConnected {
+                clearConnectingState(for: MyRAMPeerIdentity(peerID: peerID).deviceID)
+            }
+
             if state == .connected {
                 rememberTrustedPeer(peerID)
-                await sendPendingChanges()
+                Task {
+                    await sendPendingChanges()
+                }
             }
         }
     }
@@ -307,7 +396,6 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
         Task { @MainActor in
             let identity = MyRAMPeerIdentity(peerID: peerID)
-            guard !availablePeers.contains(where: { $0.deviceID == identity.deviceID }) else { return }
             lastConnectionEvent = "Found \(identity.displayName)"
 
             let discoveredPeer = MyRAMDiscoveredPeer(
@@ -316,7 +404,7 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
                 displayName: identity.displayName,
                 isTrusted: trustedPeerStore.contains(peerID: identity.deviceID)
             )
-            availablePeers.append(discoveredPeer)
+            addOrUpdateAvailablePeer(discoveredPeer)
 
             if discoveredPeer.isTrusted {
                 invite(discoveredPeer)
@@ -329,6 +417,7 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             let identity = MyRAMPeerIdentity(peerID: peerID)
             lastConnectionEvent = "Lost \(identity.displayName)"
             availablePeers.removeAll { $0.deviceID == identity.deviceID }
+            clearConnectingState(for: identity.deviceID)
         }
     }
 

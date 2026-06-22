@@ -106,6 +106,24 @@ final class MyRAMTests: XCTestCase {
         }
     }
 
+    func testTrustedPeerReconnectTrackerBlocksDuplicateConnectAttempts() {
+        var tracker = TrustedPeerReconnectTracker()
+
+        XCTAssertTrue(tracker.beginConnecting(to: "trusted-device"))
+        XCTAssertFalse(tracker.beginConnecting(to: "trusted-device"))
+        XCTAssertTrue(tracker.isConnecting(to: "trusted-device"))
+    }
+
+    func testTrustedPeerReconnectTrackerAllowsRetryAfterConnectionEnds() {
+        var tracker = TrustedPeerReconnectTracker()
+
+        XCTAssertTrue(tracker.beginConnecting(to: "trusted-device"))
+        tracker.finishConnecting(to: "trusted-device")
+
+        XCTAssertFalse(tracker.isConnecting(to: "trusted-device"))
+        XCTAssertTrue(tracker.beginConnecting(to: "trusted-device"))
+    }
+
     func testPinnedHighlightPaletteUsesReadableTextColor() {
         XCTAssertGreaterThan(
             contrastRatio(
