@@ -1841,6 +1841,24 @@ final class MyRAMTests: XCTestCase {
         ))
     }
 
+    func testDeferredRichTextContentEncoderRunsOnlyWhenRequested() throws {
+        var encodeCount = 0
+        let expectedData = try XCTUnwrap("serialized".data(using: .utf8))
+        let encoder = DeferredRichTextContentEncoder {
+            encodeCount += 1
+            return expectedData
+        }
+        let update = EditorRichTextContentUpdate.deferred(encoder)
+
+        XCTAssertEqual(encodeCount, 0)
+
+        guard case .deferred(let deferredEncoder) = update else {
+            return XCTFail("Expected deferred rich-text update")
+        }
+        XCTAssertEqual(deferredEncoder.encode(), expectedData)
+        XCTAssertEqual(encodeCount, 1)
+    }
+
     func testIncomingNoteSyncDoesNotOverwriteImmediateLocalTextEdit() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext

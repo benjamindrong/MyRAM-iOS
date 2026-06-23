@@ -34,6 +34,15 @@ enum EditorSelectionFormattingPolicy {
     }
 }
 
+struct DeferredRichTextContentEncoder {
+    let encode: () -> Data?
+}
+
+enum EditorRichTextContentUpdate {
+    case immediate(Data?)
+    case deferred(DeferredRichTextContentEncoder)
+}
+
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -118,6 +127,7 @@ struct NoteEditorView: View {
     @State private var hasPendingNoteCommit = false
     @State private var editorBufferOwner: EditorBufferOwner = .idle
     @State private var deferRemoteRefreshUntilCommit = false
+    @State private var pendingRichTextContentEncoder: DeferredRichTextContentEncoder?
     @FocusState private var isCurrentNoteSearchFocused: Bool
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
@@ -1254,16 +1264,20 @@ struct NoteEditorView: View {
     private func commitPendingNoteEdit() {
         guard hasPendingNoteCommit else { return }
         cancelPendingNoteCommit()
+        let committedRichTextContentData = pendingRichTextContentEncoder?.encode() ?? richTextContentData
+        pendingRichTextContentEncoder = nil
+        richTextContentData = committedRichTextContentData
         vm.commitNoteEdit(
             note,
             title: title,
             content: content,
-            richTextContentData: richTextContentData
+            richTextContentData: committedRichTextContentData
         )
         vm.recordNoteEdited(note)
         if editorBufferOwner == .localEditing {
             editorBufferOwner = .idle
         }
+        lastSnapshot = currentNoteSnapshot()
         applyDeferredRemoteRefreshIfNeeded()
     }
 
@@ -1290,9 +1304,15 @@ struct NoteEditorView: View {
         refreshUndoState()
     }
 
-    private func handleContentChanged(_ plainText: String, _ richTextData: Data?) {
+    private func handleContentChanged(_ plainText: String, _ richTextUpdate: EditorRichTextContentUpdate) {
         content = plainText
-        richTextContentData = richTextData
+        switch richTextUpdate {
+        case .immediate(let richTextData):
+            pendingRichTextContentEncoder = nil
+            richTextContentData = richTextData
+        case .deferred(let encoder):
+            pendingRichTextContentEncoder = encoder
+        }
         handleEditorChange()
     }
 
@@ -2767,7 +2787,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let backgroundColor: UIColor
     let textColor: UIColor
     let tintColor: UIColor?
-    let onContentChanged: (String, Data?) -> Void
+    let onContentChanged: (String, EditorRichTextContentUpdate) -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
     let onFormattingStateChanged: (EditorFormattingState) -> Void
     let onEditingFocusChanged: (Bool) -> Void
@@ -2985,7 +3005,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var formattingController: TextFormattingController
         var text: Binding<String>
         var richTextContentData: Binding<Data?>
-        var onContentChanged: (String, Data?) -> Void
+        var onContentChanged: (String, EditorRichTextContentUpdate) -> Void
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
         var onEditingFocusChanged: (Bool) -> Void
@@ -3027,7 +3047,7 @@ private struct SelectableTextView: UIViewRepresentable {
             formattingController: TextFormattingController,
             text: Binding<String>,
             richTextContentData: Binding<Data?>,
-            onContentChanged: @escaping (String, Data?) -> Void,
+            onContentChanged: @escaping (String, EditorRichTextContentUpdate) -> Void,
             onUndoManagerChanged: @escaping (UndoManager?) -> Void,
             onFormattingStateChanged: @escaping (EditorFormattingState) -> Void,
             onEditingFocusChanged: @escaping (Bool) -> Void,
@@ -3170,7 +3190,7 @@ private struct SelectableTextView: UIViewRepresentable {
         func textViewDidChange(_ textView: UITextView) {
             applyChecklistRendering(in: textView)
             updateEditorLayout(in: textView)
-            syncContent(from: textView)
+            syncContent(from: textView, serializesRichTextImmediately: false)
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
         }
@@ -3483,10 +3503,25 @@ private struct SelectableTextView: UIViewRepresentable {
                 .forEach { $0.removeFromSuperlayer() }
         }
 
-        private func syncContent(from textView: UITextView) {
+        private func syncContent(
+            from textView: UITextView,
+            serializesRichTextImmediately: Bool = true
+        ) {
             let plainText = textView.text ?? ""
-            let encodedRichText = RichTextContentCodec.encode(storageAttributedText(from: textView))
-            guard text.wrappedValue != plainText || richTextContentData.wrappedValue != encodedRichText else {
+            let richTextUpdate: EditorRichTextContentUpdate
+            let encodedRichText: Data?
+            if serializesRichTextImmediately {
+                encodedRichText = RichTextContentCodec.encode(storageAttributedText(from: textView))
+                richTextUpdate = .immediate(encodedRichText)
+            } else {
+                // Typing keeps the live text current; the commit boundary pays
+                // for full RTF serialization.
+                encodedRichText = richTextContentData.wrappedValue
+                richTextUpdate = .deferred(deferredRichTextContentEncoder(for: textView))
+            }
+
+            guard text.wrappedValue != plainText
+                || (serializesRichTextImmediately && richTextContentData.wrappedValue != encodedRichText) else {
                 clearAppliedContentIfSynced()
                 return
             }
@@ -3503,16 +3538,25 @@ private struct SelectableTextView: UIViewRepresentable {
                     }
                     self.text.wrappedValue = plainText
                     self.richTextContentData.wrappedValue = encodedRichText
-                    self.onContentChanged(plainText, encodedRichText)
+                    self.onContentChanged(plainText, richTextUpdate)
                     self.clearAppliedContentIfSynced()
                 }
                 return
             }
 
             text.wrappedValue = plainText
-            richTextContentData.wrappedValue = encodedRichText
-            onContentChanged(plainText, encodedRichText)
+            if serializesRichTextImmediately {
+                richTextContentData.wrappedValue = encodedRichText
+            }
+            onContentChanged(plainText, richTextUpdate)
             clearAppliedContentIfSynced()
+        }
+
+        private func deferredRichTextContentEncoder(for textView: UITextView) -> DeferredRichTextContentEncoder {
+            DeferredRichTextContentEncoder { [weak self, weak textView] in
+                guard let self, let textView else { return nil }
+                return RichTextContentCodec.encode(self.storageAttributedText(from: textView))
+            }
         }
 
         private func storageAttributedText(from textView: UITextView) -> NSAttributedString {
