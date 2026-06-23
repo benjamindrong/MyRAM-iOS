@@ -3011,6 +3011,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var decreaseFontSizeToggleToken = 0
         var textColorToggleToken = 0
         private var activeSearchHighlightRange: NSRange?
+        private var pendingFormattingStateRefresh: DispatchWorkItem?
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
         var isUpdatingUIView = false
         var isHandlingUserFocusChange = false
@@ -3176,7 +3177,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func textViewDidChangeSelection(_ textView: UITextView) {
             updateLastKnownSelectionRange(from: textView)
-            reportFormattingState(from: textView)
+            reportFormattingStateForSelectionChange(from: textView)
         }
 
         func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
@@ -3567,8 +3568,8 @@ private struct SelectableTextView: UIViewRepresentable {
             }
         }
 
-        func reportFormattingState(from textView: UITextView) {
-            let state = formattingState(from: textView)
+        func reportFormattingState(from textView: UITextView, allowsLargeSelectionScan: Bool = false) {
+            let state = formattingState(from: textView, allowsLargeSelectionScan: allowsLargeSelectionScan)
             if isUpdatingUIView {
                 RunLoop.main.perform { [weak self] in
                     self?.onFormattingStateChanged(state)
@@ -3576,6 +3577,33 @@ private struct SelectableTextView: UIViewRepresentable {
                 return
             }
             onFormattingStateChanged(state)
+        }
+
+        private func reportFormattingStateForSelectionChange(from textView: UITextView) {
+            let range = effectiveSelectionRange(in: textView)
+            guard EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(selectionLength: range.length) else {
+                cancelSettledFormattingStateRefresh()
+                reportFormattingState(from: textView, allowsLargeSelectionScan: true)
+                return
+            }
+
+            reportFormattingState(from: textView)
+            scheduleSettledFormattingStateRefresh(for: textView)
+        }
+
+        private func scheduleSettledFormattingStateRefresh(for textView: UITextView) {
+            pendingFormattingStateRefresh?.cancel()
+            let workItem = DispatchWorkItem { [weak self, weak textView] in
+                guard let self, let textView else { return }
+                self.reportFormattingState(from: textView, allowsLargeSelectionScan: true)
+            }
+            pendingFormattingStateRefresh = workItem
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
+        }
+
+        private func cancelSettledFormattingStateRefresh() {
+            pendingFormattingStateRefresh?.cancel()
+            pendingFormattingStateRefresh = nil
         }
 
         func reportUndoManagerChanged(_ undoManager: UndoManager?) {
@@ -3733,8 +3761,16 @@ private struct SelectableTextView: UIViewRepresentable {
             ]
         }
 
-        private func formattingState(from textView: UITextView) -> EditorFormattingState {
+        private func formattingState(
+            from textView: UITextView,
+            allowsLargeSelectionScan: Bool = false
+        ) -> EditorFormattingState {
             let range = effectiveSelectionRange(in: textView)
+            if EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(selectionLength: range.length),
+               !allowsLargeSelectionScan {
+                return approximateFormattingState(from: textView, range: range)
+            }
+
             let font = selectedFont(in: textView, range: range)
             let foregroundColor = selectedForegroundColor(in: textView, range: range)
             return EditorFormattingState(
@@ -3745,6 +3781,45 @@ private struct SelectableTextView: UIViewRepresentable {
                 fontSize: font.pointSize,
                 foregroundColor: foregroundColor
             )
+        }
+
+        private func approximateFormattingState(
+            from textView: UITextView,
+            range: NSRange
+        ) -> EditorFormattingState {
+            let font = selectedFont(in: textView, range: range)
+            let foregroundColor = selectedForegroundColor(in: textView, range: range)
+            return EditorFormattingState(
+                bold: approximateTrait(.traitBold, in: textView, range: range),
+                italic: approximateTrait(.traitItalic, in: textView, range: range),
+                underline: approximateDecoration(.underlineStyle, in: textView, range: range),
+                strikethrough: approximateDecoration(.strikethroughStyle, in: textView, range: range),
+                fontSize: font.pointSize,
+                foregroundColor: foregroundColor
+            )
+        }
+
+        private func approximateTrait(
+            _ trait: UIFontDescriptor.SymbolicTraits,
+            in textView: UITextView,
+            range: NSRange
+        ) -> Bool {
+            let font = selectedFont(in: textView, range: range)
+            return font.fontDescriptor.symbolicTraits.contains(trait)
+        }
+
+        private func approximateDecoration(
+            _ key: NSAttributedString.Key,
+            in textView: UITextView,
+            range: NSRange
+        ) -> Bool {
+            if range.length == 0 {
+                return (textView.typingAttributes[key] as? Int ?? 0) != 0
+            }
+            if range.location < textView.attributedText.length {
+                return (textView.attributedText.attribute(key, at: range.location, effectiveRange: nil) as? Int ?? 0) != 0
+            }
+            return false
         }
 
         private func selectedFont(in textView: UITextView, range: NSRange) -> UIFont {
