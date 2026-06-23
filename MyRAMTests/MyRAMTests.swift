@@ -1800,6 +1800,78 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).first, conflict)
     }
 
+    func testEditorBufferDefersRemoteRefreshDuringPendingLocalEdit() {
+        XCTAssertTrue(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
+            owner: .localEditing,
+            hasPendingNoteCommit: true
+        ))
+    }
+
+    func testEditorBufferAllowsRemoteRefreshWhenLocalEditHasCommitted() {
+        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
+            owner: .localEditing,
+            hasPendingNoteCommit: false
+        ))
+    }
+
+    func testEditorBufferAllowsDeliberateNonLocalOwnersToRefresh() {
+        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
+            owner: .idle,
+            hasPendingNoteCommit: true
+        ))
+        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
+            owner: .restoringHistory,
+            hasPendingNoteCommit: true
+        ))
+        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
+            owner: .resolvingConflict,
+            hasPendingNoteCommit: true
+        ))
+    }
+
+    func testSelectionFormattingPolicyAllowsSmallSelectionScan() {
+        XCTAssertFalse(EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(
+            selectionLength: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold
+        ))
+    }
+
+    func testSelectionFormattingPolicyDefersLargeSelectionScan() {
+        XCTAssertTrue(EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(
+            selectionLength: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold + 1
+        ))
+    }
+
+    func testRichTextCommitPolicyUsesDeferredEncoderAtCommitBoundary() throws {
+        var encodeCount = 0
+        let staleData = try XCTUnwrap("stale".data(using: .utf8))
+        let expectedData = try XCTUnwrap("fresh serialized".data(using: .utf8))
+        let encoder = DeferredRichTextContentEncoder {
+            encodeCount += 1
+            return expectedData
+        }
+
+        XCTAssertEqual(encodeCount, 0)
+        let committedData = EditorRichTextCommitPolicy.committedRichTextContentData(
+            currentData: staleData,
+            pendingEncoder: encoder
+        )
+
+        XCTAssertEqual(committedData, expectedData)
+        XCTAssertEqual(encodeCount, 1)
+    }
+
+    func testRichTextCommitPolicyFallsBackToCurrentDataWithoutDeferredEncoder() throws {
+        let currentData = try XCTUnwrap("current serialized".data(using: .utf8))
+
+        XCTAssertEqual(
+            EditorRichTextCommitPolicy.committedRichTextContentData(
+                currentData: currentData,
+                pendingEncoder: nil
+            ),
+            currentData
+        )
+    }
+
     func testIncomingNoteSyncDoesNotOverwriteImmediateLocalTextEdit() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
