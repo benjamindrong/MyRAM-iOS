@@ -4240,6 +4240,42 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(noteMatchesSearch(note, query: "groceries"))
     }
 
+    func testCurrentNoteSearchOrdersPinnedTextBeforeBodyMatches() {
+        let firstPinnedID = UUID()
+        let secondPinnedID = UUID()
+
+        let matches = NoteSearchMatcher.matches(
+            in: "Body alpha detail",
+            pinnedTexts: [
+                NoteSearchPinnedText(id: firstPinnedID, text: "Pinned beta"),
+                NoteSearchPinnedText(id: secondPinnedID, text: "Pinned alpha")
+            ],
+            query: "alpha"
+        )
+
+        XCTAssertEqual(matches.count, 2)
+        XCTAssertEqual(matches[0].region, .pinnedText(id: secondPinnedID))
+        XCTAssertNil(matches[0].nsRangeInRenderedText)
+        XCTAssertEqual(matches[1].region, .body)
+        XCTAssertEqual(matches[1].nsRangeInRenderedText, NSRange(location: 5, length: 5))
+    }
+
+    func testCurrentNoteSearchUsesOriginalStringRangesForDiacriticInsensitiveBodyMatches() {
+        let body = "Cafe planning\nCafé receipt"
+
+        let matches = NoteSearchMatcher.matches(
+            in: body,
+            pinnedTexts: [],
+            query: "cafe"
+        )
+
+        XCTAssertEqual(matches.count, 2)
+        XCTAssertEqual(matches.map(\.nsRangeInRenderedText), [
+            NSRange(location: 0, length: 4),
+            NSRange(location: 14, length: 4)
+        ])
+    }
+
     private func makeContainer(
         isStoredInMemoryOnly: Bool,
         configurationName: String = "MyRAMTests"
