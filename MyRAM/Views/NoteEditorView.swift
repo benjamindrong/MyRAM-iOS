@@ -12,6 +12,28 @@ private let defaultEditorTextFont = UIFont.preferredFont(forTextStyle: .body)
 #endif
 private let editorCommitDelayNanoseconds: UInt64 = 500_000_000
 
+enum EditorBufferOwner {
+    case idle
+    case localEditing
+    case applyingRemoteSync
+    case restoringHistory
+    case resolvingConflict
+}
+
+enum EditorBufferReloadPolicy {
+    static func shouldDeferRemoteRefresh(owner: EditorBufferOwner, hasPendingNoteCommit: Bool) -> Bool {
+        owner == .localEditing && hasPendingNoteCommit
+    }
+}
+
+enum EditorSelectionFormattingPolicy {
+    static let largeSelectionFormattingThreshold = 2_000
+
+    static func shouldDeferFullFormattingScan(selectionLength: Int) -> Bool {
+        selectionLength > largeSelectionFormattingThreshold
+    }
+}
+
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -94,6 +116,8 @@ struct NoteEditorView: View {
     @State private var keyboardToastTask: Task<Void, Never>?
     @State private var pendingNoteCommitTask: Task<Void, Never>?
     @State private var hasPendingNoteCommit = false
+    @State private var editorBufferOwner: EditorBufferOwner = .idle
+    @State private var deferRemoteRefreshUntilCommit = false
     @FocusState private var isCurrentNoteSearchFocused: Bool
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
@@ -1237,6 +1261,10 @@ struct NoteEditorView: View {
             richTextContentData: richTextContentData
         )
         vm.recordNoteEdited(note)
+        if editorBufferOwner == .localEditing {
+            editorBufferOwner = .idle
+        }
+        applyDeferredRemoteRefreshIfNeeded()
     }
 
     private func handleEditorChange() {
@@ -1255,6 +1283,7 @@ struct NoteEditorView: View {
             }
         }
         lastSnapshot = currentSnapshot
+        editorBufferOwner = .localEditing
         vm.recordActiveNoteTextEdited(note)
         scheduleNoteCommit()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
@@ -1268,9 +1297,28 @@ struct NoteEditorView: View {
     }
 
     private func reloadNoteFromSync() {
+        guard !EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
+            owner: editorBufferOwner,
+            hasPendingNoteCommit: hasPendingNoteCommit
+        ) else {
+            deferRemoteRefreshUntilCommit = true
+            return
+        }
+
+        applyRemoteNoteRefresh()
+    }
+
+    private func applyDeferredRemoteRefreshIfNeeded() {
+        guard deferRemoteRefreshUntilCommit else { return }
+        deferRemoteRefreshUntilCommit = false
+        applyRemoteNoteRefresh()
+    }
+
+    private func applyRemoteNoteRefresh() {
         guard vm.currentNote?.id == note.id,
               let refreshedNote = vm.refreshedNote(withID: note.id) else { return }
         cancelPendingNoteCommit()
+        editorBufferOwner = .applyingRemoteSync
         isApplyingRemoteSyncUpdate = true
         title = refreshedNote.title
         content = refreshedNote.content
@@ -1282,6 +1330,9 @@ struct NoteEditorView: View {
         refreshUndoState()
         DispatchQueue.main.async {
             isApplyingRemoteSyncUpdate = false
+            if editorBufferOwner == .applyingRemoteSync {
+                editorBufferOwner = .idle
+            }
         }
     }
 
@@ -1372,6 +1423,7 @@ struct NoteEditorView: View {
     }
 
     private func restore(_ snapshot: NoteSnapshot) {
+        editorBufferOwner = .restoringHistory
         title = snapshot.title
         content = snapshot.content
         richTextContentData = snapshot.richTextContentData
@@ -1386,6 +1438,7 @@ struct NoteEditorView: View {
             richTextContentData: snapshot.richTextContentData
         )
         vm.recordNoteEdited(note)
+        editorBufferOwner = .idle
     }
 
     private func restorePinnedThoughts(_ snapshots: [PinnedThoughtSnapshot]) {

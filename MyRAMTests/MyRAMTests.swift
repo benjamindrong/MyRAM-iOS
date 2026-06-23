@@ -1800,6 +1800,47 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).first, conflict)
     }
 
+    func testEditorBufferDefersRemoteRefreshDuringPendingLocalEdit() {
+        XCTAssertTrue(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
+            owner: .localEditing,
+            hasPendingNoteCommit: true
+        ))
+    }
+
+    func testEditorBufferAllowsRemoteRefreshWhenLocalEditHasCommitted() {
+        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
+            owner: .localEditing,
+            hasPendingNoteCommit: false
+        ))
+    }
+
+    func testEditorBufferAllowsDeliberateNonLocalOwnersToRefresh() {
+        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
+            owner: .idle,
+            hasPendingNoteCommit: true
+        ))
+        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
+            owner: .restoringHistory,
+            hasPendingNoteCommit: true
+        ))
+        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
+            owner: .resolvingConflict,
+            hasPendingNoteCommit: true
+        ))
+    }
+
+    func testSelectionFormattingPolicyAllowsSmallSelectionScan() {
+        XCTAssertFalse(EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(
+            selectionLength: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold
+        ))
+    }
+
+    func testSelectionFormattingPolicyDefersLargeSelectionScan() {
+        XCTAssertTrue(EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(
+            selectionLength: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold + 1
+        ))
+    }
+
     func testIncomingNoteSyncDoesNotOverwriteImmediateLocalTextEdit() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
