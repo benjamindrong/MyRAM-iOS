@@ -4,18 +4,33 @@ import NearbySyncCore
 
 // Keeps trusted-peer auto-reconnect idempotent while Multipeer is still negotiating.
 struct TrustedPeerReconnectTracker {
-    private var connectingPeerIDs: Set<String> = []
+    struct Attempt: Equatable {
+        let peerID: String
+        fileprivate let token: UUID
+    }
 
-    mutating func beginConnecting(to peerID: String) -> Bool {
-        connectingPeerIDs.insert(peerID).inserted
+    private var connectingAttemptsByPeerID: [String: Attempt] = [:]
+
+    mutating func beginConnecting(to peerID: String) -> Attempt? {
+        guard connectingAttemptsByPeerID[peerID] == nil else { return nil }
+
+        let attempt = Attempt(peerID: peerID, token: UUID())
+        connectingAttemptsByPeerID[peerID] = attempt
+        return attempt
     }
 
     mutating func finishConnecting(to peerID: String) {
-        connectingPeerIDs.remove(peerID)
+        connectingAttemptsByPeerID.removeValue(forKey: peerID)
+    }
+
+    mutating func finishConnecting(_ attempt: Attempt) {
+        guard connectingAttemptsByPeerID[attempt.peerID] == attempt else { return }
+
+        finishConnecting(to: attempt.peerID)
     }
 
     func isConnecting(to peerID: String) -> Bool {
-        connectingPeerIDs.contains(peerID)
+        connectingAttemptsByPeerID[peerID] != nil
     }
 }
 
@@ -161,12 +176,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func invite(_ peer: MyRAMDiscoveredPeer) {
-        guard reconnectTracker.beginConnecting(to: peer.deviceID) else { return }
+        guard let attempt = reconnectTracker.beginConnecting(to: peer.deviceID) else { return }
 
         lastConnectionEvent = "Inviting \(peer.displayName)"
         let timeout: TimeInterval = 12
         transport.invite(peer.peerID, timeout: timeout)
-        clearConnectingStateAfterInviteTimeout(for: peer.deviceID, timeout: timeout)
+        clearConnectingStateAfterInviteTimeout(for: attempt, timeout: timeout)
     }
 
     func recordLocalChange(
@@ -223,16 +238,23 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         pendingChangeCount = await syncEngine.pendingChangeCount()
     }
 
-    private func clearConnectingStateAfterInviteTimeout(for deviceID: String, timeout: TimeInterval) {
+    private func clearConnectingStateAfterInviteTimeout(
+        for attempt: TrustedPeerReconnectTracker.Attempt,
+        timeout: TimeInterval
+    ) {
         Task { [weak self] in
             let nanoseconds = UInt64((timeout + 1) * 1_000_000_000)
             try? await Task.sleep(nanoseconds: nanoseconds)
-            self?.clearConnectingState(for: deviceID)
+            self?.clearConnectingState(for: attempt)
         }
     }
 
     private func clearConnectingState(for deviceID: String) {
         reconnectTracker.finishConnecting(to: deviceID)
+    }
+
+    private func clearConnectingState(for attempt: TrustedPeerReconnectTracker.Attempt) {
+        reconnectTracker.finishConnecting(attempt)
     }
 
     private func sendAcknowledgement(for changes: [SyncChange], to peerID: MCPeerID) async {
