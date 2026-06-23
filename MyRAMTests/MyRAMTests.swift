@@ -106,6 +106,36 @@ final class MyRAMTests: XCTestCase {
         }
     }
 
+    func testTrustedPeerReconnectTrackerBlocksDuplicateConnectAttempts() {
+        var tracker = TrustedPeerReconnectTracker()
+
+        XCTAssertNotNil(tracker.beginConnecting(to: "trusted-device"))
+        XCTAssertNil(tracker.beginConnecting(to: "trusted-device"))
+        XCTAssertTrue(tracker.isConnecting(to: "trusted-device"))
+    }
+
+    func testTrustedPeerReconnectTrackerAllowsRetryAfterConnectionEnds() {
+        var tracker = TrustedPeerReconnectTracker()
+
+        XCTAssertNotNil(tracker.beginConnecting(to: "trusted-device"))
+        tracker.finishConnecting(to: "trusted-device")
+
+        XCTAssertFalse(tracker.isConnecting(to: "trusted-device"))
+        XCTAssertNotNil(tracker.beginConnecting(to: "trusted-device"))
+    }
+
+    func testTrustedPeerReconnectTrackerIgnoresStaleAttemptTimeout() throws {
+        var tracker = TrustedPeerReconnectTracker()
+
+        let staleAttempt = try XCTUnwrap(tracker.beginConnecting(to: "trusted-device"))
+        tracker.finishConnecting(to: staleAttempt.peerID)
+        let activeAttempt = try XCTUnwrap(tracker.beginConnecting(to: "trusted-device"))
+
+        tracker.finishConnecting(staleAttempt)
+
+        XCTAssertTrue(tracker.isConnecting(to: activeAttempt.peerID))
+    }
+
     func testPinnedHighlightPaletteUsesReadableTextColor() {
         XCTAssertGreaterThan(
             contrastRatio(
