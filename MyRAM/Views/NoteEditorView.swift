@@ -52,6 +52,12 @@ enum EditorRichTextCommitPolicy {
     }
 }
 
+enum PinnedThoughtEditDraftPolicy {
+    static func displayText(for thoughtID: UUID, persistedText: String, drafts: [UUID: String]) -> String {
+        drafts[thoughtID] ?? persistedText
+    }
+}
+
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -126,6 +132,7 @@ struct NoteEditorView: View {
     @State private var titleDraft = ""
     @State private var arePinnedThoughtsExpanded = false
     @State private var editingPinnedThoughtID: UUID?
+    @State private var pinnedThoughtDrafts: [UUID: String] = [:]
     @State private var activeReorderPayload: String?
     @State private var activeReorderOffset: CGSize = .zero
     @State private var pendingReorderInsertionIndex: Int?
@@ -138,6 +145,7 @@ struct NoteEditorView: View {
     @State private var deferRemoteRefreshUntilCommit = false
     @State private var pendingRichTextContentEncoder: DeferredRichTextContentEncoder?
     @FocusState private var isCurrentNoteSearchFocused: Bool
+    @FocusState private var focusedPinnedThoughtID: UUID?
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
     
@@ -246,13 +254,21 @@ struct NoteEditorView: View {
             }
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase != .active {
+                    commitActivePinnedThoughtEdit()
                     commitPendingNoteEdit()
                     dismissCurrentNoteSearchKeyboard()
                 }
             }
             .onDisappear {
                 clearCurrentNoteSearch()
+                commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
+            }
+            .onChange(of: focusedPinnedThoughtID) { oldValue, newValue in
+                guard oldValue != newValue else { return }
+                if let oldValue {
+                    commitPinnedThoughtEdit(withID: oldValue)
+                }
             }
             .onChange(of: vm.activeNoteSyncRevision) {
                 reloadNoteFromSync()
@@ -773,8 +789,14 @@ struct NoteEditorView: View {
 
             if editingPinnedThoughtID == thought.id {
                 TextField("Pinned", text: Binding(
-                    get: { thought.text },
-                    set: { vm.updatePinnedThought(thought, text: $0) }
+                    get: {
+                        PinnedThoughtEditDraftPolicy.displayText(
+                            for: thought.id,
+                            persistedText: thought.text,
+                            drafts: pinnedThoughtDrafts
+                        )
+                    },
+                    set: { pinnedThoughtDrafts[thought.id] = $0 }
                 ), axis: .vertical)
                 .lineLimit(1...4)
                 .textFieldStyle(.plain)
@@ -782,6 +804,13 @@ struct NoteEditorView: View {
                 .foregroundStyle(pinnedHighlightText)
                 .tint(pinnedHighlightText)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .focused($focusedPinnedThoughtID, equals: thought.id)
+                .onSubmit {
+                    commitPinnedThoughtEdit(thought)
+                }
+                .onAppear {
+                    focusedPinnedThoughtID = thought.id
+                }
                 .accessibilityIdentifier("pinned-thought-text")
             } else {
                 Text(thought.text.isEmpty ? "Pinned" : thought.text)
@@ -809,7 +838,7 @@ struct NoteEditorView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            editingPinnedThoughtID = thought.id
+            beginPinnedThoughtEditing(thought)
         }
         .contextMenu {
             Button("Unpin") {
@@ -868,6 +897,65 @@ struct NoteEditorView: View {
         vm.movePinnedThought(draggedThought, toIndex: pendingReorderInsertionIndex)
     }
 
+    private func beginPinnedThoughtEditing(_ thought: PinnedThought) {
+        if let editingPinnedThoughtID, editingPinnedThoughtID != thought.id {
+            commitPinnedThoughtEdit(withID: editingPinnedThoughtID)
+        }
+        pinnedThoughtDrafts[thought.id] = PinnedThoughtEditDraftPolicy.displayText(
+            for: thought.id,
+            persistedText: thought.text,
+            drafts: pinnedThoughtDrafts
+        )
+        editingPinnedThoughtID = thought.id
+        focusedPinnedThoughtID = thought.id
+    }
+
+    private func commitActivePinnedThoughtEdit() {
+        guard let editingPinnedThoughtID else { return }
+        commitPinnedThoughtEdit(withID: editingPinnedThoughtID)
+    }
+
+    private var hasActivePinnedThoughtEdit: Bool {
+        guard let editingPinnedThoughtID else { return false }
+        return pinnedThoughtDrafts[editingPinnedThoughtID] != nil
+    }
+
+    private func commitPinnedThoughtEdit(_ thought: PinnedThought) {
+        commitPinnedThoughtEdit(withID: thought.id)
+    }
+
+    private func commitPinnedThoughtEdit(withID thoughtID: UUID) {
+        guard let draft = pinnedThoughtDrafts[thoughtID] else {
+            if editingPinnedThoughtID == thoughtID {
+                editingPinnedThoughtID = nil
+            }
+            if focusedPinnedThoughtID == thoughtID {
+                focusedPinnedThoughtID = nil
+            }
+            return
+        }
+        guard let thought = note.pinnedThoughts.first(where: { $0.id == thoughtID }) else {
+            pinnedThoughtDrafts[thoughtID] = nil
+            if editingPinnedThoughtID == thoughtID {
+                editingPinnedThoughtID = nil
+            }
+            if focusedPinnedThoughtID == thoughtID {
+                focusedPinnedThoughtID = nil
+            }
+            return
+        }
+
+        vm.updatePinnedThought(thought, text: draft)
+        pinnedThoughtDrafts[thoughtID] = nil
+        if editingPinnedThoughtID == thoughtID {
+            editingPinnedThoughtID = nil
+        }
+        if focusedPinnedThoughtID == thoughtID {
+            focusedPinnedThoughtID = nil
+        }
+        applyDeferredRemoteRefreshIfNeeded()
+    }
+
     private func pinSelectedText(_ selectedText: String) -> Bool {
         let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -877,15 +965,16 @@ struct NoteEditorView: View {
         arePinnedThoughtsExpanded = true
         vm.setPinnedThoughtsSectionExpanded(true, for: note)
         guard let pinnedThought = vm.addPinnedThought(to: note, text: trimmed) else { return false }
-        editingPinnedThoughtID = pinnedThought.id
+        beginPinnedThoughtEditing(pinnedThought)
         return true
     }
 
     private func addPinnedThoughtFromSection() {
+        commitActivePinnedThoughtEdit()
         arePinnedThoughtsExpanded = true
         vm.setPinnedThoughtsSectionExpanded(true, for: note)
         guard let pinnedThought = vm.addPinnedThought(to: note) else { return }
-        editingPinnedThoughtID = pinnedThought.id
+        beginPinnedThoughtEditing(pinnedThought)
     }
 
     private func configureToolbarBridge() {
@@ -898,12 +987,20 @@ struct NoteEditorView: View {
         }
         toolbarBridge?.undo = { performUndo() }
         toolbarBridge?.redo = { performRedo() }
-        toolbarBridge?.newNote = { onNewNote(vm.createNewNote()) }
+        toolbarBridge?.newNote = {
+            commitActivePinnedThoughtEdit()
+            commitPendingNoteEdit()
+            onNewNote(vm.createNewNote())
+        }
         toolbarBridge?.newFolder = {
             newFolderName = ""
             showingCreateFolderPrompt = true
         }
-        toolbarBridge?.exportNote = { exportCurrentNote() }
+        toolbarBridge?.exportNote = {
+            commitActivePinnedThoughtEdit()
+            commitPendingNoteEdit()
+            exportCurrentNote()
+        }
         toolbarBridge?.importFromPhotoLibrary = { showingPhotoPicker = true }
         toolbarBridge?.importImageFile = { showingFileImporter = true }
         toolbarBridge?.deleteNote = {
@@ -1022,6 +1119,7 @@ struct NoteEditorView: View {
     }
 
     private func unpinThoughtToBody(_ thought: PinnedThought) {
+        commitPinnedThoughtEdit(thought)
         let unpinnedText = thought.text.trimmingCharacters(in: .whitespacesAndNewlines)
         vm.unpinThought(thought)
         guard !unpinnedText.isEmpty else { return }
@@ -1033,6 +1131,10 @@ struct NoteEditorView: View {
         if editingPinnedThoughtID == thought.id {
             editingPinnedThoughtID = nil
         }
+        if focusedPinnedThoughtID == thought.id {
+            focusedPinnedThoughtID = nil
+        }
+        pinnedThoughtDrafts[thought.id] = nil
         vm.deletePinnedParagraph(thought)
     }
 
@@ -1169,6 +1271,7 @@ struct NoteEditorView: View {
         switch action {
         case .newNote:
             topBarActionButton(systemImage: "square.and.pencil", identifier: "topbar-new-note") {
+                commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
                 onNewNote(vm.createNewNote())
             }
@@ -1179,6 +1282,7 @@ struct NoteEditorView: View {
             }
         case .exportNote:
             topBarActionButton(systemImage: "square.and.arrow.up", identifier: "topbar-export-note") {
+                commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
                 exportCurrentNote()
             }
@@ -1329,6 +1433,11 @@ struct NoteEditorView: View {
     }
 
     private func reloadNoteFromSync() {
+        guard !hasActivePinnedThoughtEdit else {
+            deferRemoteRefreshUntilCommit = true
+            return
+        }
+
         guard !EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
             owner: editorBufferOwner,
             hasPendingNoteCommit: hasPendingNoteCommit
@@ -1357,6 +1466,8 @@ struct NoteEditorView: View {
         richTextContentData = refreshedNote.richTextContentData
         restoreContentToggleToken += 1
         editingPinnedThoughtID = nil
+        focusedPinnedThoughtID = nil
+        pinnedThoughtDrafts.removeAll()
         lastSnapshot = currentNoteSnapshot()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
@@ -1474,6 +1585,7 @@ struct NoteEditorView: View {
     }
 
     private func restorePinnedThoughts(_ snapshots: [PinnedThoughtSnapshot]) {
+        pinnedThoughtDrafts.removeAll()
         for thought in sortedPinnedThoughts {
             vm.unpinThought(thought)
         }
@@ -1485,9 +1597,11 @@ struct NoteEditorView: View {
             }
         }
         editingPinnedThoughtID = nil
+        focusedPinnedThoughtID = nil
     }
 
     private func performUndo() {
+        commitActivePinnedThoughtEdit()
         if canUndo {
             undoLastEdit()
         } else {
@@ -1497,6 +1611,7 @@ struct NoteEditorView: View {
     }
 
     private func performRedo() {
+        commitActivePinnedThoughtEdit()
         redoLastEdit()
         refreshUndoState()
     }
@@ -2034,6 +2149,8 @@ struct NoteEditorView: View {
         switch action {
         case .exportNote:
             Button {
+                commitActivePinnedThoughtEdit()
+                commitPendingNoteEdit()
                 exportCurrentNote()
             } label: {
                 Label("Export Note", systemImage: "square.and.arrow.up")
@@ -2048,6 +2165,8 @@ struct NoteEditorView: View {
             .foregroundStyle(.primary)
         case .newNote:
             Button {
+                commitActivePinnedThoughtEdit()
+                commitPendingNoteEdit()
                 onNewNote(vm.createNewNote())
             } label: {
                 Label("New Note", systemImage: "square.and.pencil")
@@ -2119,7 +2238,7 @@ private struct TopBarActionLayout {
     let overflowActions: [NoteEditorOverflowAction]
 }
 
-struct EditorFormattingState {
+struct EditorFormattingState: Equatable {
     var bold = false
     var italic = false
     var underline = false
@@ -3044,6 +3163,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var textColorToggleToken = 0
         private var activeSearchHighlightRange: NSRange?
         private var pendingFormattingStateRefresh: DispatchWorkItem?
+        private var lastReportedFormattingState: EditorFormattingState?
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
         var isUpdatingUIView = false
         var isHandlingUserFocusChange = false
@@ -3465,6 +3585,9 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func applySearchHighlight(_ range: NSRange?, in textView: UITextView) {
+            if range == activeSearchHighlightRange, hasSearchHighlightLayers(in: textView) {
+                return
+            }
             clearSearchHighlight(in: textView)
 
             activeSearchHighlightRange = nil
@@ -3478,6 +3601,10 @@ private struct SelectableTextView: UIViewRepresentable {
             activeSearchHighlightRange = range
             textView.scrollRangeToVisible(range)
             drawSearchHighlight(range, in: textView)
+        }
+
+        private func hasSearchHighlightLayers(in textView: UITextView) -> Bool {
+            textView.layer.sublayers?.contains { $0.name == Self.searchHighlightLayerName } == true
         }
 
         private func drawSearchHighlight(_ range: NSRange, in textView: UITextView) {
@@ -3626,9 +3753,12 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func reportFormattingState(from textView: UITextView, allowsLargeSelectionScan: Bool = false) {
             let state = formattingState(from: textView, allowsLargeSelectionScan: allowsLargeSelectionScan)
+            guard state != lastReportedFormattingState else { return }
+            lastReportedFormattingState = state
             if isUpdatingUIView {
                 RunLoop.main.perform { [weak self] in
-                    self?.onFormattingStateChanged(state)
+                    guard let self, self.lastReportedFormattingState == state else { return }
+                    self.onFormattingStateChanged(state)
                 }
                 return
             }

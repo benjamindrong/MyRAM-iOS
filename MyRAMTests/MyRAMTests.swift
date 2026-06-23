@@ -1872,6 +1872,30 @@ final class MyRAMTests: XCTestCase {
         )
     }
 
+    func testPinnedThoughtDraftDisplayPreservesSingleSpaceWhileEditing() {
+        let thoughtID = UUID()
+
+        XCTAssertEqual(
+            PinnedThoughtEditDraftPolicy.displayText(
+                for: thoughtID,
+                persistedText: "",
+                drafts: [thoughtID: " "]
+            ),
+            " "
+        )
+    }
+
+    func testPinnedThoughtDraftDisplayFallsBackToPersistedTextWithoutDraft() {
+        XCTAssertEqual(
+            PinnedThoughtEditDraftPolicy.displayText(
+                for: UUID(),
+                persistedText: "Persisted pinned",
+                drafts: [:]
+            ),
+            "Persisted pinned"
+        )
+    }
+
     func testIncomingNoteSyncDoesNotOverwriteImmediateLocalTextEdit() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -3682,6 +3706,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(
             NoteEditorOverflowAction.priorityOrder,
             [
+                .search,
                 .newNote,
                 .newFolder,
                 .exportNote,
