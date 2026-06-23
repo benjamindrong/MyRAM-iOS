@@ -1841,22 +1841,35 @@ final class MyRAMTests: XCTestCase {
         ))
     }
 
-    func testDeferredRichTextContentEncoderRunsOnlyWhenRequested() throws {
+    func testRichTextCommitPolicyUsesDeferredEncoderAtCommitBoundary() throws {
         var encodeCount = 0
-        let expectedData = try XCTUnwrap("serialized".data(using: .utf8))
+        let staleData = try XCTUnwrap("stale".data(using: .utf8))
+        let expectedData = try XCTUnwrap("fresh serialized".data(using: .utf8))
         let encoder = DeferredRichTextContentEncoder {
             encodeCount += 1
             return expectedData
         }
-        let update = EditorRichTextContentUpdate.deferred(encoder)
 
         XCTAssertEqual(encodeCount, 0)
+        let committedData = EditorRichTextCommitPolicy.committedRichTextContentData(
+            currentData: staleData,
+            pendingEncoder: encoder
+        )
 
-        guard case .deferred(let deferredEncoder) = update else {
-            return XCTFail("Expected deferred rich-text update")
-        }
-        XCTAssertEqual(deferredEncoder.encode(), expectedData)
+        XCTAssertEqual(committedData, expectedData)
         XCTAssertEqual(encodeCount, 1)
+    }
+
+    func testRichTextCommitPolicyFallsBackToCurrentDataWithoutDeferredEncoder() throws {
+        let currentData = try XCTUnwrap("current serialized".data(using: .utf8))
+
+        XCTAssertEqual(
+            EditorRichTextCommitPolicy.committedRichTextContentData(
+                currentData: currentData,
+                pendingEncoder: nil
+            ),
+            currentData
+        )
     }
 
     func testIncomingNoteSyncDoesNotOverwriteImmediateLocalTextEdit() async throws {

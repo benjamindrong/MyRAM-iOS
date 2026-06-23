@@ -43,6 +43,15 @@ enum EditorRichTextContentUpdate {
     case deferred(DeferredRichTextContentEncoder)
 }
 
+enum EditorRichTextCommitPolicy {
+    static func committedRichTextContentData(
+        currentData: Data?,
+        pendingEncoder: DeferredRichTextContentEncoder?
+    ) -> Data? {
+        pendingEncoder?.encode() ?? currentData
+    }
+}
+
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -1264,7 +1273,10 @@ struct NoteEditorView: View {
     private func commitPendingNoteEdit() {
         guard hasPendingNoteCommit else { return }
         cancelPendingNoteCommit()
-        let committedRichTextContentData = pendingRichTextContentEncoder?.encode() ?? richTextContentData
+        let committedRichTextContentData = EditorRichTextCommitPolicy.committedRichTextContentData(
+            currentData: richTextContentData,
+            pendingEncoder: pendingRichTextContentEncoder
+        )
         pendingRichTextContentEncoder = nil
         richTextContentData = committedRichTextContentData
         vm.commitNoteEdit(
