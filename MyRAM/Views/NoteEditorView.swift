@@ -23,6 +23,8 @@ struct NoteEditorView: View {
     var toolbarBridge: NoteEditorToolbarBridge?
     var syncController: MyRAMSyncController? = nil
     var syncConflicts: [SyncConflictVersion] = []
+    var currentNoteSearchText: Binding<String>? = nil
+    var currentNoteSearchFocusToken = 0
     var onOpenSyncConflicts: (() -> Void)?
     @StateObject private var formattingController = TextFormattingController()
     
@@ -71,6 +73,13 @@ struct NoteEditorView: View {
     @State private var exportErrorMessage: String?
     @State private var showingNearbySync = false
     @State private var selectedSyncConflict: SyncConflictVersion?
+    @State private var isLocalCurrentNoteSearchPresented = false
+    @State private var localCurrentNoteSearchText = ""
+    @State private var debouncedCurrentNoteSearchText = ""
+    @State private var currentNoteSearchMatches: [NoteSearchMatch] = []
+    @State private var currentNoteSearchDebounceTask: Task<Void, Never>?
+    @State private var selectedCurrentNoteMatchID: String?
+    @State private var currentNoteSearchFocusRequest = 0
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
     @State private var showingTitleEditor = false
@@ -85,6 +94,7 @@ struct NoteEditorView: View {
     @State private var keyboardToastTask: Task<Void, Never>?
     @State private var pendingNoteCommitTask: Task<Void, Never>?
     @State private var hasPendingNoteCommit = false
+    @FocusState private var isCurrentNoteSearchFocused: Bool
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
     
@@ -173,12 +183,32 @@ struct NoteEditorView: View {
         editorChromeContent
             .onAppear(perform: initializeEditor)
             .onChange(of: title) { handleEditorChange() }
+            .onChange(of: currentNoteSearchQuery) {
+                scheduleCurrentNoteSearchUpdate()
+            }
+            .onChange(of: content) {
+                scheduleCurrentNoteSearchUpdate()
+            }
+            .onChange(of: sortedPinnedTextSearchSignature) {
+                scheduleCurrentNoteSearchUpdate()
+            }
+            .onChange(of: currentNoteSearchFocusToken) {
+                presentCurrentNoteSearch(focusesField: false)
+            }
+            .onChange(of: currentNoteSearchMatches) {
+                reconcileSelectedCurrentNoteMatch()
+            }
+            .onChange(of: selectedCurrentNoteMatchID) {
+                handleSelectedCurrentNoteMatchChanged()
+            }
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase != .active {
                     commitPendingNoteEdit()
+                    dismissCurrentNoteSearchKeyboard()
                 }
             }
             .onDisappear {
+                clearCurrentNoteSearch()
                 commitPendingNoteEdit()
             }
             .onChange(of: vm.activeNoteSyncRevision) {
@@ -299,6 +329,10 @@ struct NoteEditorView: View {
                 editorTopBar
             }
 
+            if isCurrentNoteSearchPresented {
+                currentNoteSearchControls
+            }
+
             VStack(spacing: 8) {
                 editorSurface
                 editorControlStrip
@@ -348,6 +382,7 @@ struct NoteEditorView: View {
             textColorToggleToken: textColorToggleToken,
             pendingTextUIColor: pendingTextUIColor,
             pendingTextColorUsesDefault: pendingTextColorUsesDefault,
+            searchHighlightRange: selectedBodySearchRange,
             formattingController: formattingController,
             backgroundColor: editorChromeStyle.editorSurfaceUIColor,
             textColor: editorChromeStyle.editorTextUIColor,
@@ -355,10 +390,140 @@ struct NoteEditorView: View {
             onContentChanged: handleContentChanged,
             onUndoManagerChanged: updateActiveUndoManager,
             onFormattingStateChanged: handleFormattingStateChanged,
+            onEditingFocusChanged: handleEditorFocusChanged,
+            onEditorScrolled: dismissCurrentNoteSearchKeyboard,
             onPinSelection: pinSelectedText,
             onLookupSelection: presentLookup
         )
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var currentNoteSearchControls: some View {
+        HStack(spacing: 8) {
+            if !usesExternalCurrentNoteSearch {
+                Image(systemName: "magnifyingglass")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                TextField("Search Note", text: currentNoteSearchBinding)
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                    .submitLabel(.search)
+                    .focused($isCurrentNoteSearchFocused)
+                    .onSubmit {
+                        dismissCurrentNoteSearchKeyboard()
+                        selectFirstCurrentNoteMatchIfNeeded()
+                    }
+                    .accessibilityIdentifier("current-note-search-field")
+            }
+
+            Text(currentNoteSearchSummary)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(minWidth: 56, alignment: .trailing)
+                .accessibilityIdentifier("current-note-search-count")
+
+            Button {
+                selectPreviousCurrentNoteMatch()
+            } label: {
+                Image(systemName: "chevron.up")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .disabled(currentNoteSearchMatches.isEmpty)
+            .accessibilityLabel("Previous match")
+            .accessibilityIdentifier("current-note-search-previous")
+
+            Button {
+                selectNextCurrentNoteMatch()
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .disabled(currentNoteSearchMatches.isEmpty)
+            .accessibilityLabel("Next match")
+            .accessibilityIdentifier("current-note-search-next")
+
+            Button {
+                clearCurrentNoteSearch()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close search")
+            .accessibilityIdentifier("current-note-search-close")
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 38)
+        .background(editorChromeStyle.toolbarFillColor)
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onChange(of: currentNoteSearchFocusRequest) {
+            guard !usesExternalCurrentNoteSearch else { return }
+            isCurrentNoteSearchFocused = true
+        }
+        .padding(.horizontal, showsTopBar ? 0 : 12)
+    }
+
+    private var currentNoteSearchBinding: Binding<String> {
+        Binding(
+            get: { currentNoteSearchQuery },
+            set: { setCurrentNoteSearchQuery($0) }
+        )
+    }
+
+    private var usesExternalCurrentNoteSearch: Bool {
+        currentNoteSearchText != nil
+    }
+
+    private var isCurrentNoteSearchPresented: Bool {
+        usesExternalCurrentNoteSearch
+            ? !currentNoteSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            : isLocalCurrentNoteSearchPresented
+    }
+
+    private var currentNoteSearchQuery: String {
+        currentNoteSearchText?.wrappedValue ?? localCurrentNoteSearchText
+    }
+
+    private var selectedCurrentNoteMatch: NoteSearchMatch? {
+        guard let selectedCurrentNoteMatchID else { return nil }
+        return currentNoteSearchMatches.first { $0.id == selectedCurrentNoteMatchID }
+    }
+
+    private var selectedBodySearchRange: NSRange? {
+        guard case .body = selectedCurrentNoteMatch?.region else { return nil }
+        return selectedCurrentNoteMatch?.nsRangeInRenderedText
+    }
+
+    private var selectedPinnedTextSearchID: UUID? {
+        guard case let .pinnedText(id) = selectedCurrentNoteMatch?.region else { return nil }
+        return id
+    }
+
+    private var sortedPinnedTextSearchSignature: [String] {
+        sortedPinnedThoughts.map { "\($0.id.uuidString):\($0.text)" }
+    }
+
+    private var currentNoteSearchSummary: String {
+        let trimmed = debouncedCurrentNoteSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "0" }
+        guard let selectedCurrentNoteMatchID,
+              let index = currentNoteSearchMatches.firstIndex(where: { $0.id == selectedCurrentNoteMatchID }) else {
+            return currentNoteSearchMatches.isEmpty ? "0" : "\(currentNoteSearchMatches.count)"
+        }
+        return "\(index + 1) of \(currentNoteSearchMatches.count)"
     }
 
     @ViewBuilder
@@ -490,21 +655,34 @@ struct NoteEditorView: View {
                 }
 
                 if arePinnedThoughtsExpanded {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(Array(sortedPinnedThoughts.enumerated()), id: \.element.id) { index, thought in
-                                if shouldShowReorderIndicator(at: index) {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(Array(sortedPinnedThoughts.enumerated()), id: \.element.id) { index, thought in
+                                    if shouldShowReorderIndicator(at: index) {
+                                        ReorderInsertionIndicator()
+                                    }
+                                    pinnedThoughtRow(thought, index: index, count: sortedPinnedThoughts.count)
+                                        .id(thought.id)
+                                }
+                                if shouldShowReorderIndicator(at: sortedPinnedThoughts.count) {
                                     ReorderInsertionIndicator()
                                 }
-                                pinnedThoughtRow(thought, index: index, count: sortedPinnedThoughts.count)
-                            }
-                            if shouldShowReorderIndicator(at: sortedPinnedThoughts.count) {
-                                ReorderInsertionIndicator()
                             }
                         }
+                        .scrollIndicators(.visible)
+                        .frame(maxHeight: 180)
+                        .onChange(of: selectedPinnedTextSearchID) { _, pinnedTextID in
+                            guard let pinnedTextID else { return }
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                proxy.scrollTo(pinnedTextID, anchor: .center)
+                            }
+                        }
+                        .onAppear {
+                            guard let selectedPinnedTextSearchID else { return }
+                            proxy.scrollTo(selectedPinnedTextSearchID, anchor: .center)
+                        }
                     }
-                    .scrollIndicators(.visible)
-                    .frame(maxHeight: 180)
                 } else {
                     VStack(alignment: .leading, spacing: 4) {
                         ForEach(sortedPinnedThoughts.prefix(1), id: \.id) { thought in
@@ -530,7 +708,8 @@ struct NoteEditorView: View {
     }
 
     private func pinnedThoughtRow(_ thought: PinnedThought, index: Int, count: Int) -> some View {
-        HStack(alignment: .top, spacing: 8) {
+        let isSelectedSearchMatch = selectedPinnedTextSearchID == thought.id
+        return HStack(alignment: .top, spacing: 8) {
             ReorderDragHandle(
                 payload: thought.id.uuidString,
                 activePayload: $activeReorderPayload,
@@ -579,6 +758,12 @@ struct NoteEditorView: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .modifier(ChromePinnedSurface(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
+        .overlay {
+            if isSelectedSearchMatch {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.accentColor, lineWidth: 2)
+            }
+        }
         .contentShape(Rectangle())
         .onTapGesture {
             editingPinnedThoughtID = thought.id
@@ -681,6 +866,115 @@ struct NoteEditorView: View {
         toolbarBridge?.deleteNote = {
             vm.deleteNote(note)
             dismiss()
+        }
+    }
+
+    private func presentCurrentNoteSearch(focusesField: Bool = true) {
+        isLocalCurrentNoteSearchPresented = true
+        scheduleCurrentNoteSearchUpdate()
+        selectFirstCurrentNoteMatchIfNeeded()
+        if focusesField && !usesExternalCurrentNoteSearch {
+            currentNoteSearchFocusRequest += 1
+        }
+    }
+
+    private func clearCurrentNoteSearch() {
+        currentNoteSearchDebounceTask?.cancel()
+        isLocalCurrentNoteSearchPresented = false
+        dismissCurrentNoteSearchKeyboard()
+        if let currentNoteSearchText {
+            currentNoteSearchText.wrappedValue = ""
+        } else {
+            localCurrentNoteSearchText = ""
+        }
+        debouncedCurrentNoteSearchText = ""
+        currentNoteSearchMatches = []
+        selectedCurrentNoteMatchID = nil
+    }
+
+    private func dismissCurrentNoteSearchKeyboard() {
+        isCurrentNoteSearchFocused = false
+    }
+
+    private func setCurrentNoteSearchQuery(_ query: String) {
+        if let currentNoteSearchText {
+            currentNoteSearchText.wrappedValue = query
+        } else {
+            localCurrentNoteSearchText = query
+            isLocalCurrentNoteSearchPresented = true
+        }
+    }
+
+    private func scheduleCurrentNoteSearchUpdate() {
+        currentNoteSearchDebounceTask?.cancel()
+        let query = currentNoteSearchQuery
+        let bodyText = content
+        let pinnedTexts = sortedPinnedThoughts.map { NoteSearchPinnedText(id: $0.id, text: $0.text) }
+        currentNoteSearchDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: 180_000_000)
+            guard !Task.isCancelled else { return }
+            let matches = NoteSearchMatcher.matches(
+                in: bodyText,
+                pinnedTexts: pinnedTexts,
+                query: query
+            )
+            await MainActor.run {
+                debouncedCurrentNoteSearchText = query
+                currentNoteSearchMatches = matches
+                reconcileSelectedCurrentNoteMatch()
+            }
+        }
+    }
+
+    private func reconcileSelectedCurrentNoteMatch() {
+        guard !currentNoteSearchMatches.isEmpty else {
+            selectedCurrentNoteMatchID = nil
+            return
+        }
+
+        if let selectedCurrentNoteMatchID,
+           currentNoteSearchMatches.contains(where: { $0.id == selectedCurrentNoteMatchID }) {
+            return
+        }
+
+        selectedCurrentNoteMatchID = currentNoteSearchMatches.first?.id
+    }
+
+    private func selectFirstCurrentNoteMatchIfNeeded() {
+        if selectedCurrentNoteMatchID == nil {
+            reconcileSelectedCurrentNoteMatch()
+        }
+    }
+
+    private func selectPreviousCurrentNoteMatch() {
+        moveSelectedCurrentNoteMatch(by: -1)
+    }
+
+    private func selectNextCurrentNoteMatch() {
+        moveSelectedCurrentNoteMatch(by: 1)
+    }
+
+    private func moveSelectedCurrentNoteMatch(by delta: Int) {
+        guard !currentNoteSearchMatches.isEmpty else { return }
+        let currentIndex = selectedCurrentNoteMatchID
+            .flatMap { selectedID in currentNoteSearchMatches.firstIndex { $0.id == selectedID } }
+            ?? (delta > 0 ? -1 : 0)
+        let nextIndex = (currentIndex + delta + currentNoteSearchMatches.count) % currentNoteSearchMatches.count
+        selectedCurrentNoteMatchID = currentNoteSearchMatches[nextIndex].id
+    }
+
+    private func handleSelectedCurrentNoteMatchChanged() {
+        guard let selectedCurrentNoteMatch else { return }
+        if case .pinnedText = selectedCurrentNoteMatch.region, !arePinnedThoughtsExpanded {
+            arePinnedThoughtsExpanded = true
+            vm.setPinnedThoughtsSectionExpanded(true, for: note)
+        }
+    }
+
+    private func handleEditorFocusChanged(_ isFocused: Bool) {
+        toolbarBridge?.isEditorFocused = isFocused
+        if isFocused {
+            dismissCurrentNoteSearchKeyboard()
         }
     }
 
@@ -858,6 +1152,10 @@ struct NoteEditorView: View {
             }
             .tint(.primary)
             .accessibilityIdentifier("topbar-attachments")
+        case .search:
+            topBarActionButton(systemImage: "magnifyingglass", identifier: "topbar-search-note") {
+                presentCurrentNoteSearch()
+            }
         case .deleteNote:
             EmptyView()
         }
@@ -1678,6 +1976,13 @@ struct NoteEditorView: View {
                 Label("New Folder", systemImage: "folder.badge.plus")
             }
             .foregroundStyle(.primary)
+        case .search:
+            Button {
+                presentCurrentNoteSearch()
+            } label: {
+                Label("Search Note", systemImage: "magnifyingglass")
+            }
+            .foregroundStyle(.primary)
         case .deleteNote:
             Button(role: .destructive) {
                 vm.deleteNote(note)
@@ -1709,11 +2014,13 @@ struct NoteEditorView: View {
 enum NoteEditorOverflowAction: String, CaseIterable {
     case newNote
     case newFolder
+    case search
     case exportNote
     case attachments
     case deleteNote
 
     static let priorityOrder: [NoteEditorOverflowAction] = [
+        .search,
         .newNote,
         .newFolder,
         .exportNote,
@@ -1734,6 +2041,106 @@ struct EditorFormattingState {
     var strikethrough = false
     var fontSize: CGFloat = defaultEditorTextFont.pointSize
     var foregroundColor: UIColor?
+}
+
+enum NoteSearchRegion: Equatable {
+    case pinnedText(id: UUID)
+    case body
+}
+
+struct NoteSearchMatch: Identifiable, Equatable {
+    let id: String
+    let region: NoteSearchRegion
+    let plainTextRange: Range<String.Index>
+    let nsRangeInRenderedText: NSRange?
+    let previewText: String
+}
+
+struct NoteSearchPinnedText {
+    let id: UUID
+    let text: String
+}
+
+enum NoteSearchMatcher {
+    static func matches(
+        in bodyText: String,
+        pinnedTexts: [NoteSearchPinnedText],
+        query: String
+    ) -> [NoteSearchMatch] {
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedQuery.isEmpty else { return [] }
+
+        let pinnedMatches = pinnedTexts.flatMap { pinnedText in
+            matches(
+                in: pinnedText.text,
+                query: trimmedQuery,
+                region: .pinnedText(id: pinnedText.id),
+                idPrefix: "pinned-\(pinnedText.id.uuidString)",
+                includesRenderedRange: false
+            )
+        }
+
+        let bodyMatches = matches(
+            in: bodyText,
+            query: trimmedQuery,
+            region: .body,
+            idPrefix: "body",
+            includesRenderedRange: true
+        )
+
+        return pinnedMatches + bodyMatches
+    }
+
+    private static func matches(
+        in text: String,
+        query: String,
+        region: NoteSearchRegion,
+        idPrefix: String,
+        includesRenderedRange: Bool
+    ) -> [NoteSearchMatch] {
+        var results: [NoteSearchMatch] = []
+        var searchStart = text.startIndex
+
+        while searchStart < text.endIndex,
+              let range = text.range(
+                of: query,
+                options: [.caseInsensitive, .diacriticInsensitive],
+                range: searchStart..<text.endIndex
+              ) {
+            let nsRange = NSRange(range, in: text)
+            results.append(NoteSearchMatch(
+                id: "\(idPrefix)-\(nsRange.location)-\(nsRange.length)",
+                region: region,
+                plainTextRange: range,
+                nsRangeInRenderedText: includesRenderedRange ? nsRange : nil,
+                previewText: preview(in: text, matchRange: range)
+            ))
+
+            searchStart = range.upperBound < text.endIndex
+                ? text.index(after: range.lowerBound)
+                : text.endIndex
+        }
+
+        return results
+    }
+
+    private static func preview(in text: String, matchRange: Range<String.Index>) -> String {
+        let contextLength = 32
+        let lower = text.index(
+            matchRange.lowerBound,
+            offsetBy: -contextLength,
+            limitedBy: text.startIndex
+        ) ?? text.startIndex
+        let upper = text.index(
+            matchRange.upperBound,
+            offsetBy: contextLength,
+            limitedBy: text.endIndex
+        ) ?? text.endIndex
+
+        return String(text[lower..<upper])
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 private struct NoteSharePayload: Identifiable {
@@ -1771,6 +2178,7 @@ final class NoteEditorToolbarBridge: ObservableObject {
     @Published var title = "Untitled"
     @Published var canUndo = false
     @Published var canRedo = false
+    @Published var isEditorFocused = false
 
     var editTitle: (() -> Void)?
     var undo: (() -> Void)?
@@ -1786,6 +2194,7 @@ final class NoteEditorToolbarBridge: ObservableObject {
         title = "Untitled"
         canUndo = false
         canRedo = false
+        isEditorFocused = false
         editTitle = nil
         undo = nil
         redo = nil
@@ -2300,6 +2709,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let textColorToggleToken: Int
     let pendingTextUIColor: UIColor?
     let pendingTextColorUsesDefault: Bool
+    let searchHighlightRange: NSRange?
     let formattingController: TextFormattingController
     let backgroundColor: UIColor
     let textColor: UIColor
@@ -2307,6 +2717,8 @@ private struct SelectableTextView: UIViewRepresentable {
     let onContentChanged: (String, Data?) -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
     let onFormattingStateChanged: (EditorFormattingState) -> Void
+    let onEditingFocusChanged: (Bool) -> Void
+    let onEditorScrolled: () -> Void
     let onPinSelection: (String) -> Bool
     let onLookupSelection: (String) -> Void
 
@@ -2393,8 +2805,11 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.onContentChanged = onContentChanged
         context.coordinator.onUndoManagerChanged = onUndoManagerChanged
         context.coordinator.onFormattingStateChanged = onFormattingStateChanged
+        context.coordinator.onEditingFocusChanged = onEditingFocusChanged
+        context.coordinator.onEditorScrolled = onEditorScrolled
         context.coordinator.onPinSelection = onPinSelection
         context.coordinator.onLookupSelection = onLookupSelection
+        context.coordinator.applySearchHighlight(searchHighlightRange, in: textView)
 
         if context.coordinator.captureSelectionToggleToken != captureSelectionToggleToken {
             context.coordinator.captureSelectionToggleToken = captureSelectionToggleToken
@@ -2505,18 +2920,23 @@ private struct SelectableTextView: UIViewRepresentable {
             onContentChanged: onContentChanged,
             onUndoManagerChanged: onUndoManagerChanged,
             onFormattingStateChanged: onFormattingStateChanged,
+            onEditingFocusChanged: onEditingFocusChanged,
+            onEditorScrolled: onEditorScrolled,
             onPinSelection: onPinSelection,
             onLookupSelection: onLookupSelection
         )
     }
 
     final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
+        private static let searchHighlightLayerName = "MyRAMSearchHighlightLayer"
         var formattingController: TextFormattingController
         var text: Binding<String>
         var richTextContentData: Binding<Data?>
         var onContentChanged: (String, Data?) -> Void
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
+        var onEditingFocusChanged: (Bool) -> Void
+        var onEditorScrolled: () -> Void
         var onPinSelection: (String) -> Bool
         var onLookupSelection: (String) -> Void
         var defaultTextColor: UIColor = .label
@@ -2537,6 +2957,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var increaseFontSizeToggleToken = 0
         var decreaseFontSizeToggleToken = 0
         var textColorToggleToken = 0
+        private var activeSearchHighlightRange: NSRange?
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
         var isUpdatingUIView = false
         var isHandlingUserFocusChange = false
@@ -2555,6 +2976,8 @@ private struct SelectableTextView: UIViewRepresentable {
             onContentChanged: @escaping (String, Data?) -> Void,
             onUndoManagerChanged: @escaping (UndoManager?) -> Void,
             onFormattingStateChanged: @escaping (EditorFormattingState) -> Void,
+            onEditingFocusChanged: @escaping (Bool) -> Void,
+            onEditorScrolled: @escaping () -> Void,
             onPinSelection: @escaping (String) -> Bool,
             onLookupSelection: @escaping (String) -> Void
         ) {
@@ -2564,6 +2987,8 @@ private struct SelectableTextView: UIViewRepresentable {
             self.onContentChanged = onContentChanged
             self.onUndoManagerChanged = onUndoManagerChanged
             self.onFormattingStateChanged = onFormattingStateChanged
+            self.onEditingFocusChanged = onEditingFocusChanged
+            self.onEditorScrolled = onEditorScrolled
             self.onPinSelection = onPinSelection
             self.onLookupSelection = onLookupSelection
         }
@@ -2707,6 +3132,7 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
+            onEditingFocusChanged(true)
             lastKnownSelectionRange = safeSelectedRange(in: textView)
             RunLoop.main.perform { [weak self, weak textView] in
                 guard let self, let textView else { return }
@@ -2719,9 +3145,20 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func textViewDidEndEditing(_ textView: UITextView) {
             isHandlingUserFocusChange = false
+            onEditingFocusChanged(false)
             syncContent(from: textView)
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
+        }
+
+        func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            onEditorScrolled()
+        }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            guard let textView = scrollView as? UITextView,
+                  let activeSearchHighlightRange else { return }
+            drawSearchHighlight(activeSearchHighlightRange, in: textView)
         }
 
         func textView(
@@ -2939,6 +3376,57 @@ private struct SelectableTextView: UIViewRepresentable {
                 hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
             )
             textView.typingAttributes = typingAttributes
+        }
+
+        func applySearchHighlight(_ range: NSRange?, in textView: UITextView) {
+            clearSearchHighlight(in: textView)
+
+            activeSearchHighlightRange = nil
+            guard let range,
+                  range.location != NSNotFound,
+                  range.length > 0,
+                  NSMaxRange(range) <= (textView.text as NSString).length else {
+                return
+            }
+
+            activeSearchHighlightRange = range
+            textView.scrollRangeToVisible(range)
+            drawSearchHighlight(range, in: textView)
+        }
+
+        private func drawSearchHighlight(_ range: NSRange, in textView: UITextView) {
+            clearSearchHighlight(in: textView)
+            textView.layoutManager.ensureLayout(for: textView.textContainer)
+            let glyphRange = textView.layoutManager.glyphRange(
+                forCharacterRange: range,
+                actualCharacterRange: nil
+            )
+            let emptySelection = NSRange(location: NSNotFound, length: 0)
+
+            textView.layoutManager.enumerateEnclosingRects(
+                forGlyphRange: glyphRange,
+                withinSelectedGlyphRange: emptySelection,
+                in: textView.textContainer
+            ) { rect, _ in
+                guard !rect.isEmpty else { return }
+                let highlightLayer = CALayer()
+                highlightLayer.name = Self.searchHighlightLayerName
+                highlightLayer.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.45).cgColor
+                highlightLayer.cornerRadius = 3
+                highlightLayer.frame = rect
+                    .insetBy(dx: -2, dy: -1)
+                    .offsetBy(
+                        dx: textView.textContainerInset.left - textView.contentOffset.x,
+                        dy: textView.textContainerInset.top - textView.contentOffset.y
+                    )
+                textView.layer.insertSublayer(highlightLayer, at: 0)
+            }
+        }
+
+        private func clearSearchHighlight(in textView: UITextView) {
+            textView.layer.sublayers?
+                .filter { $0.name == Self.searchHighlightLayerName }
+                .forEach { $0.removeFromSuperlayer() }
         }
 
         private func syncContent(from textView: UITextView) {

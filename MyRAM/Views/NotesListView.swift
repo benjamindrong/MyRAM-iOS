@@ -64,6 +64,9 @@ struct NotesListView: View {
     @State private var showingListUndoRedoActions = false
     @State private var showingNearbySync = false
     @State private var searchText = ""
+    @State private var searchScope: NotesSearchScope = .allNotes
+    @State private var currentNoteSearchText = ""
+    @State private var currentNoteSearchFocusToken = 0
     @State private var noteActionDialogContext: NoteActionDialogContext?
     @FocusState private var isSearchFocused: Bool
 #if targetEnvironment(macCatalyst)
@@ -120,6 +123,7 @@ struct NotesListView: View {
             }
             .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
+            .background(searchKeyboardShortcut)
             .modifier(MobileNoteEditorSheet(
                 selectedNote: $selectedNote,
                 vm: vm,
@@ -356,7 +360,12 @@ struct NotesListView: View {
         }
         .onChange(of: selectedNote?.id) { _, noteID in
             if noteID == nil {
+                searchScope = .allNotes
+                currentNoteSearchText = ""
                 editorToolbarBridge.reset()
+            } else {
+                currentNoteSearchText = ""
+                currentNoteSearchFocusToken += searchScope == .currentNote ? 1 : 0
             }
         }
     }
@@ -495,16 +504,44 @@ struct NotesListView: View {
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(.secondary)
 
-            TextField("Search Notes", text: $searchText)
+            TextField(searchScope.searchPlaceholder, text: activeSearchText)
                 .textInputAutocapitalization(.never)
                 .disableAutocorrection(true)
                 .submitLabel(.search)
+                .onSubmit {
+                    isSearchFocused = false
+                    if searchScope == .currentNote {
+                        currentNoteSearchFocusToken += 1
+                    }
+                }
                 .focused($isSearchFocused)
                 .accessibilityIdentifier("notes-search-field")
 
+#if targetEnvironment(macCatalyst)
+            if selectedNote != nil {
+                Picker("Search scope", selection: $searchScope) {
+                    ForEach(NotesSearchScope.allCases) { scope in
+                        Text(scope.title).tag(scope)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 156)
+                .onChange(of: searchScope) {
+                    isSearchFocused = false
+                    if searchScope == .currentNote {
+                        currentNoteSearchFocusToken += 1
+                    }
+                }
+                .accessibilityIdentifier("notes-search-scope")
+            }
+#endif
+
             if isSearching {
                 Button {
-                    searchText = ""
+                    activeSearchText.wrappedValue = ""
+                    if searchScope == .currentNote {
+                        currentNoteSearchFocusToken += 1
+                    }
                 } label: {
                     Image(systemName: "xmark.circle.fill")
                         .font(.subheadline.weight(.semibold))
@@ -526,7 +563,50 @@ struct NotesListView: View {
     }
 
     private var isSearching: Bool {
-        !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        !activeSearchText.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var activeSearchText: Binding<String> {
+        Binding(
+            get: {
+                searchScope == .currentNote ? currentNoteSearchText : searchText
+            },
+            set: { newValue in
+                if searchScope == .currentNote {
+                    currentNoteSearchText = newValue
+                } else {
+                    searchText = newValue
+                }
+            }
+        )
+    }
+
+    private var searchKeyboardShortcut: some View {
+        Button {
+            activateSearchFromShortcut()
+        } label: {
+            EmptyView()
+        }
+        .keyboardShortcut("f", modifiers: .command)
+        .accessibilityHidden(true)
+        .hidden()
+    }
+
+    private func activateSearchFromShortcut() {
+#if targetEnvironment(macCatalyst)
+        if isSearchFocused {
+            searchScope = .allNotes
+        } else if editorToolbarBridge.isEditorFocused, selectedNote != nil {
+            searchScope = .currentNote
+            currentNoteSearchFocusToken += 1
+        } else if selectedNote != nil {
+            searchScope = .currentNote
+            currentNoteSearchFocusToken += 1
+        } else {
+            searchScope = .allNotes
+        }
+#endif
+        isSearchFocused = true
     }
 
     private var notesListSelection: Binding<Set<UUID>> {
@@ -557,6 +637,8 @@ struct NotesListView: View {
                 showsTopBar: false,
                 toolbarBridge: editorToolbarBridge,
                 syncConflicts: vm.activeSyncConflicts(for: selectedNote),
+                currentNoteSearchText: $currentNoteSearchText,
+                currentNoteSearchFocusToken: currentNoteSearchFocusToken,
                 onOpenSyncConflicts: {
                     showingNearbySync = true
                 }
@@ -877,7 +959,7 @@ struct NotesListView: View {
     }
 
     private var listItems: [NotesListItem] {
-        if isSearching {
+        if isSearching && searchScope == .allNotes {
             return searchResultNotes.map(NotesListItem.note)
         }
 
@@ -885,13 +967,13 @@ struct NotesListView: View {
     }
 
     private var searchResultNotes: [Note] {
-        guard isSearching else { return [] }
+        guard isSearching && searchScope == .allNotes else { return [] }
         return vm.fetchSearchableNotes()
             .filter { noteMatchesSearch($0, query: searchText) }
     }
 
     private var actionableNotes: [Note] {
-        isSearching ? searchResultNotes : vm.notes
+        isSearching && searchScope == .allNotes ? searchResultNotes : vm.notes
     }
 
     @ViewBuilder
@@ -1647,6 +1729,31 @@ private struct NoteActionSheetRow: View {
                 Divider()
                     .padding(.horizontal, 18)
             }
+        }
+    }
+}
+
+private enum NotesSearchScope: String, CaseIterable, Identifiable {
+    case allNotes
+    case currentNote
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .allNotes:
+            "All"
+        case .currentNote:
+            "Current"
+        }
+    }
+
+    var searchPlaceholder: String {
+        switch self {
+        case .allNotes:
+            "Search Notes"
+        case .currentNote:
+            "Search Current Note"
         }
     }
 }
