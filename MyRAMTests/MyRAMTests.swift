@@ -1872,30 +1872,6 @@ final class MyRAMTests: XCTestCase {
         )
     }
 
-    func testPinnedThoughtDraftDisplayPreservesSingleSpaceWhileEditing() {
-        let thoughtID = UUID()
-
-        XCTAssertEqual(
-            PinnedThoughtEditDraftPolicy.displayText(
-                for: thoughtID,
-                persistedText: "",
-                drafts: [thoughtID: " "]
-            ),
-            " "
-        )
-    }
-
-    func testPinnedThoughtDraftDisplayFallsBackToPersistedTextWithoutDraft() {
-        XCTAssertEqual(
-            PinnedThoughtEditDraftPolicy.displayText(
-                for: UUID(),
-                persistedText: "Persisted pinned",
-                drafts: [:]
-            ),
-            "Persisted pinned"
-        )
-    }
-
     func testIncomingNoteSyncDoesNotOverwriteImmediateLocalTextEdit() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -3360,6 +3336,17 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(vm.sortedPinnedThoughts(for: note).map(\.text), ["Second thought"])
         XCTAssertEqual(note.content, "Body text")
         XCTAssertEqual(note.richTextContentData, Data("rich body".utf8))
+    }
+
+    func testPinnedTextCommitTrimsOnlyWhenUpdatingModel() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+        let pinnedText = try XCTUnwrap(vm.addPinnedThought(to: note, text: "Initial"))
+
+        vm.updatePinnedThought(pinnedText, text: "One space ")
+
+        XCTAssertEqual(pinnedText.text, "One space")
     }
 
     func testPinnedThoughtExpansionStateDefaultsCollapsedAndPersistsPerSessionNote() throws {

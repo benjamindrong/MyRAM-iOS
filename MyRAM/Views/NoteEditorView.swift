@@ -52,12 +52,6 @@ enum EditorRichTextCommitPolicy {
     }
 }
 
-enum PinnedThoughtEditDraftPolicy {
-    static func displayText(for thoughtID: UUID, persistedText: String, drafts: [UUID: String]) -> String {
-        drafts[thoughtID] ?? persistedText
-    }
-}
-
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -132,7 +126,7 @@ struct NoteEditorView: View {
     @State private var titleDraft = ""
     @State private var arePinnedThoughtsExpanded = false
     @State private var editingPinnedThoughtID: UUID?
-    @State private var pinnedThoughtDrafts: [UUID: String] = [:]
+    @State private var editingPinnedTextDraftText = ""
     @State private var activeReorderPayload: String?
     @State private var activeReorderOffset: CGSize = .zero
     @State private var pendingReorderInsertionIndex: Int?
@@ -788,16 +782,7 @@ struct NoteEditorView: View {
             )
 
             if editingPinnedThoughtID == thought.id {
-                TextField("Pinned", text: Binding(
-                    get: {
-                        PinnedThoughtEditDraftPolicy.displayText(
-                            for: thought.id,
-                            persistedText: thought.text,
-                            drafts: pinnedThoughtDrafts
-                        )
-                    },
-                    set: { pinnedThoughtDrafts[thought.id] = $0 }
-                ), axis: .vertical)
+                TextField("Pinned", text: $editingPinnedTextDraftText, axis: .vertical)
                 .lineLimit(1...4)
                 .textFieldStyle(.plain)
                 .font(.subheadline)
@@ -901,11 +886,7 @@ struct NoteEditorView: View {
         if let editingPinnedThoughtID, editingPinnedThoughtID != thought.id {
             commitPinnedThoughtEdit(withID: editingPinnedThoughtID)
         }
-        pinnedThoughtDrafts[thought.id] = PinnedThoughtEditDraftPolicy.displayText(
-            for: thought.id,
-            persistedText: thought.text,
-            drafts: pinnedThoughtDrafts
-        )
+        editingPinnedTextDraftText = thought.text
         editingPinnedThoughtID = thought.id
         focusedPinnedThoughtID = thought.id
     }
@@ -916,8 +897,7 @@ struct NoteEditorView: View {
     }
 
     private var hasActivePinnedThoughtEdit: Bool {
-        guard let editingPinnedThoughtID else { return false }
-        return pinnedThoughtDrafts[editingPinnedThoughtID] != nil
+        editingPinnedThoughtID != nil
     }
 
     private func commitPinnedThoughtEdit(_ thought: PinnedThought) {
@@ -925,20 +905,11 @@ struct NoteEditorView: View {
     }
 
     private func commitPinnedThoughtEdit(withID thoughtID: UUID) {
-        guard let draft = pinnedThoughtDrafts[thoughtID] else {
-            if editingPinnedThoughtID == thoughtID {
-                editingPinnedThoughtID = nil
-            }
-            if focusedPinnedThoughtID == thoughtID {
-                focusedPinnedThoughtID = nil
-            }
-            return
-        }
+        guard editingPinnedThoughtID == thoughtID else { return }
+        let draft = editingPinnedTextDraftText
         guard let thought = note.pinnedThoughts.first(where: { $0.id == thoughtID }) else {
-            pinnedThoughtDrafts[thoughtID] = nil
-            if editingPinnedThoughtID == thoughtID {
-                editingPinnedThoughtID = nil
-            }
+            editingPinnedThoughtID = nil
+            editingPinnedTextDraftText = ""
             if focusedPinnedThoughtID == thoughtID {
                 focusedPinnedThoughtID = nil
             }
@@ -946,10 +917,8 @@ struct NoteEditorView: View {
         }
 
         vm.updatePinnedThought(thought, text: draft)
-        pinnedThoughtDrafts[thoughtID] = nil
-        if editingPinnedThoughtID == thoughtID {
-            editingPinnedThoughtID = nil
-        }
+        editingPinnedThoughtID = nil
+        editingPinnedTextDraftText = ""
         if focusedPinnedThoughtID == thoughtID {
             focusedPinnedThoughtID = nil
         }
@@ -1130,11 +1099,11 @@ struct NoteEditorView: View {
     private func deletePinnedParagraph(_ thought: PinnedThought) {
         if editingPinnedThoughtID == thought.id {
             editingPinnedThoughtID = nil
+            editingPinnedTextDraftText = ""
         }
         if focusedPinnedThoughtID == thought.id {
             focusedPinnedThoughtID = nil
         }
-        pinnedThoughtDrafts[thought.id] = nil
         vm.deletePinnedParagraph(thought)
     }
 
@@ -1467,7 +1436,7 @@ struct NoteEditorView: View {
         restoreContentToggleToken += 1
         editingPinnedThoughtID = nil
         focusedPinnedThoughtID = nil
-        pinnedThoughtDrafts.removeAll()
+        editingPinnedTextDraftText = ""
         lastSnapshot = currentNoteSnapshot()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
@@ -1585,7 +1554,7 @@ struct NoteEditorView: View {
     }
 
     private func restorePinnedThoughts(_ snapshots: [PinnedThoughtSnapshot]) {
-        pinnedThoughtDrafts.removeAll()
+        editingPinnedTextDraftText = ""
         for thought in sortedPinnedThoughts {
             vm.unpinThought(thought)
         }
