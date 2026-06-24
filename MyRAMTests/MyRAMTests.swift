@@ -3387,6 +3387,34 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(cache.formattingStateIsApproximate)
     }
 
+    func testNoteEditorSelectionBookmarkStorePersistsBookmarkByNoteID() throws {
+        let suiteName = "NoteEditorSelectionBookmarkStoreTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = NoteEditorSelectionBookmarkStore(defaults: defaults)
+        let noteID = UUID()
+        let bookmark = NoteEditorSelectionBookmark(location: 4, length: 0, contentLength: 12)
+
+        store.save(bookmark, for: noteID)
+
+        XCTAssertEqual(store.bookmark(for: noteID), bookmark)
+    }
+
+    func testNoteEditorSelectionBookmarkStoreKeepsNotesSeparate() throws {
+        let suiteName = "NoteEditorSelectionBookmarkStoreTests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let store = NoteEditorSelectionBookmarkStore(defaults: defaults)
+        let firstNoteID = UUID()
+        let secondNoteID = UUID()
+
+        store.save(NoteEditorSelectionBookmark(location: 2, length: 0, contentLength: 8), for: firstNoteID)
+        store.save(NoteEditorSelectionBookmark(location: 6, length: 1, contentLength: 10), for: secondNoteID)
+
+        XCTAssertEqual(store.bookmark(for: firstNoteID)?.location, 2)
+        XCTAssertEqual(store.bookmark(for: secondNoteID)?.location, 6)
+    }
+
     func testPinnedThoughtExpansionStateDefaultsCollapsedAndPersistsPerSessionNote() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)

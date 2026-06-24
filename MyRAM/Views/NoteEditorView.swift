@@ -34,6 +34,39 @@ enum EditorSelectionFormattingPolicy {
     }
 }
 
+struct NoteEditorSelectionBookmark: Codable, Equatable {
+    let location: Int
+    let length: Int
+    let contentLength: Int
+}
+
+struct NoteEditorSelectionBookmarkStore {
+    private let defaults: UserDefaults
+    private let keyPrefix = "noteEditorSelectionBookmark."
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    func bookmark(for noteID: UUID) -> NoteEditorSelectionBookmark? {
+        guard let data = defaults.data(forKey: key(for: noteID)) else { return nil }
+        return try? JSONDecoder().decode(NoteEditorSelectionBookmark.self, from: data)
+    }
+
+    func save(_ bookmark: NoteEditorSelectionBookmark, for noteID: UUID) {
+        guard let data = try? JSONEncoder().encode(bookmark) else { return }
+        defaults.set(data, forKey: key(for: noteID))
+    }
+
+    func removeBookmark(for noteID: UUID) {
+        defaults.removeObject(forKey: key(for: noteID))
+    }
+
+    private func key(for noteID: UUID) -> String {
+        keyPrefix + noteID.uuidString
+    }
+}
+
 struct DeferredRichTextContentEncoder {
     let encode: () -> Data?
 }
@@ -414,6 +447,7 @@ struct NoteEditorView: View {
 
     private var editorTextView: some View {
         SelectableTextView(
+            noteID: note.id,
             text: $content,
             richTextContentData: $richTextContentData,
             keyboardFocusToggleToken: keyboardFocusToggleToken,
@@ -2880,6 +2914,7 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
 }
 
 private struct SelectableTextView: UIViewRepresentable {
+    let noteID: UUID
     @Binding var text: String
     @Binding var richTextContentData: Data?
     let keyboardFocusToggleToken: Int
@@ -2945,6 +2980,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
     func updateUIView(_ textView: UITextView, context: Context) {
         context.coordinator.textView = textView
+        context.coordinator.updateNoteID(noteID)
         context.coordinator.formattingController = formattingController
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
@@ -3001,6 +3037,7 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.onEditorScrolled = onEditorScrolled
         context.coordinator.onPinSelection = onPinSelection
         context.coordinator.onLookupSelection = onLookupSelection
+        context.coordinator.restoreSelectionBookmarkIfNeeded(in: textView)
         context.coordinator.applySearchHighlight(searchHighlightRange, in: textView)
 
         if context.coordinator.captureSelectionToggleToken != captureSelectionToggleToken {
@@ -3107,6 +3144,7 @@ private struct SelectableTextView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             formattingController: formattingController,
+            noteID: noteID,
             text: $text,
             richTextContentData: $richTextContentData,
             onContentChanged: onContentChanged,
@@ -3122,6 +3160,7 @@ private struct SelectableTextView: UIViewRepresentable {
     final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
         private static let searchHighlightLayerName = "MyRAMSearchHighlightLayer"
         var formattingController: TextFormattingController
+        var noteID: UUID
         var text: Binding<String>
         var richTextContentData: Binding<Data?>
         var onContentChanged: (String, EditorRichTextContentUpdate) -> Void
@@ -3159,6 +3198,10 @@ private struct SelectableTextView: UIViewRepresentable {
         var isHandlingUserFocusChange = false
         private var appliedPlainTextAwaitingBinding: String?
         private var appliedRichTextDataAwaitingBinding: Data?
+        private let selectionBookmarkStore = NoteEditorSelectionBookmarkStore()
+        private var hasRestoredSelectionBookmark = false
+        private var hasKnownSelectionRange = false
+        private var lastSavedSelectionBookmark: NoteEditorSelectionBookmark?
         private weak var checklistTapRecognizer: UITapGestureRecognizer?
 #if targetEnvironment(macCatalyst)
         private weak var textPlacementTapRecognizer: UITapGestureRecognizer?
@@ -3167,6 +3210,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         init(
             formattingController: TextFormattingController,
+            noteID: UUID,
             text: Binding<String>,
             richTextContentData: Binding<Data?>,
             onContentChanged: @escaping (String, EditorRichTextContentUpdate) -> Void,
@@ -3178,6 +3222,7 @@ private struct SelectableTextView: UIViewRepresentable {
             onLookupSelection: @escaping (String) -> Void
         ) {
             self.formattingController = formattingController
+            self.noteID = noteID
             self.text = text
             self.richTextContentData = richTextContentData
             self.onContentChanged = onContentChanged
@@ -3283,10 +3328,9 @@ private struct SelectableTextView: UIViewRepresentable {
                 return
             }
 
-            guard let position = textView.closestPosition(to: location) else { return }
-            let characterOffset = textView.offset(from: textView.beginningOfDocument, to: position)
-            let textLength = textStorageLength(in: textView)
-            let cursorRange = NSRange(location: min(max(characterOffset, 0), textLength), length: 0)
+            guard let cursorRange = savedSelectionRangeForFocus(in: textView) ?? tappedSelectionRange(at: location, in: textView) else {
+                return
+            }
 
             pendingFocusTapSelectionRange = cursorRange
             isHandlingUserFocusChange = true
@@ -3342,6 +3386,7 @@ private struct SelectableTextView: UIViewRepresentable {
         func textViewDidEndEditing(_ textView: UITextView) {
             isHandlingUserFocusChange = false
             onEditingFocusChanged(false)
+            updateLastKnownSelectionRange(from: textView)
             syncContent(from: textView)
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
@@ -4456,6 +4501,8 @@ private struct SelectableTextView: UIViewRepresentable {
             let range = safeSelectedRange(in: textView)
             if range.length > 0 || textView.isFirstResponder {
                 lastKnownSelectionRange = range
+                hasKnownSelectionRange = true
+                saveSelectionBookmarkIfNeeded(range, in: textView)
             }
         }
 
@@ -4463,10 +4510,17 @@ private struct SelectableTextView: UIViewRepresentable {
             let range = safeSelectedRange(in: textView)
             if range.length > 0 || textView.isFirstResponder {
                 lastKnownSelectionRange = range
+                hasKnownSelectionRange = true
+#if targetEnvironment(macCatalyst)
+                if pendingFocusTapSelectionRange == nil {
+                    saveSelectionBookmarkIfNeeded(range, in: textView)
+                }
+#else
+                saveSelectionBookmarkIfNeeded(range, in: textView)
+#endif
             }
-            // Selection drags can fire hundreds of callbacks. Keep the live
-            // callback to cached range bookkeeping; formatting is refreshed on
-            // demand by commands and focus changes.
+            // Selection drags can fire hundreds of callbacks, so formatting
+            // work stays deferred; bookmark saves skip unchanged ranges.
             selectionFormattingCache.markDirty(range: range)
         }
 
@@ -4482,6 +4536,8 @@ private struct SelectableTextView: UIViewRepresentable {
                 let range = NSRange(location: location, length: 0)
                 restoreSelectionWithoutScrolling(range, in: textView)
                 lastKnownSelectionRange = range
+                hasKnownSelectionRange = true
+                saveSelectionBookmarkIfNeeded(range, in: textView)
                 self.pendingFocusTapSelectionRange = nil
                 isHandlingUserFocusChange = false
                 return
@@ -4512,6 +4568,83 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func textStorageLength(in textView: UITextView) -> Int {
             textView.textStorage.length
+        }
+
+        func updateNoteID(_ noteID: UUID) {
+            guard self.noteID != noteID else { return }
+            if hasKnownSelectionRange {
+                saveSelectionBookmarkIfNeeded(lastKnownSelectionRange, contentLength: text.wrappedValue.utf16.count)
+            }
+            self.noteID = noteID
+            hasRestoredSelectionBookmark = false
+            hasKnownSelectionRange = false
+            lastSavedSelectionBookmark = nil
+            lastKnownSelectionRange = NSRange(location: 0, length: 0)
+        }
+
+        func restoreSelectionBookmarkIfNeeded(in textView: UITextView) {
+            guard !hasRestoredSelectionBookmark,
+                  !textView.isFirstResponder else {
+                return
+            }
+
+            hasRestoredSelectionBookmark = true
+            guard let range = savedSelectionRangeForFocus(in: textView) else { return }
+
+            restoreSelectionWithoutScrolling(range, in: textView)
+            lastKnownSelectionRange = range
+            hasKnownSelectionRange = true
+        }
+
+        private func savedSelectionRangeForFocus(in textView: UITextView) -> NSRange? {
+            let textLength = textStorageLength(in: textView)
+            if hasKnownSelectionRange, isValidSelectionRange(lastKnownSelectionRange, contentLength: textLength) {
+                return lastKnownSelectionRange
+            }
+
+            guard let bookmark = selectionBookmarkStore.bookmark(for: noteID) else { return nil }
+            lastSavedSelectionBookmark = bookmark
+            return selectionRange(from: bookmark, contentLength: textLength)
+        }
+
+        private func saveSelectionBookmarkIfNeeded(_ range: NSRange, in textView: UITextView) {
+            saveSelectionBookmarkIfNeeded(range, contentLength: textStorageLength(in: textView))
+        }
+
+        private func saveSelectionBookmarkIfNeeded(_ range: NSRange, contentLength: Int) {
+            guard isValidSelectionRange(range, contentLength: contentLength) else { return }
+
+            let bookmark = NoteEditorSelectionBookmark(
+                location: range.location,
+                length: range.length,
+                contentLength: contentLength
+            )
+            guard bookmark != lastSavedSelectionBookmark else { return }
+
+            selectionBookmarkStore.save(bookmark, for: noteID)
+            lastSavedSelectionBookmark = bookmark
+        }
+
+        private func selectionRange(from bookmark: NoteEditorSelectionBookmark, contentLength: Int) -> NSRange? {
+            let location = min(max(bookmark.location, 0), contentLength)
+            let length = min(max(bookmark.length, 0), max(contentLength - location, 0))
+            let range = NSRange(location: location, length: length)
+            guard isValidSelectionRange(range, contentLength: contentLength) else { return nil }
+            return range
+        }
+
+        private func isValidSelectionRange(_ range: NSRange, contentLength: Int) -> Bool {
+            range.location != NSNotFound
+                && range.location >= 0
+                && range.length >= 0
+                && range.location + range.length <= contentLength
+        }
+
+        private func tappedSelectionRange(at location: CGPoint, in textView: UITextView) -> NSRange? {
+            guard let position = textView.closestPosition(to: location) else { return nil }
+            let characterOffset = textView.offset(from: textView.beginningOfDocument, to: position)
+            let textLength = textStorageLength(in: textView)
+            return NSRange(location: min(max(characterOffset, 0), textLength), length: 0)
         }
     }
 }
