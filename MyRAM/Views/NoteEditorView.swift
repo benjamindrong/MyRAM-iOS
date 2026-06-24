@@ -126,6 +126,7 @@ struct NoteEditorView: View {
     @State private var titleDraft = ""
     @State private var arePinnedThoughtsExpanded = false
     @State private var editingPinnedThoughtID: UUID?
+    @State private var editingPinnedTextDraftText = ""
     @State private var activeReorderPayload: String?
     @State private var activeReorderOffset: CGSize = .zero
     @State private var pendingReorderInsertionIndex: Int?
@@ -138,6 +139,7 @@ struct NoteEditorView: View {
     @State private var deferRemoteRefreshUntilCommit = false
     @State private var pendingRichTextContentEncoder: DeferredRichTextContentEncoder?
     @FocusState private var isCurrentNoteSearchFocused: Bool
+    @FocusState private var focusedPinnedThoughtID: UUID?
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
     
@@ -246,13 +248,21 @@ struct NoteEditorView: View {
             }
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase != .active {
+                    commitActivePinnedThoughtEdit()
                     commitPendingNoteEdit()
                     dismissCurrentNoteSearchKeyboard()
                 }
             }
             .onDisappear {
                 clearCurrentNoteSearch()
+                commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
+            }
+            .onChange(of: focusedPinnedThoughtID) { oldValue, newValue in
+                guard oldValue != newValue else { return }
+                if let oldValue {
+                    commitPinnedThoughtEdit(withID: oldValue)
+                }
             }
             .onChange(of: vm.activeNoteSyncRevision) {
                 reloadNoteFromSync()
@@ -772,16 +782,20 @@ struct NoteEditorView: View {
             )
 
             if editingPinnedThoughtID == thought.id {
-                TextField("Pinned", text: Binding(
-                    get: { thought.text },
-                    set: { vm.updatePinnedThought(thought, text: $0) }
-                ), axis: .vertical)
+                TextField("Pinned", text: $editingPinnedTextDraftText, axis: .vertical)
                 .lineLimit(1...4)
                 .textFieldStyle(.plain)
                 .font(.subheadline)
                 .foregroundStyle(pinnedHighlightText)
                 .tint(pinnedHighlightText)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .focused($focusedPinnedThoughtID, equals: thought.id)
+                .onSubmit {
+                    commitPinnedThoughtEdit(thought)
+                }
+                .onAppear {
+                    focusedPinnedThoughtID = thought.id
+                }
                 .accessibilityIdentifier("pinned-thought-text")
             } else {
                 Text(thought.text.isEmpty ? "Pinned" : thought.text)
@@ -809,7 +823,7 @@ struct NoteEditorView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
-            editingPinnedThoughtID = thought.id
+            beginPinnedThoughtEditing(thought)
         }
         .contextMenu {
             Button("Unpin") {
@@ -868,6 +882,49 @@ struct NoteEditorView: View {
         vm.movePinnedThought(draggedThought, toIndex: pendingReorderInsertionIndex)
     }
 
+    private func beginPinnedThoughtEditing(_ thought: PinnedThought) {
+        if let editingPinnedThoughtID, editingPinnedThoughtID != thought.id {
+            commitPinnedThoughtEdit(withID: editingPinnedThoughtID)
+        }
+        editingPinnedTextDraftText = thought.text
+        editingPinnedThoughtID = thought.id
+        focusedPinnedThoughtID = thought.id
+    }
+
+    private func commitActivePinnedThoughtEdit() {
+        guard let editingPinnedThoughtID else { return }
+        commitPinnedThoughtEdit(withID: editingPinnedThoughtID)
+    }
+
+    private var hasActivePinnedThoughtEdit: Bool {
+        editingPinnedThoughtID != nil
+    }
+
+    private func commitPinnedThoughtEdit(_ thought: PinnedThought) {
+        commitPinnedThoughtEdit(withID: thought.id)
+    }
+
+    private func commitPinnedThoughtEdit(withID thoughtID: UUID) {
+        guard editingPinnedThoughtID == thoughtID else { return }
+        let draft = editingPinnedTextDraftText
+        guard let thought = note.pinnedThoughts.first(where: { $0.id == thoughtID }) else {
+            editingPinnedThoughtID = nil
+            editingPinnedTextDraftText = ""
+            if focusedPinnedThoughtID == thoughtID {
+                focusedPinnedThoughtID = nil
+            }
+            return
+        }
+
+        vm.updatePinnedThought(thought, text: draft)
+        editingPinnedThoughtID = nil
+        editingPinnedTextDraftText = ""
+        if focusedPinnedThoughtID == thoughtID {
+            focusedPinnedThoughtID = nil
+        }
+        applyDeferredRemoteRefreshIfNeeded()
+    }
+
     private func pinSelectedText(_ selectedText: String) -> Bool {
         let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -877,15 +934,16 @@ struct NoteEditorView: View {
         arePinnedThoughtsExpanded = true
         vm.setPinnedThoughtsSectionExpanded(true, for: note)
         guard let pinnedThought = vm.addPinnedThought(to: note, text: trimmed) else { return false }
-        editingPinnedThoughtID = pinnedThought.id
+        beginPinnedThoughtEditing(pinnedThought)
         return true
     }
 
     private func addPinnedThoughtFromSection() {
+        commitActivePinnedThoughtEdit()
         arePinnedThoughtsExpanded = true
         vm.setPinnedThoughtsSectionExpanded(true, for: note)
         guard let pinnedThought = vm.addPinnedThought(to: note) else { return }
-        editingPinnedThoughtID = pinnedThought.id
+        beginPinnedThoughtEditing(pinnedThought)
     }
 
     private func configureToolbarBridge() {
@@ -898,12 +956,20 @@ struct NoteEditorView: View {
         }
         toolbarBridge?.undo = { performUndo() }
         toolbarBridge?.redo = { performRedo() }
-        toolbarBridge?.newNote = { onNewNote(vm.createNewNote()) }
+        toolbarBridge?.newNote = {
+            commitActivePinnedThoughtEdit()
+            commitPendingNoteEdit()
+            onNewNote(vm.createNewNote())
+        }
         toolbarBridge?.newFolder = {
             newFolderName = ""
             showingCreateFolderPrompt = true
         }
-        toolbarBridge?.exportNote = { exportCurrentNote() }
+        toolbarBridge?.exportNote = {
+            commitActivePinnedThoughtEdit()
+            commitPendingNoteEdit()
+            exportCurrentNote()
+        }
         toolbarBridge?.importFromPhotoLibrary = { showingPhotoPicker = true }
         toolbarBridge?.importImageFile = { showingFileImporter = true }
         toolbarBridge?.deleteNote = {
@@ -1022,6 +1088,7 @@ struct NoteEditorView: View {
     }
 
     private func unpinThoughtToBody(_ thought: PinnedThought) {
+        commitPinnedThoughtEdit(thought)
         let unpinnedText = thought.text.trimmingCharacters(in: .whitespacesAndNewlines)
         vm.unpinThought(thought)
         guard !unpinnedText.isEmpty else { return }
@@ -1032,6 +1099,10 @@ struct NoteEditorView: View {
     private func deletePinnedParagraph(_ thought: PinnedThought) {
         if editingPinnedThoughtID == thought.id {
             editingPinnedThoughtID = nil
+            editingPinnedTextDraftText = ""
+        }
+        if focusedPinnedThoughtID == thought.id {
+            focusedPinnedThoughtID = nil
         }
         vm.deletePinnedParagraph(thought)
     }
@@ -1169,6 +1240,7 @@ struct NoteEditorView: View {
         switch action {
         case .newNote:
             topBarActionButton(systemImage: "square.and.pencil", identifier: "topbar-new-note") {
+                commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
                 onNewNote(vm.createNewNote())
             }
@@ -1179,6 +1251,7 @@ struct NoteEditorView: View {
             }
         case .exportNote:
             topBarActionButton(systemImage: "square.and.arrow.up", identifier: "topbar-export-note") {
+                commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
                 exportCurrentNote()
             }
@@ -1329,6 +1402,11 @@ struct NoteEditorView: View {
     }
 
     private func reloadNoteFromSync() {
+        guard !hasActivePinnedThoughtEdit else {
+            deferRemoteRefreshUntilCommit = true
+            return
+        }
+
         guard !EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
             owner: editorBufferOwner,
             hasPendingNoteCommit: hasPendingNoteCommit
@@ -1357,6 +1435,8 @@ struct NoteEditorView: View {
         richTextContentData = refreshedNote.richTextContentData
         restoreContentToggleToken += 1
         editingPinnedThoughtID = nil
+        focusedPinnedThoughtID = nil
+        editingPinnedTextDraftText = ""
         lastSnapshot = currentNoteSnapshot()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
@@ -1474,6 +1554,7 @@ struct NoteEditorView: View {
     }
 
     private func restorePinnedThoughts(_ snapshots: [PinnedThoughtSnapshot]) {
+        editingPinnedTextDraftText = ""
         for thought in sortedPinnedThoughts {
             vm.unpinThought(thought)
         }
@@ -1485,9 +1566,11 @@ struct NoteEditorView: View {
             }
         }
         editingPinnedThoughtID = nil
+        focusedPinnedThoughtID = nil
     }
 
     private func performUndo() {
+        commitActivePinnedThoughtEdit()
         if canUndo {
             undoLastEdit()
         } else {
@@ -1497,6 +1580,7 @@ struct NoteEditorView: View {
     }
 
     private func performRedo() {
+        commitActivePinnedThoughtEdit()
         redoLastEdit()
         refreshUndoState()
     }
@@ -2034,6 +2118,8 @@ struct NoteEditorView: View {
         switch action {
         case .exportNote:
             Button {
+                commitActivePinnedThoughtEdit()
+                commitPendingNoteEdit()
                 exportCurrentNote()
             } label: {
                 Label("Export Note", systemImage: "square.and.arrow.up")
@@ -2048,6 +2134,8 @@ struct NoteEditorView: View {
             .foregroundStyle(.primary)
         case .newNote:
             Button {
+                commitActivePinnedThoughtEdit()
+                commitPendingNoteEdit()
                 onNewNote(vm.createNewNote())
             } label: {
                 Label("New Note", systemImage: "square.and.pencil")
@@ -2119,13 +2207,32 @@ private struct TopBarActionLayout {
     let overflowActions: [NoteEditorOverflowAction]
 }
 
-struct EditorFormattingState {
+struct EditorFormattingState: Equatable {
     var bold = false
     var italic = false
     var underline = false
     var strikethrough = false
     var fontSize: CGFloat = defaultEditorTextFont.pointSize
     var foregroundColor: UIColor?
+}
+
+struct EditorSelectionFormattingCache {
+    var range = NSRange(location: 0, length: 0)
+    var formattingState: EditorFormattingState?
+    var formattingStateIsDirty = true
+    var formattingStateIsApproximate = false
+
+    mutating func markDirty(range: NSRange) {
+        self.range = range
+        formattingStateIsDirty = true
+    }
+
+    mutating func update(range: NSRange, formattingState: EditorFormattingState, isApproximate: Bool) {
+        self.range = range
+        self.formattingState = formattingState
+        formattingStateIsDirty = false
+        formattingStateIsApproximate = isApproximate
+    }
 }
 
 enum NoteSearchRegion: Equatable {
@@ -2910,7 +3017,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         if context.coordinator.selectAllToggleToken != selectAllToggleToken {
             context.coordinator.selectAllToggleToken = selectAllToggleToken
-            let fullLength = (textView.text as NSString).length
+            let fullLength = textView.textStorage.length
             if fullLength > 0 && textView.selectedRange.location == 0 && textView.selectedRange.length == fullLength {
                 textView.selectedRange = NSRange(location: fullLength, length: 0)
             } else {
@@ -3043,7 +3150,10 @@ private struct SelectableTextView: UIViewRepresentable {
         var decreaseFontSizeToggleToken = 0
         var textColorToggleToken = 0
         private var activeSearchHighlightRange: NSRange?
-        private var pendingFormattingStateRefresh: DispatchWorkItem?
+        private var activeSearchHighlightRects: [CGRect] = []
+        private var activeSearchHighlightLayers: [CALayer] = []
+        private var lastReportedFormattingState: EditorFormattingState?
+        private var selectionFormattingCache = EditorSelectionFormattingCache()
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
         var isUpdatingUIView = false
         var isHandlingUserFocusChange = false
@@ -3175,7 +3285,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
             guard let position = textView.closestPosition(to: location) else { return }
             let characterOffset = textView.offset(from: textView.beginningOfDocument, to: position)
-            let textLength = (textView.text as NSString).length
+            let textLength = textStorageLength(in: textView)
             let cursorRange = NSRange(location: min(max(characterOffset, 0), textLength), length: 0)
 
             pendingFocusTapSelectionRange = cursorRange
@@ -3203,13 +3313,13 @@ private struct SelectableTextView: UIViewRepresentable {
             applyChecklistRendering(in: textView)
             updateEditorLayout(in: textView)
             syncContent(from: textView, serializesRichTextImmediately: false)
+            markSelectionFormattingDirty(from: textView)
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
-            updateLastKnownSelectionRange(from: textView)
-            reportFormattingStateForSelectionChange(from: textView)
+            cacheSelectionFormattingRange(from: textView)
         }
 
         func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
@@ -3243,8 +3353,8 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             guard let textView = scrollView as? UITextView,
-                  let activeSearchHighlightRange else { return }
-            drawSearchHighlight(activeSearchHighlightRange, in: textView)
+                  activeSearchHighlightRange != nil else { return }
+            positionSearchHighlightLayers(in: textView)
         }
 
         func textView(
@@ -3340,6 +3450,7 @@ private struct SelectableTextView: UIViewRepresentable {
                     ?? defaultEditorTextFont
                 typingAttributes[.font] = adjustedFontSize(from: baseFont, delta: delta)
                 textView.typingAttributes = typingAttributes
+                markSelectionFormattingDirty(from: textView)
                 reportFormattingState(from: textView)
                 return
             }
@@ -3383,6 +3494,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 }
                 textView.typingAttributes = typingAttributes
                 textView.becomeFirstResponder()
+                markSelectionFormattingDirty(from: textView)
                 reportFormattingState(from: textView)
                 return
             }
@@ -3411,6 +3523,7 @@ private struct SelectableTextView: UIViewRepresentable {
             textView.becomeFirstResponder()
             syncContent(from: textView)
             registerFormattingUndo(in: textView, previousText: previousText, previousSelection: previousSelection)
+            markSelectionFormattingDirty(from: textView)
             reportFormattingState(from: textView)
         }
 
@@ -3465,13 +3578,18 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func applySearchHighlight(_ range: NSRange?, in textView: UITextView) {
+            if range == activeSearchHighlightRange, hasSearchHighlightLayers(in: textView) {
+                positionSearchHighlightLayers(in: textView)
+                return
+            }
             clearSearchHighlight(in: textView)
 
             activeSearchHighlightRange = nil
+            activeSearchHighlightRects = []
             guard let range,
                   range.location != NSNotFound,
                   range.length > 0,
-                  NSMaxRange(range) <= (textView.text as NSString).length else {
+                  NSMaxRange(range) <= textStorageLength(in: textView) else {
                 return
             }
 
@@ -3480,8 +3598,13 @@ private struct SelectableTextView: UIViewRepresentable {
             drawSearchHighlight(range, in: textView)
         }
 
+        private func hasSearchHighlightLayers(in textView: UITextView) -> Bool {
+            activeSearchHighlightLayers.contains { $0.superlayer === textView.layer }
+        }
+
         private func drawSearchHighlight(_ range: NSRange, in textView: UITextView) {
             clearSearchHighlight(in: textView)
+            activeSearchHighlightRects = []
             textView.layoutManager.ensureLayout(for: textView.textContainer)
             let glyphRange = textView.layoutManager.glyphRange(
                 forCharacterRange: range,
@@ -3499,20 +3622,40 @@ private struct SelectableTextView: UIViewRepresentable {
                 highlightLayer.name = Self.searchHighlightLayerName
                 highlightLayer.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.45).cgColor
                 highlightLayer.cornerRadius = 3
-                highlightLayer.frame = rect
-                    .insetBy(dx: -2, dy: -1)
-                    .offsetBy(
-                        dx: textView.textContainerInset.left - textView.contentOffset.x,
-                        dy: textView.textContainerInset.top - textView.contentOffset.y
-                    )
+                self.activeSearchHighlightRects.append(rect.insetBy(dx: -2, dy: -1))
+                self.activeSearchHighlightLayers.append(highlightLayer)
                 textView.layer.insertSublayer(highlightLayer, at: 0)
             }
+            positionSearchHighlightLayers(in: textView)
         }
 
         private func clearSearchHighlight(in textView: UITextView) {
+            activeSearchHighlightLayers.forEach { $0.removeFromSuperlayer() }
             textView.layer.sublayers?
                 .filter { $0.name == Self.searchHighlightLayerName }
                 .forEach { $0.removeFromSuperlayer() }
+            activeSearchHighlightRects = []
+            activeSearchHighlightLayers = []
+        }
+
+        private func positionSearchHighlightLayers(in textView: UITextView) {
+            guard activeSearchHighlightLayers.count == activeSearchHighlightRects.count,
+                  activeSearchHighlightLayers.allSatisfy({ $0.superlayer === textView.layer }) else {
+                if let activeSearchHighlightRange {
+                    drawSearchHighlight(activeSearchHighlightRange, in: textView)
+                }
+                return
+            }
+
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for (layer, rect) in zip(activeSearchHighlightLayers, activeSearchHighlightRects) {
+                layer.frame = rect.offsetBy(
+                    dx: textView.textContainerInset.left - textView.contentOffset.x,
+                    dy: textView.textContainerInset.top - textView.contentOffset.y
+                )
+            }
+            CATransaction.commit()
         }
 
         private func syncContent(
@@ -3626,40 +3769,16 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func reportFormattingState(from textView: UITextView, allowsLargeSelectionScan: Bool = false) {
             let state = formattingState(from: textView, allowsLargeSelectionScan: allowsLargeSelectionScan)
+            guard state != lastReportedFormattingState else { return }
+            lastReportedFormattingState = state
             if isUpdatingUIView {
                 RunLoop.main.perform { [weak self] in
-                    self?.onFormattingStateChanged(state)
+                    guard let self, self.lastReportedFormattingState == state else { return }
+                    self.onFormattingStateChanged(state)
                 }
                 return
             }
             onFormattingStateChanged(state)
-        }
-
-        private func reportFormattingStateForSelectionChange(from textView: UITextView) {
-            let range = effectiveSelectionRange(in: textView)
-            guard EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(selectionLength: range.length) else {
-                cancelSettledFormattingStateRefresh()
-                reportFormattingState(from: textView, allowsLargeSelectionScan: true)
-                return
-            }
-
-            reportFormattingState(from: textView)
-            scheduleSettledFormattingStateRefresh(for: textView)
-        }
-
-        private func scheduleSettledFormattingStateRefresh(for textView: UITextView) {
-            pendingFormattingStateRefresh?.cancel()
-            let workItem = DispatchWorkItem { [weak self, weak textView] in
-                guard let self, let textView else { return }
-                self.reportFormattingState(from: textView, allowsLargeSelectionScan: true)
-            }
-            pendingFormattingStateRefresh = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
-        }
-
-        private func cancelSettledFormattingStateRefresh() {
-            pendingFormattingStateRefresh?.cancel()
-            pendingFormattingStateRefresh = nil
         }
 
         func reportUndoManagerChanged(_ undoManager: UndoManager?) {
@@ -3692,7 +3811,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let selectedRange = textView.selectedRange
             textView.attributedText = normalizedAttributedText
             applyChecklistRendering(in: textView)
-            let newLength = (textView.text as NSString).length
+            let newLength = textStorageLength(in: textView)
             let clampedLocation = min(max(selectedRange.location, 0), newLength)
             let clampedLength = min(selectedRange.length, max(newLength - clampedLocation, 0))
             let restoredRange = NSRange(location: clampedLocation, length: clampedLength)
@@ -3822,11 +3941,34 @@ private struct SelectableTextView: UIViewRepresentable {
             allowsLargeSelectionScan: Bool = false
         ) -> EditorFormattingState {
             let range = effectiveSelectionRange(in: textView)
-            if EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(selectionLength: range.length),
-               !allowsLargeSelectionScan {
-                return approximateFormattingState(from: textView, range: range)
+            let usesLargeSelectionPath = EditorSelectionFormattingPolicy
+                .shouldDeferFullFormattingScan(selectionLength: range.length)
+            let needsFullState = usesLargeSelectionPath && allowsLargeSelectionScan
+            if let cachedState = selectionFormattingCache.formattingState,
+               !selectionFormattingCache.formattingStateIsDirty,
+               NSEqualRanges(selectionFormattingCache.range, range),
+               !(needsFullState && selectionFormattingCache.formattingStateIsApproximate) {
+                return cachedState
             }
 
+            let state: EditorFormattingState
+            let isApproximate: Bool
+            if usesLargeSelectionPath && !allowsLargeSelectionScan {
+                state = approximateFormattingState(from: textView, range: range)
+                isApproximate = true
+            } else {
+                state = fullFormattingState(from: textView, range: range)
+                isApproximate = false
+            }
+            selectionFormattingCache.update(
+                range: range,
+                formattingState: state,
+                isApproximate: isApproximate
+            )
+            return state
+        }
+
+        private func fullFormattingState(from textView: UITextView, range: NSRange) -> EditorFormattingState {
             let font = selectedFont(in: textView, range: range)
             let foregroundColor = selectedForegroundColor(in: textView, range: range)
             return EditorFormattingState(
@@ -3958,6 +4100,7 @@ private struct SelectableTextView: UIViewRepresentable {
                     isEnabled: shouldApply
                 )
                 textView.typingAttributes = typingAttributes
+                markSelectionFormattingDirty(from: textView)
                 reportFormattingState(from: textView)
                 return
             }
@@ -4063,6 +4206,7 @@ private struct SelectableTextView: UIViewRepresentable {
                     }
                 }
                 textView.typingAttributes = typingAttributes
+                markSelectionFormattingDirty(from: textView)
                 reportFormattingState(from: textView)
                 return
             }
@@ -4237,6 +4381,7 @@ private struct SelectableTextView: UIViewRepresentable {
                     previousSelection: previousSelection
                 )
             }
+            markSelectionFormattingDirty(from: textView)
             reportFormattingState(from: textView)
         }
 
@@ -4250,7 +4395,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let selectedRange = textView.selectedRange
             textView.attributedText = mutable
             updateEditorLayout(in: textView)
-            let newLength = (textView.text as NSString).length
+            let newLength = textStorageLength(in: textView)
             let safeLocation = min(selectedRange.location, newLength)
             let safeLength = min(selectedRange.length, newLength - safeLocation)
             let safeRange = NSRange(location: safeLocation, length: safeLength)
@@ -4276,7 +4421,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 return currentRange
             }
 
-            let fullLength = (textView.text as NSString).length
+            let fullLength = textStorageLength(in: textView)
             let cachedRange = lastKnownSelectionRange
             if cachedRange.length > 0, cachedRange.location + cachedRange.length <= fullLength {
                 return cachedRange
@@ -4297,7 +4442,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 return currentRange
             }
 
-            let fullLength = (textView.text as NSString).length
+            let fullLength = textStorageLength(in: textView)
             let cachedRange = lastKnownSelectionRange
             if cachedRange.length > 0, cachedRange.location + cachedRange.length <= fullLength {
                 restoreSelectionWithoutScrolling(cachedRange, in: textView)
@@ -4314,10 +4459,25 @@ private struct SelectableTextView: UIViewRepresentable {
             }
         }
 
+        private func cacheSelectionFormattingRange(from textView: UITextView) {
+            let range = safeSelectedRange(in: textView)
+            if range.length > 0 || textView.isFirstResponder {
+                lastKnownSelectionRange = range
+            }
+            // Selection drags can fire hundreds of callbacks. Keep the live
+            // callback to cached range bookkeeping; formatting is refreshed on
+            // demand by commands and focus changes.
+            selectionFormattingCache.markDirty(range: range)
+        }
+
+        private func markSelectionFormattingDirty(from textView: UITextView) {
+            selectionFormattingCache.markDirty(range: effectiveSelectionRange(in: textView))
+        }
+
         private func applyPendingFocusTapSelection(in textView: UITextView) {
 #if targetEnvironment(macCatalyst)
             if let pendingFocusTapSelectionRange {
-                let textLength = (textView.text as NSString).length
+                let textLength = textStorageLength(in: textView)
                 let location = min(max(pendingFocusTapSelectionRange.location, 0), textLength)
                 let range = NSRange(location: location, length: 0)
                 restoreSelectionWithoutScrolling(range, in: textView)
@@ -4333,7 +4493,7 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func safeSelectedRange(in textView: UITextView) -> NSRange {
-            let textLength = (textView.text as NSString).length
+            let textLength = textStorageLength(in: textView)
             let selectedRange = textView.selectedRange
             guard selectedRange.location != NSNotFound else {
                 return NSRange(location: textLength, length: 0)
@@ -4348,6 +4508,10 @@ private struct SelectableTextView: UIViewRepresentable {
             let previousOffset = textView.contentOffset
             textView.selectedRange = range
             textView.setContentOffset(previousOffset, animated: false)
+        }
+
+        private func textStorageLength(in textView: UITextView) -> Int {
+            textView.textStorage.length
         }
     }
 }

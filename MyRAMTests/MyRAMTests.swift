@@ -3338,6 +3338,55 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.richTextContentData, Data("rich body".utf8))
     }
 
+    func testPinnedTextCommitTrimsOnlyWhenUpdatingModel() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let vm = NotesViewModel(context: container.mainContext)
+        let note = vm.createNewNote()
+        let pinnedText = try XCTUnwrap(vm.addPinnedThought(to: note, text: "Initial"))
+
+        vm.updatePinnedThought(pinnedText, text: "One space ")
+
+        XCTAssertEqual(pinnedText.text, "One space")
+    }
+
+    func testSelectionFormattingCacheMarksMovedSelectionDirty() {
+        var cache = EditorSelectionFormattingCache()
+        let range = NSRange(location: 8, length: 24)
+
+        cache.update(range: NSRange(location: 0, length: 1), formattingState: EditorFormattingState(), isApproximate: false)
+        cache.markDirty(range: range)
+
+        XCTAssertEqual(cache.range, range)
+        XCTAssertTrue(cache.formattingStateIsDirty)
+    }
+
+    func testSelectionFormattingCacheStoresFreshFormattingState() {
+        var cache = EditorSelectionFormattingCache()
+        let range = NSRange(location: 3, length: 4)
+        let state = EditorFormattingState(bold: true, italic: true, underline: false, strikethrough: false)
+
+        cache.update(range: range, formattingState: state, isApproximate: false)
+
+        XCTAssertEqual(cache.range, range)
+        XCTAssertEqual(cache.formattingState, state)
+        XCTAssertFalse(cache.formattingStateIsDirty)
+        XCTAssertFalse(cache.formattingStateIsApproximate)
+    }
+
+    func testSelectionFormattingCacheTracksApproximateFormattingState() {
+        var cache = EditorSelectionFormattingCache()
+        let state = EditorFormattingState(underline: true)
+
+        cache.update(
+            range: NSRange(location: 0, length: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold + 1),
+            formattingState: state,
+            isApproximate: true
+        )
+
+        XCTAssertEqual(cache.formattingState, state)
+        XCTAssertTrue(cache.formattingStateIsApproximate)
+    }
+
     func testPinnedThoughtExpansionStateDefaultsCollapsedAndPersistsPerSessionNote() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
@@ -3682,6 +3731,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(
             NoteEditorOverflowAction.priorityOrder,
             [
+                .search,
                 .newNote,
                 .newFolder,
                 .exportNote,
