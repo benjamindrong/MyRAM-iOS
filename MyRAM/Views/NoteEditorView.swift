@@ -32,10 +32,6 @@ enum EditorSelectionFormattingPolicy {
     static func shouldDeferFullFormattingScan(selectionLength: Int) -> Bool {
         selectionLength > largeSelectionFormattingThreshold
     }
-
-    static func shouldDeferLiveSelectionFormattingUpdate(selectionLength: Int, isCatalyst: Bool) -> Bool {
-        isCatalyst && shouldDeferFullFormattingScan(selectionLength: selectionLength)
-    }
 }
 
 struct DeferredRichTextContentEncoder {
@@ -2220,6 +2216,25 @@ struct EditorFormattingState: Equatable {
     var foregroundColor: UIColor?
 }
 
+struct EditorSelectionFormattingCache {
+    var range = NSRange(location: 0, length: 0)
+    var formattingState: EditorFormattingState?
+    var formattingStateIsDirty = true
+    var formattingStateIsApproximate = false
+
+    mutating func markDirty(range: NSRange) {
+        self.range = range
+        formattingStateIsDirty = true
+    }
+
+    mutating func update(range: NSRange, formattingState: EditorFormattingState, isApproximate: Bool) {
+        self.range = range
+        self.formattingState = formattingState
+        formattingStateIsDirty = false
+        formattingStateIsApproximate = isApproximate
+    }
+}
+
 enum NoteSearchRegion: Equatable {
     case pinnedText(id: UUID)
     case body
@@ -3002,7 +3017,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         if context.coordinator.selectAllToggleToken != selectAllToggleToken {
             context.coordinator.selectAllToggleToken = selectAllToggleToken
-            let fullLength = (textView.text as NSString).length
+            let fullLength = textView.textStorage.length
             if fullLength > 0 && textView.selectedRange.location == 0 && textView.selectedRange.length == fullLength {
                 textView.selectedRange = NSRange(location: fullLength, length: 0)
             } else {
@@ -3135,8 +3150,10 @@ private struct SelectableTextView: UIViewRepresentable {
         var decreaseFontSizeToggleToken = 0
         var textColorToggleToken = 0
         private var activeSearchHighlightRange: NSRange?
-        private var pendingFormattingStateRefresh: DispatchWorkItem?
+        private var activeSearchHighlightRects: [CGRect] = []
+        private var activeSearchHighlightLayers: [CALayer] = []
         private var lastReportedFormattingState: EditorFormattingState?
+        private var selectionFormattingCache = EditorSelectionFormattingCache()
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
         var isUpdatingUIView = false
         var isHandlingUserFocusChange = false
@@ -3268,7 +3285,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
             guard let position = textView.closestPosition(to: location) else { return }
             let characterOffset = textView.offset(from: textView.beginningOfDocument, to: position)
-            let textLength = (textView.text as NSString).length
+            let textLength = textStorageLength(in: textView)
             let cursorRange = NSRange(location: min(max(characterOffset, 0), textLength), length: 0)
 
             pendingFocusTapSelectionRange = cursorRange
@@ -3296,13 +3313,13 @@ private struct SelectableTextView: UIViewRepresentable {
             applyChecklistRendering(in: textView)
             updateEditorLayout(in: textView)
             syncContent(from: textView, serializesRichTextImmediately: false)
+            markSelectionFormattingDirty(from: textView)
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
-            updateLastKnownSelectionRange(from: textView)
-            reportFormattingStateForSelectionChange(from: textView)
+            cacheSelectionFormattingRange(from: textView)
         }
 
         func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
@@ -3336,8 +3353,8 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             guard let textView = scrollView as? UITextView,
-                  let activeSearchHighlightRange else { return }
-            drawSearchHighlight(activeSearchHighlightRange, in: textView)
+                  activeSearchHighlightRange != nil else { return }
+            positionSearchHighlightLayers(in: textView)
         }
 
         func textView(
@@ -3433,6 +3450,7 @@ private struct SelectableTextView: UIViewRepresentable {
                     ?? defaultEditorTextFont
                 typingAttributes[.font] = adjustedFontSize(from: baseFont, delta: delta)
                 textView.typingAttributes = typingAttributes
+                markSelectionFormattingDirty(from: textView)
                 reportFormattingState(from: textView)
                 return
             }
@@ -3476,6 +3494,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 }
                 textView.typingAttributes = typingAttributes
                 textView.becomeFirstResponder()
+                markSelectionFormattingDirty(from: textView)
                 reportFormattingState(from: textView)
                 return
             }
@@ -3504,6 +3523,7 @@ private struct SelectableTextView: UIViewRepresentable {
             textView.becomeFirstResponder()
             syncContent(from: textView)
             registerFormattingUndo(in: textView, previousText: previousText, previousSelection: previousSelection)
+            markSelectionFormattingDirty(from: textView)
             reportFormattingState(from: textView)
         }
 
@@ -3559,15 +3579,17 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func applySearchHighlight(_ range: NSRange?, in textView: UITextView) {
             if range == activeSearchHighlightRange, hasSearchHighlightLayers(in: textView) {
+                positionSearchHighlightLayers(in: textView)
                 return
             }
             clearSearchHighlight(in: textView)
 
             activeSearchHighlightRange = nil
+            activeSearchHighlightRects = []
             guard let range,
                   range.location != NSNotFound,
                   range.length > 0,
-                  NSMaxRange(range) <= (textView.text as NSString).length else {
+                  NSMaxRange(range) <= textStorageLength(in: textView) else {
                 return
             }
 
@@ -3577,11 +3599,12 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func hasSearchHighlightLayers(in textView: UITextView) -> Bool {
-            textView.layer.sublayers?.contains { $0.name == Self.searchHighlightLayerName } == true
+            activeSearchHighlightLayers.contains { $0.superlayer === textView.layer }
         }
 
         private func drawSearchHighlight(_ range: NSRange, in textView: UITextView) {
             clearSearchHighlight(in: textView)
+            activeSearchHighlightRects = []
             textView.layoutManager.ensureLayout(for: textView.textContainer)
             let glyphRange = textView.layoutManager.glyphRange(
                 forCharacterRange: range,
@@ -3599,20 +3622,40 @@ private struct SelectableTextView: UIViewRepresentable {
                 highlightLayer.name = Self.searchHighlightLayerName
                 highlightLayer.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.45).cgColor
                 highlightLayer.cornerRadius = 3
-                highlightLayer.frame = rect
-                    .insetBy(dx: -2, dy: -1)
-                    .offsetBy(
-                        dx: textView.textContainerInset.left - textView.contentOffset.x,
-                        dy: textView.textContainerInset.top - textView.contentOffset.y
-                    )
+                self.activeSearchHighlightRects.append(rect.insetBy(dx: -2, dy: -1))
+                self.activeSearchHighlightLayers.append(highlightLayer)
                 textView.layer.insertSublayer(highlightLayer, at: 0)
             }
+            positionSearchHighlightLayers(in: textView)
         }
 
         private func clearSearchHighlight(in textView: UITextView) {
+            activeSearchHighlightLayers.forEach { $0.removeFromSuperlayer() }
             textView.layer.sublayers?
                 .filter { $0.name == Self.searchHighlightLayerName }
                 .forEach { $0.removeFromSuperlayer() }
+            activeSearchHighlightRects = []
+            activeSearchHighlightLayers = []
+        }
+
+        private func positionSearchHighlightLayers(in textView: UITextView) {
+            guard activeSearchHighlightLayers.count == activeSearchHighlightRects.count,
+                  activeSearchHighlightLayers.allSatisfy({ $0.superlayer === textView.layer }) else {
+                if let activeSearchHighlightRange {
+                    drawSearchHighlight(activeSearchHighlightRange, in: textView)
+                }
+                return
+            }
+
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            for (layer, rect) in zip(activeSearchHighlightLayers, activeSearchHighlightRects) {
+                layer.frame = rect.offsetBy(
+                    dx: textView.textContainerInset.left - textView.contentOffset.x,
+                    dy: textView.textContainerInset.top - textView.contentOffset.y
+                )
+            }
+            CATransaction.commit()
         }
 
         private func syncContent(
@@ -3738,52 +3781,6 @@ private struct SelectableTextView: UIViewRepresentable {
             onFormattingStateChanged(state)
         }
 
-        private func reportFormattingStateForSelectionChange(from textView: UITextView) {
-            let range = effectiveSelectionRange(in: textView)
-            if shouldDeferLiveSelectionFormattingUpdate(selectionLength: range.length) {
-                scheduleSettledFormattingStateRefresh(for: textView)
-                return
-            }
-
-            guard EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(selectionLength: range.length) else {
-                cancelSettledFormattingStateRefresh()
-                reportFormattingState(from: textView, allowsLargeSelectionScan: true)
-                return
-            }
-
-            reportFormattingState(from: textView)
-            scheduleSettledFormattingStateRefresh(for: textView)
-        }
-
-        private func shouldDeferLiveSelectionFormattingUpdate(selectionLength: Int) -> Bool {
-#if targetEnvironment(macCatalyst)
-            EditorSelectionFormattingPolicy.shouldDeferLiveSelectionFormattingUpdate(
-                selectionLength: selectionLength,
-                isCatalyst: true
-            )
-#else
-            EditorSelectionFormattingPolicy.shouldDeferLiveSelectionFormattingUpdate(
-                selectionLength: selectionLength,
-                isCatalyst: false
-            )
-#endif
-        }
-
-        private func scheduleSettledFormattingStateRefresh(for textView: UITextView) {
-            pendingFormattingStateRefresh?.cancel()
-            let workItem = DispatchWorkItem { [weak self, weak textView] in
-                guard let self, let textView else { return }
-                self.reportFormattingState(from: textView, allowsLargeSelectionScan: true)
-            }
-            pendingFormattingStateRefresh = workItem
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: workItem)
-        }
-
-        private func cancelSettledFormattingStateRefresh() {
-            pendingFormattingStateRefresh?.cancel()
-            pendingFormattingStateRefresh = nil
-        }
-
         func reportUndoManagerChanged(_ undoManager: UndoManager?) {
             if isUpdatingUIView {
                 RunLoop.main.perform { [weak self] in
@@ -3814,7 +3811,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let selectedRange = textView.selectedRange
             textView.attributedText = normalizedAttributedText
             applyChecklistRendering(in: textView)
-            let newLength = (textView.text as NSString).length
+            let newLength = textStorageLength(in: textView)
             let clampedLocation = min(max(selectedRange.location, 0), newLength)
             let clampedLength = min(selectedRange.length, max(newLength - clampedLocation, 0))
             let restoredRange = NSRange(location: clampedLocation, length: clampedLength)
@@ -3944,11 +3941,34 @@ private struct SelectableTextView: UIViewRepresentable {
             allowsLargeSelectionScan: Bool = false
         ) -> EditorFormattingState {
             let range = effectiveSelectionRange(in: textView)
-            if EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(selectionLength: range.length),
-               !allowsLargeSelectionScan {
-                return approximateFormattingState(from: textView, range: range)
+            let usesLargeSelectionPath = EditorSelectionFormattingPolicy
+                .shouldDeferFullFormattingScan(selectionLength: range.length)
+            let needsFullState = usesLargeSelectionPath && allowsLargeSelectionScan
+            if let cachedState = selectionFormattingCache.formattingState,
+               !selectionFormattingCache.formattingStateIsDirty,
+               NSEqualRanges(selectionFormattingCache.range, range),
+               !(needsFullState && selectionFormattingCache.formattingStateIsApproximate) {
+                return cachedState
             }
 
+            let state: EditorFormattingState
+            let isApproximate: Bool
+            if usesLargeSelectionPath && !allowsLargeSelectionScan {
+                state = approximateFormattingState(from: textView, range: range)
+                isApproximate = true
+            } else {
+                state = fullFormattingState(from: textView, range: range)
+                isApproximate = false
+            }
+            selectionFormattingCache.update(
+                range: range,
+                formattingState: state,
+                isApproximate: isApproximate
+            )
+            return state
+        }
+
+        private func fullFormattingState(from textView: UITextView, range: NSRange) -> EditorFormattingState {
             let font = selectedFont(in: textView, range: range)
             let foregroundColor = selectedForegroundColor(in: textView, range: range)
             return EditorFormattingState(
@@ -4080,6 +4100,7 @@ private struct SelectableTextView: UIViewRepresentable {
                     isEnabled: shouldApply
                 )
                 textView.typingAttributes = typingAttributes
+                markSelectionFormattingDirty(from: textView)
                 reportFormattingState(from: textView)
                 return
             }
@@ -4185,6 +4206,7 @@ private struct SelectableTextView: UIViewRepresentable {
                     }
                 }
                 textView.typingAttributes = typingAttributes
+                markSelectionFormattingDirty(from: textView)
                 reportFormattingState(from: textView)
                 return
             }
@@ -4359,6 +4381,7 @@ private struct SelectableTextView: UIViewRepresentable {
                     previousSelection: previousSelection
                 )
             }
+            markSelectionFormattingDirty(from: textView)
             reportFormattingState(from: textView)
         }
 
@@ -4372,7 +4395,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let selectedRange = textView.selectedRange
             textView.attributedText = mutable
             updateEditorLayout(in: textView)
-            let newLength = (textView.text as NSString).length
+            let newLength = textStorageLength(in: textView)
             let safeLocation = min(selectedRange.location, newLength)
             let safeLength = min(selectedRange.length, newLength - safeLocation)
             let safeRange = NSRange(location: safeLocation, length: safeLength)
@@ -4398,7 +4421,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 return currentRange
             }
 
-            let fullLength = (textView.text as NSString).length
+            let fullLength = textStorageLength(in: textView)
             let cachedRange = lastKnownSelectionRange
             if cachedRange.length > 0, cachedRange.location + cachedRange.length <= fullLength {
                 return cachedRange
@@ -4419,7 +4442,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 return currentRange
             }
 
-            let fullLength = (textView.text as NSString).length
+            let fullLength = textStorageLength(in: textView)
             let cachedRange = lastKnownSelectionRange
             if cachedRange.length > 0, cachedRange.location + cachedRange.length <= fullLength {
                 restoreSelectionWithoutScrolling(cachedRange, in: textView)
@@ -4436,10 +4459,25 @@ private struct SelectableTextView: UIViewRepresentable {
             }
         }
 
+        private func cacheSelectionFormattingRange(from textView: UITextView) {
+            let range = safeSelectedRange(in: textView)
+            if range.length > 0 || textView.isFirstResponder {
+                lastKnownSelectionRange = range
+            }
+            // Selection drags can fire hundreds of callbacks. Keep the live
+            // callback to cached range bookkeeping; formatting is refreshed on
+            // demand by commands and focus changes.
+            selectionFormattingCache.markDirty(range: range)
+        }
+
+        private func markSelectionFormattingDirty(from textView: UITextView) {
+            selectionFormattingCache.markDirty(range: effectiveSelectionRange(in: textView))
+        }
+
         private func applyPendingFocusTapSelection(in textView: UITextView) {
 #if targetEnvironment(macCatalyst)
             if let pendingFocusTapSelectionRange {
-                let textLength = (textView.text as NSString).length
+                let textLength = textStorageLength(in: textView)
                 let location = min(max(pendingFocusTapSelectionRange.location, 0), textLength)
                 let range = NSRange(location: location, length: 0)
                 restoreSelectionWithoutScrolling(range, in: textView)
@@ -4455,7 +4493,7 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func safeSelectedRange(in textView: UITextView) -> NSRange {
-            let textLength = (textView.text as NSString).length
+            let textLength = textStorageLength(in: textView)
             let selectedRange = textView.selectedRange
             guard selectedRange.location != NSNotFound else {
                 return NSRange(location: textLength, length: 0)
@@ -4470,6 +4508,10 @@ private struct SelectableTextView: UIViewRepresentable {
             let previousOffset = textView.contentOffset
             textView.selectedRange = range
             textView.setContentOffset(previousOffset, animated: false)
+        }
+
+        private func textStorageLength(in textView: UITextView) -> Int {
+            textView.textStorage.length
         }
     }
 }

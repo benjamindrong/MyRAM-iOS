@@ -3349,31 +3349,42 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(pinnedText.text, "One space")
     }
 
-    func testLargeCatalystSelectionDefersLiveFormattingUpdates() {
-        XCTAssertTrue(
-            EditorSelectionFormattingPolicy.shouldDeferLiveSelectionFormattingUpdate(
-                selectionLength: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold + 1,
-                isCatalyst: true
-            )
-        )
+    func testSelectionFormattingCacheMarksMovedSelectionDirty() {
+        var cache = EditorSelectionFormattingCache()
+        let range = NSRange(location: 8, length: 24)
+
+        cache.update(range: NSRange(location: 0, length: 1), formattingState: EditorFormattingState(), isApproximate: false)
+        cache.markDirty(range: range)
+
+        XCTAssertEqual(cache.range, range)
+        XCTAssertTrue(cache.formattingStateIsDirty)
     }
 
-    func testLargeNonCatalystSelectionKeepsLiveFormattingUpdates() {
-        XCTAssertFalse(
-            EditorSelectionFormattingPolicy.shouldDeferLiveSelectionFormattingUpdate(
-                selectionLength: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold + 1,
-                isCatalyst: false
-            )
-        )
+    func testSelectionFormattingCacheStoresFreshFormattingState() {
+        var cache = EditorSelectionFormattingCache()
+        let range = NSRange(location: 3, length: 4)
+        let state = EditorFormattingState(bold: true, italic: true, underline: false, strikethrough: false)
+
+        cache.update(range: range, formattingState: state, isApproximate: false)
+
+        XCTAssertEqual(cache.range, range)
+        XCTAssertEqual(cache.formattingState, state)
+        XCTAssertFalse(cache.formattingStateIsDirty)
+        XCTAssertFalse(cache.formattingStateIsApproximate)
     }
 
-    func testSmallCatalystSelectionKeepsLiveFormattingUpdates() {
-        XCTAssertFalse(
-            EditorSelectionFormattingPolicy.shouldDeferLiveSelectionFormattingUpdate(
-                selectionLength: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold,
-                isCatalyst: true
-            )
+    func testSelectionFormattingCacheTracksApproximateFormattingState() {
+        var cache = EditorSelectionFormattingCache()
+        let state = EditorFormattingState(underline: true)
+
+        cache.update(
+            range: NSRange(location: 0, length: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold + 1),
+            formattingState: state,
+            isApproximate: true
         )
+
+        XCTAssertEqual(cache.formattingState, state)
+        XCTAssertTrue(cache.formattingStateIsApproximate)
     }
 
     func testPinnedThoughtExpansionStateDefaultsCollapsedAndPersistsPerSessionNote() throws {
