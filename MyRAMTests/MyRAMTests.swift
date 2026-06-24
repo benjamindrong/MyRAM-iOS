@@ -3349,6 +3349,33 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(pinnedText.text, "One space")
     }
 
+    func testLargeCatalystSelectionDefersLiveFormattingUpdates() {
+        XCTAssertTrue(
+            EditorSelectionFormattingPolicy.shouldDeferLiveSelectionFormattingUpdate(
+                selectionLength: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold + 1,
+                isCatalyst: true
+            )
+        )
+    }
+
+    func testLargeNonCatalystSelectionKeepsLiveFormattingUpdates() {
+        XCTAssertFalse(
+            EditorSelectionFormattingPolicy.shouldDeferLiveSelectionFormattingUpdate(
+                selectionLength: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold + 1,
+                isCatalyst: false
+            )
+        )
+    }
+
+    func testSmallCatalystSelectionKeepsLiveFormattingUpdates() {
+        XCTAssertFalse(
+            EditorSelectionFormattingPolicy.shouldDeferLiveSelectionFormattingUpdate(
+                selectionLength: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold,
+                isCatalyst: true
+            )
+        )
+    }
+
     func testPinnedThoughtExpansionStateDefaultsCollapsedAndPersistsPerSessionNote() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)

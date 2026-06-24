@@ -32,6 +32,10 @@ enum EditorSelectionFormattingPolicy {
     static func shouldDeferFullFormattingScan(selectionLength: Int) -> Bool {
         selectionLength > largeSelectionFormattingThreshold
     }
+
+    static func shouldDeferLiveSelectionFormattingUpdate(selectionLength: Int, isCatalyst: Bool) -> Bool {
+        isCatalyst && shouldDeferFullFormattingScan(selectionLength: selectionLength)
+    }
 }
 
 struct DeferredRichTextContentEncoder {
@@ -3736,6 +3740,11 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func reportFormattingStateForSelectionChange(from textView: UITextView) {
             let range = effectiveSelectionRange(in: textView)
+            if shouldDeferLiveSelectionFormattingUpdate(selectionLength: range.length) {
+                scheduleSettledFormattingStateRefresh(for: textView)
+                return
+            }
+
             guard EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(selectionLength: range.length) else {
                 cancelSettledFormattingStateRefresh()
                 reportFormattingState(from: textView, allowsLargeSelectionScan: true)
@@ -3744,6 +3753,20 @@ private struct SelectableTextView: UIViewRepresentable {
 
             reportFormattingState(from: textView)
             scheduleSettledFormattingStateRefresh(for: textView)
+        }
+
+        private func shouldDeferLiveSelectionFormattingUpdate(selectionLength: Int) -> Bool {
+#if targetEnvironment(macCatalyst)
+            EditorSelectionFormattingPolicy.shouldDeferLiveSelectionFormattingUpdate(
+                selectionLength: selectionLength,
+                isCatalyst: true
+            )
+#else
+            EditorSelectionFormattingPolicy.shouldDeferLiveSelectionFormattingUpdate(
+                selectionLength: selectionLength,
+                isCatalyst: false
+            )
+#endif
         }
 
         private func scheduleSettledFormattingStateRefresh(for textView: UITextView) {
