@@ -2940,7 +2940,6 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
-        context.coordinator.installTextPlacementTapRecognizer(on: textView)
         textView.delegate = context.coordinator
         textView.font = defaultEditorTextFont
         textView.textColor = textColor
@@ -2969,7 +2968,6 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.formattingController = formattingController
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
-        context.coordinator.installTextPlacementTapRecognizer(on: textView)
         context.coordinator.isUpdatingUIView = true
         defer {
             context.coordinator.isUpdatingUIView = false
@@ -3175,6 +3173,7 @@ private struct SelectableTextView: UIViewRepresentable {
         private var activeSearchHighlightLayers: [CALayer] = []
         private var lastReportedFormattingState: EditorFormattingState?
         private var selectionFormattingCache = EditorSelectionFormattingCache()
+        private var sessionSelectionRange: NSRange?
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
         var isUpdatingUIView = false
         var isHandlingUserFocusChange = false
@@ -3183,15 +3182,6 @@ private struct SelectableTextView: UIViewRepresentable {
         private var appliedPlainTextAwaitingBinding: String?
         private var appliedRichTextDataAwaitingBinding: Data?
         private weak var checklistTapRecognizer: UITapGestureRecognizer?
-#if targetEnvironment(macCatalyst)
-        private struct PendingFocusTapContext {
-            let range: NSRange
-            let contentOffset: CGPoint
-        }
-
-        private weak var textPlacementTapRecognizer: UITapGestureRecognizer?
-        private var pendingFocusTapContext: PendingFocusTapContext?
-#endif
 
         init(
             formattingController: TextFormattingController,
@@ -3245,24 +3235,6 @@ private struct SelectableTextView: UIViewRepresentable {
             checklistTapRecognizer = recognizer
         }
 
-        func installTextPlacementTapRecognizer(on textView: UITextView) {
-#if targetEnvironment(macCatalyst)
-            if textPlacementTapRecognizer?.view === textView {
-                return
-            }
-
-            if let previous = textPlacementTapRecognizer {
-                previous.view?.removeGestureRecognizer(previous)
-            }
-
-            let recognizer = UITapGestureRecognizer(target: self, action: #selector(handleTextPlacementTap(_:)))
-            recognizer.cancelsTouchesInView = true
-            recognizer.delegate = self
-            textView.addGestureRecognizer(recognizer)
-            textPlacementTapRecognizer = recognizer
-#endif
-        }
-
         @objc
         private func handleChecklistTap(_ recognizer: UITapGestureRecognizer) {
             guard recognizer.state == .ended,
@@ -3298,50 +3270,10 @@ private struct SelectableTextView: UIViewRepresentable {
             reportUndoManagerChanged(textView.undoManager)
         }
 
-#if targetEnvironment(macCatalyst)
-        @objc
-        private func handleTextPlacementTap(_ recognizer: UITapGestureRecognizer) {
-            guard recognizer.state == .ended,
-                  let textView = textView,
-                  !textView.isFirstResponder else { return }
-
-            let location = recognizer.location(in: textView)
-            let gutterAdjustedX = location.x - textView.textContainerInset.left
-            if gutterAdjustedX >= 0, gutterAdjustedX <= ChecklistItemEditor.gutterTapWidth {
-                return
-            }
-
-            let cursorRange = EditorTextPlacementResolver.caretRange(forTapLocation: location, in: textView)
-            let tapContext = PendingFocusTapContext(range: cursorRange, contentOffset: textView.contentOffset)
-
-            pendingFocusTapContext = tapContext
-            isHandlingUserFocusChange = true
-            textView.selectedRange = cursorRange
-            textView.becomeFirstResponder()
-            restorePendingFocusTapSelection(in: textView, clear: false)
-            lastKnownSelectionRange = cursorRange
-            reportFormattingState(from: textView)
-
-            RunLoop.main.perform { [weak self, weak textView] in
-                guard let self, let textView else { return }
-                self.restorePendingFocusTapSelection(in: textView, clear: false)
-                DispatchQueue.main.async { [weak self, weak textView] in
-                    guard let self, let textView else { return }
-                    self.restorePendingFocusTapSelection(in: textView, clear: true)
-                }
-            }
-        }
-#endif
-
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer
         ) -> Bool {
-#if targetEnvironment(macCatalyst)
-            if gestureRecognizer === textPlacementTapRecognizer || otherGestureRecognizer === textPlacementTapRecognizer {
-                return false
-            }
-#endif
             return true
         }
 
@@ -3362,9 +3294,9 @@ private struct SelectableTextView: UIViewRepresentable {
 
             if isHandlingUserFocusChange {
                 // UIKit can emit a transient end-of-document selection while a
-                // text view becomes first responder. Do not let that provisional
-                // callback replace the selection we intend to restore after focus.
-                selectionFormattingCache.markDirty(range: focusAcquisitionSelectionRange ?? safeSelectedRange(in: textView))
+                // text view becomes first responder. Keep it provisional until
+                // the focus pass confirms whether native click placement stuck.
+                selectionFormattingCache.markDirty(range: focusAcquisitionSelectionRange ?? sessionSelectionRange ?? safeSelectedRange(in: textView))
                 return
             }
 
@@ -3372,15 +3304,13 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
-            focusAcquisitionSelectionRange = safeSelectedRange(in: textView)
             isHandlingUserFocusChange = true
             return true
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
             onEditingFocusChanged(true)
-            lastKnownSelectionRange = safeSelectedRange(in: textView)
-            focusAcquisitionSelectionRange = focusAcquisitionSelectionRange ?? lastKnownSelectionRange
+            focusAcquisitionSelectionRange = safeSelectedRange(in: textView)
             RunLoop.main.perform { [weak self, weak textView] in
                 guard let self, let textView else { return }
                 self.applyPendingFocusTapSelection(in: textView)
@@ -4513,6 +4443,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let range = safeSelectedRange(in: textView)
             if range.length > 0 || textView.isFirstResponder {
                 lastKnownSelectionRange = range
+                sessionSelectionRange = range
             }
         }
 
@@ -4520,6 +4451,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let range = safeSelectedRange(in: textView)
             if range.length > 0 || textView.isFirstResponder {
                 lastKnownSelectionRange = range
+                sessionSelectionRange = range
             }
             // Selection drags can fire hundreds of callbacks. Keep the live
             // callback to cached range bookkeeping; formatting is refreshed on
@@ -4532,18 +4464,16 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func applyPendingFocusTapSelection(in textView: UITextView) {
-#if targetEnvironment(macCatalyst)
-            if pendingFocusTapContext != nil {
-                restorePendingFocusTapSelection(in: textView, clear: true)
-                isHandlingUserFocusChange = false
-                return
-            }
-#endif
-
-            if let focusAcquisitionSelectionRange,
-               isValidSelectionRange(focusAcquisitionSelectionRange, in: textView) {
+            let currentRange = textView.selectedRange
+            if currentRange.location == NSNotFound,
+               let fallbackRange = validSessionSelectionRange(in: textView) {
+                restoreSelectionWithoutScrolling(fallbackRange, in: textView)
+                lastKnownSelectionRange = fallbackRange
+            } else if shouldRestoreFocusAcquisitionRange(currentRange, in: textView),
+                      let focusAcquisitionSelectionRange {
                 restoreSelectionWithoutScrolling(focusAcquisitionSelectionRange, in: textView)
                 lastKnownSelectionRange = focusAcquisitionSelectionRange
+                sessionSelectionRange = focusAcquisitionSelectionRange
             } else {
                 updateLastKnownSelectionRange(from: textView)
             }
@@ -4570,6 +4500,27 @@ private struct SelectableTextView: UIViewRepresentable {
                 && NSMaxRange(range) <= textStorageLength(in: textView)
         }
 
+        private func validSessionSelectionRange(in textView: UITextView) -> NSRange? {
+            guard let sessionSelectionRange,
+                  isValidSelectionRange(sessionSelectionRange, in: textView) else {
+                return nil
+            }
+            return sessionSelectionRange
+        }
+
+        private func shouldRestoreFocusAcquisitionRange(_ currentRange: NSRange, in textView: UITextView) -> Bool {
+            let textLength = textStorageLength(in: textView)
+            guard currentRange.location == textLength,
+                  textLength > 0,
+                  let focusAcquisitionSelectionRange,
+                  isValidSelectionRange(focusAcquisitionSelectionRange, in: textView),
+                  focusAcquisitionSelectionRange.location != textLength else {
+                return false
+            }
+
+            return true
+        }
+
         private func restoreSelectionWithoutScrolling(_ range: NSRange, in textView: UITextView) {
             let previousOffset = textView.contentOffset
             restoreSelection(range, preserving: previousOffset, in: textView)
@@ -4584,22 +4535,6 @@ private struct SelectableTextView: UIViewRepresentable {
             textView.textStorage.length
         }
 
-#if targetEnvironment(macCatalyst)
-        private func restorePendingFocusTapSelection(in textView: UITextView, clear: Bool) {
-            guard let pendingFocusTapContext else { return }
-
-            let textLength = textStorageLength(in: textView)
-            let location = min(max(pendingFocusTapContext.range.location, 0), textLength)
-            let range = NSRange(location: location, length: 0)
-            restoreSelection(range, preserving: pendingFocusTapContext.contentOffset, in: textView)
-            lastKnownSelectionRange = range
-
-            if clear {
-                self.pendingFocusTapContext = nil
-                isHandlingUserFocusChange = false
-            }
-        }
-#endif
     }
 }
 
