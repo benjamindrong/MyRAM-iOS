@@ -4,6 +4,7 @@ import UIKit
 import PhotosUI
 import UniformTypeIdentifiers
 import VisionKit
+import os
 
 #if targetEnvironment(macCatalyst)
 private let defaultEditorTextFont = UIFont.systemFont(ofSize: 20)
@@ -31,6 +32,30 @@ enum EditorSelectionFormattingPolicy {
 
     static func shouldDeferFullFormattingScan(selectionLength: Int) -> Bool {
         selectionLength > largeSelectionFormattingThreshold
+    }
+}
+
+enum EditorSelectionProfiling {
+    static let log = OSLog(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.apexcoretechs.myram",
+        category: .pointsOfInterest
+    )
+
+    static let disablesFormattingUpdates = isEnabled("MYR_PROFILE_DISABLE_FORMATTING_UPDATES")
+    static let disablesSearchHighlights = isEnabled("MYR_PROFILE_DISABLE_SEARCH_HIGHLIGHTS")
+    static let disablesChecklistRendering = isEnabled("MYR_PROFILE_DISABLE_CHECKLIST_RENDERING")
+    static let disablesCustomGestures = isEnabled("MYR_PROFILE_DISABLE_CUSTOM_GESTURES")
+
+    private static func isEnabled(_ name: String) -> Bool {
+        let processInfo = ProcessInfo.processInfo
+        if processInfo.arguments.contains(name) {
+            return true
+        }
+
+        guard let value = processInfo.environment[name]?.lowercased() else {
+            return false
+        }
+        return ["1", "true", "yes", "on"].contains(value)
     }
 }
 
@@ -2964,6 +2989,11 @@ private struct SelectableTextView: UIViewRepresentable {
     }
 
     func updateUIView(_ textView: UITextView, context: Context) {
+        let updateUIViewSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+        os_signpost(.begin, log: EditorSelectionProfiling.log, name: "SelectableTextView.updateUIView", signpostID: updateUIViewSignpostID)
+        defer {
+            os_signpost(.end, log: EditorSelectionProfiling.log, name: "SelectableTextView.updateUIView", signpostID: updateUIViewSignpostID)
+        }
         context.coordinator.textView = textView
         context.coordinator.formattingController = formattingController
         context.coordinator.installFormattingControllerHandler()
@@ -3220,6 +3250,15 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func installChecklistTapRecognizer(on textView: UITextView) {
+#if DEBUG
+            if EditorSelectionProfiling.disablesCustomGestures {
+                if let previous = checklistTapRecognizer {
+                    previous.view?.removeGestureRecognizer(previous)
+                    checklistTapRecognizer = nil
+                }
+                return
+            }
+#endif
             if checklistTapRecognizer?.view === textView {
                 return
             }
@@ -3278,6 +3317,11 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
+            let textChangeSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.textViewDidChange", signpostID: textChangeSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.textViewDidChange", signpostID: textChangeSignpostID)
+            }
             applyChecklistRendering(in: textView)
             updateEditorLayout(in: textView)
             syncContent(from: textView, serializesRichTextImmediately: false)
@@ -3287,6 +3331,11 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            let selectionChangeSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.textViewDidChangeSelection", signpostID: selectionChangeSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.textViewDidChangeSelection", signpostID: selectionChangeSignpostID)
+            }
             if isApplyingBoundContent {
                 selectionFormattingCache.markDirty(range: safeSelectedRange(in: textView))
                 return
@@ -3331,10 +3380,16 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+            os_signpost(.event, log: EditorSelectionProfiling.log, name: "Coordinator.scrollViewWillBeginDragging")
             onEditorScrolled()
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            let scrollSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.scrollViewDidScroll", signpostID: scrollSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.scrollViewDidScroll", signpostID: scrollSignpostID)
+            }
             guard let textView = scrollView as? UITextView,
                   activeSearchHighlightRange != nil else { return }
             positionSearchHighlightLayers(in: textView)
@@ -3553,7 +3608,20 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func normalizeTypingAttributes(in textView: UITextView) {
+            let normalizeTypingSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.normalizeTypingAttributes", signpostID: normalizeTypingSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.normalizeTypingAttributes", signpostID: normalizeTypingSignpostID)
+            }
+
             var typingAttributes = textView.typingAttributes
+#if DEBUG
+            guard !EditorSelectionProfiling.disablesChecklistRendering else {
+                typingAttributes[.paragraphStyle] = ChecklistItemEditor.bodyParagraphStyle(hasChecklistItems: false)
+                textView.typingAttributes = typingAttributes
+                return
+            }
+#endif
             typingAttributes[.paragraphStyle] = ChecklistItemEditor.bodyParagraphStyle(
                 hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
             )
@@ -3561,6 +3629,19 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func applySearchHighlight(_ range: NSRange?, in textView: UITextView) {
+#if DEBUG
+            if EditorSelectionProfiling.disablesSearchHighlights {
+                clearSearchHighlight(in: textView)
+                activeSearchHighlightRange = nil
+                activeSearchHighlightRects = []
+                return
+            }
+#endif
+            let searchHighlightSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.applySearchHighlight", signpostID: searchHighlightSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.applySearchHighlight", signpostID: searchHighlightSignpostID)
+            }
             if range == activeSearchHighlightRange, hasSearchHighlightLayers(in: textView) {
                 positionSearchHighlightLayers(in: textView)
                 return
@@ -3586,6 +3667,11 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func drawSearchHighlight(_ range: NSRange, in textView: UITextView) {
+            let drawSearchHighlightSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.drawSearchHighlight", signpostID: drawSearchHighlightSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.drawSearchHighlight", signpostID: drawSearchHighlightSignpostID)
+            }
             clearSearchHighlight(in: textView)
             activeSearchHighlightRects = []
             textView.layoutManager.ensureLayout(for: textView.textContainer)
@@ -3622,6 +3708,11 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func positionSearchHighlightLayers(in textView: UITextView) {
+            let positionSearchHighlightSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.positionSearchHighlightLayers", signpostID: positionSearchHighlightSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.positionSearchHighlightLayers", signpostID: positionSearchHighlightSignpostID)
+            }
             guard activeSearchHighlightLayers.count == activeSearchHighlightRects.count,
                   activeSearchHighlightLayers.allSatisfy({ $0.superlayer === textView.layer }) else {
                 if let activeSearchHighlightRange {
@@ -3645,6 +3736,11 @@ private struct SelectableTextView: UIViewRepresentable {
             from textView: UITextView,
             serializesRichTextImmediately: Bool = true
         ) {
+            let syncContentSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.syncContent", signpostID: syncContentSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.syncContent", signpostID: syncContentSignpostID)
+            }
             let plainText = textView.text ?? ""
             let richTextUpdate: EditorRichTextContentUpdate
             let encodedRichText: Data?
@@ -3693,11 +3789,21 @@ private struct SelectableTextView: UIViewRepresentable {
         private func deferredRichTextContentEncoder(for textView: UITextView) -> DeferredRichTextContentEncoder {
             DeferredRichTextContentEncoder { [weak self, weak textView] in
                 guard let self, let textView else { return nil }
+                let deferredEncoderSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+                os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.deferredRichTextContentEncoder", signpostID: deferredEncoderSignpostID)
+                defer {
+                    os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.deferredRichTextContentEncoder", signpostID: deferredEncoderSignpostID)
+                }
                 return RichTextContentCodec.encode(self.storageAttributedText(from: textView))
             }
         }
 
         private func storageAttributedText(from textView: UITextView) -> NSAttributedString {
+            let storageAttributedTextSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.storageAttributedText", signpostID: storageAttributedTextSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.storageAttributedText", signpostID: storageAttributedTextSignpostID)
+            }
             let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
             let fullRange = NSRange(location: 0, length: mutable.length)
 
@@ -3751,6 +3857,17 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func reportFormattingState(from textView: UITextView, allowsLargeSelectionScan: Bool = false) {
+            let reportFormattingStateSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.reportFormattingState", signpostID: reportFormattingStateSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.reportFormattingState", signpostID: reportFormattingStateSignpostID)
+            }
+
+#if DEBUG
+            if EditorSelectionProfiling.disablesFormattingUpdates {
+                return
+            }
+#endif
             let state = formattingState(from: textView, allowsLargeSelectionScan: allowsLargeSelectionScan)
             guard state != lastReportedFormattingState else { return }
             lastReportedFormattingState = state
@@ -3927,6 +4044,11 @@ private struct SelectableTextView: UIViewRepresentable {
             from textView: UITextView,
             allowsLargeSelectionScan: Bool = false
         ) -> EditorFormattingState {
+            let formattingStateSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.formattingState", signpostID: formattingStateSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.formattingState", signpostID: formattingStateSignpostID)
+            }
             let range = effectiveSelectionRange(in: textView)
             let usesLargeSelectionPath = EditorSelectionFormattingPolicy
                 .shouldDeferFullFormattingScan(selectionLength: range.length)
@@ -4373,6 +4495,16 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func applyChecklistRendering(in textView: UITextView) {
+#if DEBUG
+            if EditorSelectionProfiling.disablesChecklistRendering {
+                return
+            }
+#endif
+            let checklistRenderingSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.applyChecklistRendering", signpostID: checklistRenderingSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.applyChecklistRendering", signpostID: checklistRenderingSignpostID)
+            }
             let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
             guard ChecklistItemEditor.applyEditorRendering(in: mutable) else {
                 updateEditorLayout(in: textView)
@@ -4391,6 +4523,16 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func updateEditorLayout(in textView: UITextView) {
+#if DEBUG
+            if EditorSelectionProfiling.disablesChecklistRendering {
+                return
+            }
+#endif
+            let editorLayoutSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.updateEditorLayout", signpostID: editorLayoutSignpostID)
+            defer {
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.updateEditorLayout", signpostID: editorLayoutSignpostID)
+            }
             let hasChecklistItems = ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
             let desiredInsets = ChecklistItemEditor.textContainerInsets(hasChecklistItems: hasChecklistItems)
             if textView.textContainerInset != desiredInsets {
@@ -5081,6 +5223,75 @@ enum RichTextContentCodec {
         }
     }
 
+}
+
+struct BareTextViewProfilingView: View {
+    var body: some View {
+        BareProfilingTextView()
+            .ignoresSafeArea()
+    }
+}
+
+private struct BareProfilingTextView: UIViewRepresentable {
+    func makeUIView(context: Context) -> UITextView {
+        let signpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+        os_signpost(.begin, log: EditorSelectionProfiling.log, name: "BareProfilingTextView.makeUIView", signpostID: signpostID)
+        defer {
+            os_signpost(.end, log: EditorSelectionProfiling.log, name: "BareProfilingTextView.makeUIView", signpostID: signpostID)
+        }
+
+        let textView = UITextView()
+        textView.attributedText = Self.largeAttributedBody
+        textView.font = defaultEditorTextFont
+        textView.textColor = .label
+        textView.backgroundColor = .systemBackground
+        textView.allowsEditingTextAttributes = true
+        textView.isEditable = true
+        textView.isSelectable = true
+        textView.alwaysBounceVertical = false
+        textView.textContainerInset = UIEdgeInsets(top: 20, left: 18, bottom: 24, right: 18)
+        textView.typingAttributes = [
+            .font: defaultEditorTextFont,
+            .foregroundColor: UIColor.label
+        ]
+        return textView
+    }
+
+    func updateUIView(_ textView: UITextView, context: Context) {
+        let signpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+        os_signpost(.begin, log: EditorSelectionProfiling.log, name: "BareProfilingTextView.updateUIView", signpostID: signpostID)
+        os_signpost(.end, log: EditorSelectionProfiling.log, name: "BareProfilingTextView.updateUIView", signpostID: signpostID)
+    }
+
+    private static let largeAttributedBody: NSAttributedString = {
+        let paragraph = NSMutableParagraphStyle()
+        paragraph.lineSpacing = 3
+        paragraph.paragraphSpacing = 8
+
+        let baseAttributes: [NSAttributedString.Key: Any] = [
+            .font: defaultEditorTextFont,
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: paragraph
+        ]
+        let boldAttributes: [NSAttributedString.Key: Any] = [
+            .font: UIFont.boldSystemFont(ofSize: defaultEditorTextFont.pointSize),
+            .foregroundColor: UIColor.label,
+            .paragraphStyle: paragraph
+        ]
+
+        let body = NSMutableAttributedString()
+        for index in 1...1_200 {
+            body.append(NSAttributedString(
+                string: "Profiling paragraph \(index). ",
+                attributes: index.isMultiple(of: 9) ? boldAttributes : baseAttributes
+            ))
+            body.append(NSAttributedString(
+                string: "This bare Catalyst UITextView contains a large attributed body for drag-selection and edge auto-scroll profiling. It intentionally avoids the MyRAM editor coordinator, formatting toolbar state, search highlights, checklist rendering, custom gestures, and persistence callbacks.\n\n",
+                attributes: baseAttributes
+            ))
+        }
+        return body
+    }()
 }
 
 private extension UIColor {
