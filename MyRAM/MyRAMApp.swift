@@ -8,6 +8,7 @@ struct MyRAMApp: App {
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     @StateObject private var notesState: NotesListState
     private let isUITestMode = ProcessInfo.processInfo.arguments.contains("UITEST_MODE")
+    private let usesBareTextViewProfiling = ProcessInfo.processInfo.arguments.contains("MYR_PROFILE_BARE_TEXTVIEW")
 
     init() {
         _notesState = StateObject(wrappedValue: NotesListState(context: PersistenceManager.shared.context))
@@ -20,7 +21,13 @@ struct MyRAMApp: App {
 
     var body: some Scene {
         WindowGroup {
-            NotesListView(state: notesState)
+            Group {
+                if usesBareTextViewProfiling {
+                    BareTextViewProfilingView()
+                } else {
+                    NotesListView(state: notesState)
+                }
+            }
                 .preferredColorScheme(editorChromeStyle.colorSchemeOverride ?? appearanceSetting.colorScheme)
                 .tint(editorChromeStyle.appTintColor)
                 .overlay(alignment: .topLeading) {
