@@ -3387,32 +3387,19 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(cache.formattingStateIsApproximate)
     }
 
-    func testNoteEditorSelectionBookmarkStorePersistsBookmarkByNoteID() throws {
-        let suiteName = "NoteEditorSelectionBookmarkStoreTests-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let store = NoteEditorSelectionBookmarkStore(defaults: defaults)
-        let noteID = UUID()
-        let bookmark = NoteEditorSelectionBookmark(location: 4, length: 0, contentLength: 12)
+    func testTextPlacementResolverUsesLeadingBlankLineCaret() {
+        let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        textView.font = UIFont.systemFont(ofSize: 20)
+        textView.text = "\nSome existing content\nMore content"
+        textView.textContainerInset = UIEdgeInsets(top: 8, left: 5, bottom: 8, right: 5)
+        textView.layoutIfNeeded()
 
-        store.save(bookmark, for: noteID)
+        let range = EditorTextPlacementResolver.caretRange(
+            forTapLocation: CGPoint(x: 16, y: 10),
+            in: textView
+        )
 
-        XCTAssertEqual(store.bookmark(for: noteID), bookmark)
-    }
-
-    func testNoteEditorSelectionBookmarkStoreKeepsNotesSeparate() throws {
-        let suiteName = "NoteEditorSelectionBookmarkStoreTests-\(UUID().uuidString)"
-        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let store = NoteEditorSelectionBookmarkStore(defaults: defaults)
-        let firstNoteID = UUID()
-        let secondNoteID = UUID()
-
-        store.save(NoteEditorSelectionBookmark(location: 2, length: 0, contentLength: 8), for: firstNoteID)
-        store.save(NoteEditorSelectionBookmark(location: 6, length: 1, contentLength: 10), for: secondNoteID)
-
-        XCTAssertEqual(store.bookmark(for: firstNoteID)?.location, 2)
-        XCTAssertEqual(store.bookmark(for: secondNoteID)?.location, 6)
+        XCTAssertEqual(range, NSRange(location: 0, length: 0))
     }
 
     func testPinnedThoughtExpansionStateDefaultsCollapsedAndPersistsPerSessionNote() throws {
