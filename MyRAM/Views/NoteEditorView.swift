@@ -3032,7 +3032,9 @@ private struct SelectableTextView: UIViewRepresentable {
         if context.coordinator.keyboardFocusToggleToken != keyboardFocusToggleToken {
             context.coordinator.keyboardFocusToggleToken = keyboardFocusToggleToken
             if !textView.isFirstResponder {
+                context.coordinator.debugSelectionTrace("updateUIView keyboardFocus before becomeFirstResponder", textView: textView)
                 textView.becomeFirstResponder()
+                context.coordinator.debugSelectionTrace("updateUIView keyboardFocus after becomeFirstResponder", textView: textView)
             }
         }
 
@@ -3303,29 +3305,39 @@ private struct SelectableTextView: UIViewRepresentable {
                   let textView = textView,
                   !textView.isFirstResponder else { return }
 
+            debugSelectionTrace("handleTextPlacementTap start", textView: textView)
             let location = recognizer.location(in: textView)
             let gutterAdjustedX = location.x - textView.textContainerInset.left
             if gutterAdjustedX >= 0, gutterAdjustedX <= ChecklistItemEditor.gutterTapWidth {
+                debugSelectionTrace("handleTextPlacementTap gutter return", textView: textView)
                 return
             }
 
             let cursorRange = EditorTextPlacementResolver.caretRange(forTapLocation: location, in: textView)
             let tapContext = PendingFocusTapContext(range: cursorRange, contentOffset: textView.contentOffset)
+            debugSelectionTrace("handleTextPlacementTap resolved range=\(cursorRange)", textView: textView)
 
             pendingFocusTapContext = tapContext
             isHandlingUserFocusChange = true
             textView.selectedRange = cursorRange
+            debugSelectionTrace("handleTextPlacementTap after selectedRange", textView: textView)
             textView.becomeFirstResponder()
+            debugSelectionTrace("handleTextPlacementTap after becomeFirstResponder", textView: textView)
             restorePendingFocusTapSelection(in: textView, clear: false)
             lastKnownSelectionRange = cursorRange
             reportFormattingState(from: textView)
+            debugSelectionTrace("handleTextPlacementTap end", textView: textView)
 
             RunLoop.main.perform { [weak self, weak textView] in
                 guard let self, let textView else { return }
+                self.debugSelectionTrace("handleTextPlacementTap runLoop before restore", textView: textView)
                 self.restorePendingFocusTapSelection(in: textView, clear: false)
+                self.debugSelectionTrace("handleTextPlacementTap runLoop after restore", textView: textView)
                 DispatchQueue.main.async { [weak self, weak textView] in
                     guard let self, let textView else { return }
+                    self.debugSelectionTrace("handleTextPlacementTap async before final restore", textView: textView)
                     self.restorePendingFocusTapSelection(in: textView, clear: true)
+                    self.debugSelectionTrace("handleTextPlacementTap async after final restore", textView: textView)
                 }
             }
         }
@@ -3337,6 +3349,9 @@ private struct SelectableTextView: UIViewRepresentable {
         ) -> Bool {
 #if targetEnvironment(macCatalyst)
             if gestureRecognizer === textPlacementTapRecognizer || otherGestureRecognizer === textPlacementTapRecognizer {
+                if let textView {
+                    debugSelectionTrace("gestureRecognizer textPlacement simultaneous=false", textView: textView)
+                }
                 return false
             }
 #endif
@@ -3353,33 +3368,43 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            debugSelectionTrace("textViewDidChangeSelection", textView: textView)
             cacheSelectionFormattingRange(from: textView)
         }
 
         func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
+            debugSelectionTrace("textViewShouldBeginEditing before flag", textView: textView)
             isHandlingUserFocusChange = true
+            debugSelectionTrace("textViewShouldBeginEditing after flag", textView: textView)
             return true
         }
 
         func textViewDidBeginEditing(_ textView: UITextView) {
+            debugSelectionTrace("textViewDidBeginEditing start", textView: textView)
             onEditingFocusChanged(true)
             lastKnownSelectionRange = safeSelectedRange(in: textView)
+            debugSelectionTrace("textViewDidBeginEditing after safeSelectedRange lastKnown=\(lastKnownSelectionRange)", textView: textView)
             RunLoop.main.perform { [weak self, weak textView] in
                 guard let self, let textView else { return }
+                self.debugSelectionTrace("textViewDidBeginEditing runLoop before applyPending", textView: textView)
                 self.applyPendingFocusTapSelection(in: textView)
                 self.reportFormattingState(from: textView)
+                self.debugSelectionTrace("textViewDidBeginEditing runLoop after applyPending", textView: textView)
             }
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
+            debugSelectionTrace("textViewDidBeginEditing end", textView: textView)
         }
 
         func textViewDidEndEditing(_ textView: UITextView) {
+            debugSelectionTrace("textViewDidEndEditing start", textView: textView)
             isHandlingUserFocusChange = false
             onEditingFocusChanged(false)
             updateLastKnownSelectionRange(from: textView)
             syncContent(from: textView)
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
+            debugSelectionTrace("textViewDidEndEditing end", textView: textView)
         }
 
         func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
@@ -3387,6 +3412,9 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            if let textView = scrollView as? UITextView {
+                debugSelectionTrace("scrollViewDidScroll", textView: textView)
+            }
             guard let textView = scrollView as? UITextView,
                   activeSearchHighlightRange != nil else { return }
             positionSearchHighlightLayers(in: textView)
@@ -3831,6 +3859,7 @@ private struct SelectableTextView: UIViewRepresentable {
             richTextContentData: Data?,
             in textView: UITextView
         ) {
+            debugSelectionTrace("applyBoundContent start", textView: textView)
             let desiredAttributedText = RichTextContentCodec.decode(
                 richTextData: richTextContentData,
                 plainText: plainText,
@@ -3841,9 +3870,13 @@ private struct SelectableTextView: UIViewRepresentable {
                 traitCollection: textView.traitCollection,
                 defaultTextColor: defaultTextColor
             )
-            guard !textView.attributedText.isEqual(to: normalizedAttributedText) else { return }
+            guard !textView.attributedText.isEqual(to: normalizedAttributedText) else {
+                debugSelectionTrace("applyBoundContent unchanged return", textView: textView)
+                return
+            }
 
             let selectedRange = textView.selectedRange
+            debugSelectionTrace("applyBoundContent before attributedText selectedRange=\(selectedRange)", textView: textView)
             textView.attributedText = normalizedAttributedText
             applyChecklistRendering(in: textView)
             let newLength = textStorageLength(in: textView)
@@ -3853,6 +3886,7 @@ private struct SelectableTextView: UIViewRepresentable {
             restoreSelectionWithoutScrolling(restoredRange, in: textView)
             lastKnownSelectionRange = restoredRange
             reportFormattingState(from: textView)
+            debugSelectionTrace("applyBoundContent end restoredRange=\(restoredRange)", textView: textView)
         }
 
         func captureCurrentSelection(in textView: UITextView) {
@@ -4512,7 +4546,9 @@ private struct SelectableTextView: UIViewRepresentable {
         private func applyPendingFocusTapSelection(in textView: UITextView) {
 #if targetEnvironment(macCatalyst)
             if pendingFocusTapContext != nil {
+                debugSelectionTrace("applyPendingFocusTapSelection before pending restore", textView: textView)
                 restorePendingFocusTapSelection(in: textView, clear: true)
+                debugSelectionTrace("applyPendingFocusTapSelection after pending restore", textView: textView)
                 isHandlingUserFocusChange = false
                 return
             }
@@ -4550,8 +4586,12 @@ private struct SelectableTextView: UIViewRepresentable {
 
 #if targetEnvironment(macCatalyst)
         private func restorePendingFocusTapSelection(in textView: UITextView, clear: Bool) {
-            guard let pendingFocusTapContext else { return }
+            guard let pendingFocusTapContext else {
+                debugSelectionTrace("restorePendingFocusTapSelection no pending clear=\(clear)", textView: textView)
+                return
+            }
 
+            debugSelectionTrace("restorePendingFocusTapSelection before clear=\(clear) pendingRange=\(pendingFocusTapContext.range)", textView: textView)
             let textLength = textStorageLength(in: textView)
             let location = min(max(pendingFocusTapContext.range.location, 0), textLength)
             let range = NSRange(location: location, length: 0)
@@ -4562,8 +4602,29 @@ private struct SelectableTextView: UIViewRepresentable {
                 self.pendingFocusTapContext = nil
                 isHandlingUserFocusChange = false
             }
+            debugSelectionTrace("restorePendingFocusTapSelection after clear=\(clear) restoredRange=\(range)", textView: textView)
         }
 #endif
+
+        func debugSelectionTrace(_ label: String, textView: UITextView) {
+#if DEBUG
+#if targetEnvironment(macCatalyst)
+            let pendingTap = pendingFocusTapContext != nil
+#else
+            let pendingTap = false
+#endif
+            print(
+                "[EditorFocusTrace] \(label)",
+                "isFirstResponder=\(textView.isFirstResponder)",
+                "selectedRange=\(textView.selectedRange)",
+                "textLength=\(textView.textStorage.length)",
+                "contentOffset=\(textView.contentOffset)",
+                "lastKnownSelectionRange=\(lastKnownSelectionRange)",
+                "pendingTap=\(pendingTap)",
+                "isHandlingUserFocusChange=\(isHandlingUserFocusChange)"
+            )
+#endif
+        }
     }
 }
 
