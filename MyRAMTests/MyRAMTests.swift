@@ -3387,6 +3387,21 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(cache.formattingStateIsApproximate)
     }
 
+    func testTextPlacementResolverUsesLeadingBlankLineCaret() {
+        let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        textView.font = UIFont.systemFont(ofSize: 20)
+        textView.text = "\nSome existing content\nMore content"
+        textView.textContainerInset = UIEdgeInsets(top: 8, left: 5, bottom: 8, right: 5)
+        textView.layoutIfNeeded()
+
+        let range = EditorTextPlacementResolver.caretRange(
+            forTapLocation: CGPoint(x: 16, y: 10),
+            in: textView
+        )
+
+        XCTAssertEqual(range, NSRange(location: 0, length: 0))
+    }
+
     func testPinnedThoughtExpansionStateDefaultsCollapsedAndPersistsPerSessionNote() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
