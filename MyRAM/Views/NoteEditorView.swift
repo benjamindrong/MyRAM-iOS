@@ -3180,6 +3180,8 @@ private struct SelectableTextView: UIViewRepresentable {
         var lastKnownSelectionRange = NSRange(location: 0, length: 0)
         var isUpdatingUIView = false
         var isHandlingUserFocusChange = false
+        private var isApplyingBoundContent = false
+        private var focusAcquisitionSelectionRange: NSRange?
         private var appliedPlainTextAwaitingBinding: String?
         private var appliedRichTextDataAwaitingBinding: Data?
         private weak var checklistTapRecognizer: UITapGestureRecognizer?
@@ -3369,11 +3371,25 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func textViewDidChangeSelection(_ textView: UITextView) {
             debugSelectionTrace("textViewDidChangeSelection", textView: textView)
+            if isApplyingBoundContent {
+                selectionFormattingCache.markDirty(range: safeSelectedRange(in: textView))
+                return
+            }
+
+            if isHandlingUserFocusChange {
+                // UIKit can emit a transient end-of-document selection while a
+                // text view becomes first responder. Do not let that provisional
+                // callback replace the selection we intend to restore after focus.
+                selectionFormattingCache.markDirty(range: focusAcquisitionSelectionRange ?? safeSelectedRange(in: textView))
+                return
+            }
+
             cacheSelectionFormattingRange(from: textView)
         }
 
         func textViewShouldBeginEditing(_ textView: UITextView) -> Bool {
             debugSelectionTrace("textViewShouldBeginEditing before flag", textView: textView)
+            focusAcquisitionSelectionRange = safeSelectedRange(in: textView)
             isHandlingUserFocusChange = true
             debugSelectionTrace("textViewShouldBeginEditing after flag", textView: textView)
             return true
@@ -3383,6 +3399,7 @@ private struct SelectableTextView: UIViewRepresentable {
             debugSelectionTrace("textViewDidBeginEditing start", textView: textView)
             onEditingFocusChanged(true)
             lastKnownSelectionRange = safeSelectedRange(in: textView)
+            focusAcquisitionSelectionRange = focusAcquisitionSelectionRange ?? lastKnownSelectionRange
             debugSelectionTrace("textViewDidBeginEditing after safeSelectedRange lastKnown=\(lastKnownSelectionRange)", textView: textView)
             RunLoop.main.perform { [weak self, weak textView] in
                 guard let self, let textView else { return }
@@ -3399,6 +3416,7 @@ private struct SelectableTextView: UIViewRepresentable {
         func textViewDidEndEditing(_ textView: UITextView) {
             debugSelectionTrace("textViewDidEndEditing start", textView: textView)
             isHandlingUserFocusChange = false
+            focusAcquisitionSelectionRange = nil
             onEditingFocusChanged(false)
             updateLastKnownSelectionRange(from: textView)
             syncContent(from: textView)
@@ -3877,6 +3895,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
             let selectedRange = textView.selectedRange
             debugSelectionTrace("applyBoundContent before attributedText selectedRange=\(selectedRange)", textView: textView)
+            isApplyingBoundContent = true
             textView.attributedText = normalizedAttributedText
             applyChecklistRendering(in: textView)
             let newLength = textStorageLength(in: textView)
@@ -3884,6 +3903,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let clampedLength = min(selectedRange.length, max(newLength - clampedLocation, 0))
             let restoredRange = NSRange(location: clampedLocation, length: clampedLength)
             restoreSelectionWithoutScrolling(restoredRange, in: textView)
+            isApplyingBoundContent = false
             lastKnownSelectionRange = restoredRange
             reportFormattingState(from: textView)
             debugSelectionTrace("applyBoundContent end restoredRange=\(restoredRange)", textView: textView)
@@ -4554,8 +4574,16 @@ private struct SelectableTextView: UIViewRepresentable {
             }
 #endif
 
+            if let focusAcquisitionSelectionRange,
+               isValidSelectionRange(focusAcquisitionSelectionRange, in: textView) {
+                debugSelectionTrace("applyPendingFocusTapSelection restoring focus acquisition range=\(focusAcquisitionSelectionRange)", textView: textView)
+                restoreSelectionWithoutScrolling(focusAcquisitionSelectionRange, in: textView)
+                lastKnownSelectionRange = focusAcquisitionSelectionRange
+            } else {
+                updateLastKnownSelectionRange(from: textView)
+            }
+            self.focusAcquisitionSelectionRange = nil
             isHandlingUserFocusChange = false
-            updateLastKnownSelectionRange(from: textView)
         }
 
         private func safeSelectedRange(in textView: UITextView) -> NSRange {
@@ -4568,6 +4596,13 @@ private struct SelectableTextView: UIViewRepresentable {
             let safeLocation = min(max(selectedRange.location, 0), textLength)
             let safeLength = min(selectedRange.length, max(textLength - safeLocation, 0))
             return NSRange(location: safeLocation, length: safeLength)
+        }
+
+        private func isValidSelectionRange(_ range: NSRange, in textView: UITextView) -> Bool {
+            range.location != NSNotFound
+                && range.location >= 0
+                && range.length >= 0
+                && NSMaxRange(range) <= textStorageLength(in: textView)
         }
 
         private func restoreSelectionWithoutScrolling(_ range: NSRange, in textView: UITextView) {
