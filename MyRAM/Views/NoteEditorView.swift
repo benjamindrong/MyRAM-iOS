@@ -45,6 +45,13 @@ enum EditorSelectionProfiling {
     static let disablesSearchHighlights = isEnabled("MYR_PROFILE_DISABLE_SEARCH_HIGHLIGHTS")
     static let disablesChecklistRendering = isEnabled("MYR_PROFILE_DISABLE_CHECKLIST_RENDERING")
     static let disablesCustomGestures = isEnabled("MYR_PROFILE_DISABLE_CUSTOM_GESTURES")
+    static let forcesTextKit1 = isEnabled("MYR_PROFILE_FORCE_TEXTKIT1")
+
+    /// Shared factory so the full editor and the bare profiling harness construct
+    /// their UITextView identically when comparing TextKit1 vs. TextKit2 traces.
+    static func makeProfiledTextView() -> UITextView {
+        forcesTextKit1 ? UITextView(usingTextLayoutManager: false) : UITextView()
+    }
 
     private static func isEnabled(_ name: String) -> Bool {
         let processInfo = ProcessInfo.processInfo
@@ -2961,7 +2968,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let onLookupSelection: (String) -> Void
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = UITextView()
+        let textView = EditorSelectionProfiling.makeProfiledTextView()
         context.coordinator.textView = textView
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
@@ -5240,7 +5247,7 @@ private struct BareProfilingTextView: UIViewRepresentable {
             os_signpost(.end, log: EditorSelectionProfiling.log, name: "BareProfilingTextView.makeUIView", signpostID: signpostID)
         }
 
-        let textView = UITextView()
+        let textView = EditorSelectionProfiling.makeProfiledTextView()
         textView.attributedText = Self.largeAttributedBody
         textView.font = defaultEditorTextFont
         textView.textColor = .label
