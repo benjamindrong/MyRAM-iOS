@@ -162,6 +162,58 @@ final class MyRAMTests: XCTestCase {
         }
     }
 
+    func testChecklistActionNormalizesLegacyPrefixAndTogglesState() {
+        let checklistText = NSMutableAttributedString(string: "- [ ] Task")
+
+        let checkedSelection = ChecklistItemEditor.applyChecklistAction(
+            in: checklistText,
+            selection: NSRange(location: 2, length: 0)
+        )
+
+        XCTAssertEqual(checklistText.string, "\(ChecklistItemEditor.checkedPrefix)Task")
+        XCTAssertEqual(checkedSelection.location, ChecklistItemEditor.checkedPrefix.utf16.count)
+
+        _ = ChecklistItemEditor.applyChecklistAction(
+            in: checklistText,
+            selection: NSRange(location: checkedSelection.location, length: 0)
+        )
+
+        XCTAssertEqual(checklistText.string, "\(ChecklistItemEditor.uncheckedPrefix)Task")
+    }
+
+    func testChecklistCheckedContentRangesOnlyIncludesCheckedItems() {
+        let text = "\(ChecklistItemEditor.checkedPrefix)Done\n\(ChecklistItemEditor.uncheckedPrefix)Todo\nPlain" as NSString
+
+        let ranges = ChecklistItemEditor.checkedContentRanges(in: text)
+
+        XCTAssertEqual(ranges, [NSRange(location: ChecklistItemEditor.checkedPrefix.utf16.count, length: 4)])
+        XCTAssertEqual(text.substring(with: ranges[0]), "Done")
+    }
+
+    func testRichTextConflictSanitizationRequiresMatchingPlainTextAndStripsLegacyDefaultColor() throws {
+        let attributedText = NSAttributedString(
+            string: "Hello",
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 16),
+                .foregroundColor: UIColor.black
+            ]
+        )
+        let encoded = try XCTUnwrap(RichTextContentCodec.encode(attributedText))
+
+        XCTAssertNil(RichTextContentCodec.sanitizedConflictRichTextData(encoded, plainText: "Different"))
+
+        let sanitized = try XCTUnwrap(
+            RichTextContentCodec.sanitizedConflictRichTextData(encoded, plainText: "Hello")
+        )
+        let decoded = RichTextContentCodec.decode(
+            richTextData: sanitized,
+            plainText: "Hello",
+            baseFont: UIFont.systemFont(ofSize: 16)
+        )
+
+        XCTAssertNil(decoded.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+    }
+
     func testNoteSyncPayloadRoundTripsNoteFields() throws {
         let noteID = UUID()
         let folderID = UUID()
