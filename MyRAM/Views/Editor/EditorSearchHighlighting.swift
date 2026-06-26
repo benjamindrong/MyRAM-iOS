@@ -16,8 +16,6 @@ final class EditorSearchHighlighter {
 #if DEBUG
         if EditorSelectionProfiling.disablesSearchHighlights {
             clear(in: textView)
-            activeRange = nil
-            activeRects = []
             return
         }
 #endif
@@ -32,8 +30,6 @@ final class EditorSearchHighlighter {
         }
         clear(in: textView)
 
-        activeRange = nil
-        activeRects = []
         guard let validRange = Self.validHighlightRange(range, textLength: textView.textStorage.length) else {
             return
         }
@@ -69,6 +65,12 @@ final class EditorSearchHighlighter {
     }
 
     func clear(in textView: UITextView) {
+        removeHighlightLayers(in: textView)
+        activeRange = nil
+        activeRects = []
+    }
+
+    private func removeHighlightLayers(in textView: UITextView) {
         activeLayers.forEach { $0.removeFromSuperlayer() }
         textView.layer.sublayers?
             .filter { $0.name == Self.searchHighlightLayerName }
@@ -101,8 +103,7 @@ final class EditorSearchHighlighter {
         defer {
             os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.drawSearchHighlight", signpostID: drawSearchHighlightSignpostID)
         }
-        clear(in: textView)
-        activeRects = []
+        removeHighlightLayers(in: textView)
         textView.layoutManager.ensureLayout(for: textView.textContainer)
         let glyphRange = textView.layoutManager.glyphRange(
             forCharacterRange: range,

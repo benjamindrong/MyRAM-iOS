@@ -1921,6 +1921,18 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(EditorSearchHighlighter.validHighlightRange(range, textLength: 12), range)
     }
 
+    func testSearchHighlighterClearRemovesActiveState() {
+        let textView = UITextView()
+        textView.text = "Hello search highlight"
+        let highlighter = EditorSearchHighlighter()
+
+        highlighter.apply(range: NSRange(location: 0, length: 5), in: textView)
+        XCTAssertTrue(highlighter.hasActiveHighlight)
+
+        highlighter.clear(in: textView)
+        XCTAssertFalse(highlighter.hasActiveHighlight)
+    }
+
     func testRichTextCommitPolicyUsesDeferredEncoderAtCommitBoundary() throws {
         var encodeCount = 0
         let staleData = try XCTUnwrap("stale".data(using: .utf8))
