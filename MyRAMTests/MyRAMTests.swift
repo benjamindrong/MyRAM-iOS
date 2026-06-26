@@ -1893,6 +1893,34 @@ final class MyRAMTests: XCTestCase {
         ))
     }
 
+    func testSearchHighlighterRejectsMissingRange() {
+        XCTAssertNil(EditorSearchHighlighter.validHighlightRange(nil, textLength: 12))
+    }
+
+    func testSearchHighlighterRejectsNotFoundRange() {
+        let range = NSRange(location: NSNotFound, length: 4)
+
+        XCTAssertNil(EditorSearchHighlighter.validHighlightRange(range, textLength: 12))
+    }
+
+    func testSearchHighlighterRejectsZeroLengthRange() {
+        let range = NSRange(location: 3, length: 0)
+
+        XCTAssertNil(EditorSearchHighlighter.validHighlightRange(range, textLength: 12))
+    }
+
+    func testSearchHighlighterRejectsRangePastTextLength() {
+        let range = NSRange(location: 9, length: 4)
+
+        XCTAssertNil(EditorSearchHighlighter.validHighlightRange(range, textLength: 12))
+    }
+
+    func testSearchHighlighterAcceptsValidRange() {
+        let range = NSRange(location: 3, length: 4)
+
+        XCTAssertEqual(EditorSearchHighlighter.validHighlightRange(range, textLength: 12), range)
+    }
+
     func testRichTextCommitPolicyUsesDeferredEncoderAtCommitBoundary() throws {
         var encodeCount = 0
         let staleData = try XCTUnwrap("stale".data(using: .utf8))
