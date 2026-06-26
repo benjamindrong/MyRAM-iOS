@@ -29,6 +29,16 @@
 		BCE65D1C2EA569BD00F2D0AA /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D1B2EA569BD00F2D0AA /* PersistenceManager.swift */; };
 		BCE65D202EA57BCC00F2D0AA /* .gitignore in Resources */ = {isa = PBXBuildFile; fileRef = BCE65D1F2EA57BCC00F2D0AA /* .gitignore */; };
 		BCE65D222EA6000000F2D0AA /* Folder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D212EA6000000F2D0AA /* Folder.swift */; };
+		C097F01012FF000000000001 /* BareTextViewProfilingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00012FF000000000001 /* BareTextViewProfilingView.swift */; };
+		C097F01022FF000000000002 /* EditorChecklistRendering.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00022FF000000000002 /* EditorChecklistRendering.swift */; };
+		C097F01032FF000000000003 /* EditorPasteFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00032FF000000000003 /* EditorPasteFormatter.swift */; };
+		C097F01042FF000000000004 /* EditorPolicies.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00042FF000000000004 /* EditorPolicies.swift */; };
+		C097F01052FF000000000005 /* EditorProfilingFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00052FF000000000005 /* EditorProfilingFixtures.swift */; };
+		C097F01062FF000000000006 /* EditorRichTextContentCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */; };
+		C097F01072FF000000000007 /* EditorSelectionProfiling.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00072FF000000000007 /* EditorSelectionProfiling.swift */; };
+		C097F01082FF000000000008 /* EditorTextPlacementResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00082FF000000000008 /* EditorTextPlacementResolver.swift */; };
+		C097F01092FF000000000009 /* EditorTextViewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00092FF000000000009 /* EditorTextViewFactory.swift */; };
+		C097F010A2FF00000000000A /* EditorTimingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000A2FF00000000000A /* EditorTimingPolicy.swift */; };
 		C07100072FF0000000000001 /* MyRAMSyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100172FF0000000000001 /* MyRAMSyncModels.swift */; };
 		C07100082FF0000000000001 /* MyRAMDeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */; };
 		C07100092FF0000000000001 /* MyRAMSyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100192FF0000000000001 /* MyRAMSyncController.swift */; };
@@ -81,6 +91,16 @@
 		BCE65D1B2EA569BD00F2D0AA /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
 		BCE65D1F2EA57BCC00F2D0AA /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
 		BCE65D212EA6000000F2D0AA /* Folder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Folder.swift; sourceTree = "<group>"; };
+		C097F00012FF000000000001 /* BareTextViewProfilingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareTextViewProfilingView.swift; sourceTree = "<group>"; };
+		C097F00022FF000000000002 /* EditorChecklistRendering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorChecklistRendering.swift; sourceTree = "<group>"; };
+		C097F00032FF000000000003 /* EditorPasteFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPasteFormatter.swift; sourceTree = "<group>"; };
+		C097F00042FF000000000004 /* EditorPolicies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPolicies.swift; sourceTree = "<group>"; };
+		C097F00052FF000000000005 /* EditorProfilingFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorProfilingFixtures.swift; sourceTree = "<group>"; };
+		C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorRichTextContentCodec.swift; sourceTree = "<group>"; };
+		C097F00072FF000000000007 /* EditorSelectionProfiling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionProfiling.swift; sourceTree = "<group>"; };
+		C097F00082FF000000000008 /* EditorTextPlacementResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextPlacementResolver.swift; sourceTree = "<group>"; };
+		C097F00092FF000000000009 /* EditorTextViewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextViewFactory.swift; sourceTree = "<group>"; };
+		C097F000A2FF00000000000A /* EditorTimingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTimingPolicy.swift; sourceTree = "<group>"; };
 		C07100172FF0000000000001 /* MyRAMSyncModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncModels.swift; sourceTree = "<group>"; };
 		C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMDeviceIdentity.swift; sourceTree = "<group>"; };
 		C07100192FF0000000000001 /* MyRAMSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncController.swift; sourceTree = "<group>"; };
@@ -202,12 +222,30 @@
 			isa = PBXGroup;
 			children = (
 				BCE65D152EA5457600F2D0AA /* NotesListView.swift */,
+				C097F02012FF000000000001 /* Editor */,
 				BCE65D192EA545B000F2D0AA /* NoteEditorView.swift */,
 				C071001A2FF0000000000001 /* NearbySyncView.swift */,
 				BC24E30A2FDF8F94004694D1 /* SyncConflictViews.swift */,
 				BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		C097F02012FF000000000001 /* Editor */ = {
+			isa = PBXGroup;
+			children = (
+				C097F00012FF000000000001 /* BareTextViewProfilingView.swift */,
+				C097F00022FF000000000002 /* EditorChecklistRendering.swift */,
+				C097F00032FF000000000003 /* EditorPasteFormatter.swift */,
+				C097F00042FF000000000004 /* EditorPolicies.swift */,
+				C097F00052FF000000000005 /* EditorProfilingFixtures.swift */,
+				C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */,
+				C097F00072FF000000000007 /* EditorSelectionProfiling.swift */,
+				C097F00082FF000000000008 /* EditorTextPlacementResolver.swift */,
+				C097F00092FF000000000009 /* EditorTextViewFactory.swift */,
+				C097F000A2FF00000000000A /* EditorTimingPolicy.swift */,
+			);
+			path = Editor;
 			sourceTree = "<group>";
 		};
 		C07100212FF0000000000001 /* Sync */ = {
@@ -372,12 +410,22 @@
 				BC24E3042FDF8F94004694D1 /* SyncConflictStore.swift in Sources */,
 				BCE65D222EA6000000F2D0AA /* Folder.swift in Sources */,
 				C07100082FF0000000000001 /* MyRAMDeviceIdentity.swift in Sources */,
+				C097F01082FF000000000008 /* EditorTextPlacementResolver.swift in Sources */,
 				C071000A2FF0000000000001 /* NearbySyncView.swift in Sources */,
 				BC24E3092FDF8F94004694D1 /* SyncConflictViews.swift in Sources */,
 				BCB610022FEC610000610061 /* DebugDemoDataGenerator.swift in Sources */,
+				C097F01032FF000000000003 /* EditorPasteFormatter.swift in Sources */,
+				C097F010A2FF00000000000A /* EditorTimingPolicy.swift in Sources */,
 				BC24E3072FDF8F94004694D1 /* SyncStatusIndicator.swift in Sources */,
+				C097F01072FF000000000007 /* EditorSelectionProfiling.swift in Sources */,
+				C097F01062FF000000000006 /* EditorRichTextContentCodec.swift in Sources */,
 				C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */,
 				BCE65D1A2EA545B000F2D0AA /* NoteEditorView.swift in Sources */,
+				C097F01092FF000000000009 /* EditorTextViewFactory.swift in Sources */,
+				C097F01052FF000000000005 /* EditorProfilingFixtures.swift in Sources */,
+				C097F01012FF000000000001 /* BareTextViewProfilingView.swift in Sources */,
+				C097F01022FF000000000002 /* EditorChecklistRendering.swift in Sources */,
+				C097F01042FF000000000004 /* EditorPolicies.swift in Sources */,
 				C07100092FF0000000000001 /* MyRAMSyncController.swift in Sources */,
 				BCE65D162EA5457600F2D0AA /* NotesListView.swift in Sources */,
 				BCE65D1C2EA569BD00F2D0AA /* PersistenceManager.swift in Sources */,

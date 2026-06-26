@@ -1,0 +1,41 @@
+import Foundation
+
+enum EditorBufferOwner {
+    case idle
+    case localEditing
+    case applyingRemoteSync
+    case restoringHistory
+    case resolvingConflict
+}
+
+enum EditorBufferReloadPolicy {
+    static func shouldDeferRemoteRefresh(owner: EditorBufferOwner, hasPendingNoteCommit: Bool) -> Bool {
+        owner == .localEditing && hasPendingNoteCommit
+    }
+}
+
+enum EditorSelectionFormattingPolicy {
+    static let largeSelectionFormattingThreshold = 2_000
+
+    static func shouldDeferFullFormattingScan(selectionLength: Int) -> Bool {
+        selectionLength > largeSelectionFormattingThreshold
+    }
+}
+
+struct DeferredRichTextContentEncoder {
+    let encode: () -> Data?
+}
+
+enum EditorRichTextContentUpdate {
+    case immediate(Data?)
+    case deferred(DeferredRichTextContentEncoder)
+}
+
+enum EditorRichTextCommitPolicy {
+    static func committedRichTextContentData(
+        currentData: Data?,
+        pendingEncoder: DeferredRichTextContentEncoder?
+    ) -> Data? {
+        pendingEncoder?.encode() ?? currentData
+    }
+}

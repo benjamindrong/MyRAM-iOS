@@ -6,105 +6,6 @@ import UniformTypeIdentifiers
 import VisionKit
 import os
 
-#if targetEnvironment(macCatalyst)
-private let defaultEditorTextFont = UIFont.systemFont(ofSize: 20)
-#else
-private let defaultEditorTextFont = UIFont.preferredFont(forTextStyle: .body)
-#endif
-private let editorCommitDelayNanoseconds: UInt64 = 500_000_000
-
-enum EditorBufferOwner {
-    case idle
-    case localEditing
-    case applyingRemoteSync
-    case restoringHistory
-    case resolvingConflict
-}
-
-enum EditorBufferReloadPolicy {
-    static func shouldDeferRemoteRefresh(owner: EditorBufferOwner, hasPendingNoteCommit: Bool) -> Bool {
-        owner == .localEditing && hasPendingNoteCommit
-    }
-}
-
-enum EditorSelectionFormattingPolicy {
-    static let largeSelectionFormattingThreshold = 2_000
-
-    static func shouldDeferFullFormattingScan(selectionLength: Int) -> Bool {
-        selectionLength > largeSelectionFormattingThreshold
-    }
-}
-
-enum EditorSelectionProfiling {
-    static let log = OSLog(
-        subsystem: Bundle.main.bundleIdentifier ?? "com.apexcoretechs.myram",
-        category: .pointsOfInterest
-    )
-
-    static let disablesFormattingUpdates = isEnabled("MYR_PROFILE_DISABLE_FORMATTING_UPDATES")
-    static let disablesSearchHighlights = isEnabled("MYR_PROFILE_DISABLE_SEARCH_HIGHLIGHTS")
-    static let disablesChecklistRendering = isEnabled("MYR_PROFILE_DISABLE_CHECKLIST_RENDERING")
-    static let disablesCustomGestures = isEnabled("MYR_PROFILE_DISABLE_CUSTOM_GESTURES")
-    static let forcesTextKit1 = isEnabled("MYR_PROFILE_FORCE_TEXTKIT1")
-
-    /// Shared factory so the full editor and the bare profiling harness construct
-    /// their UITextView identically when comparing TextKit1 vs. TextKit2 traces.
-    static func makeProfiledTextView() -> UITextView {
-        forcesTextKit1 ? UITextView(usingTextLayoutManager: false) : UITextView()
-    }
-
-    private static func isEnabled(_ name: String) -> Bool {
-        let processInfo = ProcessInfo.processInfo
-        if processInfo.arguments.contains(name) {
-            return true
-        }
-
-        guard let value = processInfo.environment[name]?.lowercased() else {
-            return false
-        }
-        return ["1", "true", "yes", "on"].contains(value)
-    }
-}
-
-enum EditorTextPlacementResolver {
-    static func caretRange(forTapLocation point: CGPoint, in textView: UITextView) -> NSRange {
-        let textLength = textView.textStorage.length
-        guard textLength > 0 else { return NSRange(location: 0, length: 0) }
-
-        textView.layoutManager.ensureLayout(for: textView.textContainer)
-
-        var location = point
-        location.x -= textView.textContainerInset.left
-        location.y -= textView.textContainerInset.top
-        location.x -= textView.textContainer.lineFragmentPadding
-
-        let characterIndex = textView.layoutManager.characterIndex(
-            for: location,
-            in: textView.textContainer,
-            fractionOfDistanceBetweenInsertionPoints: nil
-        )
-        return NSRange(location: min(max(characterIndex, 0), textLength), length: 0)
-    }
-}
-
-struct DeferredRichTextContentEncoder {
-    let encode: () -> Data?
-}
-
-enum EditorRichTextContentUpdate {
-    case immediate(Data?)
-    case deferred(DeferredRichTextContentEncoder)
-}
-
-enum EditorRichTextCommitPolicy {
-    static func committedRichTextContentData(
-        currentData: Data?,
-        pendingEncoder: DeferredRichTextContentEncoder?
-    ) -> Data? {
-        pendingEncoder?.encode() ?? currentData
-    }
-}
-
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -1382,7 +1283,7 @@ struct NoteEditorView: View {
         hasPendingNoteCommit = true
         pendingNoteCommitTask?.cancel()
         pendingNoteCommitTask = Task {
-            try? await Task.sleep(nanoseconds: editorCommitDelayNanoseconds)
+            try? await Task.sleep(nanoseconds: EditorTimingPolicy.commitDelayNanoseconds)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 commitPendingNoteEdit()
@@ -2077,7 +1978,7 @@ struct NoteEditorView: View {
 
     private func isSelectedTextColor(_ color: UIColor) -> Bool {
         guard let selectedTextUIColor else { return false }
-        return selectedTextUIColor.isApproximatelyEqual(to: color)
+        return EditorColorComparison.isApproximatelyEqual(selectedTextUIColor, to: color)
     }
 
     private var inlinePasteMenu: some View {
@@ -2265,7 +2166,7 @@ struct EditorFormattingState: Equatable {
     var italic = false
     var underline = false
     var strikethrough = false
-    var fontSize: CGFloat = defaultEditorTextFont.pointSize
+    var fontSize: CGFloat = EditorTypography.defaultTextFont.pointSize
     var foregroundColor: UIColor?
 }
 
@@ -2562,22 +2463,33 @@ enum PinnedHighlightPalette {
             + (0.0722 * convert(components.blue))
     }
 
-    private static func rgbaComponents(from color: UIColor) -> RGBAComponents {
+    private static func rgbaComponents(from color: UIColor) -> PinnedHighlightRGBAComponents {
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
         if color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
-            return RGBAComponents(red: red, green: green, blue: blue, alpha: alpha)
+            return PinnedHighlightRGBAComponents(red: red, green: green, blue: blue, alpha: alpha)
         }
 
         var white: CGFloat = 0
         if color.getWhite(&white, alpha: &alpha) {
-            return RGBAComponents(red: white, green: white, blue: white, alpha: alpha)
+            return PinnedHighlightRGBAComponents(red: white, green: white, blue: white, alpha: alpha)
         }
 
         let ciColor = CIColor(color: color)
-        return RGBAComponents(red: ciColor.red, green: ciColor.green, blue: ciColor.blue, alpha: ciColor.alpha)
+        return PinnedHighlightRGBAComponents(red: ciColor.red, green: ciColor.green, blue: ciColor.blue, alpha: ciColor.alpha)
+    }
+}
+
+private struct PinnedHighlightRGBAComponents {
+    let red: CGFloat
+    let green: CGFloat
+    let blue: CGFloat
+    let alpha: CGFloat
+
+    var luminance: CGFloat {
+        (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
     }
 }
 
@@ -2968,30 +2880,15 @@ private struct SelectableTextView: UIViewRepresentable {
     let onLookupSelection: (String) -> Void
 
     func makeUIView(context: Context) -> UITextView {
-        let textView = EditorSelectionProfiling.makeProfiledTextView()
+        let textView = EditorTextViewFactory.makeEditorTextView(
+            backgroundColor: backgroundColor,
+            textColor: textColor,
+            tintColor: tintColor
+        )
         context.coordinator.textView = textView
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
         textView.delegate = context.coordinator
-        textView.font = defaultEditorTextFont
-        textView.textColor = textColor
-        textView.adjustsFontForContentSizeCategory = true
-        textView.allowsEditingTextAttributes = true
-        textView.backgroundColor = backgroundColor
-        textView.tintColor = tintColor
-        textView.layer.cornerRadius = 8
-        textView.typingAttributes = [
-            .font: textView.font ?? defaultEditorTextFont,
-            .foregroundColor: textColor,
-            .paragraphStyle: ChecklistItemEditor.editorParagraphStyle
-        ]
-        textView.textContainerInset = ChecklistItemEditor.textContainerInsets(hasChecklistItems: false)
-        textView.keyboardDismissMode = .interactive
-#if targetEnvironment(macCatalyst)
-        textView.alwaysBounceVertical = false
-#else
-        textView.alwaysBounceVertical = true
-#endif
         return textView
     }
 
@@ -3492,7 +3389,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 var typingAttributes = textView.typingAttributes
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
                 typingAttributes[.font] = adjustedFontSize(from: baseFont, delta: delta)
                 textView.typingAttributes = typingAttributes
                 markSelectionFormattingDirty(from: textView)
@@ -3504,7 +3401,7 @@ private struct SelectableTextView: UIViewRepresentable {
             mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
                 let baseFont = (value as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
                 mutable.addAttribute(
                     .font,
                     value: adjustedFontSize(from: baseFont, delta: delta),
@@ -3844,8 +3741,10 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func isEditorDefaultTextColor(_ color: UIColor, in textView: UITextView) -> Bool {
-            color.resolvedColor(with: textView.traitCollection)
-                .isApproximatelyEqual(to: defaultTextColor.resolvedColor(with: textView.traitCollection))
+            EditorColorComparison.isApproximatelyEqual(
+                color.resolvedColor(with: textView.traitCollection),
+                to: defaultTextColor.resolvedColor(with: textView.traitCollection)
+            )
         }
 
         var hasUnsyncedAppliedContent: Bool {
@@ -3906,7 +3805,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let desiredAttributedText = RichTextContentCodec.decode(
                 richTextData: richTextContentData,
                 plainText: plainText,
-                baseFont: textView.font ?? defaultEditorTextFont
+                baseFont: textView.font ?? EditorTypography.defaultTextFont
             )
             let normalizedAttributedText = RichTextContentCodec.normalizedForDisplay(
                 desiredAttributedText,
@@ -4039,7 +3938,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func defaultTextAttributes(for textView: UITextView) -> [NSAttributedString.Key: Any] {
             [
-                .font: textView.font ?? defaultEditorTextFont,
+                .font: textView.font ?? EditorTypography.defaultTextFont,
                 .foregroundColor: defaultTextColor,
                 .paragraphStyle: ChecklistItemEditor.bodyParagraphStyle(
                     hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
@@ -4140,13 +4039,13 @@ private struct SelectableTextView: UIViewRepresentable {
             if range.length == 0 {
                 return (textView.typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
             }
             if range.location < textView.attributedText.length,
                let font = textView.attributedText.attribute(.font, at: range.location, effectiveRange: nil) as? UIFont {
                 return font
             }
-            return textView.font ?? defaultEditorTextFont
+            return textView.font ?? EditorTypography.defaultTextFont
         }
 
         private func selectedForegroundColor(in textView: UITextView, range: NSRange) -> UIColor? {
@@ -4167,13 +4066,13 @@ private struct SelectableTextView: UIViewRepresentable {
             if range.length == 0 {
                 let font = (textView.typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
                 return font.fontDescriptor.symbolicTraits.contains(trait)
             }
 
             var hasAll = true
             textView.attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
-                let font = value as? UIFont ?? defaultEditorTextFont
+                let font = value as? UIFont ?? EditorTypography.defaultTextFont
                 if !font.fontDescriptor.symbolicTraits.contains(trait) {
                     hasAll = false
                     stop.pointee = true
@@ -4208,7 +4107,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 var typingAttributes = textView.typingAttributes
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
                 let shouldApply = !baseFont.fontDescriptor.symbolicTraits.contains(trait)
                 typingAttributes[.font] = fontBySettingTrait(
                     on: baseFont,
@@ -4226,7 +4125,7 @@ private struct SelectableTextView: UIViewRepresentable {
             mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
                 let baseFont = (value as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
                 mutable.addAttribute(
                     .font,
                     value: fontBySettingTrait(
@@ -4247,7 +4146,7 @@ private struct SelectableTextView: UIViewRepresentable {
         ) -> Bool {
             var hasTraitMissing = false
             attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
-                let font = value as? UIFont ?? defaultEditorTextFont
+                let font = value as? UIFont ?? EditorTypography.defaultTextFont
                 if !font.fontDescriptor.symbolicTraits.contains(trait) {
                     hasTraitMissing = true
                     stop.pointee = true
@@ -4684,680 +4583,6 @@ private struct SelectableTextView: UIViewRepresentable {
             textView.textStorage.length
         }
 
-    }
-}
-
-enum EditorPasteFormatter {
-    static func attributedString(
-        matchingDestinationFormattingFor text: String,
-        typingAttributes: [NSAttributedString.Key: Any],
-        defaultAttributes: [NSAttributedString.Key: Any]
-    ) -> NSAttributedString {
-        var attributes = defaultAttributes
-        typingAttributes.forEach { key, value in
-            attributes[key] = value
-        }
-        return NSAttributedString(string: text, attributes: attributes)
-    }
-}
-
-enum ChecklistItemEditor {
-    static let uncheckedPrefix = "☐\t"
-    static let checkedPrefix = "☑︎\t"
-    static let checkedPrefixVariant = "☑\t"
-    static let legacyUncheckedGlyphPrefix = "☐ "
-    static let legacyCheckedGlyphPrefix = "☑︎ "
-    static let legacyCheckedGlyphPrefixVariant = "☑ "
-    static let legacyUncheckedPrefix = "- [ ] "
-    static let legacyCheckedPrefix = "- [x] "
-    static let legacyShortUncheckedPrefix = "[ ] "
-    static let legacyShortCheckedPrefix = "[x] "
-
-    private static let autoChecklistStrikethroughKey = NSAttributedString.Key("com.apexcoretechs.myram.checklist-auto-strikethrough")
-    private static let minimumChecklistGutterWidth: CGFloat = 28
-    private static let checklistGutterReferenceFontSize: CGFloat = 20
-    private static let uncheckedChecklistIconFontSize = checklistGutterReferenceFontSize
-    private static let checkedChecklistIconFontSize = checklistGutterReferenceFontSize
-    private static let checklistGutterWidth: CGFloat = {
-        let iconFont = UIFont.systemFont(ofSize: checklistGutterReferenceFontSize, weight: .regular)
-        let uncheckedWidth = (uncheckedPrefix.trimmingCharacters(in: .whitespacesAndNewlines) as NSString)
-            .size(withAttributes: [.font: iconFont])
-            .width
-        let checkedWidth = (checkedPrefix.trimmingCharacters(in: .whitespacesAndNewlines) as NSString)
-            .size(withAttributes: [.font: iconFont])
-            .width
-        return max(minimumChecklistGutterWidth, ceil(max(uncheckedWidth, checkedWidth)) + 12)
-    }()
-    private static let paragraphSpacing: CGFloat = UIFont.preferredFont(forTextStyle: .body).lineHeight * 0.5
-    private static let compactTextInset = UIEdgeInsets(top: 12, left: 8, bottom: 12, right: 8)
-    static let gutterTapWidth: CGFloat = 44
-
-    static var editorParagraphStyle: NSParagraphStyle {
-        let style = NSMutableParagraphStyle()
-        style.firstLineHeadIndent = 0
-        style.headIndent = 0
-        style.lineBreakMode = .byWordWrapping
-        applyParagraphSpacing(to: style)
-        return style
-    }
-
-    static func bodyParagraphStyle(hasChecklistItems: Bool) -> NSParagraphStyle {
-        guard hasChecklistItems else { return editorParagraphStyle }
-
-        let style = NSMutableParagraphStyle()
-        style.firstLineHeadIndent = checklistGutterWidth
-        style.headIndent = checklistGutterWidth
-        style.tabStops = [NSTextTab(textAlignment: .left, location: checklistGutterWidth)]
-        style.defaultTabInterval = checklistGutterWidth
-        style.lineBreakMode = .byWordWrapping
-        applyParagraphSpacing(to: style)
-        return style
-    }
-
-    static func textContainerInsets(hasChecklistItems: Bool) -> UIEdgeInsets {
-        guard hasChecklistItems else { return compactTextInset }
-        return UIEdgeInsets(
-            top: compactTextInset.top,
-            left: compactTextInset.left,
-            bottom: compactTextInset.bottom,
-            right: compactTextInset.right + checklistGutterWidth
-        )
-    }
-
-    private static var checklistParagraphStyle: NSParagraphStyle {
-        let style = NSMutableParagraphStyle()
-        style.firstLineHeadIndent = 0
-        style.headIndent = checklistGutterWidth
-        style.tabStops = [NSTextTab(textAlignment: .left, location: checklistGutterWidth)]
-        style.defaultTabInterval = checklistGutterWidth
-        style.lineBreakMode = .byWordWrapping
-        applyParagraphSpacing(to: style)
-        return style
-    }
-
-    private static func applyParagraphSpacing(to style: NSMutableParagraphStyle) {
-        style.lineSpacing = 0
-        style.paragraphSpacing = paragraphSpacing
-    }
-
-    static func applyChecklistAction(
-        in attributedText: NSMutableAttributedString,
-        selection: NSRange
-    ) -> NSRange {
-        let text = attributedText.string as NSString
-        let clampedSelectionLocation = min(max(selection.location, 0), text.length)
-        let lineRangeWithNewline = text.lineRange(for: NSRange(location: clampedSelectionLocation, length: 0))
-        let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-        let line = text.substring(with: lineRange)
-
-        let replacement: (range: NSRange, prefix: String)
-        if line.hasPrefix(checkedPrefix) {
-            replacement = (NSRange(location: lineRange.location, length: checkedPrefix.utf16.count), uncheckedPrefix)
-        } else if line.hasPrefix(checkedPrefixVariant) {
-            replacement = (NSRange(location: lineRange.location, length: checkedPrefixVariant.utf16.count), uncheckedPrefix)
-        } else if line.hasPrefix(uncheckedPrefix) {
-            replacement = (NSRange(location: lineRange.location, length: uncheckedPrefix.utf16.count), checkedPrefix)
-        } else if line.hasPrefix(legacyCheckedGlyphPrefix) {
-            replacement = (NSRange(location: lineRange.location, length: legacyCheckedGlyphPrefix.utf16.count), uncheckedPrefix)
-        } else if line.hasPrefix(legacyCheckedGlyphPrefixVariant) {
-            replacement = (NSRange(location: lineRange.location, length: legacyCheckedGlyphPrefixVariant.utf16.count), uncheckedPrefix)
-        } else if line.hasPrefix(legacyUncheckedGlyphPrefix) {
-            replacement = (NSRange(location: lineRange.location, length: legacyUncheckedGlyphPrefix.utf16.count), checkedPrefix)
-        } else if line.hasPrefix(legacyCheckedPrefix) {
-            replacement = (NSRange(location: lineRange.location, length: legacyCheckedPrefix.utf16.count), uncheckedPrefix)
-        } else if line.hasPrefix(legacyUncheckedPrefix) {
-            replacement = (NSRange(location: lineRange.location, length: legacyUncheckedPrefix.utf16.count), checkedPrefix)
-        } else if line.hasPrefix(legacyShortCheckedPrefix) {
-            replacement = (NSRange(location: lineRange.location, length: legacyShortCheckedPrefix.utf16.count), uncheckedPrefix)
-        } else if line.hasPrefix(legacyShortUncheckedPrefix) {
-            replacement = (NSRange(location: lineRange.location, length: legacyShortUncheckedPrefix.utf16.count), checkedPrefix)
-        } else {
-            replacement = (NSRange(location: lineRange.location, length: 0), uncheckedPrefix)
-        }
-
-        let delta = replacement.prefix.utf16.count - replacement.range.length
-        attributedText.replaceCharacters(in: replacement.range, with: replacement.prefix)
-        _ = applyEditorRendering(in: attributedText)
-
-        let oldLocation = clampedSelectionLocation
-        let adjustedLocation: Int
-        if oldLocation < replacement.range.location {
-            adjustedLocation = oldLocation
-        } else if oldLocation <= replacement.range.location + replacement.range.length {
-            adjustedLocation = replacement.range.location + replacement.prefix.utf16.count
-        } else {
-            adjustedLocation = oldLocation + delta
-        }
-
-        let newLength = attributedText.length
-        return NSRange(location: min(max(adjustedLocation, 0), newLength), length: 0)
-    }
-
-    @discardableResult
-    static func applyEditorRendering(in attributedText: NSMutableAttributedString) -> Bool {
-        let previous = attributedText.copy() as? NSAttributedString
-        normalizeLegacyPrefixes(in: attributedText)
-        applyEditorParagraphStyles(in: attributedText)
-        applyChecklistPrefixRendering(in: attributedText)
-        let fullRange = NSRange(location: 0, length: attributedText.length)
-
-        var autoRanges: [NSRange] = []
-        attributedText.enumerateAttribute(autoChecklistStrikethroughKey, in: fullRange) { value, range, _ in
-            if (value as? Bool) == true {
-                autoRanges.append(range)
-            }
-        }
-
-        autoRanges.forEach { range in
-            attributedText.removeAttribute(.strikethroughStyle, range: range)
-            attributedText.removeAttribute(.strikethroughColor, range: range)
-            attributedText.removeAttribute(autoChecklistStrikethroughKey, range: range)
-        }
-
-        checkedContentRanges(in: attributedText.string as NSString).forEach { range in
-            guard range.length > 0 else { return }
-            attributedText.addAttribute(
-                .strikethroughStyle,
-                value: NSUnderlineStyle.single.rawValue,
-                range: range
-            )
-            attributedText.addAttribute(
-                autoChecklistStrikethroughKey,
-                value: true,
-                range: range
-            )
-        }
-
-        return previous?.isEqual(to: attributedText) == false
-    }
-
-    static func checkedContentRanges(in text: NSString) -> [NSRange] {
-        guard text.length > 0 else { return [] }
-
-        var ranges: [NSRange] = []
-        var cursor = 0
-        while cursor < text.length {
-            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
-            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-            let line = text.substring(with: lineRange)
-
-            let prefixLength: Int?
-            if line.hasPrefix(checkedPrefix) {
-                prefixLength = checkedPrefix.utf16.count
-            } else if line.hasPrefix(checkedPrefixVariant) {
-                prefixLength = checkedPrefixVariant.utf16.count
-            } else if line.hasPrefix(legacyCheckedGlyphPrefix) {
-                prefixLength = legacyCheckedGlyphPrefix.utf16.count
-            } else if line.hasPrefix(legacyCheckedGlyphPrefixVariant) {
-                prefixLength = legacyCheckedGlyphPrefixVariant.utf16.count
-            } else {
-                prefixLength = nil
-            }
-
-            if let prefixLength {
-                let start = lineRange.location + prefixLength
-                let length = max(lineRange.length - prefixLength, 0)
-                ranges.append(NSRange(location: start, length: length))
-            }
-
-            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
-            if nextCursor <= cursor { break }
-            cursor = nextCursor
-        }
-        return ranges
-    }
-
-    static func pinCandidate(in text: NSString, selection: NSRange) -> (text: String, sourceRange: NSRange)? {
-        guard text.length > 0,
-              selection.location != NSNotFound,
-              selection.location <= text.length else { return nil }
-
-        let lineProbeLocation = min(selection.location, max(text.length - 1, 0))
-        let lineRangeWithNewline = text.lineRange(for: NSRange(location: lineProbeLocation, length: 0))
-        let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-        let line = text.substring(with: lineRange)
-        let prefixLength = checklistPrefixLength(in: line) ?? 0
-        guard lineRange.length >= prefixLength else { return nil }
-
-        let contentRange = NSRange(
-            location: lineRange.location + prefixLength,
-            length: lineRange.length - prefixLength
-        )
-        let pinnedText = text.substring(with: contentRange)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !pinnedText.isEmpty else { return nil }
-
-        return (pinnedText, lineRangeWithNewline)
-    }
-
-    static func isChecklistIcon(at characterIndex: Int, in text: NSString) -> Bool {
-        guard text.length > 0 else { return false }
-        let clampedLocation = min(max(characterIndex, 0), max(text.length - 1, 0))
-        let lineRangeWithNewline = text.lineRange(for: NSRange(location: clampedLocation, length: 0))
-        let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-        guard lineRange.length > 0 else { return false }
-
-        let line = text.substring(with: lineRange)
-        guard let glyphRange = checklistGlyphRange(in: line, lineLocation: lineRange.location) else {
-            return false
-        }
-
-        return NSLocationInRange(clampedLocation, glyphRange)
-    }
-
-
-    static func isChecklistLine(at characterIndex: Int, in text: NSString) -> Bool {
-        guard text.length > 0 else { return false }
-        let clampedLocation = min(max(characterIndex, 0), max(text.length - 1, 0))
-        let lineRangeWithNewline = text.lineRange(for: NSRange(location: clampedLocation, length: 0))
-        let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-        guard lineRange.length > 0 else { return false }
-        let line = text.substring(with: lineRange)
-        return checklistPrefixLength(in: line) != nil
-    }
-
-    static func containsChecklistItems(in text: NSString) -> Bool {
-        guard text.length > 0 else { return false }
-
-        var cursor = 0
-        while cursor < text.length {
-            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
-            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-            let line = text.substring(with: lineRange)
-            if checklistPrefixLength(in: line) != nil {
-                return true
-            }
-
-            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
-            if nextCursor <= cursor { break }
-            cursor = nextCursor
-        }
-
-        return false
-    }
-
-    private static func checklistIconFontSize(for line: String) -> CGFloat {
-        if line.hasPrefix(uncheckedPrefix) || line.hasPrefix(legacyUncheckedGlyphPrefix) {
-            return uncheckedChecklistIconFontSize
-        }
-        return checkedChecklistIconFontSize
-    }
-
-    private static func applyChecklistPrefixRendering(in attributedText: NSMutableAttributedString) {
-        let text = attributedText.string as NSString
-        guard text.length > 0 else { return }
-
-        var cursor = 0
-        while cursor < text.length {
-            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
-            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-            let line = text.substring(with: lineRange)
-            if let glyphRange = checklistGlyphRange(in: line, lineLocation: lineRange.location) {
-                attributedText.addAttribute(
-                    .font,
-                    value: UIFont.systemFont(ofSize: checklistIconFontSize(for: line), weight: .regular),
-                    range: glyphRange
-                )
-                attributedText.addAttribute(.baselineOffset, value: -1, range: glyphRange)
-                attributedText.addAttribute(.foregroundColor, value: UIColor.label, range: glyphRange)
-            }
-
-            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
-            if nextCursor <= cursor { break }
-            cursor = nextCursor
-        }
-    }
-
-    private static func normalizeLegacyPrefixes(in attributedText: NSMutableAttributedString) {
-        let text = attributedText.string as NSString
-        guard text.length > 0 else { return }
-
-        var replacements: [(range: NSRange, replacement: String)] = []
-        var cursor = 0
-        while cursor < text.length {
-            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
-            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-            let line = text.substring(with: lineRange)
-
-            if line.hasPrefix(legacyCheckedGlyphPrefix) {
-                replacements.append((NSRange(location: lineRange.location, length: legacyCheckedGlyphPrefix.utf16.count), checkedPrefix))
-            } else if line.hasPrefix(legacyCheckedGlyphPrefixVariant) {
-                replacements.append((NSRange(location: lineRange.location, length: legacyCheckedGlyphPrefixVariant.utf16.count), checkedPrefix))
-            } else if line.hasPrefix(legacyUncheckedGlyphPrefix) {
-                replacements.append((NSRange(location: lineRange.location, length: legacyUncheckedGlyphPrefix.utf16.count), uncheckedPrefix))
-            } else if line.hasPrefix(legacyCheckedPrefix) {
-                replacements.append((NSRange(location: lineRange.location, length: legacyCheckedPrefix.utf16.count), checkedPrefix))
-            } else if line.hasPrefix(legacyUncheckedPrefix) {
-                replacements.append((NSRange(location: lineRange.location, length: legacyUncheckedPrefix.utf16.count), uncheckedPrefix))
-            } else if line.hasPrefix(legacyShortCheckedPrefix) {
-                replacements.append((NSRange(location: lineRange.location, length: legacyShortCheckedPrefix.utf16.count), checkedPrefix))
-            } else if line.hasPrefix(legacyShortUncheckedPrefix) {
-                replacements.append((NSRange(location: lineRange.location, length: legacyShortUncheckedPrefix.utf16.count), uncheckedPrefix))
-            }
-
-            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
-            if nextCursor <= cursor { break }
-            cursor = nextCursor
-        }
-
-        replacements.reversed().forEach { replacement in
-            attributedText.replaceCharacters(in: replacement.range, with: replacement.replacement)
-        }
-    }
-
-    private static func applyEditorParagraphStyles(in attributedText: NSMutableAttributedString) {
-        let text = attributedText.string as NSString
-        guard text.length > 0 else { return }
-        let hasChecklistItems = containsChecklistItems(in: text)
-
-        var cursor = 0
-        while cursor < text.length {
-            let lineRangeWithNewline = text.lineRange(for: NSRange(location: cursor, length: 0))
-            let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
-            let line = text.substring(with: lineRange)
-            let paragraphStyle = checklistPrefixLength(in: line) == nil
-                ? bodyParagraphStyle(hasChecklistItems: hasChecklistItems)
-                : checklistParagraphStyle
-
-            attributedText.addAttribute(
-                .paragraphStyle,
-                value: paragraphStyle,
-                range: lineRangeWithNewline
-            )
-
-            let nextCursor = lineRangeWithNewline.location + lineRangeWithNewline.length
-            if nextCursor <= cursor { break }
-            cursor = nextCursor
-        }
-    }
-
-    private static func normalizedLineRange(from lineRange: NSRange, in text: NSString) -> NSRange {
-        guard lineRange.length > 0 else { return lineRange }
-        var length = lineRange.length
-        let lastIndex = lineRange.location + lineRange.length - 1
-        if lastIndex >= 0, lastIndex < text.length, text.character(at: lastIndex) == 10 {
-            length -= 1
-        }
-        return NSRange(location: lineRange.location, length: max(length, 0))
-    }
-
-    private static func checklistPrefixLength(in line: String) -> Int? {
-        if line.hasPrefix(checkedPrefix) {
-            return checkedPrefix.utf16.count
-        }
-        if line.hasPrefix(checkedPrefixVariant) {
-            return checkedPrefixVariant.utf16.count
-        }
-        if line.hasPrefix(uncheckedPrefix) {
-            return uncheckedPrefix.utf16.count
-        }
-        if line.hasPrefix(legacyCheckedGlyphPrefix) {
-            return legacyCheckedGlyphPrefix.utf16.count
-        }
-        if line.hasPrefix(legacyCheckedGlyphPrefixVariant) {
-            return legacyCheckedGlyphPrefixVariant.utf16.count
-        }
-        if line.hasPrefix(legacyUncheckedGlyphPrefix) {
-            return legacyUncheckedGlyphPrefix.utf16.count
-        }
-        if line.hasPrefix(legacyCheckedPrefix) {
-            return legacyCheckedPrefix.utf16.count
-        }
-        if line.hasPrefix(legacyUncheckedPrefix) {
-            return legacyUncheckedPrefix.utf16.count
-        }
-        if line.hasPrefix(legacyShortCheckedPrefix) {
-            return legacyShortCheckedPrefix.utf16.count
-        }
-        if line.hasPrefix(legacyShortUncheckedPrefix) {
-            return legacyShortUncheckedPrefix.utf16.count
-        }
-        return nil
-    }
-
-    private static func checklistGlyphRange(in line: String, lineLocation: Int) -> NSRange? {
-        let prefixLength: Int
-        let delimiterLength: Int
-        if line.hasPrefix(checkedPrefix) {
-            prefixLength = checkedPrefix.utf16.count
-            delimiterLength = "\t".utf16.count
-        } else if line.hasPrefix(checkedPrefixVariant) {
-            prefixLength = checkedPrefixVariant.utf16.count
-            delimiterLength = "\t".utf16.count
-        } else if line.hasPrefix(uncheckedPrefix) {
-            prefixLength = uncheckedPrefix.utf16.count
-            delimiterLength = "\t".utf16.count
-        } else if line.hasPrefix(legacyCheckedGlyphPrefix) {
-            prefixLength = legacyCheckedGlyphPrefix.utf16.count
-            delimiterLength = " ".utf16.count
-        } else if line.hasPrefix(legacyCheckedGlyphPrefixVariant) {
-            prefixLength = legacyCheckedGlyphPrefixVariant.utf16.count
-            delimiterLength = " ".utf16.count
-        } else if line.hasPrefix(legacyUncheckedGlyphPrefix) {
-            prefixLength = legacyUncheckedGlyphPrefix.utf16.count
-            delimiterLength = " ".utf16.count
-        } else {
-            return nil
-        }
-
-        return NSRange(
-            location: lineLocation,
-            length: max(prefixLength - delimiterLength, 0)
-        )
-    }
-}
-
-enum RichTextContentCodec {
-    static func decode(
-        richTextData: Data?,
-        plainText: String,
-        baseFont: UIFont
-    ) -> NSAttributedString {
-        if let richTextData,
-           let attributedText = try? NSAttributedString(
-            data: richTextData,
-            options: [.documentType: NSAttributedString.DocumentType.rtf],
-            documentAttributes: nil
-           ) {
-            return attributedText
-        }
-        return NSAttributedString(
-            string: plainText,
-            attributes: [.font: baseFont]
-        )
-    }
-
-    static func encode(_ attributedText: NSAttributedString) -> Data? {
-        guard attributedText.length > 0 else { return nil }
-        return try? attributedText.data(
-            from: NSRange(location: 0, length: attributedText.length),
-            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
-        )
-    }
-
-    static func normalizedForDisplay(
-        _ attributedText: NSAttributedString,
-        traitCollection: UITraitCollection,
-        defaultTextColor: UIColor = .label
-    ) -> NSAttributedString {
-        // Preserve explicit colors exactly. Missing foreground means Auto, so
-        // paint it with the current editor default for display only; syncContent
-        // strips that default color back out before saving/syncing.
-        _ = traitCollection
-        let mutable = NSMutableAttributedString(attributedString: attributedText)
-        let fullRange = NSRange(location: 0, length: mutable.length)
-        mutable.enumerateAttribute(.foregroundColor, in: fullRange) { value, range, _ in
-            guard value == nil else { return }
-            mutable.addAttribute(.foregroundColor, value: defaultTextColor, range: range)
-            mutable.addAttribute(.autoTextColorDisplay, value: true, range: range)
-        }
-        return mutable
-    }
-
-    static func sanitizedConflictRichTextData(_ richTextData: Data?, plainText: String) -> Data? {
-        guard let richTextData,
-              let attributedText = try? NSAttributedString(
-                data: richTextData,
-                options: [.documentType: NSAttributedString.DocumentType.rtf],
-                documentAttributes: nil
-              ),
-              attributedText.string == plainText else { return nil }
-        let mutable = NSMutableAttributedString(attributedString: attributedText)
-        let fullRange = NSRange(location: 0, length: mutable.length)
-        stripLegacyDefaultTextColors(from: mutable, range: fullRange)
-        return encode(mutable)
-    }
-
-    private static func stripLegacyDefaultTextColors(from attributedText: NSMutableAttributedString, range: NSRange) {
-        attributedText.enumerateAttribute(.foregroundColor, in: range) { value, range, _ in
-            guard let color = value as? UIColor,
-                  color.looksLikeLegacyDefaultTextColor else { return }
-            attributedText.removeAttribute(.foregroundColor, range: range)
-        }
-        stripLegacyDefaultDecorationColor(.underlineColor, from: attributedText, range: range)
-        stripLegacyDefaultDecorationColor(.strikethroughColor, from: attributedText, range: range)
-    }
-
-    private static func stripLegacyDefaultDecorationColor(
-        _ key: NSAttributedString.Key,
-        from attributedText: NSMutableAttributedString,
-        range: NSRange
-    ) {
-        attributedText.enumerateAttribute(key, in: range) { value, range, _ in
-            guard let color = value as? UIColor,
-                  color.looksLikeLegacyDefaultTextColor else { return }
-            attributedText.removeAttribute(key, range: range)
-        }
-    }
-
-}
-
-struct BareTextViewProfilingView: View {
-    var body: some View {
-        BareProfilingTextView()
-            .ignoresSafeArea()
-    }
-}
-
-private struct BareProfilingTextView: UIViewRepresentable {
-    func makeUIView(context: Context) -> UITextView {
-        let signpostID = OSSignpostID(log: EditorSelectionProfiling.log)
-        os_signpost(.begin, log: EditorSelectionProfiling.log, name: "BareProfilingTextView.makeUIView", signpostID: signpostID)
-        defer {
-            os_signpost(.end, log: EditorSelectionProfiling.log, name: "BareProfilingTextView.makeUIView", signpostID: signpostID)
-        }
-
-        let textView = EditorSelectionProfiling.makeProfiledTextView()
-        textView.attributedText = Self.largeAttributedBody
-        textView.font = defaultEditorTextFont
-        textView.textColor = .label
-        textView.backgroundColor = .systemBackground
-        textView.allowsEditingTextAttributes = true
-        textView.isEditable = true
-        textView.isSelectable = true
-        textView.alwaysBounceVertical = false
-        textView.textContainerInset = UIEdgeInsets(top: 20, left: 18, bottom: 24, right: 18)
-        textView.typingAttributes = [
-            .font: defaultEditorTextFont,
-            .foregroundColor: UIColor.label
-        ]
-        return textView
-    }
-
-    func updateUIView(_ textView: UITextView, context: Context) {
-        let signpostID = OSSignpostID(log: EditorSelectionProfiling.log)
-        os_signpost(.begin, log: EditorSelectionProfiling.log, name: "BareProfilingTextView.updateUIView", signpostID: signpostID)
-        os_signpost(.end, log: EditorSelectionProfiling.log, name: "BareProfilingTextView.updateUIView", signpostID: signpostID)
-    }
-
-    private static let largeAttributedBody: NSAttributedString = {
-        let paragraph = NSMutableParagraphStyle()
-        paragraph.lineSpacing = 3
-        paragraph.paragraphSpacing = 8
-
-        let baseAttributes: [NSAttributedString.Key: Any] = [
-            .font: defaultEditorTextFont,
-            .foregroundColor: UIColor.label,
-            .paragraphStyle: paragraph
-        ]
-        let boldAttributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.boldSystemFont(ofSize: defaultEditorTextFont.pointSize),
-            .foregroundColor: UIColor.label,
-            .paragraphStyle: paragraph
-        ]
-
-        let body = NSMutableAttributedString()
-        for index in 1...1_200 {
-            body.append(NSAttributedString(
-                string: "Profiling paragraph \(index). ",
-                attributes: index.isMultiple(of: 9) ? boldAttributes : baseAttributes
-            ))
-            body.append(NSAttributedString(
-                string: "This bare Catalyst UITextView contains a large attributed body for drag-selection and edge auto-scroll profiling. It intentionally avoids the MyRAM editor coordinator, formatting toolbar state, search highlights, checklist rendering, custom gestures, and persistence callbacks.\n\n",
-                attributes: baseAttributes
-            ))
-        }
-        return body
-    }()
-}
-
-private extension UIColor {
-    func isApproximatelyEqual(to other: UIColor) -> Bool {
-        guard let lhs = rgbaComponents,
-              let rhs = other.rgbaComponents else {
-            return false
-        }
-
-        return abs(lhs.red - rhs.red) <= 0.02
-            && abs(lhs.green - rhs.green) <= 0.02
-            && abs(lhs.blue - rhs.blue) <= 0.02
-            && abs(lhs.alpha - rhs.alpha) <= 0.02
-    }
-
-    var looksLikeLegacyDefaultTextColor: Bool {
-        guard let components = rgbaComponents, components.alpha > 0.6 else { return false }
-        return components.saturation <= 0.08
-            && (components.luminance <= 0.42 || components.luminance >= 0.58)
-    }
-
-    private var rgbaComponents: RGBAComponents? {
-        var red: CGFloat = 0
-        var green: CGFloat = 0
-        var blue: CGFloat = 0
-        var alpha: CGFloat = 0
-        if getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
-            return RGBAComponents(red: red, green: green, blue: blue, alpha: alpha)
-        }
-
-        var white: CGFloat = 0
-        if getWhite(&white, alpha: &alpha) {
-            return RGBAComponents(red: white, green: white, blue: white, alpha: alpha)
-        }
-
-        let ciColor = CIColor(color: self)
-        return RGBAComponents(red: ciColor.red, green: ciColor.green, blue: ciColor.blue, alpha: ciColor.alpha)
-    }
-}
-
-private extension NSAttributedString.Key {
-    static let autoTextColorDisplay = NSAttributedString.Key("com.myram.autoTextColorDisplay")
-}
-
-private struct RGBAComponents {
-    let red: CGFloat
-    let green: CGFloat
-    let blue: CGFloat
-    let alpha: CGFloat
-
-    var luminance: CGFloat {
-        (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
-    }
-
-    var saturation: CGFloat {
-        let maxComponent = max(red, green, blue)
-        let minComponent = min(red, green, blue)
-        guard maxComponent > 0 else { return 0 }
-        return (maxComponent - minComponent) / maxComponent
     }
 }
 
