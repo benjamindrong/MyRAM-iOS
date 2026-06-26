@@ -84,9 +84,9 @@ enum RichTextContentCodec {
     }
 }
 
-extension UIColor {
-    func isApproximatelyEqual(to other: UIColor) -> Bool {
-        guard let lhs = rgbaComponents,
+enum EditorColorComparison {
+    static func isApproximatelyEqual(_ color: UIColor, to other: UIColor) -> Bool {
+        guard let lhs = color.rgbaComponents,
               let rhs = other.rgbaComponents else {
             return false
         }
@@ -97,28 +97,31 @@ extension UIColor {
             && abs(lhs.alpha - rhs.alpha) <= 0.02
     }
 
+}
+
+private extension UIColor {
     var looksLikeLegacyDefaultTextColor: Bool {
         guard let components = rgbaComponents, components.alpha > 0.6 else { return false }
         return components.saturation <= 0.08
             && (components.luminance <= 0.42 || components.luminance >= 0.58)
     }
 
-    private var rgbaComponents: RGBAComponents? {
+    var rgbaComponents: EditorRGBAComponents? {
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
         if getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
-            return RGBAComponents(red: red, green: green, blue: blue, alpha: alpha)
+            return EditorRGBAComponents(red: red, green: green, blue: blue, alpha: alpha)
         }
 
         var white: CGFloat = 0
         if getWhite(&white, alpha: &alpha) {
-            return RGBAComponents(red: white, green: white, blue: white, alpha: alpha)
+            return EditorRGBAComponents(red: white, green: white, blue: white, alpha: alpha)
         }
 
         let ciColor = CIColor(color: self)
-        return RGBAComponents(red: ciColor.red, green: ciColor.green, blue: ciColor.blue, alpha: ciColor.alpha)
+        return EditorRGBAComponents(red: ciColor.red, green: ciColor.green, blue: ciColor.blue, alpha: ciColor.alpha)
     }
 }
 
@@ -126,7 +129,7 @@ extension NSAttributedString.Key {
     static let autoTextColorDisplay = NSAttributedString.Key("com.myram.autoTextColorDisplay")
 }
 
-struct RGBAComponents {
+private struct EditorRGBAComponents {
     let red: CGFloat
     let green: CGFloat
     let blue: CGFloat

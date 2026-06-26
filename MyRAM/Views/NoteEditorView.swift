@@ -1283,7 +1283,7 @@ struct NoteEditorView: View {
         hasPendingNoteCommit = true
         pendingNoteCommitTask?.cancel()
         pendingNoteCommitTask = Task {
-            try? await Task.sleep(nanoseconds: editorCommitDelayNanoseconds)
+            try? await Task.sleep(nanoseconds: EditorTimingPolicy.commitDelayNanoseconds)
             guard !Task.isCancelled else { return }
             await MainActor.run {
                 commitPendingNoteEdit()
@@ -1978,7 +1978,7 @@ struct NoteEditorView: View {
 
     private func isSelectedTextColor(_ color: UIColor) -> Bool {
         guard let selectedTextUIColor else { return false }
-        return selectedTextUIColor.isApproximatelyEqual(to: color)
+        return EditorColorComparison.isApproximatelyEqual(selectedTextUIColor, to: color)
     }
 
     private var inlinePasteMenu: some View {
@@ -2166,7 +2166,7 @@ struct EditorFormattingState: Equatable {
     var italic = false
     var underline = false
     var strikethrough = false
-    var fontSize: CGFloat = defaultEditorTextFont.pointSize
+    var fontSize: CGFloat = EditorTypography.defaultTextFont.pointSize
     var foregroundColor: UIColor?
 }
 
@@ -2463,22 +2463,33 @@ enum PinnedHighlightPalette {
             + (0.0722 * convert(components.blue))
     }
 
-    private static func rgbaComponents(from color: UIColor) -> RGBAComponents {
+    private static func rgbaComponents(from color: UIColor) -> PinnedHighlightRGBAComponents {
         var red: CGFloat = 0
         var green: CGFloat = 0
         var blue: CGFloat = 0
         var alpha: CGFloat = 0
         if color.getRed(&red, green: &green, blue: &blue, alpha: &alpha) {
-            return RGBAComponents(red: red, green: green, blue: blue, alpha: alpha)
+            return PinnedHighlightRGBAComponents(red: red, green: green, blue: blue, alpha: alpha)
         }
 
         var white: CGFloat = 0
         if color.getWhite(&white, alpha: &alpha) {
-            return RGBAComponents(red: white, green: white, blue: white, alpha: alpha)
+            return PinnedHighlightRGBAComponents(red: white, green: white, blue: white, alpha: alpha)
         }
 
         let ciColor = CIColor(color: color)
-        return RGBAComponents(red: ciColor.red, green: ciColor.green, blue: ciColor.blue, alpha: ciColor.alpha)
+        return PinnedHighlightRGBAComponents(red: ciColor.red, green: ciColor.green, blue: ciColor.blue, alpha: ciColor.alpha)
+    }
+}
+
+private struct PinnedHighlightRGBAComponents {
+    let red: CGFloat
+    let green: CGFloat
+    let blue: CGFloat
+    let alpha: CGFloat
+
+    var luminance: CGFloat {
+        (0.2126 * red) + (0.7152 * green) + (0.0722 * blue)
     }
 }
 
@@ -3378,7 +3389,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 var typingAttributes = textView.typingAttributes
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
                 typingAttributes[.font] = adjustedFontSize(from: baseFont, delta: delta)
                 textView.typingAttributes = typingAttributes
                 markSelectionFormattingDirty(from: textView)
@@ -3390,7 +3401,7 @@ private struct SelectableTextView: UIViewRepresentable {
             mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
                 let baseFont = (value as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
                 mutable.addAttribute(
                     .font,
                     value: adjustedFontSize(from: baseFont, delta: delta),
@@ -3730,8 +3741,10 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func isEditorDefaultTextColor(_ color: UIColor, in textView: UITextView) -> Bool {
-            color.resolvedColor(with: textView.traitCollection)
-                .isApproximatelyEqual(to: defaultTextColor.resolvedColor(with: textView.traitCollection))
+            EditorColorComparison.isApproximatelyEqual(
+                color.resolvedColor(with: textView.traitCollection),
+                to: defaultTextColor.resolvedColor(with: textView.traitCollection)
+            )
         }
 
         var hasUnsyncedAppliedContent: Bool {
@@ -3792,7 +3805,7 @@ private struct SelectableTextView: UIViewRepresentable {
             let desiredAttributedText = RichTextContentCodec.decode(
                 richTextData: richTextContentData,
                 plainText: plainText,
-                baseFont: textView.font ?? defaultEditorTextFont
+                baseFont: textView.font ?? EditorTypography.defaultTextFont
             )
             let normalizedAttributedText = RichTextContentCodec.normalizedForDisplay(
                 desiredAttributedText,
@@ -3925,7 +3938,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func defaultTextAttributes(for textView: UITextView) -> [NSAttributedString.Key: Any] {
             [
-                .font: textView.font ?? defaultEditorTextFont,
+                .font: textView.font ?? EditorTypography.defaultTextFont,
                 .foregroundColor: defaultTextColor,
                 .paragraphStyle: ChecklistItemEditor.bodyParagraphStyle(
                     hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
@@ -4026,13 +4039,13 @@ private struct SelectableTextView: UIViewRepresentable {
             if range.length == 0 {
                 return (textView.typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
             }
             if range.location < textView.attributedText.length,
                let font = textView.attributedText.attribute(.font, at: range.location, effectiveRange: nil) as? UIFont {
                 return font
             }
-            return textView.font ?? defaultEditorTextFont
+            return textView.font ?? EditorTypography.defaultTextFont
         }
 
         private func selectedForegroundColor(in textView: UITextView, range: NSRange) -> UIColor? {
@@ -4053,13 +4066,13 @@ private struct SelectableTextView: UIViewRepresentable {
             if range.length == 0 {
                 let font = (textView.typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
                 return font.fontDescriptor.symbolicTraits.contains(trait)
             }
 
             var hasAll = true
             textView.attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
-                let font = value as? UIFont ?? defaultEditorTextFont
+                let font = value as? UIFont ?? EditorTypography.defaultTextFont
                 if !font.fontDescriptor.symbolicTraits.contains(trait) {
                     hasAll = false
                     stop.pointee = true
@@ -4094,7 +4107,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 var typingAttributes = textView.typingAttributes
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
                 let shouldApply = !baseFont.fontDescriptor.symbolicTraits.contains(trait)
                 typingAttributes[.font] = fontBySettingTrait(
                     on: baseFont,
@@ -4112,7 +4125,7 @@ private struct SelectableTextView: UIViewRepresentable {
             mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
                 let baseFont = (value as? UIFont)
                     ?? textView.font
-                    ?? defaultEditorTextFont
+                    ?? EditorTypography.defaultTextFont
                 mutable.addAttribute(
                     .font,
                     value: fontBySettingTrait(
@@ -4133,7 +4146,7 @@ private struct SelectableTextView: UIViewRepresentable {
         ) -> Bool {
             var hasTraitMissing = false
             attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
-                let font = value as? UIFont ?? defaultEditorTextFont
+                let font = value as? UIFont ?? EditorTypography.defaultTextFont
                 if !font.fontDescriptor.symbolicTraits.contains(trait) {
                     hasTraitMissing = true
                     stop.pointee = true

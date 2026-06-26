@@ -7,12 +7,12 @@ enum EditorProfilingFixtures {
         paragraph.paragraphSpacing = 8
 
         let baseAttributes: [NSAttributedString.Key: Any] = [
-            .font: defaultEditorTextFont,
+            .font: EditorTypography.defaultTextFont,
             .foregroundColor: UIColor.label,
             .paragraphStyle: paragraph
         ]
         let boldAttributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.boldSystemFont(ofSize: defaultEditorTextFont.pointSize),
+            .font: UIFont.boldSystemFont(ofSize: EditorTypography.defaultTextFont.pointSize),
             .foregroundColor: UIColor.label,
             .paragraphStyle: paragraph
         ]

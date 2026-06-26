@@ -1,14 +1,21 @@
 import UIKit
 
-#if targetEnvironment(macCatalyst)
-let defaultEditorTextFont = UIFont.systemFont(ofSize: 20)
-#else
-let defaultEditorTextFont = UIFont.preferredFont(forTextStyle: .body)
-#endif
+enum EditorTypography {
+    #if targetEnvironment(macCatalyst)
+    static let defaultTextFont = UIFont.systemFont(ofSize: 20)
+    #else
+    static let defaultTextFont = UIFont.preferredFont(forTextStyle: .body)
+    #endif
+}
 
 enum EditorTextViewFactory {
     static func makeTextView() -> UITextView {
-        EditorSelectionProfiling.forcesTextKit1 ? UITextView(usingTextLayoutManager: false) : UITextView()
+        #if targetEnvironment(macCatalyst)
+        if EditorSelectionProfiling.forcesTextKit1 {
+            return UITextView(usingTextLayoutManager: false)
+        }
+        #endif
+        return UITextView()
     }
 
     static func makeEditorTextView(
@@ -17,7 +24,7 @@ enum EditorTextViewFactory {
         tintColor: UIColor?
     ) -> UITextView {
         let textView = makeTextView()
-        textView.font = defaultEditorTextFont
+        textView.font = EditorTypography.defaultTextFont
         textView.textColor = textColor
         textView.adjustsFontForContentSizeCategory = true
         textView.allowsEditingTextAttributes = true
@@ -25,7 +32,7 @@ enum EditorTextViewFactory {
         textView.tintColor = tintColor
         textView.layer.cornerRadius = 8
         textView.typingAttributes = [
-            .font: textView.font ?? defaultEditorTextFont,
+            .font: textView.font ?? EditorTypography.defaultTextFont,
             .foregroundColor: textColor,
             .paragraphStyle: ChecklistItemEditor.editorParagraphStyle
         ]
@@ -42,7 +49,7 @@ enum EditorTextViewFactory {
     static func makeBareProfilingTextView(attributedText: NSAttributedString) -> UITextView {
         let textView = makeTextView()
         textView.attributedText = attributedText
-        textView.font = defaultEditorTextFont
+        textView.font = EditorTypography.defaultTextFont
         textView.textColor = .label
         textView.backgroundColor = .systemBackground
         textView.allowsEditingTextAttributes = true
@@ -51,7 +58,7 @@ enum EditorTextViewFactory {
         textView.alwaysBounceVertical = false
         textView.textContainerInset = UIEdgeInsets(top: 20, left: 18, bottom: 24, right: 18)
         textView.typingAttributes = [
-            .font: defaultEditorTextFont,
+            .font: EditorTypography.defaultTextFont,
             .foregroundColor: UIColor.label
         ]
         return textView
