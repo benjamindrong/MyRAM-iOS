@@ -90,9 +90,7 @@ enum EditorSearchMatchResolver {
     static func bodyRange(for match: NoteSearchMatch?, textLength: Int) -> NSRange? {
         guard case .body = match?.region,
               let range = match?.nsRangeInRenderedText,
-              range.location != NSNotFound,
-              range.length > 0,
-              NSMaxRange(range) <= textLength else {
+              EditorSelectionRangeResolver.hasPositiveLengthResolvedRange(range, textLength: textLength) else {
             return nil
         }
 

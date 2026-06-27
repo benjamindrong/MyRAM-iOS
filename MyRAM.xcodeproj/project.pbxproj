@@ -35,6 +35,7 @@
 		C097F01042FF000000000004 /* EditorPolicies.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00042FF000000000004 /* EditorPolicies.swift */; };
 		C097F01052FF000000000005 /* EditorProfilingFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00052FF000000000005 /* EditorProfilingFixtures.swift */; };
 		C097F01062FF000000000006 /* EditorRichTextContentCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */; };
+		C097F010D2FF00000000000D /* EditorSelectionRangeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000D2FF00000000000D /* EditorSelectionRangeResolver.swift */; };
 		C097F01072FF000000000007 /* EditorSelectionProfiling.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00072FF000000000007 /* EditorSelectionProfiling.swift */; };
 		C097F010B2FF00000000000B /* EditorSearchHighlighting.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000B2FF00000000000B /* EditorSearchHighlighting.swift */; };
 		C097F010C2FF00000000000C /* EditorSearchMatchResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000C2FF00000000000C /* EditorSearchMatchResolver.swift */; };
@@ -99,6 +100,7 @@
 		C097F00042FF000000000004 /* EditorPolicies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPolicies.swift; sourceTree = "<group>"; };
 		C097F00052FF000000000005 /* EditorProfilingFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorProfilingFixtures.swift; sourceTree = "<group>"; };
 		C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorRichTextContentCodec.swift; sourceTree = "<group>"; };
+		C097F000D2FF00000000000D /* EditorSelectionRangeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionRangeResolver.swift; sourceTree = "<group>"; };
 		C097F00072FF000000000007 /* EditorSelectionProfiling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionProfiling.swift; sourceTree = "<group>"; };
 		C097F000B2FF00000000000B /* EditorSearchHighlighting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSearchHighlighting.swift; sourceTree = "<group>"; };
 		C097F000C2FF00000000000C /* EditorSearchMatchResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSearchMatchResolver.swift; sourceTree = "<group>"; };
@@ -244,6 +246,7 @@
 				C097F00042FF000000000004 /* EditorPolicies.swift */,
 				C097F00052FF000000000005 /* EditorProfilingFixtures.swift */,
 				C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */,
+				C097F000D2FF00000000000D /* EditorSelectionRangeResolver.swift */,
 				C097F00072FF000000000007 /* EditorSelectionProfiling.swift */,
 				C097F000B2FF00000000000B /* EditorSearchHighlighting.swift */,
 				C097F000C2FF00000000000C /* EditorSearchMatchResolver.swift */,
@@ -427,6 +430,7 @@
 				C097F010B2FF00000000000B /* EditorSearchHighlighting.swift in Sources */,
 				C097F010C2FF00000000000C /* EditorSearchMatchResolver.swift in Sources */,
 				C097F01062FF000000000006 /* EditorRichTextContentCodec.swift in Sources */,
+				C097F010D2FF00000000000D /* EditorSelectionRangeResolver.swift in Sources */,
 				C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */,
 				BCE65D1A2EA545B000F2D0AA /* NoteEditorView.swift in Sources */,
 				C097F01092FF000000000009 /* EditorTextViewFactory.swift in Sources */,

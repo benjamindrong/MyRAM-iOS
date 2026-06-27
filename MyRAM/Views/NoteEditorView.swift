@@ -3617,9 +3617,10 @@ private struct SelectableTextView: UIViewRepresentable {
             textView.attributedText = normalizedAttributedText
             applyChecklistRendering(in: textView)
             let newLength = textStorageLength(in: textView)
-            let clampedLocation = min(max(selectedRange.location, 0), newLength)
-            let clampedLength = min(selectedRange.length, max(newLength - clampedLocation, 0))
-            let restoredRange = NSRange(location: clampedLocation, length: clampedLength)
+            let restoredRange = EditorSelectionRangeResolver.clampedSelectionRange(
+                selectedRange,
+                textLength: newLength
+            )
             restoreSelectionWithoutScrolling(restoredRange, in: textView)
             lastKnownSelectionRange = restoredRange
             reportFormattingState(from: textView)
@@ -3687,15 +3688,14 @@ private struct SelectableTextView: UIViewRepresentable {
             let fullText = textView.text as NSString
             let currentRange = safeSelectedRange(in: textView)
             if currentRange.length > 0,
-               NSMaxRange(currentRange) <= fullText.length {
+               EditorSelectionRangeResolver.isValidRange(currentRange, textLength: fullText.length) {
                 lastKnownSelectionRange = currentRange
                 return fullText.substring(with: currentRange)
             }
 
             let cachedRange = lastKnownSelectionRange
             if cachedRange.length > 0,
-               cachedRange.location != NSNotFound,
-               NSMaxRange(cachedRange) <= fullText.length {
+               EditorSelectionRangeResolver.hasPositiveLengthResolvedRange(cachedRange, textLength: fullText.length) {
                 restoreSelectionWithoutScrolling(cachedRange, in: textView)
                 return fullText.substring(with: cachedRange)
             }
@@ -4216,9 +4216,10 @@ private struct SelectableTextView: UIViewRepresentable {
             textView.attributedText = mutable
             updateEditorLayout(in: textView)
             let newLength = textStorageLength(in: textView)
-            let safeLocation = min(selectedRange.location, newLength)
-            let safeLength = min(selectedRange.length, newLength - safeLocation)
-            let safeRange = NSRange(location: safeLocation, length: safeLength)
+            let safeRange = EditorSelectionRangeResolver.clampedRenderedSelectionRange(
+                selectedRange,
+                textLength: newLength
+            )
             restoreSelectionWithoutScrolling(safeRange, in: textView)
             lastKnownSelectionRange = safeRange
         }
@@ -4253,7 +4254,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
             let fullLength = textStorageLength(in: textView)
             let cachedRange = lastKnownSelectionRange
-            if cachedRange.length > 0, cachedRange.location + cachedRange.length <= fullLength {
+            if EditorSelectionRangeResolver.hasPositiveLengthWithinText(cachedRange, textLength: fullLength) {
                 return cachedRange
             }
 
@@ -4274,7 +4275,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
             let fullLength = textStorageLength(in: textView)
             let cachedRange = lastKnownSelectionRange
-            if cachedRange.length > 0, cachedRange.location + cachedRange.length <= fullLength {
+            if EditorSelectionRangeResolver.hasPositiveLengthWithinText(cachedRange, textLength: fullLength) {
                 restoreSelectionWithoutScrolling(cachedRange, in: textView)
                 return cachedRange
             }
@@ -4325,22 +4326,17 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         private func safeSelectedRange(in textView: UITextView) -> NSRange {
-            let textLength = textStorageLength(in: textView)
-            let selectedRange = textView.selectedRange
-            guard selectedRange.location != NSNotFound else {
-                return NSRange(location: textLength, length: 0)
-            }
-
-            let safeLocation = min(max(selectedRange.location, 0), textLength)
-            let safeLength = min(selectedRange.length, max(textLength - safeLocation, 0))
-            return NSRange(location: safeLocation, length: safeLength)
+            EditorSelectionRangeResolver.clampedSelectionRange(
+                textView.selectedRange,
+                textLength: textStorageLength(in: textView)
+            )
         }
 
         private func isValidSelectionRange(_ range: NSRange, in textView: UITextView) -> Bool {
-            range.location != NSNotFound
-                && range.location >= 0
-                && range.length >= 0
-                && NSMaxRange(range) <= textStorageLength(in: textView)
+            EditorSelectionRangeResolver.isValidRange(
+                range,
+                textLength: textStorageLength(in: textView)
+            )
         }
 
         private func validSessionSelectionRange(in textView: UITextView) -> NSRange? {
