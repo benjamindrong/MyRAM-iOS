@@ -3654,8 +3654,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 ? textView.selectedRange
                 : lastKnownSelectionRange
             let fullText = textView.text as NSString
-            guard cursorRange.location != NSNotFound,
-                  cursorRange.location <= fullText.length else {
+            guard EditorSelectionRangeResolver.isValidRange(cursorRange, textLength: fullText.length) else {
                 _ = onPinSelection("")
                 return
             }
@@ -3678,7 +3677,10 @@ private struct SelectableTextView: UIViewRepresentable {
 
             let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
             mutable.deleteCharacters(in: deletionRange)
-            let caretLocation = min(deletionRange.location, mutable.length)
+            let caretLocation = EditorSelectionRangeResolver.clampedCaretLocation(
+                deletionRange.location,
+                textLength: mutable.length
+            )
             applyAttributedText(mutable, in: textView, selectedRange: NSRange(location: caretLocation, length: 0))
             textView.becomeFirstResponder()
             reportUndoManagerChanged(textView.undoManager)
@@ -4254,7 +4256,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
             let fullLength = textStorageLength(in: textView)
             let cachedRange = lastKnownSelectionRange
-            if EditorSelectionRangeResolver.hasPositiveLengthWithinText(cachedRange, textLength: fullLength) {
+            if EditorSelectionRangeResolver.hasPositiveLengthResolvedRange(cachedRange, textLength: fullLength) {
                 return cachedRange
             }
 
@@ -4275,7 +4277,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
             let fullLength = textStorageLength(in: textView)
             let cachedRange = lastKnownSelectionRange
-            if EditorSelectionRangeResolver.hasPositiveLengthWithinText(cachedRange, textLength: fullLength) {
+            if EditorSelectionRangeResolver.hasPositiveLengthResolvedRange(cachedRange, textLength: fullLength) {
                 restoreSelectionWithoutScrolling(cachedRange, in: textView)
                 return cachedRange
             }

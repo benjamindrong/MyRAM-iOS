@@ -234,11 +234,48 @@ final class MyRAMTests: XCTestCase {
             NSRange(location: 7, length: 2),
             textLength: 8
         ))
+        XCTAssertFalse(EditorSelectionRangeResolver.isValidRange(
+            NSRange(location: 9, length: 0),
+            textLength: 8
+        ))
+        XCTAssertFalse(EditorSelectionRangeResolver.isValidRange(
+            NSRange(location: Int.max - 1, length: 2),
+            textLength: 8
+        ))
     }
 
     func testEditorSelectionRangeResolverAcceptsRangeEndingAtTextLength() {
         XCTAssertTrue(EditorSelectionRangeResolver.isValidRange(
             NSRange(location: 5, length: 3),
+            textLength: 8
+        ))
+    }
+
+    func testEditorSelectionRangeResolverAcceptsCollapsedRangeAtTextEnd() {
+        XCTAssertTrue(EditorSelectionRangeResolver.isValidRange(
+            NSRange(location: 8, length: 0),
+            textLength: 8
+        ))
+    }
+
+    func testEditorSelectionRangeResolverRejectsNegativeTextLength() {
+        XCTAssertFalse(EditorSelectionRangeResolver.isValidRange(
+            NSRange(location: 0, length: 0),
+            textLength: -1
+        ))
+    }
+
+    func testEditorSelectionRangeResolverPositiveLengthRequiresValidNonEmptyRange() {
+        XCTAssertFalse(EditorSelectionRangeResolver.hasPositiveLengthResolvedRange(
+            NSRange(location: 3, length: 0),
+            textLength: 8
+        ))
+        XCTAssertFalse(EditorSelectionRangeResolver.hasPositiveLengthResolvedRange(
+            NSRange(location: Int.max - 1, length: 2),
+            textLength: 8
+        ))
+        XCTAssertTrue(EditorSelectionRangeResolver.hasPositiveLengthResolvedRange(
+            NSRange(location: 3, length: 2),
             textLength: 8
         ))
     }
@@ -250,6 +287,20 @@ final class MyRAMTests: XCTestCase {
         )
 
         XCTAssertEqual(range, NSRange(location: 6, length: 2))
+    }
+
+    func testRenderedSelectionClampPreservesLegacySemanticsDistinctFromCanonicalClamp() {
+        let renderedRange = EditorSelectionRangeResolver.clampedRenderedSelectionRange(
+            NSRange(location: -2, length: 3),
+            textLength: 8
+        )
+        let canonicalRange = EditorSelectionRangeResolver.clampedSelectionRange(
+            NSRange(location: -2, length: 3),
+            textLength: 8
+        )
+
+        XCTAssertEqual(renderedRange, NSRange(location: -2, length: 3))
+        XCTAssertEqual(canonicalRange, NSRange(location: 0, length: 3))
     }
 
     func testChecklistActionNormalizesLegacyPrefixAndTogglesState() {

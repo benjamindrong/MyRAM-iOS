@@ -11,6 +11,10 @@ enum EditorSelectionRangeResolver {
         return NSRange(location: safeLocation, length: safeLength)
     }
 
+    /// Mirrors the historical checklist-rendering selection restore clamp.
+    /// Unlike `clampedSelectionRange`, this intentionally does not normalize
+    /// `NSNotFound` or negative locations. Do not merge these paths without an
+    /// explicit behavior decision.
     static func clampedRenderedSelectionRange(_ range: NSRange, textLength: Int) -> NSRange {
         let safeLocation = min(range.location, textLength)
         let safeLength = min(range.length, textLength - safeLocation)
@@ -22,20 +26,18 @@ enum EditorSelectionRangeResolver {
     }
 
     static func isValidRange(_ range: NSRange, textLength: Int) -> Bool {
-        range.location != NSNotFound
-            && range.location >= 0
-            && range.length >= 0
-            && NSMaxRange(range) <= textLength
-    }
+        guard textLength >= 0,
+              range.location != NSNotFound,
+              range.location >= 0,
+              range.length >= 0,
+              range.location <= textLength else {
+            return false
+        }
 
-    static func hasPositiveLengthWithinText(_ range: NSRange, textLength: Int) -> Bool {
-        range.length > 0
-            && range.location + range.length <= textLength
+        return range.length <= textLength - range.location
     }
 
     static func hasPositiveLengthResolvedRange(_ range: NSRange, textLength: Int) -> Bool {
-        range.location != NSNotFound
-            && range.length > 0
-            && NSMaxRange(range) <= textLength
+        range.length > 0 && isValidRange(range, textLength: textLength)
     }
 }
