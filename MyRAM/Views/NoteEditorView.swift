@@ -2159,34 +2159,6 @@ private struct TopBarActionLayout {
     let overflowActions: [NoteEditorOverflowAction]
 }
 
-struct EditorFormattingState: Equatable {
-    var bold = false
-    var italic = false
-    var underline = false
-    var strikethrough = false
-    var fontSize: CGFloat = EditorTypography.defaultTextFont.pointSize
-    var foregroundColor: UIColor?
-}
-
-struct EditorSelectionFormattingCache {
-    var range = NSRange(location: 0, length: 0)
-    var formattingState: EditorFormattingState?
-    var formattingStateIsDirty = true
-    var formattingStateIsApproximate = false
-
-    mutating func markDirty(range: NSRange) {
-        self.range = range
-        formattingStateIsDirty = true
-    }
-
-    mutating func update(range: NSRange, formattingState: EditorFormattingState, isApproximate: Bool) {
-        self.range = range
-        self.formattingState = formattingState
-        formattingStateIsDirty = false
-        formattingStateIsApproximate = isApproximate
-    }
-}
-
 private struct NoteSharePayload: Identifiable {
     let id = UUID()
     let urls: [URL]
@@ -3569,7 +3541,12 @@ private struct SelectableTextView: UIViewRepresentable {
                 return
             }
 #endif
-            let state = formattingState(from: textView, allowsLargeSelectionScan: allowsLargeSelectionScan)
+            let state = EditorFormattingStateResolver.formattingState(
+                from: textView,
+                selectedRange: effectiveSelectionRange(in: textView),
+                cache: &selectionFormattingCache,
+                allowsLargeSelectionScan: allowsLargeSelectionScan
+            )
             guard state != lastReportedFormattingState else { return }
             lastReportedFormattingState = state
             if isUpdatingUIView {
@@ -3741,160 +3718,6 @@ private struct SelectableTextView: UIViewRepresentable {
                     hasChecklistItems: ChecklistItemEditor.containsChecklistItems(in: textView.text as NSString)
                 )
             ]
-        }
-
-        private func formattingState(
-            from textView: UITextView,
-            allowsLargeSelectionScan: Bool = false
-        ) -> EditorFormattingState {
-            let formattingStateSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
-            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.formattingState", signpostID: formattingStateSignpostID)
-            defer {
-                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.formattingState", signpostID: formattingStateSignpostID)
-            }
-            let range = effectiveSelectionRange(in: textView)
-            let usesLargeSelectionPath = EditorSelectionFormattingPolicy
-                .shouldDeferFullFormattingScan(selectionLength: range.length)
-            let needsFullState = usesLargeSelectionPath && allowsLargeSelectionScan
-            if let cachedState = selectionFormattingCache.formattingState,
-               !selectionFormattingCache.formattingStateIsDirty,
-               NSEqualRanges(selectionFormattingCache.range, range),
-               !(needsFullState && selectionFormattingCache.formattingStateIsApproximate) {
-                return cachedState
-            }
-
-            let state: EditorFormattingState
-            let isApproximate: Bool
-            if usesLargeSelectionPath && !allowsLargeSelectionScan {
-                state = approximateFormattingState(from: textView, range: range)
-                isApproximate = true
-            } else {
-                state = fullFormattingState(from: textView, range: range)
-                isApproximate = false
-            }
-            selectionFormattingCache.update(
-                range: range,
-                formattingState: state,
-                isApproximate: isApproximate
-            )
-            return state
-        }
-
-        private func fullFormattingState(from textView: UITextView, range: NSRange) -> EditorFormattingState {
-            let font = selectedFont(in: textView, range: range)
-            let foregroundColor = selectedForegroundColor(in: textView, range: range)
-            return EditorFormattingState(
-                bold: hasTrait(.traitBold, in: textView, range: range),
-                italic: hasTrait(.traitItalic, in: textView, range: range),
-                underline: hasDecoration(.underlineStyle, in: textView, range: range),
-                strikethrough: hasDecoration(.strikethroughStyle, in: textView, range: range),
-                fontSize: font.pointSize,
-                foregroundColor: foregroundColor
-            )
-        }
-
-        private func approximateFormattingState(
-            from textView: UITextView,
-            range: NSRange
-        ) -> EditorFormattingState {
-            let font = selectedFont(in: textView, range: range)
-            let foregroundColor = selectedForegroundColor(in: textView, range: range)
-            return EditorFormattingState(
-                bold: approximateTrait(.traitBold, in: textView, range: range),
-                italic: approximateTrait(.traitItalic, in: textView, range: range),
-                underline: approximateDecoration(.underlineStyle, in: textView, range: range),
-                strikethrough: approximateDecoration(.strikethroughStyle, in: textView, range: range),
-                fontSize: font.pointSize,
-                foregroundColor: foregroundColor
-            )
-        }
-
-        private func approximateTrait(
-            _ trait: UIFontDescriptor.SymbolicTraits,
-            in textView: UITextView,
-            range: NSRange
-        ) -> Bool {
-            let font = selectedFont(in: textView, range: range)
-            return font.fontDescriptor.symbolicTraits.contains(trait)
-        }
-
-        private func approximateDecoration(
-            _ key: NSAttributedString.Key,
-            in textView: UITextView,
-            range: NSRange
-        ) -> Bool {
-            if range.length == 0 {
-                return (textView.typingAttributes[key] as? Int ?? 0) != 0
-            }
-            if range.location < textView.attributedText.length {
-                return (textView.attributedText.attribute(key, at: range.location, effectiveRange: nil) as? Int ?? 0) != 0
-            }
-            return false
-        }
-
-        private func selectedFont(in textView: UITextView, range: NSRange) -> UIFont {
-            if range.length == 0 {
-                return (textView.typingAttributes[.font] as? UIFont)
-                    ?? textView.font
-                    ?? EditorTypography.defaultTextFont
-            }
-            if range.location < textView.attributedText.length,
-               let font = textView.attributedText.attribute(.font, at: range.location, effectiveRange: nil) as? UIFont {
-                return font
-            }
-            return textView.font ?? EditorTypography.defaultTextFont
-        }
-
-        private func selectedForegroundColor(in textView: UITextView, range: NSRange) -> UIColor? {
-            if range.length == 0 {
-                return textView.typingAttributes[.foregroundColor] as? UIColor
-            }
-            if range.location < textView.attributedText.length {
-                return textView.attributedText.attribute(.foregroundColor, at: range.location, effectiveRange: nil) as? UIColor
-            }
-            return nil
-        }
-
-        private func hasTrait(
-            _ trait: UIFontDescriptor.SymbolicTraits,
-            in textView: UITextView,
-            range: NSRange
-        ) -> Bool {
-            if range.length == 0 {
-                let font = (textView.typingAttributes[.font] as? UIFont)
-                    ?? textView.font
-                    ?? EditorTypography.defaultTextFont
-                return font.fontDescriptor.symbolicTraits.contains(trait)
-            }
-
-            var hasAll = true
-            textView.attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
-                let font = value as? UIFont ?? EditorTypography.defaultTextFont
-                if !font.fontDescriptor.symbolicTraits.contains(trait) {
-                    hasAll = false
-                    stop.pointee = true
-                }
-            }
-            return hasAll
-        }
-
-        private func hasDecoration(
-            _ key: NSAttributedString.Key,
-            in textView: UITextView,
-            range: NSRange
-        ) -> Bool {
-            if range.length == 0 {
-                return (textView.typingAttributes[key] as? Int ?? 0) != 0
-            }
-
-            var hasAll = true
-            textView.attributedText.enumerateAttribute(key, in: range) { value, _, stop in
-                if (value as? Int ?? 0) == 0 {
-                    hasAll = false
-                    stop.pointee = true
-                }
-            }
-            return hasAll
         }
 
         private func toggleFontTrait(_ trait: UIFontDescriptor.SymbolicTraits, in textView: UITextView) {
