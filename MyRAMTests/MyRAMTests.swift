@@ -4473,7 +4473,7 @@ final class MyRAMTests: XCTestCase {
         let firstPinnedID = UUID()
         let secondPinnedID = UUID()
 
-        let matches = NoteSearchMatcher.matches(
+        let matches = EditorSearchMatchResolver.matches(
             in: "Body alpha detail",
             pinnedTexts: [
                 NoteSearchPinnedText(id: firstPinnedID, text: "Pinned beta"),
@@ -4492,7 +4492,7 @@ final class MyRAMTests: XCTestCase {
     func testCurrentNoteSearchUsesOriginalStringRangesForDiacriticInsensitiveBodyMatches() {
         let body = "Cafe planning\nCafé receipt"
 
-        let matches = NoteSearchMatcher.matches(
+        let matches = EditorSearchMatchResolver.matches(
             in: body,
             pinnedTexts: [],
             query: "cafe"
@@ -4503,6 +4503,124 @@ final class MyRAMTests: XCTestCase {
             NSRange(location: 0, length: 4),
             NSRange(location: 14, length: 4)
         ])
+    }
+
+    func testCurrentNoteSearchNormalizesWhitespaceQuery() {
+        XCTAssertEqual(EditorSearchMatchResolver.normalizedQuery("  alpha\n"), "alpha")
+    }
+
+    func testCurrentNoteSearchReturnsNoMatchesForWhitespaceQuery() {
+        let matches = EditorSearchMatchResolver.matches(
+            in: "Body alpha detail",
+            pinnedTexts: [NoteSearchPinnedText(id: UUID(), text: "Pinned alpha")],
+            query: "  \n  "
+        )
+
+        XCTAssertTrue(matches.isEmpty)
+    }
+
+    func testCurrentNoteSearchReturnsNoMatchesWhenQueryIsMissing() {
+        let matches = EditorSearchMatchResolver.matches(
+            in: "Body alpha detail",
+            pinnedTexts: [NoteSearchPinnedText(id: UUID(), text: "Pinned alpha")],
+            query: "invoice"
+        )
+
+        XCTAssertTrue(matches.isEmpty)
+    }
+
+    func testCurrentNoteSearchPreservesPinnedThenBodyOrdering() {
+        let firstPinnedID = UUID()
+        let secondPinnedID = UUID()
+
+        let matches = EditorSearchMatchResolver.matches(
+            in: "Body alpha detail",
+            pinnedTexts: [
+                NoteSearchPinnedText(id: firstPinnedID, text: "Pinned alpha one"),
+                NoteSearchPinnedText(id: secondPinnedID, text: "Pinned alpha two")
+            ],
+            query: "alpha"
+        )
+
+        XCTAssertEqual(matches.map(\.region), [
+            .pinnedText(id: firstPinnedID),
+            .pinnedText(id: secondPinnedID),
+            .body
+        ])
+    }
+
+    func testCurrentNoteSearchPreservesValidSelectedMatch() {
+        let matches = EditorSearchMatchResolver.matches(
+            in: "alpha beta alpha",
+            pinnedTexts: [],
+            query: "alpha"
+        )
+        let selectedID = matches[1].id
+
+        XCTAssertEqual(
+            EditorSearchMatchResolver.resolvedSelectedMatchID(in: matches, selectedMatchID: selectedID),
+            selectedID
+        )
+    }
+
+    func testCurrentNoteSearchFallsBackFromStaleSelectedMatch() {
+        let matches = EditorSearchMatchResolver.matches(
+            in: "alpha beta alpha",
+            pinnedTexts: [],
+            query: "alpha"
+        )
+
+        XCTAssertEqual(
+            EditorSearchMatchResolver.resolvedSelectedMatchID(in: matches, selectedMatchID: "stale"),
+            matches.first?.id
+        )
+    }
+
+    func testCurrentNoteSearchClearsSelectedMatchWhenEmpty() {
+        XCTAssertNil(EditorSearchMatchResolver.resolvedSelectedMatchID(in: [], selectedMatchID: "stale"))
+    }
+
+    func testCurrentNoteSearchNextAndPreviousWrapMatches() {
+        let matches = EditorSearchMatchResolver.matches(
+            in: "alpha beta alpha gamma alpha",
+            pinnedTexts: [],
+            query: "alpha"
+        )
+
+        XCTAssertEqual(EditorSearchMatchResolver.nextMatchIndex(in: matches, selectedMatchID: nil), 0)
+        XCTAssertEqual(EditorSearchMatchResolver.previousMatchIndex(in: matches, selectedMatchID: nil), 2)
+        XCTAssertEqual(EditorSearchMatchResolver.nextMatchIndex(in: matches, selectedMatchID: matches[2].id), 0)
+        XCTAssertEqual(EditorSearchMatchResolver.previousMatchIndex(in: matches, selectedMatchID: matches[0].id), 2)
+        XCTAssertEqual(EditorSearchMatchResolver.matchIndex(in: matches, selectedMatchID: matches[0].id, movingBy: 2), 2)
+        XCTAssertEqual(EditorSearchMatchResolver.matchIndex(in: matches, selectedMatchID: matches[2].id, movingBy: -2), 0)
+    }
+
+    func testCurrentNoteSearchBodyRangeRequiresBodyMatchWithinBounds() {
+        let body = "Body alpha detail"
+        let matches = EditorSearchMatchResolver.matches(
+            in: body,
+            pinnedTexts: [NoteSearchPinnedText(id: UUID(), text: "Pinned alpha")],
+            query: "alpha"
+        )
+
+        XCTAssertNil(EditorSearchMatchResolver.bodyRange(for: matches[0], textLength: body.utf16.count))
+        XCTAssertEqual(
+            EditorSearchMatchResolver.bodyRange(for: matches[1], textLength: body.utf16.count),
+            NSRange(location: 5, length: 5)
+        )
+    }
+
+    func testCurrentNoteSearchBodyRangeRejectsOutOfBoundsRange() {
+        let text = "alpha"
+        let match = NoteSearchMatch(
+            id: "body-3-4",
+            region: .body,
+            plainTextRange: text.startIndex..<text.endIndex,
+            nsRangeInRenderedText: NSRange(location: 3, length: 4),
+            previewText: text
+        )
+
+        XCTAssertNil(EditorSearchMatchResolver.bodyRange(for: match, textLength: text.utf16.count))
     }
 
     private func makeContainer(
