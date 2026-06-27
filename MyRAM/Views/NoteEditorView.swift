@@ -3073,7 +3073,6 @@ private struct SelectableTextView: UIViewRepresentable {
     }
 
     final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
-        private static let searchHighlightLayerName = "MyRAMSearchHighlightLayer"
         var formattingController: TextFormattingController
         var text: Binding<String>
         var richTextContentData: Binding<Data?>
@@ -3102,9 +3101,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var increaseFontSizeToggleToken = 0
         var decreaseFontSizeToggleToken = 0
         var textColorToggleToken = 0
-        private var activeSearchHighlightRange: NSRange?
-        private var activeSearchHighlightRects: [CGRect] = []
-        private var activeSearchHighlightLayers: [CALayer] = []
+        let searchHighlighter = EditorSearchHighlighter()
         private var lastReportedFormattingState: EditorFormattingState?
         private var selectionFormattingCache = EditorSelectionFormattingCache()
         private var sessionSelectionRange: NSRange?
@@ -3295,8 +3292,8 @@ private struct SelectableTextView: UIViewRepresentable {
                 os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.scrollViewDidScroll", signpostID: scrollSignpostID)
             }
             guard let textView = scrollView as? UITextView,
-                  activeSearchHighlightRange != nil else { return }
-            positionSearchHighlightLayers(in: textView)
+                  searchHighlighter.hasActiveHighlight else { return }
+            searchHighlighter.reposition(in: textView)
         }
 
         func textView(
@@ -3533,107 +3530,7 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func applySearchHighlight(_ range: NSRange?, in textView: UITextView) {
-#if DEBUG
-            if EditorSelectionProfiling.disablesSearchHighlights {
-                clearSearchHighlight(in: textView)
-                activeSearchHighlightRange = nil
-                activeSearchHighlightRects = []
-                return
-            }
-#endif
-            let searchHighlightSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
-            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.applySearchHighlight", signpostID: searchHighlightSignpostID)
-            defer {
-                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.applySearchHighlight", signpostID: searchHighlightSignpostID)
-            }
-            if range == activeSearchHighlightRange, hasSearchHighlightLayers(in: textView) {
-                positionSearchHighlightLayers(in: textView)
-                return
-            }
-            clearSearchHighlight(in: textView)
-
-            activeSearchHighlightRange = nil
-            activeSearchHighlightRects = []
-            guard let range,
-                  range.location != NSNotFound,
-                  range.length > 0,
-                  NSMaxRange(range) <= textStorageLength(in: textView) else {
-                return
-            }
-
-            activeSearchHighlightRange = range
-            textView.scrollRangeToVisible(range)
-            drawSearchHighlight(range, in: textView)
-        }
-
-        private func hasSearchHighlightLayers(in textView: UITextView) -> Bool {
-            activeSearchHighlightLayers.contains { $0.superlayer === textView.layer }
-        }
-
-        private func drawSearchHighlight(_ range: NSRange, in textView: UITextView) {
-            let drawSearchHighlightSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
-            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.drawSearchHighlight", signpostID: drawSearchHighlightSignpostID)
-            defer {
-                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.drawSearchHighlight", signpostID: drawSearchHighlightSignpostID)
-            }
-            clearSearchHighlight(in: textView)
-            activeSearchHighlightRects = []
-            textView.layoutManager.ensureLayout(for: textView.textContainer)
-            let glyphRange = textView.layoutManager.glyphRange(
-                forCharacterRange: range,
-                actualCharacterRange: nil
-            )
-            let emptySelection = NSRange(location: NSNotFound, length: 0)
-
-            textView.layoutManager.enumerateEnclosingRects(
-                forGlyphRange: glyphRange,
-                withinSelectedGlyphRange: emptySelection,
-                in: textView.textContainer
-            ) { rect, _ in
-                guard !rect.isEmpty else { return }
-                let highlightLayer = CALayer()
-                highlightLayer.name = Self.searchHighlightLayerName
-                highlightLayer.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.45).cgColor
-                highlightLayer.cornerRadius = 3
-                self.activeSearchHighlightRects.append(rect.insetBy(dx: -2, dy: -1))
-                self.activeSearchHighlightLayers.append(highlightLayer)
-                textView.layer.insertSublayer(highlightLayer, at: 0)
-            }
-            positionSearchHighlightLayers(in: textView)
-        }
-
-        private func clearSearchHighlight(in textView: UITextView) {
-            activeSearchHighlightLayers.forEach { $0.removeFromSuperlayer() }
-            textView.layer.sublayers?
-                .filter { $0.name == Self.searchHighlightLayerName }
-                .forEach { $0.removeFromSuperlayer() }
-            activeSearchHighlightRects = []
-            activeSearchHighlightLayers = []
-        }
-
-        private func positionSearchHighlightLayers(in textView: UITextView) {
-            let positionSearchHighlightSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
-            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.positionSearchHighlightLayers", signpostID: positionSearchHighlightSignpostID)
-            defer {
-                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.positionSearchHighlightLayers", signpostID: positionSearchHighlightSignpostID)
-            }
-            guard activeSearchHighlightLayers.count == activeSearchHighlightRects.count,
-                  activeSearchHighlightLayers.allSatisfy({ $0.superlayer === textView.layer }) else {
-                if let activeSearchHighlightRange {
-                    drawSearchHighlight(activeSearchHighlightRange, in: textView)
-                }
-                return
-            }
-
-            CATransaction.begin()
-            CATransaction.setDisableActions(true)
-            for (layer, rect) in zip(activeSearchHighlightLayers, activeSearchHighlightRects) {
-                layer.frame = rect.offsetBy(
-                    dx: textView.textContainerInset.left - textView.contentOffset.x,
-                    dy: textView.textContainerInset.top - textView.contentOffset.y
-                )
-            }
-            CATransaction.commit()
+            searchHighlighter.apply(range: range, in: textView)
         }
 
         private func syncContent(
