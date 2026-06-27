@@ -1015,15 +1015,11 @@ struct NoteEditorView: View {
     }
 
     private func moveSelectedCurrentNoteMatch(by delta: Int) {
-        let nextIndex = delta < 0
-            ? EditorSearchMatchResolver.previousMatchIndex(
-                in: currentNoteSearchMatches,
-                selectedMatchID: selectedCurrentNoteMatchID
-            )
-            : EditorSearchMatchResolver.nextMatchIndex(
-                in: currentNoteSearchMatches,
-                selectedMatchID: selectedCurrentNoteMatchID
-            )
+        let nextIndex = EditorSearchMatchResolver.matchIndex(
+            in: currentNoteSearchMatches,
+            selectedMatchID: selectedCurrentNoteMatchID,
+            movingBy: delta
+        )
         guard let nextIndex else { return }
         selectedCurrentNoteMatchID = currentNoteSearchMatches[nextIndex].id
     }

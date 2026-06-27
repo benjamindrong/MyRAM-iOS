@@ -75,6 +75,18 @@ enum EditorSearchMatchResolver {
         matchIndex(in: matches, selectedMatchID: selectedMatchID, movingBy: -1)
     }
 
+    static func matchIndex(
+        in matches: [NoteSearchMatch],
+        selectedMatchID: String?,
+        movingBy delta: Int
+    ) -> Int? {
+        guard !matches.isEmpty else { return nil }
+        let currentIndex = selectedMatchID
+            .flatMap { selectedID in matches.firstIndex { $0.id == selectedID } }
+            ?? (delta > 0 ? -1 : 0)
+        return (currentIndex + delta + matches.count) % matches.count
+    }
+
     static func bodyRange(for match: NoteSearchMatch?, textLength: Int) -> NSRange? {
         guard case .body = match?.region,
               let range = match?.nsRangeInRenderedText,
@@ -85,18 +97,6 @@ enum EditorSearchMatchResolver {
         }
 
         return range
-    }
-
-    private static func matchIndex(
-        in matches: [NoteSearchMatch],
-        selectedMatchID: String?,
-        movingBy delta: Int
-    ) -> Int? {
-        guard !matches.isEmpty else { return nil }
-        let currentIndex = selectedMatchID
-            .flatMap { selectedID in matches.firstIndex { $0.id == selectedID } }
-            ?? (delta > 0 ? -1 : 0)
-        return (currentIndex + delta + matches.count) % matches.count
     }
 
     private static func matches(

@@ -4591,6 +4591,8 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(EditorSearchMatchResolver.previousMatchIndex(in: matches, selectedMatchID: nil), 2)
         XCTAssertEqual(EditorSearchMatchResolver.nextMatchIndex(in: matches, selectedMatchID: matches[2].id), 0)
         XCTAssertEqual(EditorSearchMatchResolver.previousMatchIndex(in: matches, selectedMatchID: matches[0].id), 2)
+        XCTAssertEqual(EditorSearchMatchResolver.matchIndex(in: matches, selectedMatchID: matches[0].id, movingBy: 2), 2)
+        XCTAssertEqual(EditorSearchMatchResolver.matchIndex(in: matches, selectedMatchID: matches[2].id, movingBy: -2), 0)
     }
 
     func testCurrentNoteSearchBodyRangeRequiresBodyMatchWithinBounds() {
