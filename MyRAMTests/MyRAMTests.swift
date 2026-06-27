@@ -3620,6 +3620,261 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(cache.formattingStateIsApproximate)
     }
 
+    func testFormattingStateResolverUsesTypingAttributesForCollapsedCaret() throws {
+        let typingFont = UIFont.boldSystemFont(ofSize: 19)
+        let typingColor = UIColor.systemGreen
+        var cache = EditorSelectionFormattingCache()
+
+        let state = EditorFormattingStateResolver.formattingState(
+            attributedText: NSAttributedString(string: "Body"),
+            selectedRange: NSRange(location: 2, length: 0),
+            typingAttributes: [
+                .font: typingFont,
+                .foregroundColor: typingColor,
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .strikethroughStyle: NSUnderlineStyle.single.rawValue
+            ],
+            fallbackFont: UIFont.systemFont(ofSize: 17),
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+
+        XCTAssertTrue(state.bold)
+        XCTAssertFalse(state.italic)
+        XCTAssertTrue(state.underline)
+        XCTAssertTrue(state.strikethrough)
+        XCTAssertEqual(state.fontSize, 19, accuracy: 0.1)
+        XCTAssertTrue(try XCTUnwrap(state.foregroundColor).isEqual(typingColor))
+    }
+
+    func testFormattingStateResolverRequiresAllSelectedCharactersToShareFontTrait() {
+        let attributedText = NSMutableAttributedString(string: "Bold mix")
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.boldSystemFont(ofSize: 17),
+            range: NSRange(location: 0, length: 4)
+        )
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.systemFont(ofSize: 17),
+            range: NSRange(location: 4, length: 4)
+        )
+        var cache = EditorSelectionFormattingCache()
+
+        let mixedState = EditorFormattingStateResolver.formattingState(
+            attributedText: attributedText,
+            selectedRange: NSRange(location: 0, length: attributedText.length),
+            typingAttributes: [:],
+            fallbackFont: UIFont.systemFont(ofSize: 17),
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+
+        cache.markDirty(range: NSRange(location: 0, length: 4))
+        let boldState = EditorFormattingStateResolver.formattingState(
+            attributedText: attributedText,
+            selectedRange: NSRange(location: 0, length: 4),
+            typingAttributes: [:],
+            fallbackFont: UIFont.systemFont(ofSize: 17),
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+
+        XCTAssertFalse(mixedState.bold)
+        XCTAssertTrue(boldState.bold)
+    }
+
+    func testFormattingStateResolverRequiresAllSelectedCharactersToShareDecorations() {
+        let attributedText = NSMutableAttributedString(string: "Marked up")
+        attributedText.addAttribute(
+            .underlineStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 0, length: 6)
+        )
+        attributedText.addAttribute(
+            .strikethroughStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 0, length: 6)
+        )
+        var cache = EditorSelectionFormattingCache()
+
+        let mixedState = EditorFormattingStateResolver.formattingState(
+            attributedText: attributedText,
+            selectedRange: NSRange(location: 0, length: attributedText.length),
+            typingAttributes: [:],
+            fallbackFont: UIFont.systemFont(ofSize: 17),
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+
+        cache.markDirty(range: NSRange(location: 0, length: 6))
+        let decoratedState = EditorFormattingStateResolver.formattingState(
+            attributedText: attributedText,
+            selectedRange: NSRange(location: 0, length: 6),
+            typingAttributes: [:],
+            fallbackFont: UIFont.systemFont(ofSize: 17),
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+
+        XCTAssertFalse(mixedState.underline)
+        XCTAssertFalse(mixedState.strikethrough)
+        XCTAssertTrue(decoratedState.underline)
+        XCTAssertTrue(decoratedState.strikethrough)
+    }
+
+    func testFormattingStateResolverUsesLeadingSelectedFontAndColor() throws {
+        let attributedText = NSMutableAttributedString(string: "Red blue")
+        attributedText.addAttributes(
+            [
+                .font: UIFont.systemFont(ofSize: 24),
+                .foregroundColor: UIColor.systemRed
+            ],
+            range: NSRange(location: 0, length: 3)
+        )
+        attributedText.addAttributes(
+            [
+                .font: UIFont.systemFont(ofSize: 12),
+                .foregroundColor: UIColor.systemBlue
+            ],
+            range: NSRange(location: 4, length: 4)
+        )
+        var cache = EditorSelectionFormattingCache()
+
+        let state = EditorFormattingStateResolver.formattingState(
+            attributedText: attributedText,
+            selectedRange: NSRange(location: 0, length: attributedText.length),
+            typingAttributes: [:],
+            fallbackFont: UIFont.systemFont(ofSize: 17),
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+
+        XCTAssertEqual(state.fontSize, 24, accuracy: 0.1)
+        XCTAssertTrue(try XCTUnwrap(state.foregroundColor).isEqual(UIColor.systemRed))
+    }
+
+    func testFormattingStateResolverApproximateLargeSelectionSamplesLeadingState() {
+        let text = String(repeating: "a", count: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold + 2)
+        let attributedText = NSMutableAttributedString(string: text)
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.boldSystemFont(ofSize: 17),
+            range: NSRange(location: 0, length: 1)
+        )
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.systemFont(ofSize: 17),
+            range: NSRange(location: 1, length: attributedText.length - 1)
+        )
+        var cache = EditorSelectionFormattingCache()
+
+        let state = EditorFormattingStateResolver.formattingState(
+            attributedText: attributedText,
+            selectedRange: NSRange(location: 0, length: attributedText.length),
+            typingAttributes: [:],
+            fallbackFont: UIFont.systemFont(ofSize: 17),
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+
+        XCTAssertTrue(state.bold)
+        XCTAssertTrue(cache.formattingStateIsApproximate)
+    }
+
+    func testFormattingStateResolverFallsBackForCollapsedOutOfBoundsSelection() {
+        var cache = EditorSelectionFormattingCache()
+        let fallbackFont = UIFont.systemFont(ofSize: 21)
+
+        let state = EditorFormattingStateResolver.formattingState(
+            attributedText: NSAttributedString(string: "Body"),
+            selectedRange: NSRange(location: 99, length: 0),
+            typingAttributes: [:],
+            fallbackFont: fallbackFont,
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+
+        XCTAssertFalse(state.bold)
+        XCTAssertFalse(state.italic)
+        XCTAssertFalse(state.underline)
+        XCTAssertFalse(state.strikethrough)
+        XCTAssertEqual(state.fontSize, 21, accuracy: 0.1)
+        XCTAssertNil(state.foregroundColor)
+    }
+
+    func testFormattingStateResolverReturnsCachedStateForCleanMatchingSelection() {
+        let attributedText = NSMutableAttributedString(string: "Body")
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.boldSystemFont(ofSize: 17),
+            range: NSRange(location: 0, length: attributedText.length)
+        )
+        let range = NSRange(location: 0, length: attributedText.length)
+        var cache = EditorSelectionFormattingCache()
+
+        let firstState = EditorFormattingStateResolver.formattingState(
+            attributedText: attributedText,
+            selectedRange: range,
+            typingAttributes: [:],
+            fallbackFont: UIFont.systemFont(ofSize: 17),
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.systemFont(ofSize: 17),
+            range: range
+        )
+        let cachedState = EditorFormattingStateResolver.formattingState(
+            attributedText: attributedText,
+            selectedRange: range,
+            typingAttributes: [:],
+            fallbackFont: UIFont.systemFont(ofSize: 17),
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+
+        XCTAssertTrue(firstState.bold)
+        XCTAssertEqual(cachedState, firstState)
+    }
+
+    func testFormattingStateResolverRecomputesDirtyCache() {
+        let attributedText = NSMutableAttributedString(string: "Body")
+        let range = NSRange(location: 0, length: attributedText.length)
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.boldSystemFont(ofSize: 17),
+            range: range
+        )
+        var cache = EditorSelectionFormattingCache()
+
+        _ = EditorFormattingStateResolver.formattingState(
+            attributedText: attributedText,
+            selectedRange: range,
+            typingAttributes: [:],
+            fallbackFont: UIFont.systemFont(ofSize: 17),
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.systemFont(ofSize: 17),
+            range: range
+        )
+        cache.markDirty(range: range)
+        let recomputedState = EditorFormattingStateResolver.formattingState(
+            attributedText: attributedText,
+            selectedRange: range,
+            typingAttributes: [:],
+            fallbackFont: UIFont.systemFont(ofSize: 17),
+            allowsLargeSelectionScan: false,
+            cache: &cache
+        )
+
+        XCTAssertFalse(recomputedState.bold)
+    }
+
     func testTextPlacementResolverUsesLeadingBlankLineCaret() {
         let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
         textView.font = UIFont.systemFont(ofSize: 20)
