@@ -505,13 +505,17 @@ struct NoteEditorView: View {
     }
 
     private var selectedCurrentNoteMatch: NoteSearchMatch? {
-        guard let selectedCurrentNoteMatchID else { return nil }
-        return currentNoteSearchMatches.first { $0.id == selectedCurrentNoteMatchID }
+        EditorSearchMatchResolver.resolvedSelectedMatch(
+            in: currentNoteSearchMatches,
+            selectedMatchID: selectedCurrentNoteMatchID
+        )
     }
 
     private var selectedBodySearchRange: NSRange? {
-        guard case .body = selectedCurrentNoteMatch?.region else { return nil }
-        return selectedCurrentNoteMatch?.nsRangeInRenderedText
+        EditorSearchMatchResolver.bodyRange(
+            for: selectedCurrentNoteMatch,
+            textLength: content.utf16.count
+        )
     }
 
     private var selectedPinnedTextSearchID: UUID? {
@@ -976,7 +980,7 @@ struct NoteEditorView: View {
         currentNoteSearchDebounceTask = Task {
             try? await Task.sleep(nanoseconds: 180_000_000)
             guard !Task.isCancelled else { return }
-            let matches = NoteSearchMatcher.matches(
+            let matches = EditorSearchMatchResolver.matches(
                 in: bodyText,
                 pinnedTexts: pinnedTexts,
                 query: query
@@ -990,17 +994,10 @@ struct NoteEditorView: View {
     }
 
     private func reconcileSelectedCurrentNoteMatch() {
-        guard !currentNoteSearchMatches.isEmpty else {
-            selectedCurrentNoteMatchID = nil
-            return
-        }
-
-        if let selectedCurrentNoteMatchID,
-           currentNoteSearchMatches.contains(where: { $0.id == selectedCurrentNoteMatchID }) {
-            return
-        }
-
-        selectedCurrentNoteMatchID = currentNoteSearchMatches.first?.id
+        selectedCurrentNoteMatchID = EditorSearchMatchResolver.resolvedSelectedMatchID(
+            in: currentNoteSearchMatches,
+            selectedMatchID: selectedCurrentNoteMatchID
+        )
     }
 
     private func selectFirstCurrentNoteMatchIfNeeded() {
@@ -1018,11 +1015,16 @@ struct NoteEditorView: View {
     }
 
     private func moveSelectedCurrentNoteMatch(by delta: Int) {
-        guard !currentNoteSearchMatches.isEmpty else { return }
-        let currentIndex = selectedCurrentNoteMatchID
-            .flatMap { selectedID in currentNoteSearchMatches.firstIndex { $0.id == selectedID } }
-            ?? (delta > 0 ? -1 : 0)
-        let nextIndex = (currentIndex + delta + currentNoteSearchMatches.count) % currentNoteSearchMatches.count
+        let nextIndex = delta < 0
+            ? EditorSearchMatchResolver.previousMatchIndex(
+                in: currentNoteSearchMatches,
+                selectedMatchID: selectedCurrentNoteMatchID
+            )
+            : EditorSearchMatchResolver.nextMatchIndex(
+                in: currentNoteSearchMatches,
+                selectedMatchID: selectedCurrentNoteMatchID
+            )
+        guard let nextIndex else { return }
         selectedCurrentNoteMatchID = currentNoteSearchMatches[nextIndex].id
     }
 
@@ -2186,106 +2188,6 @@ struct EditorSelectionFormattingCache {
         self.formattingState = formattingState
         formattingStateIsDirty = false
         formattingStateIsApproximate = isApproximate
-    }
-}
-
-enum NoteSearchRegion: Equatable {
-    case pinnedText(id: UUID)
-    case body
-}
-
-struct NoteSearchMatch: Identifiable, Equatable {
-    let id: String
-    let region: NoteSearchRegion
-    let plainTextRange: Range<String.Index>
-    let nsRangeInRenderedText: NSRange?
-    let previewText: String
-}
-
-struct NoteSearchPinnedText {
-    let id: UUID
-    let text: String
-}
-
-enum NoteSearchMatcher {
-    static func matches(
-        in bodyText: String,
-        pinnedTexts: [NoteSearchPinnedText],
-        query: String
-    ) -> [NoteSearchMatch] {
-        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedQuery.isEmpty else { return [] }
-
-        let pinnedMatches = pinnedTexts.flatMap { pinnedText in
-            matches(
-                in: pinnedText.text,
-                query: trimmedQuery,
-                region: .pinnedText(id: pinnedText.id),
-                idPrefix: "pinned-\(pinnedText.id.uuidString)",
-                includesRenderedRange: false
-            )
-        }
-
-        let bodyMatches = matches(
-            in: bodyText,
-            query: trimmedQuery,
-            region: .body,
-            idPrefix: "body",
-            includesRenderedRange: true
-        )
-
-        return pinnedMatches + bodyMatches
-    }
-
-    private static func matches(
-        in text: String,
-        query: String,
-        region: NoteSearchRegion,
-        idPrefix: String,
-        includesRenderedRange: Bool
-    ) -> [NoteSearchMatch] {
-        var results: [NoteSearchMatch] = []
-        var searchStart = text.startIndex
-
-        while searchStart < text.endIndex,
-              let range = text.range(
-                of: query,
-                options: [.caseInsensitive, .diacriticInsensitive],
-                range: searchStart..<text.endIndex
-              ) {
-            let nsRange = NSRange(range, in: text)
-            results.append(NoteSearchMatch(
-                id: "\(idPrefix)-\(nsRange.location)-\(nsRange.length)",
-                region: region,
-                plainTextRange: range,
-                nsRangeInRenderedText: includesRenderedRange ? nsRange : nil,
-                previewText: preview(in: text, matchRange: range)
-            ))
-
-            searchStart = range.upperBound < text.endIndex
-                ? text.index(after: range.lowerBound)
-                : text.endIndex
-        }
-
-        return results
-    }
-
-    private static func preview(in text: String, matchRange: Range<String.Index>) -> String {
-        let contextLength = 32
-        let lower = text.index(
-            matchRange.lowerBound,
-            offsetBy: -contextLength,
-            limitedBy: text.startIndex
-        ) ?? text.startIndex
-        let upper = text.index(
-            matchRange.upperBound,
-            offsetBy: contextLength,
-            limitedBy: text.endIndex
-        ) ?? text.endIndex
-
-        return String(text[lower..<upper])
-            .replacingOccurrences(of: "\n", with: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
