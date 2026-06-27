@@ -81,9 +81,7 @@ final class EditorSearchHighlighter {
 
     static func validHighlightRange(_ range: NSRange?, textLength: Int) -> NSRange? {
         guard let range,
-              range.location != NSNotFound,
-              range.length > 0,
-              NSMaxRange(range) <= textLength else {
+              EditorSelectionRangeResolver.hasPositiveLengthResolvedRange(range, textLength: textLength) else {
             return nil
         }
         return range

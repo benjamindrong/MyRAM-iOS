@@ -84,7 +84,10 @@ enum ChecklistItemEditor {
         selection: NSRange
     ) -> NSRange {
         let text = attributedText.string as NSString
-        let clampedSelectionLocation = min(max(selection.location, 0), text.length)
+        let clampedSelectionLocation = EditorSelectionRangeResolver.clampedCaretLocation(
+            selection.location,
+            textLength: text.length
+        )
         let lineRangeWithNewline = text.lineRange(for: NSRange(location: clampedSelectionLocation, length: 0))
         let lineRange = normalizedLineRange(from: lineRangeWithNewline, in: text)
         let line = text.substring(with: lineRange)
@@ -129,7 +132,13 @@ enum ChecklistItemEditor {
         }
 
         let newLength = attributedText.length
-        return NSRange(location: min(max(adjustedLocation, 0), newLength), length: 0)
+        return NSRange(
+            location: EditorSelectionRangeResolver.clampedCaretLocation(
+                adjustedLocation,
+                textLength: newLength
+            ),
+            length: 0
+        )
     }
 
     @discardableResult
