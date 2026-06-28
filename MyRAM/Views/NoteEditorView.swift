@@ -3248,8 +3248,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func adjustFontSize(in textView: UITextView, by delta: CGFloat) {
             let selectedRange = formattingActionRange(in: textView)
-            let commandPlan = EditorFormattingCommandResolver.fontSizePlan(range: selectedRange, delta: delta)
-            guard case let .fontSize(fontSizePlan) = commandPlan else { return }
+            let fontSizePlan = EditorFormattingCommandResolver.fontSizePlan(range: selectedRange, delta: delta)
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
@@ -3289,12 +3288,11 @@ private struct SelectableTextView: UIViewRepresentable {
             usesDefaultColor: Bool = false
         ) {
             let selectedRange = formattingActionRange(in: textView)
-            let commandPlan = EditorFormattingCommandResolver.colorPlan(
+            let colorPlan = EditorFormattingCommandResolver.colorPlan(
                 range: selectedRange,
                 color: color,
                 usesDefaultColor: usesDefaultColor
             )
-            guard case let .color(colorPlan) = commandPlan else { return }
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
@@ -3739,12 +3737,11 @@ private struct SelectableTextView: UIViewRepresentable {
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
                     ?? EditorTypography.defaultTextFont
-                let commandPlan = EditorFormattingCommandResolver.collapsedTraitPlan(
+                let traitPlan = EditorFormattingCommandResolver.collapsedTraitPlan(
                     range: selectedRange,
                     baseFont: baseFont,
                     trait: trait
                 )
-                guard case let .trait(traitPlan) = commandPlan else { return }
                 typingAttributes[.font] = EditorFormattingCommandResolver.fontBySettingTrait(
                     on: baseFont,
                     trait: traitPlan.trait,
@@ -3757,12 +3754,11 @@ private struct SelectableTextView: UIViewRepresentable {
             }
 
             let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
-            let commandPlan = EditorFormattingCommandResolver.traitPlan(
+            let traitPlan = EditorFormattingCommandResolver.traitPlan(
                 in: mutable,
                 range: selectedRange,
                 trait: trait
             )
-            guard case let .trait(traitPlan) = commandPlan else { return }
             mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
                 let baseFont = (value as? UIFont)
                     ?? textView.font
@@ -3786,12 +3782,11 @@ private struct SelectableTextView: UIViewRepresentable {
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
                 let currentValue = typingAttributes[key] as? Int ?? 0
-                let commandPlan = EditorFormattingCommandResolver.collapsedDecorationPlan(
+                let decorationPlan = EditorFormattingCommandResolver.collapsedDecorationPlan(
                     range: selectedRange,
                     key: key,
                     currentValue: currentValue
                 )
-                guard case let .decoration(decorationPlan) = commandPlan else { return }
                 typingAttributes[decorationPlan.styleKey] = decorationPlan.shouldApply
                     ? NSUnderlineStyle.single.rawValue
                     : 0
@@ -3809,12 +3804,11 @@ private struct SelectableTextView: UIViewRepresentable {
             }
 
             let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
-            let commandPlan = EditorFormattingCommandResolver.decorationPlan(
+            let decorationPlan = EditorFormattingCommandResolver.decorationPlan(
                 in: mutable,
                 range: selectedRange,
                 key: key
             )
-            guard case let .decoration(decorationPlan) = commandPlan else { return }
             let value = decorationPlan.shouldApply ? NSUnderlineStyle.single.rawValue : 0
             mutable.addAttribute(decorationPlan.styleKey, value: value, range: selectedRange)
             if let colorKey = decorationPlan.colorKey {

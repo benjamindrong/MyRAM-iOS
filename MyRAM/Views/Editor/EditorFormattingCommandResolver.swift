@@ -1,13 +1,6 @@
 import UIKit
 
 // Plans describe formatting intent only; the editor coordinator owns every mutation side effect.
-enum EditorFormattingCommandPlan: Equatable {
-    case trait(EditorFormattingTraitPlan)
-    case decoration(EditorFormattingDecorationPlan)
-    case fontSize(EditorFormattingFontSizePlan)
-    case color(EditorFormattingColorPlan)
-}
-
 struct EditorFormattingTraitPlan: Equatable {
     let range: NSRange
     let trait: UIFontDescriptor.SymbolicTraits
@@ -40,24 +33,24 @@ enum EditorFormattingCommandResolver {
         in attributedText: NSAttributedString,
         range: NSRange,
         trait: UIFontDescriptor.SymbolicTraits
-    ) -> EditorFormattingCommandPlan {
-        .trait(EditorFormattingTraitPlan(
+    ) -> EditorFormattingTraitPlan {
+        EditorFormattingTraitPlan(
             range: range,
             trait: trait,
             shouldApply: shouldApplyFontTrait(in: attributedText, range: range, trait: trait)
-        ))
+        )
     }
 
     static func collapsedTraitPlan(
         range: NSRange,
         baseFont: UIFont,
         trait: UIFontDescriptor.SymbolicTraits
-    ) -> EditorFormattingCommandPlan {
-        .trait(EditorFormattingTraitPlan(
+    ) -> EditorFormattingTraitPlan {
+        EditorFormattingTraitPlan(
             range: range,
             trait: trait,
             shouldApply: !baseFont.fontDescriptor.symbolicTraits.contains(trait)
-        ))
+        )
     }
 
     static func shouldApplyFontTrait(
@@ -120,8 +113,8 @@ enum EditorFormattingCommandResolver {
         return baseFont
     }
 
-    static func fontSizePlan(range: NSRange, delta: CGFloat) -> EditorFormattingCommandPlan {
-        .fontSize(EditorFormattingFontSizePlan(range: range, delta: delta))
+    static func fontSizePlan(range: NSRange, delta: CGFloat) -> EditorFormattingFontSizePlan {
+        EditorFormattingFontSizePlan(range: range, delta: delta)
     }
 
     static func adjustedFontSize(from baseFont: UIFont, delta: CGFloat) -> UIFont {
@@ -133,26 +126,26 @@ enum EditorFormattingCommandResolver {
         in attributedText: NSAttributedString,
         range: NSRange,
         key: NSAttributedString.Key
-    ) -> EditorFormattingCommandPlan {
-        .decoration(EditorFormattingDecorationPlan(
+    ) -> EditorFormattingDecorationPlan {
+        EditorFormattingDecorationPlan(
             range: range,
             styleKey: key,
             colorKey: decorationColorKey(for: key),
             shouldApply: shouldApplyDecoration(in: attributedText, range: range, key: key)
-        ))
+        )
     }
 
     static func collapsedDecorationPlan(
         range: NSRange,
         key: NSAttributedString.Key,
         currentValue: Int
-    ) -> EditorFormattingCommandPlan {
-        .decoration(EditorFormattingDecorationPlan(
+    ) -> EditorFormattingDecorationPlan {
+        EditorFormattingDecorationPlan(
             range: range,
             styleKey: key,
             colorKey: decorationColorKey(for: key),
             shouldApply: currentValue == 0
-        ))
+        )
     }
 
     static func decorationColorKey(for key: NSAttributedString.Key) -> NSAttributedString.Key? {
@@ -186,11 +179,11 @@ enum EditorFormattingCommandResolver {
         range: NSRange,
         color: UIColor?,
         usesDefaultColor: Bool
-    ) -> EditorFormattingCommandPlan {
-        .color(EditorFormattingColorPlan(
+    ) -> EditorFormattingColorPlan {
+        EditorFormattingColorPlan(
             range: range,
             color: color,
             usesDefaultColor: usesDefaultColor
-        ))
+        )
     }
 }

@@ -3911,15 +3911,12 @@ final class MyRAMTests: XCTestCase {
             range: NSRange(location: 4, length: 4)
         )
 
-        let commandPlan = EditorFormattingCommandResolver.traitPlan(
+        let traitPlan = EditorFormattingCommandResolver.traitPlan(
             in: attributedText,
             range: NSRange(location: 0, length: attributedText.length),
             trait: .traitBold
         )
 
-        guard case let .trait(traitPlan) = commandPlan else {
-            return XCTFail("Expected trait plan")
-        }
         XCTAssertEqual(traitPlan.range, NSRange(location: 0, length: attributedText.length))
         XCTAssertEqual(traitPlan.trait, .traitBold)
         XCTAssertTrue(traitPlan.shouldApply)
@@ -3933,15 +3930,12 @@ final class MyRAMTests: XCTestCase {
             range: NSRange(location: 0, length: attributedText.length)
         )
 
-        let commandPlan = EditorFormattingCommandResolver.traitPlan(
+        let traitPlan = EditorFormattingCommandResolver.traitPlan(
             in: attributedText,
             range: NSRange(location: 0, length: attributedText.length),
             trait: .traitBold
         )
 
-        guard case let .trait(traitPlan) = commandPlan else {
-            return XCTFail("Expected trait plan")
-        }
         XCTAssertFalse(traitPlan.shouldApply)
     }
 
@@ -3953,15 +3947,12 @@ final class MyRAMTests: XCTestCase {
             range: NSRange(location: 0, length: 6)
         )
 
-        let commandPlan = EditorFormattingCommandResolver.traitPlan(
+        let traitPlan = EditorFormattingCommandResolver.traitPlan(
             in: attributedText,
             range: NSRange(location: 0, length: attributedText.length),
             trait: .traitItalic
         )
 
-        guard case let .trait(traitPlan) = commandPlan else {
-            return XCTFail("Expected trait plan")
-        }
         XCTAssertTrue(traitPlan.shouldApply)
     }
 
@@ -3973,15 +3964,12 @@ final class MyRAMTests: XCTestCase {
             range: NSRange(location: 0, length: 9)
         )
 
-        let commandPlan = EditorFormattingCommandResolver.decorationPlan(
+        let decorationPlan = EditorFormattingCommandResolver.decorationPlan(
             in: attributedText,
             range: NSRange(location: 0, length: attributedText.length),
             key: .underlineStyle
         )
 
-        guard case let .decoration(decorationPlan) = commandPlan else {
-            return XCTFail("Expected decoration plan")
-        }
         XCTAssertEqual(decorationPlan.styleKey, .underlineStyle)
         XCTAssertEqual(decorationPlan.colorKey, .underlineColor)
         XCTAssertTrue(decorationPlan.shouldApply)
@@ -3995,15 +3983,12 @@ final class MyRAMTests: XCTestCase {
             range: NSRange(location: 0, length: attributedText.length)
         )
 
-        let commandPlan = EditorFormattingCommandResolver.decorationPlan(
+        let decorationPlan = EditorFormattingCommandResolver.decorationPlan(
             in: attributedText,
             range: NSRange(location: 0, length: attributedText.length),
             key: .strikethroughStyle
         )
 
-        guard case let .decoration(decorationPlan) = commandPlan else {
-            return XCTFail("Expected decoration plan")
-        }
         XCTAssertEqual(decorationPlan.styleKey, .strikethroughStyle)
         XCTAssertEqual(decorationPlan.colorKey, .strikethroughColor)
         XCTAssertFalse(decorationPlan.shouldApply)
@@ -4070,15 +4055,11 @@ final class MyRAMTests: XCTestCase {
             usesDefaultColor: true
         )
 
-        guard case let .color(explicitColorPlan) = explicitPlan,
-              case let .color(defaultColorPlan) = defaultPlan else {
-            return XCTFail("Expected color plans")
-        }
-        XCTAssertEqual(explicitColorPlan.range, range)
-        XCTAssertTrue(try XCTUnwrap(explicitColorPlan.color).isEqual(UIColor.systemRed))
-        XCTAssertFalse(explicitColorPlan.usesDefaultColor)
-        XCTAssertNil(defaultColorPlan.color)
-        XCTAssertTrue(defaultColorPlan.usesDefaultColor)
+        XCTAssertEqual(explicitPlan.range, range)
+        XCTAssertTrue(try XCTUnwrap(explicitPlan.color).isEqual(UIColor.systemRed))
+        XCTAssertFalse(explicitPlan.usesDefaultColor)
+        XCTAssertNil(defaultPlan.color)
+        XCTAssertTrue(defaultPlan.usesDefaultColor)
     }
 
     func testFormattingCommandResolverCollapsedCaretPlansPreserveToggleSemantics() {
@@ -4093,13 +4074,9 @@ final class MyRAMTests: XCTestCase {
             currentValue: 0
         )
 
-        guard case let .trait(traitPlan) = boldPlan,
-              case let .decoration(underlinePlan) = decorationPlan else {
-            return XCTFail("Expected collapsed-caret plans")
-        }
-        XCTAssertFalse(traitPlan.shouldApply)
-        XCTAssertTrue(underlinePlan.shouldApply)
-        XCTAssertEqual(underlinePlan.colorKey, .underlineColor)
+        XCTAssertFalse(boldPlan.shouldApply)
+        XCTAssertTrue(decorationPlan.shouldApply)
+        XCTAssertEqual(decorationPlan.colorKey, .underlineColor)
     }
 
     func testTextPlacementResolverUsesLeadingBlankLineCaret() {
