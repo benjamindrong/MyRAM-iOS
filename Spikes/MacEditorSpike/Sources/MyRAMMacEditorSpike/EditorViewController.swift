@@ -2,6 +2,7 @@ import AppKit
 
 final class EditorViewController: NSViewController {
     private let content: NSAttributedString
+    private weak var textView: NSTextView?
 
     init(content: NSAttributedString) {
         self.content = content
@@ -41,6 +42,12 @@ final class EditorViewController: NSViewController {
         textView.textStorage?.setAttributedString(content)
 
         scrollView.documentView = textView
+        self.textView = textView
         view = scrollView
+    }
+
+    override func viewDidAppear() {
+        super.viewDidAppear()
+        view.window?.makeFirstResponder(textView)
     }
 }

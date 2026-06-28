@@ -8,6 +8,12 @@ Run the spike:
 swift run MyRAMMacEditorSpike
 ```
 
+Run as a foreground macOS app bundle:
+
+```sh
+Scripts/run-app-bundle.sh
+```
+
 Run tests:
 
 ```sh
