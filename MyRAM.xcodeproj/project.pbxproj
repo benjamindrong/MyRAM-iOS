@@ -24,6 +24,9 @@
 		BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000002 /* MyRAMMacApp.swift */; };
 		BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000003 /* MyRAMMacRootView.swift */; };
 		BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
+		BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000001 /* MacNoteEditorView.swift */; };
+		BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000002 /* MacTextViewRepresentable.swift */; };
+		BCA106010000000000000003 /* MacEditorSampleDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000003 /* MacEditorSampleDocument.swift */; };
 		BCB610022FEC610000610061 /* DebugDemoDataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */; };
 		BCF104022FF1040000000104 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D0B2EA5447D00F2D0AA /* Note.swift */; };
@@ -94,6 +97,9 @@
 		BCA105020000000000000001 /* MyRAMMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyRAMMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BCA105020000000000000002 /* MyRAMMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacApp.swift; sourceTree = "<group>"; };
 		BCA105020000000000000003 /* MyRAMMacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacRootView.swift; sourceTree = "<group>"; };
+		BCA106020000000000000001 /* MacNoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteEditorView.swift; sourceTree = "<group>"; };
+		BCA106020000000000000002 /* MacTextViewRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTextViewRepresentable.swift; sourceTree = "<group>"; };
+		BCA106020000000000000003 /* MacEditorSampleDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSampleDocument.swift; sourceTree = "<group>"; };
 		BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDemoDataGenerator.swift; sourceTree = "<group>"; };
 		BCCAFE012FEE000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BCF104012FF1040000000104 /* MyRAMPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMPlatform.swift; sourceTree = "<group>"; };
@@ -217,6 +223,9 @@
 			children = (
 				BCA105020000000000000002 /* MyRAMMacApp.swift */,
 				BCA105020000000000000003 /* MyRAMMacRootView.swift */,
+				BCA106020000000000000001 /* MacNoteEditorView.swift */,
+				BCA106020000000000000002 /* MacTextViewRepresentable.swift */,
+				BCA106020000000000000003 /* MacEditorSampleDocument.swift */,
 			);
 			path = Mac;
 			sourceTree = "<group>";
@@ -541,6 +550,9 @@
 			files = (
 				BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */,
 				BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */,
+				BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */,
+				BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */,
+				BCA106010000000000000003 /* MacEditorSampleDocument.swift in Sources */,
 				BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
