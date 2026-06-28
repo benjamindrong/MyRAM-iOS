@@ -21,6 +21,9 @@
 		BC9F1BC32EA47D310045FD72 /* MyRAMTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BC22EA47D310045FD72 /* MyRAMTests.swift */; };
 		BC9F1BCD2EA47D310045FD72 /* MyRAMUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCC2EA47D310045FD72 /* MyRAMUITests.swift */; };
 		BC9F1BCF2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */; };
+		BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000002 /* MyRAMMacApp.swift */; };
+		BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000003 /* MyRAMMacRootView.swift */; };
+		BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCB610022FEC610000610061 /* DebugDemoDataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */; };
 		BCF104022FF1040000000104 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D0B2EA5447D00F2D0AA /* Note.swift */; };
@@ -87,6 +90,9 @@
 		BC9F1BC82EA47D310045FD72 /* MyRAMUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyRAMUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BC9F1BCC2EA47D310045FD72 /* MyRAMUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITests.swift; sourceTree = "<group>"; };
 		BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITestsLaunchTests.swift; sourceTree = "<group>"; };
+		BCA105020000000000000001 /* MyRAMMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyRAMMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BCA105020000000000000002 /* MyRAMMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacApp.swift; sourceTree = "<group>"; };
+		BCA105020000000000000003 /* MyRAMMacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacRootView.swift; sourceTree = "<group>"; };
 		BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDemoDataGenerator.swift; sourceTree = "<group>"; };
 		BCCAFE012FEE000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BCF104012FF1040000000104 /* MyRAMPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMPlatform.swift; sourceTree = "<group>"; };
@@ -141,6 +147,13 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		BCA105040000000000000002 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
@@ -160,6 +173,7 @@
 			isa = PBXGroup;
 			children = (
 				BC9F1BAC2EA47D2E0045FD72 /* MyRAM.app */,
+				BCA105020000000000000001 /* MyRAMMac.app */,
 				BC9F1BBE2EA47D310045FD72 /* MyRAMTests.xctest */,
 				BC9F1BC82EA47D310045FD72 /* MyRAMUITests.xctest */,
 			);
@@ -174,6 +188,7 @@
 				BCE65D0F2EA544DF00F2D0AA /* ViewModels */,
 				BCE65D0A2EA5446600F2D0AA /* Models */,
 				BCF104032FF1040000000104 /* Platform */,
+				BCA105030000000000000001 /* Mac */,
 				C07100212FF0000000000001 /* Sync */,
 				BC9F1BAF2EA47D2E0045FD72 /* MyRAMApp.swift */,
 				BC9F1BB32EA47D2F0045FD72 /* Item.swift */,
@@ -193,6 +208,15 @@
 				BC9F1BB82EA47D300045FD72 /* Preview Assets.xcassets */,
 			);
 			path = "Preview Content";
+			sourceTree = "<group>";
+		};
+		BCA105030000000000000001 /* Mac */ = {
+			isa = PBXGroup;
+			children = (
+				BCA105020000000000000002 /* MyRAMMacApp.swift */,
+				BCA105020000000000000003 /* MyRAMMacRootView.swift */,
+			);
+			path = Mac;
 			sourceTree = "<group>";
 		};
 		BC9F1BC12EA47D310045FD72 /* MyRAMTests */ = {
@@ -343,6 +367,25 @@
 			productReference = BC9F1BC82EA47D310045FD72 /* MyRAMUITests.xctest */;
 			productType = "com.apple.product-type.bundle.ui-testing";
 		};
+		BCA105050000000000000001 /* MyRAMMac */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BCA105070000000000000001 /* Build configuration list for PBXNativeTarget "MyRAMMac" */;
+			buildPhases = (
+				BCA105040000000000000001 /* Sources */,
+				BCA105040000000000000002 /* Frameworks */,
+				BCA105040000000000000003 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = MyRAMMac;
+			packageProductDependencies = (
+			);
+			productName = MyRAMMac;
+			productReference = BCA105020000000000000001 /* MyRAMMac.app */;
+			productType = "com.apple.product-type.application";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -364,6 +407,9 @@
 						CreatedOnToolsVersion = 15.0;
 						TestTargetID = BC9F1BAB2EA47D2E0045FD72;
 					};
+					BCA105050000000000000001 = {
+						CreatedOnToolsVersion = 15.0;
+					};
 				};
 			};
 			buildConfigurationList = BC9F1BA72EA47D2E0045FD72 /* Build configuration list for PBXProject "MyRAM" */;
@@ -383,6 +429,7 @@
 			projectRoot = "";
 			targets = (
 				BC9F1BAB2EA47D2E0045FD72 /* MyRAM */,
+				BCA105050000000000000001 /* MyRAMMac */,
 				BC9F1BBD2EA47D310045FD72 /* MyRAMTests */,
 				BC9F1BC72EA47D310045FD72 /* MyRAMUITests */,
 			);
@@ -409,6 +456,13 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 		BC9F1BC62EA47D310045FD72 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BCA105040000000000000003 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -474,6 +528,16 @@
 			files = (
 				BC9F1BCD2EA47D310045FD72 /* MyRAMUITests.swift in Sources */,
 				BC9F1BCF2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BCA105040000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */,
+				BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */,
+				BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -744,6 +808,60 @@
 			};
 			name = Release;
 		};
+		BCA105060000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5FF5MBB334;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MyRAMMac;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				IPHONEOS_DEPLOYMENT_TARGET = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.mac.dev;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		BCA105060000000000000002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5FF5MBB334;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CFBundleDisplayName = MyRAMMac;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				IPHONEOS_DEPLOYMENT_TARGET = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.mac;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = macosx;
+				SUPPORTED_PLATFORMS = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -779,6 +897,15 @@
 			buildConfigurations = (
 				BC9F1BD92EA47D310045FD72 /* Debug */,
 				BC9F1BDA2EA47D310045FD72 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BCA105070000000000000001 /* Build configuration list for PBXNativeTarget "MyRAMMac" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BCA105060000000000000001 /* Debug */,
+				BCA105060000000000000002 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
