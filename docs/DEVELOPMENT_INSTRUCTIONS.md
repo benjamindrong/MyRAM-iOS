@@ -4,8 +4,6 @@
 
 Build MyRAM as a user-controlled external-memory notes app. The product should support fast capture, reliable retrieval, and low-pressure organization.
 
-The current major product direction is the future **Defrag** feature.
-
 ## Desktop Build Direction
 
 The first mac desktop build uses the existing iOS app target with Mac Catalyst enabled. This keeps the current UIKit-backed editor, sharing flow, SwiftData models, and SwiftUI screens on one implementation path while desktop-specific behavior is still being defined.
@@ -58,76 +56,6 @@ Defrag should look for candidate suggestions such as:
 
 Defrag should not auto-delete, auto-archive, auto-pin, merge, rewrite, or reprioritize content without user approval.
 
-## Suggested MVP Ticket
-
-### Ticket: Add Defrag Review MVP
-
-Goal:
-
-Create a basic Defrag screen that displays candidate note organization suggestions and lets the user approve or ignore them.
-
-## Suggested Implementation Steps
-
-1. Add a Defrag entry point in app navigation.
-2. Create a Defrag screen with suggestion cards.
-3. Define a `DefragSuggestion` model.
-4. Define supported suggestion types.
-5. Add mock or placeholder suggestion generation first if the real data layer is not ready.
-6. Add user actions.
-7. Keep all actions non-destructive at first if persistence is not ready.
-8. Use optional, non-authoritative wording throughout the UI.
-
-Suggested model shape:
-
-```kotlin
-data class DefragSuggestion(
-    val id: String,
-    val type: DefragSuggestionType,
-    val title: String,
-    val description: String,
-    val noteIds: List<String>,
-    val suggestedAction: DefragAction?
-)
-
-enum class DefragSuggestionType {
-    PossibleDuplicate,
-    RelatedNotes,
-    ShortFragment,
-    OcrTextAvailable,
-    PossibleActionItem
-}
-
-enum class DefragAction {
-    Merge,
-    Bundle,
-    Pin,
-    Archive,
-    Ignore
-}
-```
-
-Suggested action semantics:
-
-- `Merge`: combine selected notes after confirmation
-- `Bundle`: group related notes without destroying originals
-- `Pin`: user manually keeps a note easier to access
-- `Archive`: move a note out of the main view without deleting it
-- `Ignore`: dismiss the suggestion
-
-## Preferred Naming
-
-Use:
-
-- Quick Capture
-- Defrag
-- Recall
-- Pinned RAM
-- Keep in View
-- Note Bundles
-- Archive
-
-Avoid "Active Memory" if it implies the app is deciding what should be active or important.
-
 ## UX Rules
 
 - Suggestions are optional.
@@ -140,16 +68,3 @@ Avoid "Active Memory" if it implies the app is deciding what should be active or
 - Do not auto-archive anything.
 - Do not auto-pin anything.
 - Do not assign priority automatically.
-
-## Near-Term Implementation Scope
-
-For the first pass, do not build a complex intelligent system.
-
-Start with simple rule-based or mock suggestions:
-
-- Notes with similar titles
-- Notes created close together in time
-- Notes containing repeated words or phrases
-- Very short notes
-- Notes with OCR text available
-- Notes containing simple action-like language
