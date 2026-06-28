@@ -3898,6 +3898,187 @@ final class MyRAMTests: XCTestCase {
         XCTAssertFalse(recomputedState.bold)
     }
 
+    func testFormattingCommandResolverAppliesTraitWhenAnySelectedSegmentIsMissingTrait() {
+        let attributedText = NSMutableAttributedString(string: "Bold mix")
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.boldSystemFont(ofSize: 17),
+            range: NSRange(location: 0, length: 4)
+        )
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.systemFont(ofSize: 17),
+            range: NSRange(location: 4, length: 4)
+        )
+
+        let traitPlan = EditorFormattingCommandResolver.traitPlan(
+            in: attributedText,
+            range: NSRange(location: 0, length: attributedText.length),
+            trait: .traitBold
+        )
+
+        XCTAssertEqual(traitPlan.range, NSRange(location: 0, length: attributedText.length))
+        XCTAssertEqual(traitPlan.trait, .traitBold)
+        XCTAssertTrue(traitPlan.shouldApply)
+    }
+
+    func testFormattingCommandResolverRemovesTraitWhenAllSelectedSegmentsHaveTrait() {
+        let attributedText = NSMutableAttributedString(string: "Bold")
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.boldSystemFont(ofSize: 17),
+            range: NSRange(location: 0, length: attributedText.length)
+        )
+
+        let traitPlan = EditorFormattingCommandResolver.traitPlan(
+            in: attributedText,
+            range: NSRange(location: 0, length: attributedText.length),
+            trait: .traitBold
+        )
+
+        XCTAssertFalse(traitPlan.shouldApply)
+    }
+
+    func testFormattingCommandResolverItalicUsesTraitSemantics() {
+        let attributedText = NSMutableAttributedString(string: "Italic mix")
+        attributedText.addAttribute(
+            .font,
+            value: UIFont.italicSystemFont(ofSize: 17),
+            range: NSRange(location: 0, length: 6)
+        )
+
+        let traitPlan = EditorFormattingCommandResolver.traitPlan(
+            in: attributedText,
+            range: NSRange(location: 0, length: attributedText.length),
+            trait: .traitItalic
+        )
+
+        XCTAssertTrue(traitPlan.shouldApply)
+    }
+
+    func testFormattingCommandResolverDecorationAppliesWhenAnySegmentIsUndecorated() {
+        let attributedText = NSMutableAttributedString(string: "Underline mix")
+        attributedText.addAttribute(
+            .underlineStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 0, length: 9)
+        )
+
+        let decorationPlan = EditorFormattingCommandResolver.decorationPlan(
+            in: attributedText,
+            range: NSRange(location: 0, length: attributedText.length),
+            key: .underlineStyle
+        )
+
+        XCTAssertEqual(decorationPlan.styleKey, .underlineStyle)
+        XCTAssertEqual(decorationPlan.colorKey, .underlineColor)
+        XCTAssertTrue(decorationPlan.shouldApply)
+    }
+
+    func testFormattingCommandResolverDecorationRemovesWhenFullyDecorated() {
+        let attributedText = NSMutableAttributedString(string: "Strike")
+        attributedText.addAttribute(
+            .strikethroughStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 0, length: attributedText.length)
+        )
+
+        let decorationPlan = EditorFormattingCommandResolver.decorationPlan(
+            in: attributedText,
+            range: NSRange(location: 0, length: attributedText.length),
+            key: .strikethroughStyle
+        )
+
+        XCTAssertEqual(decorationPlan.styleKey, .strikethroughStyle)
+        XCTAssertEqual(decorationPlan.colorKey, .strikethroughColor)
+        XCTAssertFalse(decorationPlan.shouldApply)
+    }
+
+    func testFormattingCommandResolverMapsDecorationColorKeys() {
+        XCTAssertEqual(
+            EditorFormattingCommandResolver.decorationColorKey(for: .underlineStyle),
+            .underlineColor
+        )
+        XCTAssertEqual(
+            EditorFormattingCommandResolver.decorationColorKey(for: .strikethroughStyle),
+            .strikethroughColor
+        )
+        XCTAssertNil(EditorFormattingCommandResolver.decorationColorKey(for: .font))
+    }
+
+    func testFormattingCommandResolverFontTraitHelperPreservesPointSize() {
+        let baseFont = UIFont.systemFont(ofSize: 23)
+
+        let boldFont = EditorFormattingCommandResolver.fontBySettingTrait(
+            on: baseFont,
+            trait: .traitBold,
+            isEnabled: true
+        )
+
+        XCTAssertEqual(boldFont.pointSize, 23, accuracy: 0.1)
+        XCTAssertTrue(boldFont.fontDescriptor.symbolicTraits.contains(.traitBold))
+    }
+
+    func testFormattingCommandResolverFontTraitHelperSafelyReturnsFontForUnsupportedTrait() {
+        let baseFont = UIFont.systemFont(ofSize: 18)
+
+        let resolvedFont = EditorFormattingCommandResolver.fontBySettingTrait(
+            on: baseFont,
+            trait: .traitExpanded,
+            isEnabled: true
+        )
+
+        XCTAssertEqual(resolvedFont.pointSize, 18, accuracy: 0.1)
+    }
+
+    func testFormattingCommandResolverFontSizeClampsToSupportedRange() {
+        let smallFont = UIFont.systemFont(ofSize: 12)
+        let largeFont = UIFont.systemFont(ofSize: 39)
+
+        let minimumFont = EditorFormattingCommandResolver.adjustedFontSize(from: smallFont, delta: -10)
+        let maximumFont = EditorFormattingCommandResolver.adjustedFontSize(from: largeFont, delta: 10)
+
+        XCTAssertEqual(minimumFont.pointSize, EditorFormattingCommandResolver.minimumFontSize, accuracy: 0.1)
+        XCTAssertEqual(maximumFont.pointSize, EditorFormattingCommandResolver.maximumFontSize, accuracy: 0.1)
+    }
+
+    func testFormattingCommandResolverColorPlanDistinguishesExplicitAndDefaultColor() throws {
+        let range = NSRange(location: 2, length: 4)
+        let explicitPlan = EditorFormattingCommandResolver.colorPlan(
+            range: range,
+            color: .systemRed,
+            usesDefaultColor: false
+        )
+        let defaultPlan = EditorFormattingCommandResolver.colorPlan(
+            range: range,
+            color: nil,
+            usesDefaultColor: true
+        )
+
+        XCTAssertEqual(explicitPlan.range, range)
+        XCTAssertTrue(try XCTUnwrap(explicitPlan.color).isEqual(UIColor.systemRed))
+        XCTAssertFalse(explicitPlan.usesDefaultColor)
+        XCTAssertNil(defaultPlan.color)
+        XCTAssertTrue(defaultPlan.usesDefaultColor)
+    }
+
+    func testFormattingCommandResolverCollapsedCaretPlansPreserveToggleSemantics() {
+        let boldPlan = EditorFormattingCommandResolver.collapsedTraitPlan(
+            range: NSRange(location: 3, length: 0),
+            baseFont: UIFont.boldSystemFont(ofSize: 17),
+            trait: .traitBold
+        )
+        let decorationPlan = EditorFormattingCommandResolver.collapsedDecorationPlan(
+            range: NSRange(location: 3, length: 0),
+            key: .underlineStyle,
+            currentValue: 0
+        )
+
+        XCTAssertFalse(boldPlan.shouldApply)
+        XCTAssertTrue(decorationPlan.shouldApply)
+        XCTAssertEqual(decorationPlan.colorKey, .underlineColor)
+    }
+
     func testTextPlacementResolverUsesLeadingBlankLineCaret() {
         let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
         textView.font = UIFont.systemFont(ofSize: 20)
