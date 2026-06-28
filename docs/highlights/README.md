@@ -6,7 +6,7 @@ Highlights give a note a lightweight RAM layer: a small set of high-value text s
 
 The main note body remains the default place for free-text capture. Highlights are an optional layer for things the user wants to keep visible, revisit, or organize above the normal flow of text.
 
-## Product Principles
+## Interaction Principles
 
 - Capture stays fast. Users can keep typing free-form text without choosing a structure first.
 - Highlighting is additive. A highlight surfaces or preserves an important idea; it does not require rewriting the note.
@@ -38,7 +38,7 @@ Highlights can be created from:
 
 - selected text in the note body
 - a manual add action in the highlights section
-- future note-intelligence suggestions
+- note-intelligence suggestions
 
 When a user highlights selected body text in v1, the selected text should remain in the note body by default. The highlight is a surfaced copy/reference-style item, not a destructive move. A future version may add explicit "move to highlight" behavior, but v1 should avoid surprising content removal.
 
@@ -118,15 +118,15 @@ Notes without highlights should not show a large empty highlights section.
 
 The add/highlight entry point should remain available through contextual actions, note body selection actions, or a compact add control when appropriate.
 
-## V1 Explicit Non-Goal
+## Non-Goal
 
-V1 does not require all thoughts to become list items.
+Highlights do not require all thoughts to become list items.
 
 Highlights are not a replacement for the note body. They are a selective layer for important thoughts. The user should be able to write a full note as free text, highlight zero or more important pieces, and continue writing without managing a block/list structure.
 
 This keeps MyRAM aligned with fast capture while still introducing the RAM concept in a focused, reversible way.
 
-## Implementation Notes for MYR-44
+## Implementation Notes
 
 The follow-up implementation ticket should introduce:
 
@@ -139,6 +139,6 @@ The follow-up implementation ticket should introduce:
 
 The implementation should avoid coupling highlight edits to automatic note body rewrites in v1.
 
-## Current Implementation Note
+## Terminology Note
 
-The current SwiftData model and export manifest still use `PinnedThought`/`pinnedThoughts` internally. User-facing terminology should say "Highlight" or "Highlights"; storage and migration renames should be handled separately if they become necessary.
+The current SwiftData model and export manifest still use `PinnedThought`/`pinnedThoughts`. User-facing terminology should say "Highlight" or "Highlights"; storage and migration renames should be handled separately if they become necessary.
