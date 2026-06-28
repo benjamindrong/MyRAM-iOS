@@ -118,7 +118,7 @@ Suggested action semantics:
 
 Use:
 
-- RAM Dump
+- Quick Capture
 - Defrag
 - Recall
 - Pinned RAM

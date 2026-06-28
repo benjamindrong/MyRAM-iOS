@@ -1,8 +1,6 @@
 # MyRAM
 
-MyRAM catches what your brain drops, then helps you make sense of it later.
-
-Quick-capture hook: "Dump it now, make sense of it later."
+MyRAM gives scattered thoughts, notes, screenshots, and copied text a place to land until you are ready to organize them.
 
 ## What MyRAM Is
 
@@ -12,7 +10,7 @@ The name comes from the idea of computer RAM: temporary, active memory that help
 
 Core idea:
 
-> Dump it now. Make sense of it later.
+> Capture it now. Organize it when you are ready.
 
 ## Current Features
 
@@ -29,11 +27,11 @@ Desktop support is planned later for parity.
 
 ## Product Positioning
 
-MyRAM is not just another notes app. It is built for fast capture now and organization later, when the user has more time, attention, or context.
+MyRAM is built for fast capture now and organization later, when the user has more time, attention, or context.
 
 Main positioning line:
 
-> MyRAM catches what your brain drops, then helps you make sense of it later.
+> Capture what matters before it gets lost.
 
 Alternative shorter line:
 
@@ -55,7 +53,7 @@ Defrag is intended to feel calm, optional, and user-controlled.
 
 Suggested product terms:
 
-- **RAM Dump**: quick capture for raw thoughts, pasted text, screenshots, temporary notes, and fragments
+- **Quick Capture**: fast entry for raw thoughts, pasted text, screenshots, notes, and fragments
 - **Defrag**: review mode for reorganizing scattered notes
 - **Recall**: search and retrieval
 - **Pinned RAM** or **Keep in View**: user-selected notes kept easier to access
