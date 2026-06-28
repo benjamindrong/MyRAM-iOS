@@ -3248,13 +3248,18 @@ private struct SelectableTextView: UIViewRepresentable {
 
         func adjustFontSize(in textView: UITextView, by delta: CGFloat) {
             let selectedRange = formattingActionRange(in: textView)
+            let commandPlan = EditorFormattingCommandResolver.fontSizePlan(range: selectedRange, delta: delta)
+            guard case let .fontSize(fontSizePlan) = commandPlan else { return }
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
                     ?? EditorTypography.defaultTextFont
-                typingAttributes[.font] = adjustedFontSize(from: baseFont, delta: delta)
+                typingAttributes[.font] = EditorFormattingCommandResolver.adjustedFontSize(
+                    from: baseFont,
+                    delta: fontSizePlan.delta
+                )
                 textView.typingAttributes = typingAttributes
                 markSelectionFormattingDirty(from: textView)
                 reportFormattingState(from: textView)
@@ -3268,7 +3273,10 @@ private struct SelectableTextView: UIViewRepresentable {
                     ?? EditorTypography.defaultTextFont
                 mutable.addAttribute(
                     .font,
-                    value: adjustedFontSize(from: baseFont, delta: delta),
+                    value: EditorFormattingCommandResolver.adjustedFontSize(
+                        from: baseFont,
+                        delta: fontSizePlan.delta
+                    ),
                     range: range
                 )
             }
@@ -3281,10 +3289,16 @@ private struct SelectableTextView: UIViewRepresentable {
             usesDefaultColor: Bool = false
         ) {
             let selectedRange = formattingActionRange(in: textView)
+            let commandPlan = EditorFormattingCommandResolver.colorPlan(
+                range: selectedRange,
+                color: color,
+                usesDefaultColor: usesDefaultColor
+            )
+            guard case let .color(colorPlan) = commandPlan else { return }
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
-                if usesDefaultColor {
+                if colorPlan.usesDefaultColor {
                     // Auto uses the editor default for display, but syncContent
                     // strips this default foreground before RTF encoding. That
                     // keeps UIKit readable now without saving light/dark colors
@@ -3293,7 +3307,7 @@ private struct SelectableTextView: UIViewRepresentable {
                     typingAttributes[.autoTextColorDisplay] = true
                     syncDecorationColorsWithForeground(in: &typingAttributes, color: defaultTextColor)
                 } else {
-                    let resolvedColor = color ?? textView.textColor ?? defaultTextColor
+                    let resolvedColor = colorPlan.color ?? textView.textColor ?? defaultTextColor
                     typingAttributes[.foregroundColor] = resolvedColor
                     typingAttributes.removeValue(forKey: .autoTextColorDisplay)
                     syncDecorationColorsWithForeground(in: &typingAttributes, color: resolvedColor)
@@ -3308,7 +3322,7 @@ private struct SelectableTextView: UIViewRepresentable {
             textView.textStorage.beginEditing()
             let previousText = NSAttributedString(attributedString: textView.attributedText)
             let previousSelection = textView.selectedRange
-            if usesDefaultColor {
+            if colorPlan.usesDefaultColor {
                 // UITextView can render attributed ranges without foreground
                 // attributes as black. Paint the selected text with the editor
                 // default for the live view; storage encoding removes this
@@ -3317,7 +3331,7 @@ private struct SelectableTextView: UIViewRepresentable {
                 textView.textStorage.addAttribute(.autoTextColorDisplay, value: true, range: selectedRange)
                 syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: defaultTextColor)
             } else {
-                let resolvedColor = color ?? textView.textColor ?? defaultTextColor
+                let resolvedColor = colorPlan.color ?? textView.textColor ?? defaultTextColor
                 textView.textStorage.addAttribute(.foregroundColor, value: resolvedColor, range: selectedRange)
                 textView.textStorage.removeAttribute(.autoTextColorDisplay, range: selectedRange)
                 syncDecorationColorsWithForeground(in: textView.textStorage, range: selectedRange, color: resolvedColor)
@@ -3725,11 +3739,16 @@ private struct SelectableTextView: UIViewRepresentable {
                 let baseFont = (typingAttributes[.font] as? UIFont)
                     ?? textView.font
                     ?? EditorTypography.defaultTextFont
-                let shouldApply = !baseFont.fontDescriptor.symbolicTraits.contains(trait)
-                typingAttributes[.font] = fontBySettingTrait(
+                let commandPlan = EditorFormattingCommandResolver.collapsedTraitPlan(
+                    range: selectedRange,
+                    baseFont: baseFont,
+                    trait: trait
+                )
+                guard case let .trait(traitPlan) = commandPlan else { return }
+                typingAttributes[.font] = EditorFormattingCommandResolver.fontBySettingTrait(
                     on: baseFont,
-                    trait: trait,
-                    isEnabled: shouldApply
+                    trait: traitPlan.trait,
+                    isEnabled: traitPlan.shouldApply
                 )
                 textView.typingAttributes = typingAttributes
                 markSelectionFormattingDirty(from: textView)
@@ -3738,17 +3757,22 @@ private struct SelectableTextView: UIViewRepresentable {
             }
 
             let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
-            let shouldApply = shouldApplyFontTrait(in: mutable, range: selectedRange, trait: trait)
+            let commandPlan = EditorFormattingCommandResolver.traitPlan(
+                in: mutable,
+                range: selectedRange,
+                trait: trait
+            )
+            guard case let .trait(traitPlan) = commandPlan else { return }
             mutable.enumerateAttribute(.font, in: selectedRange) { value, range, _ in
                 let baseFont = (value as? UIFont)
                     ?? textView.font
                     ?? EditorTypography.defaultTextFont
                 mutable.addAttribute(
                     .font,
-                    value: fontBySettingTrait(
+                    value: EditorFormattingCommandResolver.fontBySettingTrait(
                         on: baseFont,
-                        trait: trait,
-                        isEnabled: shouldApply
+                        trait: traitPlan.trait,
+                        isEnabled: traitPlan.shouldApply
                     ),
                     range: range
                 )
@@ -3756,82 +3780,23 @@ private struct SelectableTextView: UIViewRepresentable {
             applyAttributedText(mutable, in: textView, selectedRange: selectedRange)
         }
 
-        private func shouldApplyFontTrait(
-            in attributedText: NSAttributedString,
-            range: NSRange,
-            trait: UIFontDescriptor.SymbolicTraits
-        ) -> Bool {
-            var hasTraitMissing = false
-            attributedText.enumerateAttribute(.font, in: range) { value, _, stop in
-                let font = value as? UIFont ?? EditorTypography.defaultTextFont
-                if !font.fontDescriptor.symbolicTraits.contains(trait) {
-                    hasTraitMissing = true
-                    stop.pointee = true
-                }
-            }
-            return hasTraitMissing
-        }
-
-        private func fontBySettingTrait(
-            on baseFont: UIFont,
-            trait: UIFontDescriptor.SymbolicTraits,
-            isEnabled: Bool
-        ) -> UIFont {
-            var traits = baseFont.fontDescriptor.symbolicTraits
-            if isEnabled {
-                traits.insert(trait)
-            } else {
-                traits.remove(trait)
-            }
-
-            if let descriptor = baseFont.fontDescriptor.withSymbolicTraits(traits) {
-                return UIFont(descriptor: descriptor, size: baseFont.pointSize)
-            }
-
-            let systemDescriptor = UIFont.systemFont(ofSize: baseFont.pointSize).fontDescriptor
-            if let descriptor = systemDescriptor.withSymbolicTraits(traits) {
-                return UIFont(descriptor: descriptor, size: baseFont.pointSize)
-            }
-
-            if trait == .traitBold {
-                if isEnabled {
-                    return UIFont.boldSystemFont(ofSize: baseFont.pointSize)
-                }
-                if traits.contains(.traitItalic) {
-                    return UIFont.italicSystemFont(ofSize: baseFont.pointSize)
-                }
-                return UIFont.systemFont(ofSize: baseFont.pointSize)
-            }
-
-            if trait == .traitItalic {
-                if isEnabled {
-                    return UIFont.italicSystemFont(ofSize: baseFont.pointSize)
-                }
-                if traits.contains(.traitBold) {
-                    return UIFont.boldSystemFont(ofSize: baseFont.pointSize)
-                }
-                return UIFont.systemFont(ofSize: baseFont.pointSize)
-            }
-
-            return baseFont
-        }
-
-        private func adjustedFontSize(from baseFont: UIFont, delta: CGFloat) -> UIFont {
-            let newPointSize = min(max(baseFont.pointSize + delta, 11), 40)
-            return UIFont(descriptor: baseFont.fontDescriptor, size: newPointSize)
-        }
-
         private func toggleTextDecoration(in textView: UITextView, key: NSAttributedString.Key) {
             let selectedRange = formattingActionRange(in: textView)
-            let colorKey = decorationColorKey(for: key)
 
             if selectedRange.length == 0 {
                 var typingAttributes = textView.typingAttributes
                 let currentValue = typingAttributes[key] as? Int ?? 0
-                let shouldApply = currentValue == 0
-                typingAttributes[key] = shouldApply ? NSUnderlineStyle.single.rawValue : 0
-                if let colorKey {
-                    if shouldApply, let color = typingAttributes[.foregroundColor] as? UIColor {
+                let commandPlan = EditorFormattingCommandResolver.collapsedDecorationPlan(
+                    range: selectedRange,
+                    key: key,
+                    currentValue: currentValue
+                )
+                guard case let .decoration(decorationPlan) = commandPlan else { return }
+                typingAttributes[decorationPlan.styleKey] = decorationPlan.shouldApply
+                    ? NSUnderlineStyle.single.rawValue
+                    : 0
+                if let colorKey = decorationPlan.colorKey {
+                    if decorationPlan.shouldApply, let color = typingAttributes[.foregroundColor] as? UIColor {
                         typingAttributes[colorKey] = color
                     } else {
                         typingAttributes.removeValue(forKey: colorKey)
@@ -3844,11 +3809,16 @@ private struct SelectableTextView: UIViewRepresentable {
             }
 
             let mutable = NSMutableAttributedString(attributedString: textView.attributedText)
-            let shouldApply = shouldApplyDecoration(in: mutable, range: selectedRange, key: key)
-            let value = shouldApply ? NSUnderlineStyle.single.rawValue : 0
-            mutable.addAttribute(key, value: value, range: selectedRange)
-            if let colorKey {
-                if shouldApply {
+            let commandPlan = EditorFormattingCommandResolver.decorationPlan(
+                in: mutable,
+                range: selectedRange,
+                key: key
+            )
+            guard case let .decoration(decorationPlan) = commandPlan else { return }
+            let value = decorationPlan.shouldApply ? NSUnderlineStyle.single.rawValue : 0
+            mutable.addAttribute(decorationPlan.styleKey, value: value, range: selectedRange)
+            if let colorKey = decorationPlan.colorKey {
+                if decorationPlan.shouldApply {
                     mutable.enumerateAttribute(.foregroundColor, in: selectedRange) { foregroundColor, range, _ in
                         if let foregroundColor {
                             mutable.addAttribute(colorKey, value: foregroundColor, range: range)
@@ -3941,33 +3911,6 @@ private struct SelectableTextView: UIViewRepresentable {
                     attributedText.removeAttribute(colorKey, range: range)
                 }
             }
-        }
-
-        private func decorationColorKey(for key: NSAttributedString.Key) -> NSAttributedString.Key? {
-            switch key {
-            case .underlineStyle:
-                return .underlineColor
-            case .strikethroughStyle:
-                return .strikethroughColor
-            default:
-                return nil
-            }
-        }
-
-        private func shouldApplyDecoration(
-            in attributedText: NSAttributedString,
-            range: NSRange,
-            key: NSAttributedString.Key
-        ) -> Bool {
-            var hasUndecoratedSegment = false
-            attributedText.enumerateAttribute(key, in: range) { value, _, stop in
-                let style = value as? Int ?? 0
-                if style == 0 {
-                    hasUndecoratedSegment = true
-                    stop.pointee = true
-                }
-            }
-            return hasUndecoratedSegment
         }
 
         private func applyAttributedText(

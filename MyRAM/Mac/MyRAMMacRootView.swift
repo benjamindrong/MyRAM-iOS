@@ -16,7 +16,7 @@ struct MyRAMMacRootView: View {
 
             Label("Native Mac shell is ready for future desktop UI.", systemImage: "macwindow")
                 .font(.title3)
-            Text("The production note editor is intentionally placeholder-only in MYR-105.")
+            Text("The native Mac note editor is in progress.")
                 .foregroundStyle(.secondary)
         }
         .padding(36)
