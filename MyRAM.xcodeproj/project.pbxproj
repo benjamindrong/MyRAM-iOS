@@ -22,6 +22,7 @@
 		BC9F1BCD2EA47D310045FD72 /* MyRAMUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCC2EA47D310045FD72 /* MyRAMUITests.swift */; };
 		BC9F1BCF2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */; };
 		BCB610022FEC610000610061 /* DebugDemoDataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */; };
+		BCF104022FF1040000000104 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D0B2EA5447D00F2D0AA /* Note.swift */; };
 		BCE65D112EA544FB00F2D0AA /* NotesViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D102EA544FB00F2D0AA /* NotesViewModel.swift */; };
 		BCE65D162EA5457600F2D0AA /* NotesListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D152EA5457600F2D0AA /* NotesListView.swift */; };
@@ -88,6 +89,7 @@
 		BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDemoDataGenerator.swift; sourceTree = "<group>"; };
 		BCCAFE012FEE000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		BCF104012FF1040000000104 /* MyRAMPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMPlatform.swift; sourceTree = "<group>"; };
 		BCE65D0B2EA5447D00F2D0AA /* Note.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Note.swift; sourceTree = "<group>"; };
 		BCE65D102EA544FB00F2D0AA /* NotesViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesViewModel.swift; sourceTree = "<group>"; };
 		BCE65D152EA5457600F2D0AA /* NotesListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesListView.swift; sourceTree = "<group>"; };
@@ -171,6 +173,7 @@
 				BCE65D142EA5453D00F2D0AA /* Views */,
 				BCE65D0F2EA544DF00F2D0AA /* ViewModels */,
 				BCE65D0A2EA5446600F2D0AA /* Models */,
+				BCF104032FF1040000000104 /* Platform */,
 				C07100212FF0000000000001 /* Sync */,
 				BC9F1BAF2EA47D2E0045FD72 /* MyRAMApp.swift */,
 				BC9F1BB32EA47D2F0045FD72 /* Item.swift */,
@@ -224,6 +227,14 @@
 				BCE65D102EA544FB00F2D0AA /* NotesViewModel.swift */,
 			);
 			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		BCF104032FF1040000000104 /* Platform */ = {
+			isa = PBXGroup;
+			children = (
+				BCF104012FF1040000000104 /* MyRAMPlatform.swift */,
+			);
+			path = Platform;
 			sourceTree = "<group>";
 		};
 		BCE65D142EA5453D00F2D0AA /* Views */ = {
@@ -429,6 +440,7 @@
 				C097F01032FF000000000003 /* EditorPasteFormatter.swift in Sources */,
 				C097F010A2FF00000000000A /* EditorTimingPolicy.swift in Sources */,
 				BC24E3072FDF8F94004694D1 /* SyncStatusIndicator.swift in Sources */,
+				BCF104022FF1040000000104 /* MyRAMPlatform.swift in Sources */,
 				C097F01072FF000000000007 /* EditorSelectionProfiling.swift in Sources */,
 				C097F010B2FF00000000000B /* EditorSearchHighlighting.swift in Sources */,
 				C097F010C2FF00000000000C /* EditorSearchMatchResolver.swift in Sources */,

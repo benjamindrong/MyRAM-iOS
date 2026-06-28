@@ -167,6 +167,7 @@ struct SyncConflictDetailView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
 #if targetEnvironment(macCatalyst)
+                // Legacy Catalyst presents this detail with desktop-style toolbar dismissal.
                 ToolbarItem(placement: .cancellationAction) {
                     closeButton
                 }
@@ -187,7 +188,7 @@ struct SyncConflictDetailView: View {
 
             Spacer(minLength: 16)
 
-#if !targetEnvironment(macCatalyst)
+#if os(iOS) && !targetEnvironment(macCatalyst)
             closeButton
 #endif
         }
@@ -196,7 +197,7 @@ struct SyncConflictDetailView: View {
     private var headerStack: some View {
         VStack(alignment: .leading, spacing: 10) {
             headerTitle
-#if !targetEnvironment(macCatalyst)
+#if os(iOS) && !targetEnvironment(macCatalyst)
             closeButton
 #endif
         }
@@ -226,6 +227,7 @@ struct SyncConflictDetailView: View {
 
     private func closeDetail() {
 #if targetEnvironment(macCatalyst)
+        // Legacy Catalyst needs UIKit presentation plumbing to dismiss the desktop-shaped sheet.
         topPresentedViewController()?.dismiss(animated: true) {
             onClose()
         }
@@ -235,6 +237,7 @@ struct SyncConflictDetailView: View {
     }
 
 #if targetEnvironment(macCatalyst)
+    // UIKit-only Catalyst helper; a native macOS target must not compile this path.
     private func topPresentedViewController() -> UIViewController? {
         let foregroundScene = UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
@@ -267,6 +270,7 @@ struct SyncConflictDetailView: View {
     private var actionButtons: some View {
         Group {
 #if targetEnvironment(macCatalyst)
+            // Legacy Catalyst keeps conflict actions in a desktop-width horizontal layout.
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 10) {
                     copyButton
@@ -359,24 +363,25 @@ struct SyncConflictDetailView: View {
     }
 
     private func textBoxHeight(_ text: String) -> CGFloat {
-#if targetEnvironment(macCatalyst)
-        return 220
-#else
+        if MyRAMPlatform.isMacCatalyst {
+            // Legacy Catalyst keeps conflict text boxes at desktop sheet height.
+            return 220
+        }
         let explicitLines = max(text.components(separatedBy: .newlines).count, 1)
         let wrappedLines = max(text.count / 72, 1)
         let estimatedLines = max(explicitLines, wrappedLines)
         return max(120, CGFloat(estimatedLines) * 24 + 40)
-#endif
     }
 }
 
 private struct SyncConflictDetailFrame: ViewModifier {
     func body(content: Content) -> some View {
-#if targetEnvironment(macCatalyst)
-        content.frame(minHeight: 680)
-#else
-        content
-#endif
+        if MyRAMPlatform.isMacCatalyst {
+            // Legacy Catalyst gives the conflict detail a desktop sheet minimum height.
+            content.frame(minHeight: 680)
+        } else {
+            content
+        }
     }
 }
 
@@ -384,6 +389,7 @@ extension View {
     @ViewBuilder
     func syncConflictPresentationSizing() -> some View {
 #if targetEnvironment(macCatalyst)
+        // Legacy Catalyst uses a full-height UIKit sheet; native macOS will use an os(macOS) presentation.
         presentationDetents([.large])
 #else
         self

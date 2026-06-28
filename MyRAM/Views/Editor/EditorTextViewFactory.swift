@@ -1,20 +1,22 @@
 import UIKit
 
 enum EditorTypography {
-    #if targetEnvironment(macCatalyst)
-    static let defaultTextFont = UIFont.systemFont(ofSize: 20)
-    #else
-    static let defaultTextFont = UIFont.preferredFont(forTextStyle: .body)
-    #endif
+    static let defaultTextFont: UIFont = {
+        // Legacy Catalyst keeps a fixed desktop-sized editor font; native macOS will define its own AppKit typography.
+        if MyRAMPlatform.isMacCatalyst {
+            return UIFont.systemFont(ofSize: 20)
+        }
+        return UIFont.preferredFont(forTextStyle: .body)
+    }()
 }
 
 enum EditorTextViewFactory {
     static func makeTextView() -> UITextView {
-        #if targetEnvironment(macCatalyst)
-        if EditorSelectionProfiling.forcesTextKit1 {
+        // Transitional Catalyst profiling can force TextKit 1 without becoming the future native Mac editor path.
+        if MyRAMPlatform.isMacCatalyst,
+           EditorSelectionProfiling.forcesTextKit1 {
             return UITextView(usingTextLayoutManager: false)
         }
-        #endif
         return UITextView()
     }
 
@@ -38,11 +40,8 @@ enum EditorTextViewFactory {
         ]
         textView.textContainerInset = ChecklistItemEditor.textContainerInsets(hasChecklistItems: false)
         textView.keyboardDismissMode = .interactive
-#if targetEnvironment(macCatalyst)
-        textView.alwaysBounceVertical = false
-#else
-        textView.alwaysBounceVertical = true
-#endif
+        // Catalyst keeps its legacy desktop scroll feel; real iPhone/iPad keeps the existing mobile bounce.
+        textView.alwaysBounceVertical = MyRAMPlatform.isRealIOSOrIPadOS
         return textView
     }
 

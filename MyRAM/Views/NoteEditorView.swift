@@ -1095,11 +1095,8 @@ struct NoteEditorView: View {
     }
 
     private var showsTitleInTopBar: Bool {
-#if targetEnvironment(macCatalyst)
-        false
-#else
-        showsTopBar
-#endif
+        // Legacy Catalyst desktop chrome keeps the note title out of the embedded top bar.
+        !MyRAMPlatform.isMacCatalyst && showsTopBar
     }
 
     private var editorTitleHeader: some View {
@@ -1589,15 +1586,14 @@ struct NoteEditorView: View {
     }
 
     private func openNearbySync(onFallback: (() -> Void)? = nil) {
-#if targetEnvironment(macCatalyst)
-        onFallback?()
-#else
-        if syncController != nil {
+        // Legacy Catalyst does not open Nearby Sync from the embedded editor shell.
+        if MyRAMPlatform.isMacCatalyst {
+            onFallback?()
+        } else if syncController != nil {
             showingNearbySync = true
         } else {
             onFallback?()
         }
-#endif
     }
 
     private func copySyncConflict(_ conflict: SyncConflictVersion) {
@@ -1631,6 +1627,7 @@ struct NoteEditorView: View {
     @ViewBuilder
     private var desktopOrMobileEditorControls: some View {
 #if targetEnvironment(macCatalyst)
+        // Legacy Catalyst exposes desktop inline formatting controls; native macOS will define its own editor chrome.
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
                 inlineActionButton(systemImage: "pin", identifier: "keyboard-control-pin") {
@@ -3171,11 +3168,11 @@ private struct SelectableTextView: UIViewRepresentable {
             editMenuForTextIn range: NSRange,
             suggestedActions: [UIMenuElement]
         ) -> UIMenu? {
-#if targetEnvironment(macCatalyst)
-            return UIMenu(children: suggestedActions)
-#else
-            UIMenu(children: [])
-#endif
+            // Legacy Catalyst keeps the desktop text edit menu; real iPhone/iPad uses app-owned controls.
+            if MyRAMPlatform.isMacCatalyst {
+                return UIMenu(children: suggestedActions)
+            }
+            return UIMenu(children: [])
         }
 
         func hasPendingFormattingMutation(
