@@ -106,6 +106,29 @@ final class MyRAMTests: XCTestCase {
         }
     }
 
+    func testPlatformPolicyMatchesCurrentBuildTarget() {
+        #if os(iOS) && !targetEnvironment(macCatalyst)
+        XCTAssertTrue(MyRAMPlatform.isRealIOSOrIPadOS)
+        XCTAssertFalse(MyRAMPlatform.isNativeMacOS)
+        XCTAssertFalse(MyRAMPlatform.isMacCatalyst)
+        #elseif targetEnvironment(macCatalyst)
+        XCTAssertFalse(MyRAMPlatform.isRealIOSOrIPadOS)
+        XCTAssertFalse(MyRAMPlatform.isNativeMacOS)
+        XCTAssertTrue(MyRAMPlatform.isMacCatalyst)
+        #elseif os(macOS)
+        XCTAssertFalse(MyRAMPlatform.isRealIOSOrIPadOS)
+        XCTAssertTrue(MyRAMPlatform.isNativeMacOS)
+        XCTAssertFalse(MyRAMPlatform.isMacCatalyst)
+        #else
+        XCTFail("MyRAMPlatform has no policy for this build target.")
+        #endif
+    }
+
+    func testPlatformPolicyDoesNotReportImpossibleTargetCombination() {
+        XCTAssertFalse(MyRAMPlatform.isRealIOSOrIPadOS && MyRAMPlatform.isMacCatalyst)
+        XCTAssertFalse(MyRAMPlatform.isNativeMacOS && MyRAMPlatform.isMacCatalyst)
+    }
+
     func testTrustedPeerReconnectTrackerBlocksDuplicateConnectAttempts() {
         var tracker = TrustedPeerReconnectTracker()
 

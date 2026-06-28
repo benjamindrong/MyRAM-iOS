@@ -30,6 +30,7 @@ struct NotesListView: View {
     private let topBarIconSize: CGFloat = 20
     private let topBarHeight: CGFloat = 44
 #if targetEnvironment(macCatalyst)
+    // Legacy Catalyst desktop shell sizing. Native macOS will use an os(macOS) boundary instead.
     private let desktopSidebarDefaultWidth: CGFloat = 300
     private let desktopSidebarMinimumWidth: CGFloat = 0
     private let desktopSidebarMinimumExpandedWidth: CGFloat = 220
@@ -70,6 +71,7 @@ struct NotesListView: View {
     @State private var noteActionDialogContext: NoteActionDialogContext?
     @FocusState private var isSearchFocused: Bool
 #if targetEnvironment(macCatalyst)
+    // Legacy Catalyst desktop sidebar state; not a native macOS policy.
     @State private var desktopSidebarWidth: CGFloat = 300
     @State private var lastExpandedDesktopSidebarWidth: CGFloat = 300
     @State private var desktopSidebarDragStartWidth: CGFloat?
@@ -100,6 +102,7 @@ struct NotesListView: View {
                     .padding(.horizontal)
 
 #if targetEnvironment(macCatalyst)
+                // Legacy Catalyst desktop split view. Future native macOS will use os(macOS)-gated AppKit/SwiftUI code.
                 ZStack(alignment: .topLeading) {
                     HStack(spacing: 0) {
                         notesListContent
@@ -300,7 +303,7 @@ struct NotesListView: View {
                     }
                 )
             }
-#if !targetEnvironment(macCatalyst)
+#if os(iOS) && !targetEnvironment(macCatalyst)
             .overlay {
                 if let context = noteActionDialogContext {
                     NoteActionSheetOverlay(
@@ -371,6 +374,7 @@ struct NotesListView: View {
     }
 
 #if targetEnvironment(macCatalyst)
+    // Legacy Catalyst desktop sidebar affordance; do not carry this into the native macOS target by default.
     private var desktopSidebarDivider: some View {
         Rectangle()
             .fill(Color.secondary.opacity(desktopSidebarWidth == 0 ? 0.30 : 0.22))
@@ -482,6 +486,7 @@ struct NotesListView: View {
             }
         }
 #if targetEnvironment(macCatalyst)
+        // Legacy Catalyst desktop context menu. Native macOS should get an explicit os(macOS) interaction model.
         .contextMenu(forSelectionType: UUID.self) { noteIDs in
             desktopNoteContextMenuButtons(for: noteIDs)
         } primaryAction: { noteIDs in
@@ -517,24 +522,25 @@ struct NotesListView: View {
                 .focused($isSearchFocused)
                 .accessibilityIdentifier("notes-search-field")
 
-#if targetEnvironment(macCatalyst)
-            if selectedNote != nil {
-                Picker("Search scope", selection: $searchScope) {
-                    ForEach(NotesSearchScope.allCases) { scope in
-                        Text(scope.title).tag(scope)
+            if MyRAMPlatform.isMacCatalyst {
+                // Legacy Catalyst exposes desktop current-note search from the split editor shell.
+                if selectedNote != nil {
+                    Picker("Search scope", selection: $searchScope) {
+                        ForEach(NotesSearchScope.allCases) { scope in
+                            Text(scope.title).tag(scope)
+                        }
                     }
-                }
-                .pickerStyle(.segmented)
-                .frame(width: 156)
-                .onChange(of: searchScope) {
-                    isSearchFocused = false
-                    if searchScope == .currentNote {
-                        currentNoteSearchFocusToken += 1
+                    .pickerStyle(.segmented)
+                    .frame(width: 156)
+                    .onChange(of: searchScope) {
+                        isSearchFocused = false
+                        if searchScope == .currentNote {
+                            currentNoteSearchFocusToken += 1
+                        }
                     }
+                    .accessibilityIdentifier("notes-search-scope")
                 }
-                .accessibilityIdentifier("notes-search-scope")
             }
-#endif
 
             if isSearching {
                 Button {
@@ -593,19 +599,20 @@ struct NotesListView: View {
     }
 
     private func activateSearchFromShortcut() {
-#if targetEnvironment(macCatalyst)
-        if isSearchFocused {
-            searchScope = .allNotes
-        } else if editorToolbarBridge.isEditorFocused, selectedNote != nil {
-            searchScope = .currentNote
-            currentNoteSearchFocusToken += 1
-        } else if selectedNote != nil {
-            searchScope = .currentNote
-            currentNoteSearchFocusToken += 1
-        } else {
-            searchScope = .allNotes
+        if MyRAMPlatform.isMacCatalyst {
+            // Legacy Catalyst routes Command-F between sidebar and embedded editor search.
+            if isSearchFocused {
+                searchScope = .allNotes
+            } else if editorToolbarBridge.isEditorFocused, selectedNote != nil {
+                searchScope = .currentNote
+                currentNoteSearchFocusToken += 1
+            } else if selectedNote != nil {
+                searchScope = .currentNote
+                currentNoteSearchFocusToken += 1
+            } else {
+                searchScope = .allNotes
+            }
         }
-#endif
         isSearchFocused = true
     }
 
@@ -613,12 +620,11 @@ struct NotesListView: View {
         Binding(
             get: { selectedNoteIDs },
             set: { proposedSelection in
-#if targetEnvironment(macCatalyst)
-                if editMode.isEditing {
+                if MyRAMPlatform.isMacCatalyst, editMode.isEditing {
+                    // Legacy Catalyst emulates multi-toggle selection in the desktop list shell.
                     selectedNoteIDs = toggledDesktopSelection(from: selectedNoteIDs, proposedSelection: proposedSelection)
                     return
                 }
-#endif
 
                 selectedNoteIDs = proposedSelection
             }
@@ -672,6 +678,7 @@ struct NotesListView: View {
                 Spacer(minLength: 0)
 
 #if targetEnvironment(macCatalyst)
+                // Legacy Catalyst embeds editor toolbar actions into the desktop list top bar.
                 if selectedNote != nil {
                     desktopEditorToolbarActions
                 }
@@ -1031,6 +1038,7 @@ struct NotesListView: View {
 
     private func noteRow(_ note: Note) -> some View {
 #if targetEnvironment(macCatalyst)
+        // Legacy Catalyst desktop rows rely on SwiftUI list selection instead of mobile long-press actions.
         noteRowContent(note)
             .tag(note.id)
             .listRowSeparatorTint(.secondary.opacity(0.3))
@@ -1389,7 +1397,6 @@ struct NotesListView: View {
         }
     }
 
-#if targetEnvironment(macCatalyst)
     private func toggledDesktopSelection(
         from currentSelection: Set<UUID>,
         proposedSelection: Set<UUID>
@@ -1406,7 +1413,6 @@ struct NotesListView: View {
         }
         return updatedSelection
     }
-#endif
 
     private func isBulkNoteActionTarget(_ note: Note) -> Bool {
         editMode.isEditing
@@ -1515,23 +1521,24 @@ private struct MobileNoteEditorSheet: ViewModifier {
     let onOpenSyncConflicts: () -> Void
 
     func body(content: Content) -> some View {
-#if targetEnvironment(macCatalyst)
-        content
-#else
-        content
-            .sheet(item: $selectedNote) { note in
-                NoteEditorView(
-                    vm: vm,
-                    note: note,
-                    onNewNote: { newNote in
-                        selectedNote = newNote
-                    },
-                    syncController: syncController,
-                    syncConflicts: vm.activeSyncConflicts(for: note),
-                    onOpenSyncConflicts: onOpenSyncConflicts
-                )
-            }
-#endif
+        if MyRAMPlatform.isMacCatalyst {
+            // Legacy Catalyst shows the editor in the desktop split shell, not a mobile sheet.
+            content
+        } else {
+            content
+                .sheet(item: $selectedNote) { note in
+                    NoteEditorView(
+                        vm: vm,
+                        note: note,
+                        onNewNote: { newNote in
+                            selectedNote = newNote
+                        },
+                        syncController: syncController,
+                        syncConflicts: vm.activeSyncConflicts(for: note),
+                        onOpenSyncConflicts: onOpenSyncConflicts
+                    )
+                }
+        }
     }
 }
 
