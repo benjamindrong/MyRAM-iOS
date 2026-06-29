@@ -15,19 +15,42 @@ final class MacNotePersistenceAdapter {
         self.context = context
     }
 
-    func loadDefaultNote() throws -> Note {
-        var descriptor = FetchDescriptor<Note>(
+    func loadNotes() throws -> [Note] {
+        let descriptor = FetchDescriptor<Note>(
             predicate: #Predicate { note in
                 note.deletedAt == nil
-            },
-            sortBy: [SortDescriptor(\.modifiedAt, order: .reverse)]
+            }
         )
-        descriptor.fetchLimit = 1
 
-        if let note = try context.fetch(descriptor).first {
+        return try context.fetch(descriptor).sortedByMacSelectionOrder()
+    }
+
+    func loadNotesCreatingFirstIfNeeded() throws -> [Note] {
+        let notes = try loadNotes()
+        guard notes.isEmpty else { return notes }
+
+        return [try createNote()]
+    }
+
+    func loadNote(id: UUID) throws -> Note? {
+        let descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { note in
+                note.id == id && note.deletedAt == nil
+            }
+        )
+
+        return try context.fetch(descriptor).first
+    }
+
+    func loadDefaultNote() throws -> Note {
+        if let note = try loadNotes().first {
             return note
         }
 
+        return try createNote()
+    }
+
+    func createNote() throws -> Note {
         let note = Note()
         context.insert(note)
         try context.save()
@@ -70,5 +93,22 @@ final class MacNotePersistenceAdapter {
 
 enum MacNotePersistenceError: Error, Equatable {
     case deletedNote
+}
+
+private extension Array where Element == Note {
+    func sortedByMacSelectionOrder() -> [Note] {
+        sorted { first, second in
+            if first.modifiedAt != second.modifiedAt {
+                return first.modifiedAt > second.modifiedAt
+            }
+
+            if first.createdAt != second.createdAt {
+                return first.createdAt > second.createdAt
+            }
+
+            // UUID string order makes equal-timestamp lists stable across fetches and test runs.
+            return first.id.uuidString < second.id.uuidString
+        }
+    }
 }
 #endif
