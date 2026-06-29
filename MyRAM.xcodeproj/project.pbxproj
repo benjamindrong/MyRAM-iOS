@@ -43,6 +43,8 @@
 		C097F01042FF000000000004 /* EditorPolicies.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00042FF000000000004 /* EditorPolicies.swift */; };
 		C097F010F2FF00000000000F /* EditorFormattingCommandResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000F2FF00000000000F /* EditorFormattingCommandResolver.swift */; };
 		C097F010E2FF00000000000E /* EditorFormattingStateResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000E2FF00000000000E /* EditorFormattingStateResolver.swift */; };
+		C108F0102FF0000000000001 /* EditorFormattingMutationApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = C108F0002FF0000000000001 /* EditorFormattingMutationApplier.swift */; };
+		C108F0112FF0000000000001 /* EditorFormattingMutationApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */; };
 		C097F01052FF000000000005 /* EditorProfilingFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00052FF000000000005 /* EditorProfilingFixtures.swift */; };
 		C097F01062FF000000000006 /* EditorRichTextContentCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */; };
 		C097F010D2FF00000000000D /* EditorSelectionRangeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000D2FF00000000000D /* EditorSelectionRangeResolver.swift */; };
@@ -126,6 +128,8 @@
 		C097F00042FF000000000004 /* EditorPolicies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPolicies.swift; sourceTree = "<group>"; };
 		C097F000F2FF00000000000F /* EditorFormattingCommandResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingCommandResolver.swift; sourceTree = "<group>"; };
 		C097F000E2FF00000000000E /* EditorFormattingStateResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingStateResolver.swift; sourceTree = "<group>"; };
+		C108F0002FF0000000000001 /* EditorFormattingMutationApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingMutationApplier.swift; sourceTree = "<group>"; };
+		C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingMutationApplierTests.swift; sourceTree = "<group>"; };
 		C097F00052FF000000000005 /* EditorProfilingFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorProfilingFixtures.swift; sourceTree = "<group>"; };
 		C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorRichTextContentCodec.swift; sourceTree = "<group>"; };
 		C097F000D2FF00000000000D /* EditorSelectionRangeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionRangeResolver.swift; sourceTree = "<group>"; };
@@ -252,6 +256,7 @@
 		BC9F1BC12EA47D310045FD72 /* MyRAMTests */ = {
 			isa = PBXGroup;
 			children = (
+				C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */,
 				BC9F1BC22EA47D310045FD72 /* MyRAMTests.swift */,
 			);
 			path = MyRAMTests;
@@ -320,6 +325,7 @@
 				C097F00032FF000000000003 /* EditorPasteFormatter.swift */,
 				C097F00042FF000000000004 /* EditorPolicies.swift */,
 				C097F000F2FF00000000000F /* EditorFormattingCommandResolver.swift */,
+				C108F0002FF0000000000001 /* EditorFormattingMutationApplier.swift */,
 				C097F000E2FF00000000000E /* EditorFormattingStateResolver.swift */,
 				C097F00052FF000000000005 /* EditorProfilingFixtures.swift */,
 				C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */,
@@ -570,6 +576,7 @@
 				C097F01062FF000000000006 /* EditorRichTextContentCodec.swift in Sources */,
 				C097F010D2FF00000000000D /* EditorSelectionRangeResolver.swift in Sources */,
 				C097F010F2FF00000000000F /* EditorFormattingCommandResolver.swift in Sources */,
+				C108F0102FF0000000000001 /* EditorFormattingMutationApplier.swift in Sources */,
 				C097F010E2FF00000000000E /* EditorFormattingStateResolver.swift in Sources */,
 				C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */,
 				BCE65D1A2EA545B000F2D0AA /* NoteEditorView.swift in Sources */,
@@ -588,6 +595,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C108F0112FF0000000000001 /* EditorFormattingMutationApplierTests.swift in Sources */,
 				BC9F1BC32EA47D310045FD72 /* MyRAMTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
