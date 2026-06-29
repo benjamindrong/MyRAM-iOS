@@ -10,6 +10,7 @@ struct MyRAMMacRootView: View {
     @State private var loadError: String?
     @State private var saveError: String?
     @State private var saveTask: Task<Void, Never>?
+    @State private var hasUnsavedChanges = false
 
     var body: some View {
         NavigationSplitView {
@@ -53,6 +54,7 @@ struct MyRAMMacRootView: View {
             attributedText = loadedNotes.first.map {
                 MacNotePersistenceAdapter().attributedContent(for: $0)
             } ?? NSAttributedString(string: "")
+            hasUnsavedChanges = false
             loadError = nil
         } catch {
             loadError = "Unable to load notes: \(error.localizedDescription)"
@@ -65,6 +67,7 @@ struct MyRAMMacRootView: View {
         flushPendingSave()
         selectedNoteID = note.id
         attributedText = MacNotePersistenceAdapter().attributedContent(for: note)
+        hasUnsavedChanges = false
         saveError = nil
     }
 
@@ -76,6 +79,7 @@ struct MyRAMMacRootView: View {
             notes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
             selectedNoteID = newNote.id
             attributedText = MacNotePersistenceAdapter().attributedContent(for: newNote)
+            hasUnsavedChanges = false
             loadError = nil
             saveError = nil
         } catch {
@@ -86,6 +90,7 @@ struct MyRAMMacRootView: View {
     private func scheduleSave() {
         guard let noteID = selectedNoteID else { return }
         let contentToSave = NSAttributedString(attributedString: attributedText)
+        hasUnsavedChanges = true
 
         saveTask?.cancel()
         saveTask = Task { @MainActor in
@@ -99,7 +104,7 @@ struct MyRAMMacRootView: View {
         saveTask?.cancel()
         saveTask = nil
 
-        guard let selectedNoteID else { return }
+        guard hasUnsavedChanges, let selectedNoteID else { return }
         saveNote(id: selectedNoteID, attributedContent: attributedText)
     }
 
@@ -109,6 +114,7 @@ struct MyRAMMacRootView: View {
             guard let note = try adapter.loadNote(id: noteID) else { return }
             try adapter.save(note: note, attributedContent: attributedContent)
             notes = try adapter.loadNotesCreatingFirstIfNeeded()
+            hasUnsavedChanges = selectedNoteID == noteID ? false : hasUnsavedChanges
             saveError = nil
         } catch {
             saveError = "Unable to save note: \(error.localizedDescription)"
