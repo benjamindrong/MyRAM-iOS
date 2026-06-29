@@ -120,6 +120,8 @@ final class EditorSearchHighlighter {
         CATransaction.commit()
     }
 
+    // scrollRangeToVisible can settle after the current layout pass; this final
+    // runloop pass converges the highlight after scrolling and layout finish.
     private func schedulePostScrollReposition(in textView: UITextView) {
         DispatchQueue.main.async { [weak self, weak textView] in
             guard let self, let textView, self.hasActiveHighlight else { return }
