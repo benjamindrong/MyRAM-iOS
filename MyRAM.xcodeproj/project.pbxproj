@@ -33,6 +33,8 @@
 		BCA109010000000000000003 /* Folder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D212EA6000000F2D0AA /* Folder.swift */; };
 		BCA109010000000000000004 /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D1B2EA569BD00F2D0AA /* PersistenceManager.swift */; };
 		BCA109010000000000000005 /* MacNotePersistenceAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */; };
+		BCA10A010000000000000001 /* MacSidebarCollapsePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */; };
+		BCA10A010000000000000002 /* MacSidebarCollapsePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */; };
 		BCB610022FEC610000610061 /* DebugDemoDataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */; };
 		BCF104022FF1040000000104 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D0B2EA5447D00F2D0AA /* Note.swift */; };
@@ -123,6 +125,8 @@
 		BCA107020000000000000002 /* MyRAMMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyRAMMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotePersistenceAdapter.swift; sourceTree = "<group>"; };
 		BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotePersistenceAdapterTests.swift; sourceTree = "<group>"; };
+		BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSidebarCollapsePolicy.swift; sourceTree = "<group>"; };
+		BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSidebarCollapsePolicyTests.swift; sourceTree = "<group>"; };
 		BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDemoDataGenerator.swift; sourceTree = "<group>"; };
 		BCCAFE012FEE000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BCF104012FF1040000000104 /* MyRAMPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMPlatform.swift; sourceTree = "<group>"; };
@@ -265,6 +269,7 @@
 				BCA106020000000000000002 /* MacTextViewRepresentable.swift */,
 				BCA106020000000000000003 /* MacEditorSampleDocument.swift */,
 				BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */,
+				BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */,
 			);
 			path = Mac;
 			sourceTree = "<group>";
@@ -294,6 +299,7 @@
 			children = (
 				BCA107020000000000000001 /* MacEditorSampleDocumentTests.swift */,
 				BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */,
+				BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */,
 			);
 			path = MyRAMMacTests;
 			sourceTree = "<group>";
@@ -648,6 +654,7 @@
 				BCA109010000000000000002 /* Note.swift in Sources */,
 				BCA109010000000000000003 /* Folder.swift in Sources */,
 				BCA109010000000000000004 /* PersistenceManager.swift in Sources */,
+				BCA10A010000000000000001 /* MacSidebarCollapsePolicy.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -657,6 +664,7 @@
 			files = (
 				BCA107010000000000000001 /* MacEditorSampleDocumentTests.swift in Sources */,
 				BCA109010000000000000005 /* MacNotePersistenceAdapterTests.swift in Sources */,
+				BCA10A010000000000000002 /* MacSidebarCollapsePolicyTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

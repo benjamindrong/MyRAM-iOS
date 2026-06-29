@@ -12,6 +12,8 @@ struct MyRAMMacRootView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var hasUnsavedChanges = false
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @State private var sidebarCollapseState: MacSidebarCollapsePolicy.CollapseState = .expanded
+    @State private var isApplyingAutomaticVisibilityChange = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -30,20 +32,16 @@ struct MyRAMMacRootView: View {
                 onTextChanged: scheduleSave
             )
         }
-        .toolbar(removing: .sidebarToggle)
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button(action: showSidebar) {
-                    Image(systemName: "sidebar.leading")
-                }
-                .opacity(showsSidebarRestoreButton ? 1 : 0)
-                .disabled(!showsSidebarRestoreButton)
-                .accessibilityHidden(!showsSidebarRestoreButton)
-                .help("Show Sidebar")
-            }
-        }
         .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 260, minHeight: 280)
+        .onGeometryChange(for: CGFloat.self) { proxy in
+            proxy.size.width
+        } action: { width in
+            handleWidthChange(width)
+        }
+        .onChange(of: columnVisibility) { _, newValue in
+            handleColumnVisibilityChange(newValue)
+        }
         .onAppear(perform: loadNotesIfNeeded)
         .onDisappear(perform: flushPendingSave)
     }
@@ -53,8 +51,29 @@ struct MyRAMMacRootView: View {
         return notes.first { $0.id == selectedNoteID }
     }
 
-    private var showsSidebarRestoreButton: Bool {
-        columnVisibility == .detailOnly
+    private func handleWidthChange(_ width: CGFloat) {
+        let nextState = MacSidebarCollapsePolicy.stateAfterWidthChange(
+            currentState: sidebarCollapseState,
+            availableWidth: width
+        )
+        guard nextState != sidebarCollapseState else { return }
+
+        sidebarCollapseState = nextState
+        isApplyingAutomaticVisibilityChange = true
+        withAnimation(.easeInOut(duration: 0.25)) {
+            columnVisibility = nextState == .expanded ? .all : .detailOnly
+        }
+    }
+
+    private func handleColumnVisibilityChange(_ newValue: NavigationSplitViewVisibility) {
+        if isApplyingAutomaticVisibilityChange {
+            isApplyingAutomaticVisibilityChange = false
+            return
+        }
+
+        sidebarCollapseState = MacSidebarCollapsePolicy.stateAfterManualVisibilityChange(
+            isSidebarVisible: newValue == .all
+        )
     }
 
     private func loadNotesIfNeeded() {
@@ -138,9 +157,6 @@ struct MyRAMMacRootView: View {
         }
     }
 
-    private func showSidebar() {
-        columnVisibility = .all
-    }
 }
 
 private struct MacNoteListView: View {
@@ -189,7 +205,7 @@ private struct MacNoteListView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
         }
-        .navigationSplitViewColumnWidth(min: 48, ideal: 260, max: 360)
+        .navigationSplitViewColumnWidth(ideal: 260, max: 360)
     }
 
     private var selectedBinding: Binding<UUID?> {
