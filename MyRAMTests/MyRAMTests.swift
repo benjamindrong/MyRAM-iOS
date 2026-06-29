@@ -2089,14 +2089,13 @@ final class MyRAMTests: XCTestCase {
         let textContainerRect = CGRect(x: 18, y: 120, width: 42, height: 16)
         let convertedRect = EditorSearchHighlightGeometry.layerRect(
             forTextContainerRect: textContainerRect,
-            textContainerInset: UIEdgeInsets(top: 12, left: 20, bottom: 8, right: 10),
-            contentOffset: CGPoint(x: 3, y: 48)
+            textContainerInset: UIEdgeInsets(top: 12, left: 20, bottom: 8, right: 10)
         )
 
-        XCTAssertEqual(convertedRect, CGRect(x: 35, y: 84, width: 42, height: 16))
+        XCTAssertEqual(convertedRect, CGRect(x: 38, y: 132, width: 42, height: 16))
     }
 
-    func testSearchHighlighterLayerRectsMoveWithContentOffset() throws {
+    func testSearchHighlighterLayerRectsStayStableWhenContentOffsetChanges() throws {
         let textView = searchHighlightTestTextView()
         let range = (textView.text as NSString).range(of: "needle")
         XCTAssertNotEqual(range.location, NSNotFound)
@@ -2109,7 +2108,7 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(initialRects.count, scrolledRects.count)
         XCTAssertEqual(scrolledRects.first?.minX ?? 0, initialRects.first?.minX ?? 0, accuracy: 0.5)
-        XCTAssertEqual(scrolledRects.first?.minY ?? 0, (initialRects.first?.minY ?? 0) - 72, accuracy: 0.5)
+        XCTAssertEqual(scrolledRects.first?.minY ?? 0, initialRects.first?.minY ?? 0, accuracy: 0.5)
     }
 
     func testSearchHighlighterRepositionsLayerAfterScrolling() throws {

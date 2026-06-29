@@ -150,8 +150,7 @@ final class EditorSearchHighlighter {
             let paddedRect = rect.insetBy(dx: -2, dy: -1)
             layerRects.append(EditorSearchHighlightGeometry.layerRect(
                 forTextContainerRect: paddedRect,
-                textContainerInset: textView.textContainerInset,
-                contentOffset: textView.contentOffset
+                textContainerInset: textView.textContainerInset
             ))
         }
 
@@ -162,15 +161,14 @@ final class EditorSearchHighlighter {
 enum EditorSearchHighlightGeometry {
     static func layerRect(
         forTextContainerRect rect: CGRect,
-        textContainerInset: UIEdgeInsets,
-        contentOffset: CGPoint
+        textContainerInset: UIEdgeInsets
     ) -> CGRect {
         // TextKit returns glyph enclosing rects in text-container coordinates.
-        // The rects already include lineFragmentPadding, so only the container's
-        // origin inside the scroll view and the current scroll offset are needed.
+        // Layers inserted into UITextView.layer live in content coordinates, so
+        // scrolling is handled by the scroll view's bounds instead of this frame.
         rect.offsetBy(
-            dx: textContainerInset.left - contentOffset.x,
-            dy: textContainerInset.top - contentOffset.y
+            dx: textContainerInset.left,
+            dy: textContainerInset.top
         )
     }
 }
