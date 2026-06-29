@@ -86,15 +86,6 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             self.onTextChanged = onTextChanged
         }
 
-        func textDidChange(_ notification: Notification) {
-            guard !isApplyingSwiftUIUpdate else { return }
-            guard let textView = notification.object as? NSTextView else {
-                return
-            }
-
-            publishCurrentText(from: textView)
-        }
-
         func textStorage(
             _ textStorage: NSTextStorage,
             didProcessEditing editedMask: NSTextStorageEditActions,

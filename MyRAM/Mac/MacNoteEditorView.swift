@@ -53,7 +53,7 @@ struct MacNoteEditorView: View {
     private var platformStatus: String {
         // Keep platform identity centralized in the shared helper introduced for the Mac port.
         guard MyRAMPlatform.isNativeMacOS else { return "Unsupported platform" }
-        return note.map { $0.title.isEmpty ? "Persisted note" : $0.title } ?? "Loading persisted note"
+        return note.map { $0.title.isEmpty ? "Untitled" : $0.title } ?? "Loading Untitled note"
     }
 
     private func loadNoteIfNeeded() {
