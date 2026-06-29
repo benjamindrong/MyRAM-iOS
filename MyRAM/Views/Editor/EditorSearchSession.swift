@@ -1,24 +1,18 @@
 import Foundation
 
 struct EditorSearchSession: Equatable {
-    var query: String = ""
     var debouncedQuery: String = ""
     var matches: [NoteSearchMatch] = []
     var selectedMatchID: String?
-    private var bodyTextLength = 0
 
     init(
-        query: String = "",
         debouncedQuery: String = "",
         matches: [NoteSearchMatch] = [],
-        selectedMatchID: String? = nil,
-        bodyTextLength: Int = 0
+        selectedMatchID: String? = nil
     ) {
-        self.query = query
         self.debouncedQuery = debouncedQuery
         self.matches = matches
         self.selectedMatchID = selectedMatchID
-        self.bodyTextLength = bodyTextLength
     }
 
     var selectedMatch: NoteSearchMatch? {
@@ -28,10 +22,10 @@ struct EditorSearchSession: Equatable {
         )
     }
 
-    var selectedBodyHighlightRange: NSRange? {
+    func selectedBodyHighlightRange(textLength: Int) -> NSRange? {
         EditorSearchMatchResolver.bodyRange(
             for: selectedMatch,
-            textLength: bodyTextLength
+            textLength: textLength
         )
     }
 
@@ -49,12 +43,6 @@ struct EditorSearchSession: Equatable {
         return "\(index + 1) of \(matches.count)"
     }
 
-    func updatingQuery(_ query: String) -> EditorSearchSession {
-        var session = self
-        session.query = query
-        return session
-    }
-
     func rebuilt(
         bodyText: String,
         pinnedTexts: [NoteSearchPinnedText],
@@ -66,14 +54,12 @@ struct EditorSearchSession: Equatable {
             query: query
         )
         return EditorSearchSession(
-            query: query,
             debouncedQuery: query,
             matches: rebuiltMatches,
             selectedMatchID: EditorSearchMatchResolver.resolvedSelectedMatchID(
                 in: rebuiltMatches,
                 selectedMatchID: selectedMatchID
-            ),
-            bodyTextLength: bodyText.utf16.count
+            )
         )
     }
 

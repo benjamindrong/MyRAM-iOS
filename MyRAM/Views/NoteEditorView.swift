@@ -505,7 +505,7 @@ struct NoteEditorView: View {
     }
 
     private var selectedBodySearchRange: NSRange? {
-        searchSession.selectedBodyHighlightRange
+        searchSession.selectedBodyHighlightRange(textLength: content.utf16.count)
     }
 
     private var selectedPinnedTextSearchID: UUID? {
@@ -951,7 +951,6 @@ struct NoteEditorView: View {
             localCurrentNoteSearchText = query
             isLocalCurrentNoteSearchPresented = true
         }
-        searchSession = searchSession.updatingQuery(query)
     }
 
     private func scheduleCurrentNoteSearchUpdate() {
@@ -959,7 +958,6 @@ struct NoteEditorView: View {
         let query = currentNoteSearchQuery
         let bodyText = content
         let pinnedTexts = sortedPinnedThoughts.map { NoteSearchPinnedText(id: $0.id, text: $0.text) }
-        searchSession = searchSession.updatingQuery(query)
         currentNoteSearchDebounceTask = Task {
             try? await Task.sleep(nanoseconds: 180_000_000)
             guard !Task.isCancelled else { return }

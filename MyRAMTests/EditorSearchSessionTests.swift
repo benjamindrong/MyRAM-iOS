@@ -11,7 +11,6 @@ final class EditorSearchSessionTests: XCTestCase {
             query: "alpha"
         )
 
-        XCTAssertEqual(session.query, "alpha")
         XCTAssertEqual(session.debouncedQuery, "alpha")
         XCTAssertEqual(session.matches.map(\.region), [.pinnedText(id: pinnedID), .body])
         XCTAssertEqual(session.selectedMatchID, session.matches.first?.id)
@@ -32,7 +31,7 @@ final class EditorSearchSessionTests: XCTestCase {
 
         XCTAssertEqual(session.matches, [])
         XCTAssertNil(session.selectedMatchID)
-        XCTAssertNil(session.selectedBodyHighlightRange)
+        XCTAssertNil(session.selectedBodyHighlightRange(textLength: "alpha".utf16.count))
         XCTAssertEqual(session.summaryText, "0")
     }
 
@@ -51,7 +50,7 @@ final class EditorSearchSessionTests: XCTestCase {
 
         XCTAssertEqual(session.matches, [])
         XCTAssertNil(session.selectedMatchID)
-        XCTAssertNil(session.selectedBodyHighlightRange)
+        XCTAssertNil(session.selectedBodyHighlightRange(textLength: "alpha".utf16.count))
         XCTAssertNil(session.selectedPinnedTextID)
         XCTAssertEqual(session.summaryText, "0")
     }
@@ -64,11 +63,9 @@ final class EditorSearchSessionTests: XCTestCase {
         )
         let selectedID = initial.matches[1].id
         let selected = EditorSearchSession(
-            query: initial.query,
             debouncedQuery: initial.debouncedQuery,
             matches: initial.matches,
-            selectedMatchID: selectedID,
-            bodyTextLength: "alpha beta alpha".utf16.count
+            selectedMatchID: selectedID
         )
 
         let rebuilt = selected.rebuilt(
@@ -82,11 +79,9 @@ final class EditorSearchSessionTests: XCTestCase {
 
     func testRebuiltSessionFallsBackFromStaleSelectedMatch() {
         let stale = EditorSearchSession(
-            query: "alpha",
             debouncedQuery: "alpha",
             matches: [],
-            selectedMatchID: "stale",
-            bodyTextLength: 0
+            selectedMatchID: "stale"
         )
 
         let rebuilt = stale.rebuilt(
@@ -100,11 +95,9 @@ final class EditorSearchSessionTests: XCTestCase {
 
     func testOutOfBoundsSelectedMatchFallsBackCleanly() {
         let stale = EditorSearchSession(
-            query: "alpha",
             debouncedQuery: "alpha",
             matches: [],
-            selectedMatchID: "body-200-5",
-            bodyTextLength: 0
+            selectedMatchID: "body-200-5"
         )
 
         let rebuilt = stale.rebuilt(
@@ -114,7 +107,10 @@ final class EditorSearchSessionTests: XCTestCase {
         )
 
         XCTAssertEqual(rebuilt.selectedMatchID, rebuilt.matches.first?.id)
-        XCTAssertEqual(rebuilt.selectedBodyHighlightRange, NSRange(location: 0, length: 5))
+        XCTAssertEqual(
+            rebuilt.selectedBodyHighlightRange(textLength: "alpha beta".utf16.count),
+            NSRange(location: 0, length: 5)
+        )
     }
 
     func testNextNavigationWraps() {
@@ -125,11 +121,9 @@ final class EditorSearchSessionTests: XCTestCase {
         )
 
         let selectedLast = EditorSearchSession(
-            query: session.query,
             debouncedQuery: session.debouncedQuery,
             matches: session.matches,
-            selectedMatchID: session.matches[2].id,
-            bodyTextLength: "alpha beta alpha gamma alpha".utf16.count
+            selectedMatchID: session.matches[2].id
         )
 
         XCTAssertEqual(selectedLast.selectingNext().selectedMatchID, session.matches[0].id)
@@ -152,7 +146,10 @@ final class EditorSearchSessionTests: XCTestCase {
             query: "alpha"
         )
 
-        XCTAssertEqual(session.selectedBodyHighlightRange, NSRange(location: 5, length: 5))
+        XCTAssertEqual(
+            session.selectedBodyHighlightRange(textLength: "Body alpha detail".utf16.count),
+            NSRange(location: 5, length: 5)
+        )
         XCTAssertNil(session.selectedPinnedTextID)
     }
 
@@ -166,7 +163,7 @@ final class EditorSearchSessionTests: XCTestCase {
         )
 
         XCTAssertEqual(session.selectedPinnedTextID, pinnedID)
-        XCTAssertNil(session.selectedBodyHighlightRange)
+        XCTAssertNil(session.selectedBodyHighlightRange(textLength: "Body alpha detail".utf16.count))
     }
 
     func testSummaryTextCompatibility() {
@@ -176,11 +173,9 @@ final class EditorSearchSessionTests: XCTestCase {
             query: "alpha"
         )
         let countOnly = EditorSearchSession(
-            query: session.query,
             debouncedQuery: session.debouncedQuery,
             matches: session.matches,
-            selectedMatchID: nil,
-            bodyTextLength: "alpha beta alpha".utf16.count
+            selectedMatchID: nil
         )
 
         XCTAssertEqual(EditorSearchSession().summaryText, "0")
