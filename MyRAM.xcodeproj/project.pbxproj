@@ -46,8 +46,10 @@
 		C097F01022FF000000000002 /* EditorChecklistRendering.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00022FF000000000002 /* EditorChecklistRendering.swift */; };
 		C097F01032FF000000000003 /* EditorPasteFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00032FF000000000003 /* EditorPasteFormatter.swift */; };
 		C097F01042FF000000000004 /* EditorPolicies.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00042FF000000000004 /* EditorPolicies.swift */; };
+		C097F01102FF000000000010 /* EditorFocusSelectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00102FF000000000010 /* EditorFocusSelectionPolicy.swift */; };
 		C097F010F2FF00000000000F /* EditorFormattingCommandResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000F2FF00000000000F /* EditorFormattingCommandResolver.swift */; };
 		C097F010E2FF00000000000E /* EditorFormattingStateResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000E2FF00000000000E /* EditorFormattingStateResolver.swift */; };
+		C097F01112FF000000000011 /* EditorFocusSelectionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00112FF000000000011 /* EditorFocusSelectionPolicyTests.swift */; };
 		C108F0102FF0000000000001 /* EditorFormattingMutationApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = C108F0002FF0000000000001 /* EditorFormattingMutationApplier.swift */; };
 		C108F0112FF0000000000001 /* EditorFormattingMutationApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */; };
 		C097F01052FF000000000005 /* EditorProfilingFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00052FF000000000005 /* EditorProfilingFixtures.swift */; };
@@ -135,8 +137,10 @@
 		C097F00022FF000000000002 /* EditorChecklistRendering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorChecklistRendering.swift; sourceTree = "<group>"; };
 		C097F00032FF000000000003 /* EditorPasteFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPasteFormatter.swift; sourceTree = "<group>"; };
 		C097F00042FF000000000004 /* EditorPolicies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPolicies.swift; sourceTree = "<group>"; };
+		C097F00102FF000000000010 /* EditorFocusSelectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFocusSelectionPolicy.swift; sourceTree = "<group>"; };
 		C097F000F2FF00000000000F /* EditorFormattingCommandResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingCommandResolver.swift; sourceTree = "<group>"; };
 		C097F000E2FF00000000000E /* EditorFormattingStateResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingStateResolver.swift; sourceTree = "<group>"; };
+		C097F00112FF000000000011 /* EditorFocusSelectionPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFocusSelectionPolicyTests.swift; sourceTree = "<group>"; };
 		C108F0002FF0000000000001 /* EditorFormattingMutationApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingMutationApplier.swift; sourceTree = "<group>"; };
 		C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingMutationApplierTests.swift; sourceTree = "<group>"; };
 		C097F00052FF000000000005 /* EditorProfilingFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorProfilingFixtures.swift; sourceTree = "<group>"; };
@@ -269,6 +273,7 @@
 			isa = PBXGroup;
 			children = (
 				C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */,
+				C097F00112FF000000000011 /* EditorFocusSelectionPolicyTests.swift */,
 				C11200022FF1120000000001 /* EditorSearchSessionTests.swift */,
 				BC9F1BC22EA47D310045FD72 /* MyRAMTests.swift */,
 			);
@@ -338,6 +343,7 @@
 				C097F00022FF000000000002 /* EditorChecklistRendering.swift */,
 				C097F00032FF000000000003 /* EditorPasteFormatter.swift */,
 				C097F00042FF000000000004 /* EditorPolicies.swift */,
+				C097F00102FF000000000010 /* EditorFocusSelectionPolicy.swift */,
 				C097F000F2FF00000000000F /* EditorFormattingCommandResolver.swift */,
 				C108F0002FF0000000000001 /* EditorFormattingMutationApplier.swift */,
 				C097F000E2FF00000000000E /* EditorFormattingStateResolver.swift */,
@@ -591,6 +597,7 @@
 				C11200102FF1120000000001 /* EditorSearchSession.swift in Sources */,
 				C097F01062FF000000000006 /* EditorRichTextContentCodec.swift in Sources */,
 				C097F010D2FF00000000000D /* EditorSelectionRangeResolver.swift in Sources */,
+				C097F01102FF000000000010 /* EditorFocusSelectionPolicy.swift in Sources */,
 				C097F010F2FF00000000000F /* EditorFormattingCommandResolver.swift in Sources */,
 				C108F0102FF0000000000001 /* EditorFormattingMutationApplier.swift in Sources */,
 				C097F010E2FF00000000000E /* EditorFormattingStateResolver.swift in Sources */,
@@ -612,6 +619,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C108F0112FF0000000000001 /* EditorFormattingMutationApplierTests.swift in Sources */,
+				C097F01112FF000000000011 /* EditorFocusSelectionPolicyTests.swift in Sources */,
 				C11200112FF1120000000001 /* EditorSearchSessionTests.swift in Sources */,
 				BC9F1BC32EA47D310045FD72 /* MyRAMTests.swift in Sources */,
 			);

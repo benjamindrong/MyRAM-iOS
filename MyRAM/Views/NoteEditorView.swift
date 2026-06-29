@@ -3824,18 +3824,14 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func effectiveSelectionRange(in textView: UITextView) -> NSRange {
             let currentRange = textView.selectedRange
-            if currentRange.length > 0 {
-                return currentRange
-            }
-
-            guard !textView.isFirstResponder else {
-                return currentRange
-            }
-
             let fullLength = textStorageLength(in: textView)
-            let cachedRange = lastKnownSelectionRange
-            if EditorSelectionRangeResolver.hasPositiveLengthResolvedRange(cachedRange, textLength: fullLength) {
-                return cachedRange
+            if let policyRange = EditorFocusSelectionPolicy.cachedSelectionRange(
+                currentRange: currentRange,
+                isFirstResponder: textView.isFirstResponder,
+                cachedRange: lastKnownSelectionRange,
+                textLength: fullLength
+            ) {
+                return policyRange
             }
 
             return currentRange
@@ -3843,29 +3839,28 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func formattingActionRange(in textView: UITextView) -> NSRange {
             let currentRange = safeSelectedRange(in: textView)
-            if currentRange.length > 0 {
-                lastKnownSelectionRange = currentRange
-                return currentRange
-            }
-
-            if textView.isFirstResponder {
-                lastKnownSelectionRange = currentRange
-                return currentRange
-            }
-
             let fullLength = textStorageLength(in: textView)
-            let cachedRange = lastKnownSelectionRange
-            if EditorSelectionRangeResolver.hasPositiveLengthResolvedRange(cachedRange, textLength: fullLength) {
-                restoreSelectionWithoutScrolling(cachedRange, in: textView)
-                return cachedRange
+            guard let policyRange = EditorFocusSelectionPolicy.cachedSelectionRange(
+                currentRange: currentRange,
+                isFirstResponder: textView.isFirstResponder,
+                cachedRange: lastKnownSelectionRange,
+                textLength: fullLength
+            ) else {
+                return currentRange
             }
 
-            return currentRange
+            if policyRange == currentRange {
+                lastKnownSelectionRange = currentRange
+                return currentRange
+            }
+
+            restoreSelectionWithoutScrolling(policyRange, in: textView)
+            return policyRange
         }
 
         private func updateLastKnownSelectionRange(from textView: UITextView) {
             let range = safeSelectedRange(in: textView)
-            if range.length > 0 || textView.isFirstResponder {
+            if EditorFocusSelectionPolicy.shouldCacheSelection(range: range, isFirstResponder: textView.isFirstResponder) {
                 lastKnownSelectionRange = range
                 sessionSelectionRange = range
             }
@@ -3873,7 +3868,7 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func cacheSelectionFormattingRange(from textView: UITextView) {
             let range = safeSelectedRange(in: textView)
-            if range.length > 0 || textView.isFirstResponder {
+            if EditorFocusSelectionPolicy.shouldCacheSelection(range: range, isFirstResponder: textView.isFirstResponder) {
                 lastKnownSelectionRange = range
                 sessionSelectionRange = range
             }
@@ -3889,16 +3884,22 @@ private struct SelectableTextView: UIViewRepresentable {
 
         private func applyPendingFocusTapSelection(in textView: UITextView) {
             let currentRange = textView.selectedRange
-            if currentRange.location == NSNotFound,
-               let fallbackRange = validSessionSelectionRange(in: textView) {
+            let decision = EditorFocusSelectionPolicy.focusRestoreDecision(
+                currentRange: currentRange,
+                focusAcquisitionRange: focusAcquisitionSelectionRange,
+                sessionRange: sessionSelectionRange,
+                textLength: textStorageLength(in: textView)
+            )
+
+            switch decision {
+            case let .restoreSessionFallback(fallbackRange):
                 restoreSelectionWithoutScrolling(fallbackRange, in: textView)
                 lastKnownSelectionRange = fallbackRange
-            } else if shouldRestoreFocusAcquisitionRange(currentRange, in: textView),
-                      let focusAcquisitionSelectionRange {
+            case let .restoreFocusAcquisition(focusAcquisitionSelectionRange):
                 restoreSelectionWithoutScrolling(focusAcquisitionSelectionRange, in: textView)
                 lastKnownSelectionRange = focusAcquisitionSelectionRange
                 sessionSelectionRange = focusAcquisitionSelectionRange
-            } else {
+            case .acceptCurrent:
                 updateLastKnownSelectionRange(from: textView)
             }
             self.focusAcquisitionSelectionRange = nil
@@ -3910,34 +3911,6 @@ private struct SelectableTextView: UIViewRepresentable {
                 textView.selectedRange,
                 textLength: textStorageLength(in: textView)
             )
-        }
-
-        private func isValidSelectionRange(_ range: NSRange, in textView: UITextView) -> Bool {
-            EditorSelectionRangeResolver.isValidRange(
-                range,
-                textLength: textStorageLength(in: textView)
-            )
-        }
-
-        private func validSessionSelectionRange(in textView: UITextView) -> NSRange? {
-            guard let sessionSelectionRange,
-                  isValidSelectionRange(sessionSelectionRange, in: textView) else {
-                return nil
-            }
-            return sessionSelectionRange
-        }
-
-        private func shouldRestoreFocusAcquisitionRange(_ currentRange: NSRange, in textView: UITextView) -> Bool {
-            let textLength = textStorageLength(in: textView)
-            guard currentRange.location == textLength,
-                  textLength > 0,
-                  let focusAcquisitionSelectionRange,
-                  isValidSelectionRange(focusAcquisitionSelectionRange, in: textView),
-                  focusAcquisitionSelectionRange.location != textLength else {
-                return false
-            }
-
-            return true
         }
 
         private func restoreSelectionWithoutScrolling(_ range: NSRange, in textView: UITextView) {
