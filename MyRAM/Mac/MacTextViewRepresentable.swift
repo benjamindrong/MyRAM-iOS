@@ -3,10 +3,11 @@ import AppKit
 import SwiftUI
 
 struct MacTextViewRepresentable: NSViewRepresentable {
-    @Binding var text: String
+    @Binding var attributedText: NSAttributedString
+    var onTextChanged: () -> Void = {}
 
     func makeCoordinator() -> Coordinator {
-        Coordinator(text: $text)
+        Coordinator(attributedText: $attributedText, onTextChanged: onTextChanged)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
@@ -20,11 +21,12 @@ struct MacTextViewRepresentable: NSViewRepresentable {
 
         let textView = NSTextView(frame: .zero)
         textView.delegate = context.coordinator
-        textView.string = text
+        textView.textStorage?.delegate = context.coordinator
+        textView.textStorage?.setAttributedString(attributedText)
         textView.isEditable = true
         textView.isSelectable = true
         textView.allowsUndo = true
-        textView.isRichText = false
+        textView.isRichText = true
         textView.importsGraphics = false
         textView.usesFindBar = true
         textView.font = .systemFont(ofSize: 15)
@@ -54,33 +56,63 @@ struct MacTextViewRepresentable: NSViewRepresentable {
     }
 
     func updateNSView(_ scrollView: NSScrollView, context: Context) {
-        context.coordinator.text = $text
+        context.coordinator.attributedText = $attributedText
+        context.coordinator.onTextChanged = onTextChanged
 
         guard let textView = context.coordinator.textView ?? scrollView.documentView as? NSTextView else {
             return
         }
 
         context.coordinator.textView = textView
-        if textView.string != text {
-            textView.string = text
+        textView.textStorage?.delegate = context.coordinator
+        let currentText = textView.attributedString()
+        if !currentText.isEqual(to: attributedText) {
+            let selectedRange = textView.selectedRange()
+            context.coordinator.isApplyingSwiftUIUpdate = true
+            textView.textStorage?.setAttributedString(attributedText)
+            textView.setSelectedRange(selectedRange.clamped(toLength: attributedText.length))
+            context.coordinator.isApplyingSwiftUIUpdate = false
         }
     }
 
-    final class Coordinator: NSObject, NSTextViewDelegate {
-        var text: Binding<String>
+    final class Coordinator: NSObject, NSTextStorageDelegate, NSTextViewDelegate {
+        var attributedText: Binding<NSAttributedString>
+        var onTextChanged: () -> Void
         weak var textView: NSTextView?
+        var isApplyingSwiftUIUpdate = false
 
-        init(text: Binding<String>) {
-            self.text = text
+        init(attributedText: Binding<NSAttributedString>, onTextChanged: @escaping () -> Void) {
+            self.attributedText = attributedText
+            self.onTextChanged = onTextChanged
         }
 
-        func textDidChange(_ notification: Notification) {
-            guard let textView = notification.object as? NSTextView else {
+        func textStorage(
+            _ textStorage: NSTextStorage,
+            didProcessEditing editedMask: NSTextStorageEditActions,
+            range editedRange: NSRange,
+            changeInLength delta: Int
+        ) {
+            guard !isApplyingSwiftUIUpdate else { return }
+            guard editedMask.contains(.editedAttributes) || editedMask.contains(.editedCharacters) else {
                 return
             }
+            guard let textView else { return }
 
-            text.wrappedValue = textView.string
+            publishCurrentText(from: textView)
         }
+
+        private func publishCurrentText(from textView: NSTextView) {
+            attributedText.wrappedValue = NSAttributedString(attributedString: textView.attributedString())
+            onTextChanged()
+        }
+    }
+}
+
+private extension NSRange {
+    func clamped(toLength length: Int) -> NSRange {
+        let safeLocation = min(location, length)
+        let maxLength = length - safeLocation
+        return NSRange(location: safeLocation, length: min(self.length, maxLength))
     }
 }
 #endif
