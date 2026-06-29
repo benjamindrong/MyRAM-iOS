@@ -3113,12 +3113,26 @@ private struct SelectableTextView: UIViewRepresentable {
             onEditorScrolled()
         }
 
+        // Keep search highlights aligned through live scrolling, programmatic
+        // scroll animation completion, and deceleration settling.
         func scrollViewDidScroll(_ scrollView: UIScrollView) {
             let scrollSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
             os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.scrollViewDidScroll", signpostID: scrollSignpostID)
             defer {
                 os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.scrollViewDidScroll", signpostID: scrollSignpostID)
             }
+            guard let textView = scrollView as? UITextView,
+                  searchHighlighter.hasActiveHighlight else { return }
+            searchHighlighter.reposition(in: textView)
+        }
+
+        func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+            guard let textView = scrollView as? UITextView,
+                  searchHighlighter.hasActiveHighlight else { return }
+            searchHighlighter.reposition(in: textView)
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
             guard let textView = scrollView as? UITextView,
                   searchHighlighter.hasActiveHighlight else { return }
             searchHighlighter.reposition(in: textView)
