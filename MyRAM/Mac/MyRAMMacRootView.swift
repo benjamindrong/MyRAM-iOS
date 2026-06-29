@@ -30,7 +30,15 @@ struct MyRAMMacRootView: View {
             )
         }
         .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 520, minHeight: 420)
+        .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button(action: toggleSidebar) {
+                    Image(systemName: "sidebar.leading")
+                }
+                .help("Show or Hide Sidebar")
+            }
+        }
+        .frame(minWidth: 320, minHeight: 320)
         .onAppear(perform: loadNotesIfNeeded)
         .onDisappear(perform: flushPendingSave)
     }
@@ -120,6 +128,13 @@ struct MyRAMMacRootView: View {
             saveError = "Unable to save note: \(error.localizedDescription)"
         }
     }
+
+    private func toggleSidebar() {
+        NSApp.keyWindow?.firstResponder?.tryToPerform(
+            #selector(NSSplitViewController.toggleSidebar(_:)),
+            with: nil
+        )
+    }
 }
 
 private struct MacNoteListView: View {
@@ -168,7 +183,7 @@ private struct MacNoteListView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
         }
-        .navigationSplitViewColumnWidth(min: 96, ideal: 260, max: 360)
+        .navigationSplitViewColumnWidth(min: 64, ideal: 260, max: 360)
     }
 
     private var selectedBinding: Binding<UUID?> {
