@@ -32,15 +32,17 @@ struct MyRAMMacRootView: View {
         }
         .toolbar(removing: .sidebarToggle)
         .toolbar {
-            if columnVisibility != .all {
-                ToolbarItem(placement: .navigation) {
-                    Button(action: showSidebar) {
-                        Image(systemName: "sidebar.leading")
-                    }
-                    .help("Show Sidebar")
+            ToolbarItem(placement: .navigation) {
+                Button(action: showSidebar) {
+                    Image(systemName: "sidebar.leading")
                 }
+                .opacity(showsSidebarRestoreButton ? 1 : 0)
+                .disabled(!showsSidebarRestoreButton)
+                .accessibilityHidden(!showsSidebarRestoreButton)
+                .help("Show Sidebar")
             }
         }
+        .navigationSplitViewStyle(.balanced)
         .frame(minWidth: 260, minHeight: 280)
         .onAppear(perform: loadNotesIfNeeded)
         .onDisappear(perform: flushPendingSave)
@@ -49,6 +51,10 @@ struct MyRAMMacRootView: View {
     private var selectedNote: Note? {
         guard let selectedNoteID else { return nil }
         return notes.first { $0.id == selectedNoteID }
+    }
+
+    private var showsSidebarRestoreButton: Bool {
+        columnVisibility == .detailOnly
     }
 
     private func loadNotesIfNeeded() {
