@@ -14,7 +14,7 @@ struct MacNoteEditorView: View {
             header
 
             MacTextViewRepresentable(attributedText: $attributedText, onTextChanged: onTextChanged)
-                .frame(minWidth: 180, minHeight: 220)
+                .frame(minWidth: 160, minHeight: 200)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay {
                     RoundedRectangle(cornerRadius: 8)
@@ -32,7 +32,7 @@ struct MacNoteEditorView: View {
             }
         }
         .padding(16)
-        .frame(minWidth: 240, minHeight: 320)
+        .frame(minWidth: 200, minHeight: 280)
     }
 
     private var header: some View {
