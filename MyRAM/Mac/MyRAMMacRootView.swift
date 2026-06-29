@@ -30,14 +30,6 @@ struct MyRAMMacRootView: View {
             )
         }
         .navigationSplitViewStyle(.balanced)
-        .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button(action: toggleSidebar) {
-                    Image(systemName: "sidebar.leading")
-                }
-                .help("Show or Hide Sidebar")
-            }
-        }
         .frame(minWidth: 320, minHeight: 320)
         .onAppear(perform: loadNotesIfNeeded)
         .onDisappear(perform: flushPendingSave)
@@ -127,13 +119,6 @@ struct MyRAMMacRootView: View {
         } catch {
             saveError = "Unable to save note: \(error.localizedDescription)"
         }
-    }
-
-    private func toggleSidebar() {
-        NSApp.keyWindow?.firstResponder?.tryToPerform(
-            #selector(NSSplitViewController.toggleSidebar(_:)),
-            with: nil
-        )
     }
 }
 
