@@ -2085,6 +2085,54 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(EditorSearchHighlighter.validHighlightRange(range, textLength: 12), range)
     }
 
+    func testSearchHighlightGeometryConvertsTextContainerRectToLayerCoordinates() {
+        let textContainerRect = CGRect(x: 18, y: 120, width: 42, height: 16)
+        let convertedRect = EditorSearchHighlightGeometry.layerRect(
+            forTextContainerRect: textContainerRect,
+            textContainerInset: UIEdgeInsets(top: 12, left: 20, bottom: 8, right: 10),
+            contentOffset: CGPoint(x: 3, y: 48)
+        )
+
+        XCTAssertEqual(convertedRect, CGRect(x: 35, y: 84, width: 42, height: 16))
+    }
+
+    func testSearchHighlighterLayerRectsMoveWithContentOffset() throws {
+        let textView = searchHighlightTestTextView()
+        let range = (textView.text as NSString).range(of: "needle")
+        XCTAssertNotEqual(range.location, NSNotFound)
+
+        textView.contentOffset = .zero
+        let initialRects = try XCTUnwrap(EditorSearchHighlighter.highlightLayerRects(for: range, in: textView))
+
+        textView.contentOffset = CGPoint(x: 0, y: 72)
+        let scrolledRects = try XCTUnwrap(EditorSearchHighlighter.highlightLayerRects(for: range, in: textView))
+
+        XCTAssertEqual(initialRects.count, scrolledRects.count)
+        XCTAssertEqual(scrolledRects.first?.minX ?? 0, initialRects.first?.minX ?? 0, accuracy: 0.5)
+        XCTAssertEqual(scrolledRects.first?.minY ?? 0, (initialRects.first?.minY ?? 0) - 72, accuracy: 0.5)
+    }
+
+    func testSearchHighlighterRepositionsLayerAfterScrolling() throws {
+        let textView = searchHighlightTestTextView()
+        let range = (textView.text as NSString).range(of: "needle")
+        XCTAssertNotEqual(range.location, NSNotFound)
+        let highlighter = EditorSearchHighlighter()
+
+        highlighter.apply(range: range, in: textView)
+        textView.contentOffset = CGPoint(x: 0, y: 96)
+        highlighter.reposition(in: textView)
+
+        let highlightLayer = try XCTUnwrap(textView.layer.sublayers?.first {
+            $0.name == "MyRAMSearchHighlightLayer"
+        })
+        let expectedRects = try XCTUnwrap(EditorSearchHighlighter.highlightLayerRects(for: range, in: textView))
+        let expectedFrame = try XCTUnwrap(expectedRects.first)
+        XCTAssertEqual(highlightLayer.frame.minX, expectedFrame.minX, accuracy: 0.5)
+        XCTAssertEqual(highlightLayer.frame.minY, expectedFrame.minY, accuracy: 0.5)
+        XCTAssertEqual(highlightLayer.frame.width, expectedFrame.width, accuracy: 0.5)
+        XCTAssertEqual(highlightLayer.frame.height, expectedFrame.height, accuracy: 0.5)
+    }
+
     func testSearchHighlighterClearRemovesActiveState() {
         let textView = UITextView()
         textView.text = "Hello search highlight"
@@ -2095,6 +2143,27 @@ final class MyRAMTests: XCTestCase {
 
         highlighter.clear(in: textView)
         XCTAssertFalse(highlighter.hasActiveHighlight)
+    }
+
+    private func searchHighlightTestTextView() -> UITextView {
+        let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 220, height: 120))
+        textView.font = .systemFont(ofSize: 17)
+        textView.textContainerInset = UIEdgeInsets(top: 14, left: 18, bottom: 14, right: 18)
+        textView.textContainer.lineFragmentPadding = 6
+        textView.text = """
+        Alpha beta gamma
+        Second line filler
+        Third line filler
+        Fourth line filler
+        Fifth line has needle here
+        Sixth line filler
+        Seventh line filler
+        Eighth line filler
+        Ninth line filler
+        """
+        textView.layoutIfNeeded()
+        textView.layoutManager.ensureLayout(for: textView.textContainer)
+        return textView
     }
 
     func testRichTextCommitPolicyUsesDeferredEncoderAtCommitBoundary() throws {

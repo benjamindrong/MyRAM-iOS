@@ -5,7 +5,6 @@ final class EditorSearchHighlighter {
     private static let searchHighlightLayerName = "MyRAMSearchHighlightLayer"
 
     private var activeRange: NSRange?
-    private var activeRects: [CGRect] = []
     private var activeLayers: [CALayer] = []
 
     var hasActiveHighlight: Bool {
@@ -36,7 +35,8 @@ final class EditorSearchHighlighter {
 
         activeRange = validRange
         textView.scrollRangeToVisible(validRange)
-        draw(validRange, in: textView)
+        redraw(validRange, in: textView)
+        schedulePostScrollReposition(in: textView)
     }
 
     func reposition(in textView: UITextView) {
@@ -45,21 +45,22 @@ final class EditorSearchHighlighter {
         defer {
             os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.positionSearchHighlightLayers", signpostID: positionSearchHighlightSignpostID)
         }
-        guard activeLayers.count == activeRects.count,
+        guard let activeRange else { return }
+        guard let layerRects = Self.highlightLayerRects(for: activeRange, in: textView) else {
+            clear(in: textView)
+            return
+        }
+
+        guard activeLayers.count == layerRects.count,
               activeLayers.allSatisfy({ $0.superlayer === textView.layer }) else {
-            if let activeRange {
-                draw(activeRange, in: textView)
-            }
+            redraw(activeRange, in: textView)
             return
         }
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        for (layer, rect) in zip(activeLayers, activeRects) {
-            layer.frame = rect.offsetBy(
-                dx: textView.textContainerInset.left - textView.contentOffset.x,
-                dy: textView.textContainerInset.top - textView.contentOffset.y
-            )
+        for (layer, rect) in zip(activeLayers, layerRects) {
+            layer.frame = rect
         }
         CATransaction.commit()
     }
@@ -67,7 +68,6 @@ final class EditorSearchHighlighter {
     func clear(in textView: UITextView) {
         removeHighlightLayers(in: textView)
         activeRange = nil
-        activeRects = []
     }
 
     private func removeHighlightLayers(in textView: UITextView) {
@@ -75,7 +75,6 @@ final class EditorSearchHighlighter {
         textView.layer.sublayers?
             .filter { $0.name == Self.searchHighlightLayerName }
             .forEach { $0.removeFromSuperlayer() }
-        activeRects = []
         activeLayers = []
     }
 
@@ -95,19 +94,52 @@ final class EditorSearchHighlighter {
         activeLayers.contains { $0.superlayer === textView.layer }
     }
 
-    private func draw(_ range: NSRange, in textView: UITextView) {
+    private func redraw(_ range: NSRange, in textView: UITextView) {
         let drawSearchHighlightSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
         os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.drawSearchHighlight", signpostID: drawSearchHighlightSignpostID)
         defer {
             os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.drawSearchHighlight", signpostID: drawSearchHighlightSignpostID)
         }
         removeHighlightLayers(in: textView)
+        guard let layerRects = Self.highlightLayerRects(for: range, in: textView) else {
+            activeRange = nil
+            return
+        }
+
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for rect in layerRects {
+            let highlightLayer = CALayer()
+            highlightLayer.name = Self.searchHighlightLayerName
+            highlightLayer.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.45).cgColor
+            highlightLayer.cornerRadius = 3
+            highlightLayer.frame = rect
+            self.activeLayers.append(highlightLayer)
+            textView.layer.insertSublayer(highlightLayer, at: 0)
+        }
+        CATransaction.commit()
+    }
+
+    private func schedulePostScrollReposition(in textView: UITextView) {
+        DispatchQueue.main.async { [weak self, weak textView] in
+            guard let self, let textView, self.hasActiveHighlight else { return }
+            self.reposition(in: textView)
+        }
+    }
+
+    static func highlightLayerRects(for range: NSRange, in textView: UITextView) -> [CGRect]? {
+        guard let validRange = validHighlightRange(range, textLength: textView.textStorage.length) else {
+            return nil
+        }
+
+        textView.layoutIfNeeded()
         textView.layoutManager.ensureLayout(for: textView.textContainer)
         let glyphRange = textView.layoutManager.glyphRange(
-            forCharacterRange: range,
+            forCharacterRange: validRange,
             actualCharacterRange: nil
         )
         let emptySelection = NSRange(location: NSNotFound, length: 0)
+        var layerRects: [CGRect] = []
 
         textView.layoutManager.enumerateEnclosingRects(
             forGlyphRange: glyphRange,
@@ -115,14 +147,30 @@ final class EditorSearchHighlighter {
             in: textView.textContainer
         ) { rect, _ in
             guard !rect.isEmpty else { return }
-            let highlightLayer = CALayer()
-            highlightLayer.name = Self.searchHighlightLayerName
-            highlightLayer.backgroundColor = UIColor.systemYellow.withAlphaComponent(0.45).cgColor
-            highlightLayer.cornerRadius = 3
-            self.activeRects.append(rect.insetBy(dx: -2, dy: -1))
-            self.activeLayers.append(highlightLayer)
-            textView.layer.insertSublayer(highlightLayer, at: 0)
+            let paddedRect = rect.insetBy(dx: -2, dy: -1)
+            layerRects.append(EditorSearchHighlightGeometry.layerRect(
+                forTextContainerRect: paddedRect,
+                textContainerInset: textView.textContainerInset,
+                contentOffset: textView.contentOffset
+            ))
         }
-        reposition(in: textView)
+
+        return layerRects
+    }
+}
+
+enum EditorSearchHighlightGeometry {
+    static func layerRect(
+        forTextContainerRect rect: CGRect,
+        textContainerInset: UIEdgeInsets,
+        contentOffset: CGPoint
+    ) -> CGRect {
+        // TextKit returns glyph enclosing rects in text-container coordinates.
+        // The rects already include lineFragmentPadding, so only the container's
+        // origin inside the scroll view and the current scroll offset are needed.
+        rect.offsetBy(
+            dx: textContainerInset.left - contentOffset.x,
+            dy: textContainerInset.top - contentOffset.y
+        )
     }
 }

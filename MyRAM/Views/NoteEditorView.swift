@@ -3163,6 +3163,18 @@ private struct SelectableTextView: UIViewRepresentable {
             searchHighlighter.reposition(in: textView)
         }
 
+        func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
+            guard let textView = scrollView as? UITextView,
+                  searchHighlighter.hasActiveHighlight else { return }
+            searchHighlighter.reposition(in: textView)
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
+            guard let textView = scrollView as? UITextView,
+                  searchHighlighter.hasActiveHighlight else { return }
+            searchHighlighter.reposition(in: textView)
+        }
+
         func textView(
             _ textView: UITextView,
             editMenuForTextIn range: NSRange,
