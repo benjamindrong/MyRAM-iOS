@@ -1,5 +1,7 @@
 # MYR-96 Native macOS Editor Spike
 
+Note: This document is historical. The current desktop strategy was superseded by the native macOS direction established in MYR-104+ and formalized by MYR-110. Mac Catalyst is no longer the active desktop support path.
+
 ## Purpose
 
 Prototype a minimal native macOS editor surface using AppKit `NSTextView` so large-note drag selection and edge auto-scroll can be compared against the Catalyst editor behavior observed in MYR-95.
