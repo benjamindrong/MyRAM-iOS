@@ -28,7 +28,8 @@ struct MyRAMMacRootView: View {
                 onTextChanged: scheduleSave
             )
         }
-        .frame(minWidth: 900, minHeight: 560)
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 520, minHeight: 420)
         .onAppear(perform: loadNotesIfNeeded)
         .onDisappear(perform: flushPendingSave)
     }
@@ -161,7 +162,7 @@ private struct MacNoteListView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
         }
-        .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 320)
+        .navigationSplitViewColumnWidth(min: 96, ideal: 260, max: 360)
     }
 
     private var selectedBinding: Binding<UUID?> {
