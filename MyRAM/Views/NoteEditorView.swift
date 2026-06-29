@@ -69,10 +69,8 @@ struct NoteEditorView: View {
     @State private var selectedSyncConflict: SyncConflictVersion?
     @State private var isLocalCurrentNoteSearchPresented = false
     @State private var localCurrentNoteSearchText = ""
-    @State private var debouncedCurrentNoteSearchText = ""
-    @State private var currentNoteSearchMatches: [NoteSearchMatch] = []
+    @State private var searchSession = EditorSearchSession()
     @State private var currentNoteSearchDebounceTask: Task<Void, Never>?
-    @State private var selectedCurrentNoteMatchID: String?
     @State private var currentNoteSearchFocusRequest = 0
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
@@ -194,10 +192,8 @@ struct NoteEditorView: View {
             .onChange(of: currentNoteSearchFocusToken) {
                 presentCurrentNoteSearch(focusesField: false)
             }
-            .onChange(of: currentNoteSearchMatches) {
-                reconcileSelectedCurrentNoteMatch()
-            }
-            .onChange(of: selectedCurrentNoteMatchID) {
+            .onChange(of: searchSession) { oldSession, newSession in
+                guard oldSession.selectedMatchID != newSession.selectedMatchID else { return }
                 handleSelectedCurrentNoteMatchChanged()
             }
             .onChange(of: scenePhase) { _, newPhase in
@@ -440,7 +436,7 @@ struct NoteEditorView: View {
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
-            .disabled(currentNoteSearchMatches.isEmpty)
+            .disabled(searchSession.matches.isEmpty)
             .accessibilityLabel("Previous match")
             .accessibilityIdentifier("current-note-search-previous")
 
@@ -452,7 +448,7 @@ struct NoteEditorView: View {
                     .frame(width: 28, height: 28)
             }
             .buttonStyle(.plain)
-            .disabled(currentNoteSearchMatches.isEmpty)
+            .disabled(searchSession.matches.isEmpty)
             .accessibilityLabel("Next match")
             .accessibilityIdentifier("current-note-search-next")
 
@@ -505,22 +501,15 @@ struct NoteEditorView: View {
     }
 
     private var selectedCurrentNoteMatch: NoteSearchMatch? {
-        EditorSearchMatchResolver.resolvedSelectedMatch(
-            in: currentNoteSearchMatches,
-            selectedMatchID: selectedCurrentNoteMatchID
-        )
+        searchSession.selectedMatch
     }
 
     private var selectedBodySearchRange: NSRange? {
-        EditorSearchMatchResolver.bodyRange(
-            for: selectedCurrentNoteMatch,
-            textLength: content.utf16.count
-        )
+        searchSession.selectedBodyHighlightRange
     }
 
     private var selectedPinnedTextSearchID: UUID? {
-        guard case let .pinnedText(id) = selectedCurrentNoteMatch?.region else { return nil }
-        return id
+        searchSession.selectedPinnedTextID
     }
 
     private var sortedPinnedTextSearchSignature: [String] {
@@ -528,13 +517,7 @@ struct NoteEditorView: View {
     }
 
     private var currentNoteSearchSummary: String {
-        let trimmed = debouncedCurrentNoteSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return "0" }
-        guard let selectedCurrentNoteMatchID,
-              let index = currentNoteSearchMatches.firstIndex(where: { $0.id == selectedCurrentNoteMatchID }) else {
-            return currentNoteSearchMatches.isEmpty ? "0" : "\(currentNoteSearchMatches.count)"
-        }
-        return "\(index + 1) of \(currentNoteSearchMatches.count)"
+        searchSession.summaryText
     }
 
     @ViewBuilder
@@ -954,9 +937,7 @@ struct NoteEditorView: View {
         } else {
             localCurrentNoteSearchText = ""
         }
-        debouncedCurrentNoteSearchText = ""
-        currentNoteSearchMatches = []
-        selectedCurrentNoteMatchID = nil
+        searchSession = searchSession.cleared()
     }
 
     private func dismissCurrentNoteSearchKeyboard() {
@@ -970,6 +951,7 @@ struct NoteEditorView: View {
             localCurrentNoteSearchText = query
             isLocalCurrentNoteSearchPresented = true
         }
+        searchSession = searchSession.updatingQuery(query)
     }
 
     private func scheduleCurrentNoteSearchUpdate() {
@@ -977,51 +959,30 @@ struct NoteEditorView: View {
         let query = currentNoteSearchQuery
         let bodyText = content
         let pinnedTexts = sortedPinnedThoughts.map { NoteSearchPinnedText(id: $0.id, text: $0.text) }
+        searchSession = searchSession.updatingQuery(query)
         currentNoteSearchDebounceTask = Task {
             try? await Task.sleep(nanoseconds: 180_000_000)
             guard !Task.isCancelled else { return }
-            let matches = EditorSearchMatchResolver.matches(
-                in: bodyText,
-                pinnedTexts: pinnedTexts,
-                query: query
-            )
             await MainActor.run {
-                debouncedCurrentNoteSearchText = query
-                currentNoteSearchMatches = matches
-                reconcileSelectedCurrentNoteMatch()
+                searchSession = searchSession.rebuilt(
+                    bodyText: bodyText,
+                    pinnedTexts: pinnedTexts,
+                    query: query
+                )
             }
         }
     }
 
-    private func reconcileSelectedCurrentNoteMatch() {
-        selectedCurrentNoteMatchID = EditorSearchMatchResolver.resolvedSelectedMatchID(
-            in: currentNoteSearchMatches,
-            selectedMatchID: selectedCurrentNoteMatchID
-        )
-    }
-
     private func selectFirstCurrentNoteMatchIfNeeded() {
-        if selectedCurrentNoteMatchID == nil {
-            reconcileSelectedCurrentNoteMatch()
-        }
+        searchSession = searchSession.selectingFirstIfNeeded()
     }
 
     private func selectPreviousCurrentNoteMatch() {
-        moveSelectedCurrentNoteMatch(by: -1)
+        searchSession = searchSession.selectingPrevious()
     }
 
     private func selectNextCurrentNoteMatch() {
-        moveSelectedCurrentNoteMatch(by: 1)
-    }
-
-    private func moveSelectedCurrentNoteMatch(by delta: Int) {
-        let nextIndex = EditorSearchMatchResolver.matchIndex(
-            in: currentNoteSearchMatches,
-            selectedMatchID: selectedCurrentNoteMatchID,
-            movingBy: delta
-        )
-        guard let nextIndex else { return }
-        selectedCurrentNoteMatchID = currentNoteSearchMatches[nextIndex].id
+        searchSession = searchSession.selectingNext()
     }
 
     private func handleSelectedCurrentNoteMatchChanged() {
