@@ -18,8 +18,8 @@ final class MacEditorSampleDocumentTests: XCTestCase {
         let sectionMarkerCount = sampleText.components(separatedBy: "Selection stress section").count - 1
         let checkpointCount = sampleText.components(separatedBy: "Manual checkpoint").count - 1
 
-        XCTAssertGreaterThanOrEqual(sectionMarkerCount, MacEditorSampleDocument.defaultSectionCount)
-        XCTAssertGreaterThanOrEqual(checkpointCount, MacEditorSampleDocument.defaultSectionCount)
+        XCTAssertEqual(sectionMarkerCount, MacEditorSampleDocument.defaultSectionCount)
+        XCTAssertEqual(checkpointCount, MacEditorSampleDocument.defaultSectionCount)
     }
 
     func testSampleTextGenerationIsDeterministicForSameSectionCount() {
