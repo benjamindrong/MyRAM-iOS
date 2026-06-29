@@ -11,9 +11,10 @@ struct MyRAMMacRootView: View {
     @State private var saveError: String?
     @State private var saveTask: Task<Void, Never>?
     @State private var hasUnsavedChanges = false
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             MacNoteListView(
                 notes: notes,
                 selectedNoteID: selectedNoteID,
@@ -31,11 +32,13 @@ struct MyRAMMacRootView: View {
         }
         .toolbar(removing: .sidebarToggle)
         .toolbar {
-            ToolbarItem(placement: .navigation) {
-                Button(action: toggleSidebar) {
-                    Image(systemName: "sidebar.leading")
+            if columnVisibility != .all {
+                ToolbarItem(placement: .navigation) {
+                    Button(action: showSidebar) {
+                        Image(systemName: "sidebar.leading")
+                    }
+                    .help("Show Sidebar")
                 }
-                .help("Show or Hide Sidebar")
             }
         }
         .frame(minWidth: 260, minHeight: 280)
@@ -129,11 +132,8 @@ struct MyRAMMacRootView: View {
         }
     }
 
-    private func toggleSidebar() {
-        NSApp.keyWindow?.firstResponder?.tryToPerform(
-            #selector(NSSplitViewController.toggleSidebar(_:)),
-            with: nil
-        )
+    private func showSidebar() {
+        columnVisibility = .all
     }
 }
 
