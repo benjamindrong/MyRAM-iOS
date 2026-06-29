@@ -75,6 +75,59 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         )
     }
 
+    func testSaveStripsDefaultLookingColorsForAppearanceAwareReload() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Auto color", content: "")
+        context.insert(note)
+        try context.save()
+
+        let attributedText = NSMutableAttributedString(string: "Auto underline")
+        let fullRange = NSRange(location: 0, length: attributedText.length)
+        attributedText.addAttribute(.foregroundColor, value: NSColor.black, range: fullRange)
+        attributedText.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: fullRange)
+        attributedText.addAttribute(.underlineColor, value: NSColor.black, range: fullRange)
+        attributedText.addAttribute(.strikethroughStyle, value: NSUnderlineStyle.single.rawValue, range: fullRange)
+        attributedText.addAttribute(.strikethroughColor, value: NSColor.white, range: fullRange)
+
+        let adapter = MacNotePersistenceAdapter(context: context)
+        try adapter.save(note: note, attributedContent: attributedText)
+        let decodedText = adapter.attributedContent(for: note)
+
+        XCTAssertNil(decodedText.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        XCTAssertNil(decodedText.attribute(.underlineColor, at: 0, effectiveRange: nil))
+        XCTAssertNil(decodedText.attribute(.strikethroughColor, at: 0, effectiveRange: nil))
+        XCTAssertEqual(
+            decodedText.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int,
+            NSUnderlineStyle.single.rawValue
+        )
+        XCTAssertEqual(
+            decodedText.attribute(.strikethroughStyle, at: 0, effectiveRange: nil) as? Int,
+            NSUnderlineStyle.single.rawValue
+        )
+    }
+
+    func testSavePreservesExplicitNonDefaultColor() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Explicit color", content: "")
+        context.insert(note)
+        try context.save()
+
+        let attributedText = NSMutableAttributedString(string: "Red text")
+        attributedText.addAttribute(
+            .foregroundColor,
+            value: NSColor.systemRed,
+            range: NSRange(location: 0, length: attributedText.length)
+        )
+
+        let adapter = MacNotePersistenceAdapter(context: context)
+        try adapter.save(note: note, attributedContent: attributedText)
+        let decodedText = adapter.attributedContent(for: note)
+
+        XCTAssertNotNil(decodedText.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+    }
+
     func testMalformedRichTextDataFallsBackToPlainText() throws {
         let container = try makeInMemoryContainer()
         let note = Note(title: "Fallback", content: "Plain fallback")

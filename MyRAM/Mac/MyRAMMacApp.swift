@@ -7,6 +7,10 @@ struct MyRAMMacApp: App {
         WindowGroup {
             MyRAMMacRootView()
         }
+        .commands {
+            TextEditingCommands()
+            TextFormattingCommands()
+        }
     }
 }
 #endif
