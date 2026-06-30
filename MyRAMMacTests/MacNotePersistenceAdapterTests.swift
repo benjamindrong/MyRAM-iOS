@@ -180,6 +180,46 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         )
     }
 
+    func testSavePersistsNilRichTextDataForEmptyAttributedContent() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Empty", content: "Existing")
+        note.richTextContentData = Data("existing rtf".utf8)
+        context.insert(note)
+        try context.save()
+
+        try MacNotePersistenceAdapter(context: context).save(
+            note: note,
+            attributedContent: NSAttributedString(string: "")
+        )
+
+        XCTAssertEqual(note.content, "")
+        XCTAssertNil(note.richTextContentData)
+    }
+
+    func testSavePersistsRTFDataForNonEmptyStyledContent() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Styled", content: "")
+        context.insert(note)
+        try context.save()
+
+        let attributedText = NSMutableAttributedString(string: "Styled body")
+        let fullRange = NSRange(location: 0, length: attributedText.length)
+        attributedText.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: 18), range: fullRange)
+        attributedText.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: fullRange)
+
+        let adapter = MacNotePersistenceAdapter(context: context)
+        try adapter.save(note: note, attributedContent: attributedText)
+
+        XCTAssertNotNil(note.richTextContentData)
+        let decodedText = adapter.attributedContent(for: note)
+        XCTAssertEqual(decodedText.string, "Styled body")
+        let font = try XCTUnwrap(decodedText.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(font.fontDescriptor.symbolicTraits.contains(.bold))
+        try assertColor(decodedText.attribute(.foregroundColor, at: 0, effectiveRange: nil), matches: .systemBlue)
+    }
+
     func testSavePreservesExplicitNonDefaultColor() throws {
         let container = try makeInMemoryContainer()
         let context = container.mainContext
