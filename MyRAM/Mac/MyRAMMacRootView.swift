@@ -14,6 +14,7 @@ struct MyRAMMacRootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarCollapseState: MacSidebarCollapsePolicy.CollapseState = .expanded
     @State private var isApplyingAutomaticVisibilityChange = false
+    @State private var isExpandingWindowForSidebar = false
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -54,6 +55,8 @@ struct MyRAMMacRootView: View {
     }
 
     private func handleWidthChange(_ width: CGFloat) {
+        guard !isExpandingWindowForSidebar else { return }
+
         let nextState = MacSidebarCollapsePolicy.stateAfterWidthChange(
             currentState: sidebarCollapseState,
             availableWidth: width
@@ -74,7 +77,8 @@ struct MyRAMMacRootView: View {
         }
 
         if sidebarCollapseState == .autoCollapsed, newValue == .all {
-            expandWindowForAutoCollapsedSidebar()
+            reopenAutoCollapsedSidebarAfterWindowExpansion()
+            return
         }
 
         sidebarCollapseState = MacSidebarCollapsePolicy.stateAfterManualVisibilityChange(
@@ -168,8 +172,14 @@ struct MyRAMMacRootView: View {
         }
     }
 
-    private func expandWindowForAutoCollapsedSidebar() {
-        guard let window = NSApp.keyWindow else { return }
+    private func reopenAutoCollapsedSidebarAfterWindowExpansion() {
+        isApplyingAutomaticVisibilityChange = true
+        columnVisibility = .detailOnly
+
+        guard let window = NSApp.keyWindow else {
+            showAutoCollapsedSidebar()
+            return
+        }
 
         let visibleFrame = window.screen?.visibleFrame ?? window.frame
         let expandedFrame = MacSidebarCollapsePolicy.windowFrameExpandingSidebarToLeft(
@@ -177,8 +187,27 @@ struct MyRAMMacRootView: View {
             visibleFrame: visibleFrame
         )
 
-        guard expandedFrame != window.frame else { return }
-        window.animator().setFrame(expandedFrame, display: true)
+        guard expandedFrame != window.frame else {
+            showAutoCollapsedSidebar()
+            return
+        }
+
+        isExpandingWindowForSidebar = true
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.25
+            window.animator().setFrame(expandedFrame, display: true)
+        } completionHandler: {
+            showAutoCollapsedSidebar()
+        }
+    }
+
+    private func showAutoCollapsedSidebar() {
+        isExpandingWindowForSidebar = false
+        sidebarCollapseState = .expanded
+        isApplyingAutomaticVisibilityChange = true
+        withAnimation(.easeInOut(duration: 0.2)) {
+            columnVisibility = .all
+        }
     }
 }
 
