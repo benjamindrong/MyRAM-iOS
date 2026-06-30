@@ -86,7 +86,13 @@ final class MyRAMSyncConflictService {
                     plainText: resolution.resolvedText
                 )
             } else if previousContent != resolution.resolvedText {
+                // Plain-text merge resolutions can omit rich text data; keep
+                // compatible existing formatting instead of clearing it.
                 note.richTextContentData = resolution.resolvedData
+                    ?? RichTextContentCodec.sanitizedConflictRichTextData(
+                        note.richTextContentData,
+                        plainText: resolution.resolvedText
+                    )
             }
             note.modifiedAt = now
             result.note = note

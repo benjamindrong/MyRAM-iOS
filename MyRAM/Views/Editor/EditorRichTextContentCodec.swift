@@ -54,8 +54,8 @@ enum RichTextContentCodec {
                 options: [.documentType: NSAttributedString.DocumentType.rtf],
                 documentAttributes: nil
               ),
-              attributedText.string == plainText else { return nil }
-        let mutable = NSMutableAttributedString(attributedString: attributedText)
+              let compatibleText = attributedText.compatibleConflictText(matching: plainText) else { return nil }
+        let mutable = NSMutableAttributedString(attributedString: compatibleText)
         let fullRange = NSRange(location: 0, length: mutable.length)
         stripLegacyDefaultTextColors(from: mutable, range: fullRange)
         return encode(mutable)
@@ -81,6 +81,43 @@ enum RichTextContentCodec {
                   color.looksLikeLegacyDefaultTextColor else { return }
             attributedText.removeAttribute(key, range: range)
         }
+    }
+}
+
+private extension NSAttributedString {
+    func compatibleConflictText(matching plainText: String) -> NSAttributedString? {
+        guard string != plainText else { return self }
+        let nsString = string as NSString
+        let nsPlainLength = (plainText as NSString).length
+        guard nsString.length > nsPlainLength else { return nil }
+        guard nsString.substring(to: nsPlainLength) == plainText else { return nil }
+
+        let extraTrailingText = nsString.substring(from: nsPlainLength)
+        guard extraTrailingText.isDocumentBoundaryWhitespace else { return nil }
+
+        // Only document-boundary serialization whitespace is safe to trim; any
+        // interior difference must fail instead of remapping formatting.
+        let mutable = NSMutableAttributedString(attributedString: self)
+        let extraTrailingRange = NSRange(
+            location: nsPlainLength,
+            length: nsString.length - nsPlainLength
+        )
+        mutable.deleteCharacters(in: extraTrailingRange)
+
+        let matchesResolvedPlainText = mutable.string == plainText
+        assert(
+            matchesResolvedPlainText,
+            "compatibleConflictText range arithmetic produced wrong result"
+        )
+        guard matchesResolvedPlainText else { return nil }
+        return mutable
+    }
+}
+
+private extension String {
+    var isDocumentBoundaryWhitespace: Bool {
+        self == "\n"
+            || (!isEmpty && unicodeScalars.allSatisfy { CharacterSet.whitespaces.contains($0) })
     }
 }
 
