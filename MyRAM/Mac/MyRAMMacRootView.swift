@@ -43,7 +43,9 @@ struct MyRAMMacRootView: View {
             handleColumnVisibilityChange(newValue)
         }
         .onAppear(perform: loadNotesIfNeeded)
-        .onDisappear(perform: flushPendingSave)
+        .onDisappear {
+            _ = flushPendingSave()
+        }
     }
 
     private var selectedNote: Note? {
@@ -69,6 +71,10 @@ struct MyRAMMacRootView: View {
         if isApplyingAutomaticVisibilityChange {
             isApplyingAutomaticVisibilityChange = false
             return
+        }
+
+        if sidebarCollapseState == .autoCollapsed, newValue == .all {
+            expandWindowForAutoCollapsedSidebar()
         }
 
         sidebarCollapseState = MacSidebarCollapsePolicy.stateAfterManualVisibilityChange(
@@ -99,8 +105,8 @@ struct MyRAMMacRootView: View {
 
     private func selectNote(_ note: Note) {
         guard note.id != selectedNoteID else { return }
+        guard flushPendingSave() else { return }
 
-        flushPendingSave()
         selectedNoteID = note.id
         attributedText = MacNotePersistenceAdapter().attributedContent(for: note)
         hasUnsavedChanges = false
@@ -108,7 +114,7 @@ struct MyRAMMacRootView: View {
     }
 
     private func createNote() {
-        flushPendingSave()
+        guard flushPendingSave() else { return }
 
         do {
             let newNote = try MacNotePersistenceAdapter().createNote()
@@ -132,31 +138,48 @@ struct MyRAMMacRootView: View {
         saveTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled, selectedNoteID == noteID else { return }
-            saveNote(id: noteID, attributedContent: contentToSave)
+            _ = saveNote(id: noteID, attributedContent: contentToSave)
         }
     }
 
-    private func flushPendingSave() {
+    private func flushPendingSave() -> Bool {
         saveTask?.cancel()
         saveTask = nil
 
-        guard hasUnsavedChanges, let selectedNoteID else { return }
-        saveNote(id: selectedNoteID, attributedContent: attributedText)
+        guard hasUnsavedChanges, let selectedNoteID else { return true }
+        return saveNote(id: selectedNoteID, attributedContent: attributedText)
     }
 
-    private func saveNote(id noteID: UUID, attributedContent: NSAttributedString) {
+    private func saveNote(id noteID: UUID, attributedContent: NSAttributedString) -> Bool {
         do {
             let adapter = MacNotePersistenceAdapter()
-            guard let note = try adapter.loadNote(id: noteID) else { return }
+            guard let note = try adapter.loadNote(id: noteID) else {
+                saveError = "Unable to save note: note was not found."
+                return false
+            }
             try adapter.save(note: note, attributedContent: attributedContent)
             notes = try adapter.loadNotesCreatingFirstIfNeeded()
             hasUnsavedChanges = selectedNoteID == noteID ? false : hasUnsavedChanges
             saveError = nil
+            return true
         } catch {
             saveError = "Unable to save note: \(error.localizedDescription)"
+            return false
         }
     }
 
+    private func expandWindowForAutoCollapsedSidebar() {
+        guard let window = NSApp.keyWindow else { return }
+
+        let visibleFrame = window.screen?.visibleFrame ?? window.frame
+        let expandedFrame = MacSidebarCollapsePolicy.windowFrameExpandingSidebarToLeft(
+            currentFrame: window.frame,
+            visibleFrame: visibleFrame
+        )
+
+        guard expandedFrame != window.frame else { return }
+        window.animator().setFrame(expandedFrame, display: true)
+    }
 }
 
 private struct MacNoteListView: View {

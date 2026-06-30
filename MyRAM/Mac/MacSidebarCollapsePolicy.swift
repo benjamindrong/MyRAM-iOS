@@ -8,6 +8,7 @@ enum MacSidebarCollapsePolicy {
     }
 
     static let collapseWidthThreshold: CGFloat = 500
+    static let sidebarExpansionWidth: CGFloat = 260
 
     static func stateAfterWidthChange(
         currentState: CollapseState,
@@ -26,5 +27,21 @@ enum MacSidebarCollapsePolicy {
 
     static func stateAfterManualVisibilityChange(isSidebarVisible: Bool) -> CollapseState {
         isSidebarVisible ? .expanded : .manuallyCollapsed
+    }
+
+    static func windowFrameExpandingSidebarToLeft(
+        currentFrame: CGRect,
+        visibleFrame: CGRect,
+        sidebarWidth: CGFloat = sidebarExpansionWidth
+    ) -> CGRect {
+        let targetMinX = max(visibleFrame.minX, currentFrame.minX - sidebarWidth)
+        let widthIncrease = currentFrame.minX - targetMinX
+
+        return CGRect(
+            x: targetMinX,
+            y: currentFrame.minY,
+            width: currentFrame.width + widthIncrease,
+            height: currentFrame.height
+        )
     }
 }

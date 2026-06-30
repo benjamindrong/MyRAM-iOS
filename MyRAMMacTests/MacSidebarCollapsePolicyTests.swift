@@ -65,4 +65,29 @@ final class MacSidebarCollapsePolicyTests: XCTestCase {
             .expanded
         )
     }
+
+    func testWindowFrameExpandingSidebarToLeftPreservesRightEdge() {
+        let frame = MacSidebarCollapsePolicy.windowFrameExpandingSidebarToLeft(
+            currentFrame: CGRect(x: 500, y: 100, width: 600, height: 400),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1200, height: 900),
+            sidebarWidth: 260
+        )
+
+        XCTAssertEqual(frame.minX, 240)
+        XCTAssertEqual(frame.width, 860)
+        XCTAssertEqual(frame.maxX, 1100)
+        XCTAssertEqual(frame.height, 400)
+    }
+
+    func testWindowFrameExpandingSidebarToLeftClampsToVisibleFrame() {
+        let frame = MacSidebarCollapsePolicy.windowFrameExpandingSidebarToLeft(
+            currentFrame: CGRect(x: 100, y: 100, width: 600, height: 400),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1200, height: 900),
+            sidebarWidth: 260
+        )
+
+        XCTAssertEqual(frame.minX, 0)
+        XCTAssertEqual(frame.width, 700)
+        XCTAssertEqual(frame.maxX, 700)
+    }
 }
