@@ -9,22 +9,36 @@ struct MyRAMSyncApplyResult {
     var preservedConflicts: [SyncConflictVersion] = []
 }
 
+struct ActiveNoteTextPatch: Equatable {
+    let noteID: UUID
+    let patch: SyncTextPatch
+    let mergedText: String
+}
+
+private enum NoteBodySyncResolution {
+    case noOp
+    case apply(text: String, patch: SyncTextPatch, richTextContentData: Data?)
+}
+
 @MainActor
 final class MyRAMSyncChangeApplier {
     private let context: ModelContext
     private let conflictStore: SyncConflictStore
     private let isTextApplicationUnsafe: (SyncConflictEntityType, UUID, SyncConflictField) -> Bool
+    private let activeText: (UUID, SyncConflictField) -> String?
     private(set) var syncConflicts: [SyncConflictVersion]
     private var newlyPreservedConflicts: [SyncConflictVersion] = []
 
     init(
         context: ModelContext,
         conflictStore: SyncConflictStore,
-        isTextApplicationUnsafe: @escaping (SyncConflictEntityType, UUID, SyncConflictField) -> Bool = { _, _, _ in false }
+        isTextApplicationUnsafe: @escaping (SyncConflictEntityType, UUID, SyncConflictField) -> Bool = { _, _, _ in false },
+        activeText: @escaping (UUID, SyncConflictField) -> String? = { _, _ in nil }
     ) {
         self.context = context
         self.conflictStore = conflictStore
         self.isTextApplicationUnsafe = isTextApplicationUnsafe
+        self.activeText = activeText
         syncConflicts = conflictStore.activeConflicts()
     }
 
@@ -120,8 +134,8 @@ final class MyRAMSyncChangeApplier {
         }
 
         if !isNewNote,
-           shouldFreezeIncomingNotePayload(note: note, payload: payload, originDeviceID: change.originDeviceID) {
-            preserveIncomingNoteTextConflictsIfNeeded(note: note, payload: payload, originDeviceID: change.originDeviceID)
+           shouldFreezeIncomingNoteTitlePayload(note: note, payload: payload, originDeviceID: change.originDeviceID) {
+            preserveIncomingNoteTitleConflictIfNeeded(note: note, payload: payload, originDeviceID: change.originDeviceID)
             return MyRAMSyncApplyResult(shouldRefreshActiveNote: activeNoteID == payload.id)
         }
 
@@ -319,6 +333,19 @@ final class MyRAMSyncChangeApplier {
         return false
     }
 
+    private func shouldFreezeIncomingNoteTitlePayload(
+        note: Note,
+        payload: MyRAMNoteSyncPayload,
+        originDeviceID: String
+    ) -> Bool {
+        if conflictStore.hasActiveConflict(entityType: .note, entityID: note.id, field: .noteTitle) {
+            return true
+        }
+
+        return note.title != payload.title
+            && noteTitleResolution(note: note, payload: payload, originDeviceID: originDeviceID).freezesOrdinaryPayload
+    }
+
     private func preserveIncomingNoteTextConflictsIfNeeded(
         note: Note,
         payload: MyRAMNoteSyncPayload,
@@ -352,6 +379,25 @@ final class MyRAMSyncChangeApplier {
         }
     }
 
+    private func preserveIncomingNoteTitleConflictIfNeeded(
+        note: Note,
+        payload: MyRAMNoteSyncPayload,
+        originDeviceID: String
+    ) {
+        if note.title != payload.title,
+           noteTitleResolution(note: note, payload: payload, originDeviceID: originDeviceID) == .conflict {
+            preserveSyncConflict(
+                entityType: .note,
+                entityID: note.id,
+                noteID: note.id,
+                field: .noteTitle,
+                localText: note.title,
+                remoteText: payload.title,
+                remoteModifiedAt: payload.modifiedAt
+            )
+        }
+    }
+
     private func hasActiveNoteTextConflict(noteID: UUID) -> Bool {
         conflictStore.hasActiveConflict(entityType: .note, entityID: noteID, field: .noteTitle)
             || conflictStore.hasActiveConflict(entityType: .note, entityID: noteID, field: .noteContent)
@@ -376,7 +422,7 @@ final class MyRAMSyncChangeApplier {
                 remoteData: nil,
                 originDeviceID: originDeviceID
             ) {
-            case .apply(let text):
+            case .apply(let text, _):
                 note.title = text
                 saveNoteTitleBaseline(note: note, payload: payload, originDeviceID: originDeviceID)
             case .deferIncoming:
@@ -396,40 +442,97 @@ final class MyRAMSyncChangeApplier {
             saveNoteTitleBaseline(note: note, payload: payload, originDeviceID: originDeviceID)
         }
 
-        if note.content != payload.content || note.richTextContentData != payload.richTextContentData {
-            switch gatedRemoteTextResolution(
-                entityType: .note,
-                entityID: note.id,
-                field: .noteContent,
-                localText: note.content,
-                localData: note.richTextContentData,
-                remoteBaseText: payload.baseContent,
-                remoteBaseData: payload.baseRichTextContentData,
-                remoteText: payload.content,
-                remoteData: payload.richTextContentData,
+        let localContentText = activeText(note.id, .noteContent) ?? note.content
+        if localContentText != payload.content || note.richTextContentData != payload.richTextContentData {
+            switch noteBodySyncResolution(
+                note: note,
+                localText: localContentText,
+                payload: payload,
                 originDeviceID: originDeviceID
             ) {
-            case .apply(let text):
+            case .apply(let text, _, let richTextContentData):
                 note.content = text
-                note.richTextContentData = text == payload.content ? payload.richTextContentData : note.richTextContentData
+                note.richTextContentData = richTextContentData
                 saveNoteContentBaseline(note: note, payload: payload, originDeviceID: originDeviceID)
-            case .deferIncoming:
+            case .noOp:
                 break
-            case .conflict:
-                preserveSyncConflict(
-                    entityType: .note,
-                    entityID: note.id,
-                    noteID: note.id,
-                    field: .noteContent,
-                    localText: note.content,
-                    remoteText: payload.content,
-                    remoteRichTextContentData: payload.richTextContentData,
-                    remoteModifiedAt: payload.modifiedAt
-                )
             }
         } else {
             saveNoteContentBaseline(note: note, payload: payload, originDeviceID: originDeviceID)
         }
+    }
+
+    private func noteBodySyncResolution(
+        note: Note,
+        localText: String,
+        payload: MyRAMNoteSyncPayload,
+        originDeviceID: String
+    ) -> NoteBodySyncResolution {
+        let baseline = selectedBaseline(
+            entityType: .note,
+            entityID: note.id,
+            field: .noteContent,
+            remoteBaseText: payload.baseContent,
+            remoteBaseData: payload.baseRichTextContentData,
+            originDeviceID: originDeviceID
+        )
+        let baseText = baseline.text ?? ""
+        let remoteText = payload.content
+        let resolvedText: String
+
+        switch SyncThreeWayTextMergePolicy.merge(base: baseline.text, local: localText, remote: remoteText) {
+        case .apply(let text, _):
+            resolvedText = text
+        case .noOp:
+            let richTextContentData = resolvedRichTextContentData(resolvedText: localText, payload: payload)
+            if note.richTextContentData == richTextContentData {
+                return .noOp
+            }
+            return .apply(
+                text: localText,
+                patch: SyncTextPatch.from(local: localText, to: localText),
+                richTextContentData: richTextContentData
+            )
+        case .conflict:
+            resolvedText = replayRemoteDelta(base: baseText, local: localText, remote: remoteText)
+        }
+
+        let patch = SyncTextPatch.from(local: localText, to: resolvedText)
+        return .apply(
+            text: resolvedText,
+            patch: patch,
+            richTextContentData: resolvedRichTextContentData(resolvedText: resolvedText, payload: payload)
+        )
+    }
+
+    private func replayRemoteDelta(base: String, local: String, remote: String) -> String {
+        let delta = SyncTextPatch.delta(from: base, to: remote)
+        let localLength = (local as NSString).length
+        let location = min(delta.range.location, localLength)
+        let length = min(delta.range.length, max(0, localLength - location))
+        let replayPatch = SyncTextPatch(
+            range: NSRange(location: location, length: length),
+            replacement: delta.replacement
+        )
+
+        if let resolvedText = replayPatch.applying(to: local) {
+            return resolvedText
+        }
+        if local.isEmpty {
+            return delta.replacement
+        }
+        if delta.replacement.isEmpty {
+            return local
+        }
+        return local + "\n" + delta.replacement
+    }
+
+    private func resolvedRichTextContentData(resolvedText: String, payload: MyRAMNoteSyncPayload) -> Data? {
+        guard resolvedText == payload.content else { return nil }
+        return RichTextContentCodec.sanitizedConflictRichTextData(
+            payload.richTextContentData,
+            plainText: resolvedText
+        )
     }
 
     private func noteTitleResolution(
@@ -456,11 +559,12 @@ final class MyRAMSyncChangeApplier {
         payload: MyRAMNoteSyncPayload,
         originDeviceID: String
     ) -> RemoteTextResolution {
-        gatedRemoteTextResolution(
+        let localText = activeText(note.id, .noteContent) ?? note.content
+        return gatedRemoteTextResolution(
             entityType: .note,
             entityID: note.id,
             field: .noteContent,
-            localText: note.content,
+            localText: localText,
             localData: note.richTextContentData,
             remoteBaseText: payload.baseContent,
             remoteBaseData: payload.baseRichTextContentData,
@@ -486,7 +590,8 @@ final class MyRAMSyncChangeApplier {
             return .conflict
         }
 
-        if isTextApplicationUnsafe(entityType, entityID, field),
+        let isUnsafe = isTextApplicationUnsafe(entityType, entityID, field)
+        if isUnsafe,
            isSameBaselineRemoteText(
             entityType: entityType,
             entityID: entityID,
@@ -495,6 +600,21 @@ final class MyRAMSyncChangeApplier {
             remoteBaseData: remoteBaseData,
             originDeviceID: originDeviceID
            ) {
+            let resolution = remoteTextResolution(
+                entityType: entityType,
+                entityID: entityID,
+                field: field,
+                localText: localText,
+                localData: localData,
+                remoteBaseText: remoteBaseText,
+                remoteBaseData: remoteBaseData,
+                remoteText: remoteText,
+                remoteData: remoteData,
+                originDeviceID: originDeviceID
+            )
+            if case .apply(_, let patch) = resolution, patch != nil {
+                return resolution
+            }
             return hasLocalTextDivergedFromRemoteBase(
                 entityType: entityType,
                 entityID: entityID,
@@ -519,9 +639,10 @@ final class MyRAMSyncChangeApplier {
             remoteData: remoteData,
             originDeviceID: originDeviceID
         )
-        if case .apply(let text) = resolution,
+        if case .apply(let text, let patch) = resolution,
            text != localText,
-           isTextApplicationUnsafe(entityType, entityID, field) {
+           isUnsafe,
+           patch == nil {
             return .conflict
         }
         return resolution
@@ -588,16 +709,16 @@ final class MyRAMSyncChangeApplier {
 
         if localData != baseline.data || remoteData != baseline.data {
             if localText == baseline.text {
-                return .apply(remoteText)
+                return .apply(remoteText, patch: nil)
             }
             return .conflict
         }
 
         switch SyncThreeWayTextMergePolicy.merge(base: baseline.text, local: localText, remote: remoteText) {
-        case .apply(let text), .merged(let text):
-            return .apply(text)
+        case .apply(let text, let patch):
+            return .apply(text, patch: patch)
         case .noOp:
-            return .apply(localText)
+            return .apply(localText, patch: nil)
         case .conflict:
             return .conflict
         }
@@ -714,7 +835,7 @@ final class MyRAMSyncChangeApplier {
         }
 
         switch SyncThreeWayTextMergePolicy.merge(base: baseText, local: localText, remote: resolvedText) {
-        case .apply(let text), .merged(let text):
+        case .apply(let text, _):
             applyResolvedText(text, conflict: conflict)
             return true
         case .noOp:
@@ -833,7 +954,7 @@ final class MyRAMSyncChangeApplier {
             remoteData: nil,
             originDeviceID: originDeviceID
         ) {
-        case .apply(let text):
+        case .apply(let text, _):
             thought.text = text
             savePinnedTextBaseline(thoughtID: thought.id, payload: payload, originDeviceID: originDeviceID)
             return false
@@ -1140,7 +1261,7 @@ private extension SyncConflictEntityType {
 }
 
 private enum RemoteTextResolution: Equatable {
-    case apply(String)
+    case apply(String, patch: SyncTextPatch? = nil)
     case deferIncoming
     case conflict
 
