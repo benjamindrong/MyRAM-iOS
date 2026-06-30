@@ -378,6 +378,56 @@ final class MyRAMTests: XCTestCase {
         XCTAssertNil(decoded.attribute(.foregroundColor, at: 0, effectiveRange: nil))
     }
 
+    func testRichTextConflictSanitizationPreservesFormattingForTrailingNewlineMismatch() throws {
+        let richTextData = try makeStyledConflictRichTextData(text: "Bold Italic Underline\n")
+
+        let sanitized = try XCTUnwrap(
+            RichTextContentCodec.sanitizedConflictRichTextData(
+                richTextData,
+                plainText: "Bold Italic Underline"
+            )
+        )
+        let decoded = try decodeRichTextData(sanitized)
+
+        XCTAssertEqual(decoded.string, "Bold Italic Underline")
+        try assertStyledConflictFormattingSurvives(in: decoded)
+    }
+
+    func testRichTextConflictSanitizationPreservesFormattingForTrailingBoundaryWhitespaceMismatch() throws {
+        let richTextData = try makeStyledConflictRichTextData(text: "Bold Italic Underline   ")
+
+        let sanitized = try XCTUnwrap(
+            RichTextContentCodec.sanitizedConflictRichTextData(
+                richTextData,
+                plainText: "Bold Italic Underline"
+            )
+        )
+        let decoded = try decodeRichTextData(sanitized)
+
+        XCTAssertEqual(decoded.string, "Bold Italic Underline")
+        try assertStyledConflictFormattingSurvives(in: decoded)
+    }
+
+    func testRichTextConflictSanitizationRejectsInteriorWhitespaceMismatch() throws {
+        let richTextData = try makeStyledConflictRichTextData(text: "Bold  Italic Underline")
+
+        XCTAssertNil(
+            RichTextContentCodec.sanitizedConflictRichTextData(
+                richTextData,
+                plainText: "Bold Italic Underline"
+            )
+        )
+    }
+
+    func testRichTextConflictSanitizationRejectsMalformedRichTextData() {
+        XCTAssertNil(
+            RichTextContentCodec.sanitizedConflictRichTextData(
+                Data("not rtf".utf8),
+                plainText: "Bold Italic Underline"
+            )
+        )
+    }
+
     func testNoteSyncPayloadRoundTripsNoteFields() throws {
         let noteID = UUID()
         let folderID = UUID()
@@ -2330,6 +2380,23 @@ final class MyRAMTests: XCTestCase {
         )
     }
 
+    func testRestoreConflictPreservesBoldItalicAndUnderlineFormatting() throws {
+        let remoteText = "Bold Italic Underline"
+        let incomingRichTextData = try makeStyledConflictRichTextData(text: remoteText)
+        let fixture = try makeActiveNoteContentConflictFixture(
+            remoteText: remoteText,
+            remoteRichTextContentData: incomingRichTextData
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
+
+        fixture.vm.restoreSyncConflict(fixture.conflict)
+
+        let richTextData = try XCTUnwrap(fixture.note.richTextContentData)
+        let attributedText = try decodeRichTextData(richTextData)
+        XCTAssertEqual(attributedText.string, remoteText)
+        try assertStyledConflictFormattingSurvives(in: attributedText)
+    }
+
     func testSaveMergedConflictUsesMergedTextAfterPostConflictTyping() throws {
         let fixture = try makeActiveNoteContentConflictFixture()
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
@@ -2362,6 +2429,20 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(payload.action, .resolved)
         XCTAssertEqual(payload.resolvedText, mergedText)
         XCTAssertEqual(payload.baseText, fixture.conflict.remoteText)
+    }
+
+    func testSaveMergedConflictPreservesCompatibleExistingRichTextWhenResolvedDataIsNil() throws {
+        let fixture = try makeActiveNoteContentConflictFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
+        let mergedText = "Bold Italic Underline\nVersion to Sync"
+        fixture.note.richTextContentData = try makeStyledConflictRichTextData(text: mergedText)
+
+        fixture.vm.saveMergedSyncConflict(fixture.conflict, mergedText: mergedText)
+
+        let richTextData = try XCTUnwrap(fixture.note.richTextContentData)
+        let attributedText = try decodeRichTextData(richTextData)
+        XCTAssertEqual(attributedText.string, mergedText)
+        try assertStyledConflictFormattingSurvives(in: attributedText)
     }
 
     func testNoteDeleteSyncIsBlockedWhileContentConflictIsActive() throws {
@@ -5391,6 +5472,38 @@ final class MyRAMTests: XCTestCase {
         attributedText.addAttribute(.foregroundColor, value: UIColor.systemRed, range: redRange)
 
         return try XCTUnwrap(RichTextContentCodec.encode(attributedText))
+    }
+
+    private func makeStyledConflictRichTextData(text: String) throws -> Data {
+        let attributedText = NSMutableAttributedString(string: text)
+        let boldRange = (text as NSString).range(of: "Bold")
+        let italicRange = (text as NSString).range(of: "Italic")
+        let underlineRange = (text as NSString).range(of: "Underline")
+        attributedText.addAttribute(.font, value: UIFont.boldSystemFont(ofSize: 18), range: boldRange)
+        attributedText.addAttribute(.font, value: UIFont.italicSystemFont(ofSize: 18), range: italicRange)
+        attributedText.addAttribute(
+            .underlineStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: underlineRange
+        )
+
+        return try XCTUnwrap(RichTextContentCodec.encode(attributedText))
+    }
+
+    private func assertStyledConflictFormattingSurvives(in attributedText: NSAttributedString) throws {
+        let text = attributedText.string as NSString
+        let boldLocation = text.range(of: "Bold").location
+        let italicLocation = text.range(of: "Italic").location
+        let underlineLocation = text.range(of: "Underline").location
+
+        let boldFont = try XCTUnwrap(attributedText.attribute(.font, at: boldLocation, effectiveRange: nil) as? UIFont)
+        XCTAssertTrue(boldFont.fontDescriptor.symbolicTraits.contains(.traitBold))
+
+        let italicFont = try XCTUnwrap(attributedText.attribute(.font, at: italicLocation, effectiveRange: nil) as? UIFont)
+        XCTAssertTrue(italicFont.fontDescriptor.symbolicTraits.contains(.traitItalic))
+
+        let underline = attributedText.attribute(.underlineStyle, at: underlineLocation, effectiveRange: nil) as? Int
+        XCTAssertEqual(underline, NSUnderlineStyle.single.rawValue)
     }
 
     private func decodeRichTextData(_ data: Data) throws -> NSAttributedString {

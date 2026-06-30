@@ -54,8 +54,8 @@ enum RichTextContentCodec {
                 options: [.documentType: NSAttributedString.DocumentType.rtf],
                 documentAttributes: nil
               ),
-              attributedText.string == plainText else { return nil }
-        let mutable = NSMutableAttributedString(attributedString: attributedText)
+              let compatibleText = attributedText.compatibleConflictText(matching: plainText) else { return nil }
+        let mutable = NSMutableAttributedString(attributedString: compatibleText)
         let fullRange = NSRange(location: 0, length: mutable.length)
         stripLegacyDefaultTextColors(from: mutable, range: fullRange)
         return encode(mutable)
@@ -81,6 +81,35 @@ enum RichTextContentCodec {
                   color.looksLikeLegacyDefaultTextColor else { return }
             attributedText.removeAttribute(key, range: range)
         }
+    }
+}
+
+private extension NSAttributedString {
+    func compatibleConflictText(matching plainText: String) -> NSAttributedString? {
+        guard string != plainText else { return self }
+        guard string.hasPrefix(plainText) else { return nil }
+
+        let extraTrailingText = String(string.dropFirst(plainText.count))
+        guard extraTrailingText.isDocumentBoundaryWhitespace else { return nil }
+
+        // Only document-boundary serialization whitespace is safe to trim; any
+        // interior difference must fail instead of remapping formatting.
+        let mutable = NSMutableAttributedString(attributedString: self)
+        let extraTrailingRange = NSRange(
+            location: (plainText as NSString).length,
+            length: (extraTrailingText as NSString).length
+        )
+        mutable.deleteCharacters(in: extraTrailingRange)
+
+        guard mutable.string == plainText else { return nil }
+        return mutable
+    }
+}
+
+private extension String {
+    var isDocumentBoundaryWhitespace: Bool {
+        guard !isEmpty else { return false }
+        return unicodeScalars.allSatisfy { CharacterSet.whitespacesAndNewlines.contains($0) }
     }
 }
 
