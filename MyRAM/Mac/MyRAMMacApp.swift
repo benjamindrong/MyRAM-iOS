@@ -10,6 +10,7 @@ struct MyRAMMacApp: App {
         .commands {
             TextEditingCommands()
             TextFormattingCommands()
+            SidebarCommands()
         }
     }
 }

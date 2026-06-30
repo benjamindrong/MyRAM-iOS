@@ -16,6 +16,111 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertNil(note.deletedAt)
     }
 
+    func testLoadNotesCreatingFirstIfNeededCreatesNoteWhenStoreIsEmpty() throws {
+        let container = try makeInMemoryContainer()
+        let adapter = MacNotePersistenceAdapter(context: container.mainContext)
+
+        let notes = try adapter.loadNotesCreatingFirstIfNeeded()
+
+        XCTAssertEqual(notes.count, 1)
+        XCTAssertEqual(notes.first?.title, "")
+        XCTAssertEqual(notes.first?.content, "")
+        XCTAssertNil(notes.first?.deletedAt)
+    }
+
+    func testLoadNotesReturnsOnlyNonDeletedNotes() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let activeNote = Note(title: "Active", content: "Active body")
+        let deletedNote = Note(title: "Deleted", content: "Deleted body")
+        deletedNote.deletedAt = Date()
+        context.insert(activeNote)
+        context.insert(deletedNote)
+        try context.save()
+
+        let notes = try MacNotePersistenceAdapter(context: context).loadNotes()
+
+        XCTAssertEqual(notes.map(\.id), [activeNote.id])
+    }
+
+    func testLoadNotesSortsByModifiedAtDescending() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let oldestNote = Note(title: "Oldest", content: "")
+        oldestNote.modifiedAt = Date(timeIntervalSince1970: 100)
+        let newestNote = Note(title: "Newest", content: "")
+        newestNote.modifiedAt = Date(timeIntervalSince1970: 300)
+        let middleNote = Note(title: "Middle", content: "")
+        middleNote.modifiedAt = Date(timeIntervalSince1970: 200)
+        context.insert(oldestNote)
+        context.insert(newestNote)
+        context.insert(middleNote)
+        try context.save()
+
+        let notes = try MacNotePersistenceAdapter(context: context).loadNotes()
+
+        XCTAssertEqual(notes.map(\.id), [newestNote.id, middleNote.id, oldestNote.id])
+    }
+
+    func testLoadNotesUsesDeterministicTieBreakersForEqualModifiedAtValues() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let sharedModifiedAt = Date(timeIntervalSince1970: 500)
+        let sharedCreatedAt = Date(timeIntervalSince1970: 400)
+        let lowerIDNote = Note(title: "Lower", content: "")
+        lowerIDNote.id = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        lowerIDNote.modifiedAt = sharedModifiedAt
+        lowerIDNote.createdAt = sharedCreatedAt
+        let higherIDNote = Note(title: "Higher", content: "")
+        higherIDNote.id = UUID(uuidString: "00000000-0000-0000-0000-000000000002")!
+        higherIDNote.modifiedAt = sharedModifiedAt
+        higherIDNote.createdAt = sharedCreatedAt
+        let newerCreatedAtNote = Note(title: "Created Later", content: "")
+        newerCreatedAtNote.id = UUID(uuidString: "00000000-0000-0000-0000-000000000003")!
+        newerCreatedAtNote.modifiedAt = sharedModifiedAt
+        newerCreatedAtNote.createdAt = Date(timeIntervalSince1970: 450)
+        context.insert(higherIDNote)
+        context.insert(newerCreatedAtNote)
+        context.insert(lowerIDNote)
+        try context.save()
+
+        let notes = try MacNotePersistenceAdapter(context: context).loadNotes()
+
+        XCTAssertEqual(notes.map(\.id), [newerCreatedAtNote.id, lowerIDNote.id, higherIDNote.id])
+    }
+
+    func testCreateNotePersistsBlankNonDeletedNote() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let adapter = MacNotePersistenceAdapter(context: context)
+
+        let note = try adapter.createNote()
+        let loadedNotes = try adapter.loadNotes()
+
+        XCTAssertEqual(loadedNotes.map(\.id), [note.id])
+        XCTAssertEqual(note.title, "")
+        XCTAssertEqual(note.content, "")
+        XCTAssertNil(note.deletedAt)
+    }
+
+    func testLoadNoteReturnsMatchingNonDeletedNote() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let matchingNote = Note(title: "Match", content: "Match body")
+        let otherNote = Note(title: "Other", content: "Other body")
+        let deletedNote = Note(title: "Deleted", content: "Deleted body")
+        deletedNote.deletedAt = Date()
+        context.insert(matchingNote)
+        context.insert(otherNote)
+        context.insert(deletedNote)
+        try context.save()
+
+        let adapter = MacNotePersistenceAdapter(context: context)
+
+        XCTAssertEqual(try adapter.loadNote(id: matchingNote.id)?.id, matchingNote.id)
+        XCTAssertNil(try adapter.loadNote(id: deletedNote.id))
+    }
+
     func testLoadDefaultNoteReturnsMostRecentlyModifiedNonDeletedNote() throws {
         let container = try makeInMemoryContainer()
         let context = container.mainContext
