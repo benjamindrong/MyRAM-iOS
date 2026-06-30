@@ -209,17 +209,15 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         attributedText.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: 18), range: fullRange)
         attributedText.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: fullRange)
 
-        try MacNotePersistenceAdapter(context: context).save(note: note, attributedContent: attributedText)
+        let adapter = MacNotePersistenceAdapter(context: context)
+        try adapter.save(note: note, attributedContent: attributedText)
 
-        let richTextData = try XCTUnwrap(note.richTextContentData)
-        let decodedText = try NSAttributedString(
-            data: richTextData,
-            options: [.documentType: NSAttributedString.DocumentType.rtf],
-            documentAttributes: nil
-        )
+        XCTAssertNotNil(note.richTextContentData)
+        let decodedText = adapter.attributedContent(for: note)
         XCTAssertEqual(decodedText.string, "Styled body")
-        XCTAssertNotNil(decodedText.attribute(.font, at: 0, effectiveRange: nil))
-        XCTAssertNotNil(decodedText.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        let font = try XCTUnwrap(decodedText.attribute(.font, at: 0, effectiveRange: nil) as? NSFont)
+        XCTAssertTrue(font.fontDescriptor.symbolicTraits.contains(.bold))
+        try assertColor(decodedText.attribute(.foregroundColor, at: 0, effectiveRange: nil), matches: .systemBlue)
     }
 
     func testSavePreservesExplicitNonDefaultColor() throws {
