@@ -210,6 +210,7 @@ struct NoteEditorView: View {
                 clearCurrentNoteSearch()
                 commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
+                vm.clearActiveNoteDraft(note)
             }
             .onChange(of: focusedPinnedThoughtID) { oldValue, newValue in
                 guard oldValue != newValue else { return }
@@ -220,7 +221,7 @@ struct NoteEditorView: View {
             .onChange(of: vm.activeNoteSyncRevision) {
                 reloadNoteFromSync()
             }
-            .onChange(of: vm.activeNoteTextPatch?.id) {
+            .onChange(of: vm.activeNoteTextPatchDeliveryID) {
                 applyActiveNoteTextPatchIfNeeded()
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
@@ -1336,12 +1337,16 @@ struct NoteEditorView: View {
 
     private func applyActiveNoteTextPatchIfNeeded() {
         guard let activePatch = vm.activeNoteTextPatch,
-              activePatch.noteID == note.id,
-              activePatch.patch.applying(to: content) == activePatch.mergedText else { return }
+              activePatch.noteID == note.id else { return }
+        let patch = activePatch.patch.applying(to: content) == activePatch.mergedText
+            ? activePatch.patch
+            : SyncTextPatch.from(local: content, to: activePatch.mergedText)
+        guard patch.applying(to: content) == activePatch.mergedText else { return }
         isApplyingRemoteSyncUpdate = true
         content = activePatch.mergedText
-        pendingActiveTextPatch = activePatch.patch
+        pendingActiveTextPatch = patch
         activeTextPatchToggleToken += 1
+        vm.recordActiveNotePatchApplied(noteID: note.id, content: activePatch.mergedText)
         lastSnapshot = currentNoteSnapshot()
         refreshUndoState()
         DispatchQueue.main.async {

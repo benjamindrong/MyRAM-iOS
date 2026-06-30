@@ -26,6 +26,7 @@ final class NotesViewModel: ObservableObject {
     @Published private(set) var syncConflicts: [SyncConflictVersion] = []
     @Published private(set) var activeNoteSyncRevision = 0
     @Published private(set) var activeNoteTextPatch: ActiveNoteTextPatch?
+    @Published private(set) var activeNoteTextPatchDeliveryID = 0
     @Published private(set) var hasUndoableAction = false
     @Published private(set) var hasRedoableAction = false
     
@@ -366,6 +367,9 @@ final class NotesViewModel: ObservableObject {
     }
 
     func selectNote(_ note: Note?) {
+        if let currentNoteID = currentNote?.id, currentNoteID != note?.id {
+            activeNoteDraftTextByID.removeValue(forKey: currentNoteID)
+        }
         currentNote = note
         UserDefaults.standard.set(note?.id.uuidString, forKey: "lastNoteID")
     }
@@ -390,9 +394,18 @@ final class NotesViewModel: ObservableObject {
 
     func recordActiveNoteTextEdited(_ note: Note, content: String? = nil) {
         recentTextEditByNoteID[note.id] = Date()
-        if let content {
+        if currentNote?.id == note.id, let content {
             activeNoteDraftTextByID[note.id] = content
         }
+    }
+
+    func recordActiveNotePatchApplied(noteID: UUID, content: String) {
+        guard currentNote?.id == noteID else { return }
+        activeNoteDraftTextByID[noteID] = content
+    }
+
+    func clearActiveNoteDraft(_ note: Note) {
+        activeNoteDraftTextByID.removeValue(forKey: note.id)
     }
 
     func refreshedNote(withID noteID: UUID) -> Note? {
@@ -411,6 +424,7 @@ final class NotesViewModel: ObservableObject {
         note.richTextContentData = richTextContentData
         note.modifiedAt = .now
         recordActiveNoteTextEdited(note, content: content)
+        activeNoteDraftTextByID[note.id] = content
         try? context.save()
         recordNoteSyncChange(note)
     }
@@ -1352,6 +1366,9 @@ final class NotesViewModel: ObservableObject {
     func applyIncomingSyncChanges(_ changes: [SyncChange]) async {
         guard !changes.isEmpty else { return }
         let activeNoteID = currentNote?.id
+        let activeEditorStartText: String? = activeNoteID.flatMap { id in
+            activeNoteDraftTextByID[id] ?? (currentNote?.id == id ? currentNote?.content : nil)
+        }
         isApplyingRemoteSyncChange = true
         defer { isApplyingRemoteSyncChange = false }
 
@@ -1363,6 +1380,7 @@ final class NotesViewModel: ObservableObject {
             },
             activeText: { [weak self] noteID, field in
                 guard field == .noteContent else { return nil }
+                guard self?.currentNote?.id == noteID else { return nil }
                 return self?.activeNoteDraftTextByID[noteID]
             }
         )
@@ -1385,13 +1403,27 @@ final class NotesViewModel: ObservableObject {
 
         try? context.save()
         refreshCurrentFolderContent()
-        if result.shouldRefreshActiveNote {
+        var didPublishActiveTextPatch = false
+        if let activeNoteID,
+           let activeEditorStartText,
+           let activeNote = refreshedNote(withID: activeNoteID),
+           activeEditorStartText != activeNote.content {
+            publishActiveNoteTextPatch(
+                noteID: activeNote.id,
+                patch: SyncTextPatch.from(local: activeEditorStartText, to: activeNote.content),
+                mergedText: activeNote.content
+            )
+            didPublishActiveTextPatch = true
+        }
+        if result.shouldRefreshActiveNote && !didPublishActiveTextPatch {
             activeNoteSyncRevision += 1
         }
-        if let patch = result.activeNoteTextPatch {
-            activeNoteDraftTextByID[patch.noteID] = patch.mergedText
-            activeNoteTextPatch = patch
-        }
+    }
+
+    private func publishActiveNoteTextPatch(noteID: UUID, patch: SyncTextPatch, mergedText: String) {
+        activeNoteDraftTextByID[noteID] = mergedText
+        activeNoteTextPatch = ActiveNoteTextPatch(noteID: noteID, patch: patch, mergedText: mergedText)
+        activeNoteTextPatchDeliveryID += 1
     }
 
     private func isIncomingTextUnsafe(
