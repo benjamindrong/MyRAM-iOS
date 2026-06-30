@@ -58,6 +58,9 @@ final class MacNotePersistenceAdapter {
     }
 
     func attributedContent(for note: Note) -> NSAttributedString {
+        // Decode intentionally stays local to the Mac adapter: the Mac fallback omits
+        // a base font because NSTextView manages its own defaults, while the editor
+        // codec requires UIKit fallback attributes.
         if let richTextContentData = note.richTextContentData,
            let attributedText = try? NSAttributedString(
             data: richTextContentData,
@@ -76,18 +79,9 @@ final class MacNotePersistenceAdapter {
         }
 
         note.content = attributedContent.string
-        note.richTextContentData = Self.encodeRTF(attributedContent)
+        note.richTextContentData = RTFCoding.encode(attributedContent)
         note.modifiedAt = .now
         try context.save()
-    }
-
-    private static func encodeRTF(_ attributedContent: NSAttributedString) -> Data? {
-        guard attributedContent.length > 0 else { return nil }
-
-        return try? attributedContent.data(
-            from: NSRange(location: 0, length: attributedContent.length),
-            documentAttributes: [.documentType: NSAttributedString.DocumentType.rtf]
-        )
     }
 }
 

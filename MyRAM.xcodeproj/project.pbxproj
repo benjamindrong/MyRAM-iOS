@@ -21,6 +21,8 @@
 		BC9F1BC32EA47D310045FD72 /* MyRAMTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BC22EA47D310045FD72 /* MyRAMTests.swift */; };
 		BC9F1BCD2EA47D310045FD72 /* MyRAMUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCC2EA47D310045FD72 /* MyRAMUITests.swift */; };
 		BC9F1BCF2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */; };
+		BCA104010000000000000001 /* RTFCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA104020000000000000001 /* RTFCoding.swift */; };
+		BCA104010000000000000002 /* RTFCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA104020000000000000001 /* RTFCoding.swift */; };
 		BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000002 /* MyRAMMacApp.swift */; };
 		BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000003 /* MyRAMMacRootView.swift */; };
 		BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
@@ -116,6 +118,7 @@
 		BC9F1BCC2EA47D310045FD72 /* MyRAMUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITests.swift; sourceTree = "<group>"; };
 		BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		BCA105020000000000000001 /* MyRAMMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyRAMMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		BCA104020000000000000001 /* RTFCoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTFCoding.swift; sourceTree = "<group>"; };
 		BCA105020000000000000002 /* MyRAMMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacApp.swift; sourceTree = "<group>"; };
 		BCA105020000000000000003 /* MyRAMMacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacRootView.swift; sourceTree = "<group>"; };
 		BCA106020000000000000001 /* MacNoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteEditorView.swift; sourceTree = "<group>"; };
@@ -238,6 +241,7 @@
 				BCE65D0F2EA544DF00F2D0AA /* ViewModels */,
 				BCE65D0A2EA5446600F2D0AA /* Models */,
 				BCF104032FF1040000000104 /* Platform */,
+				BCA104030000000000000001 /* Persistence */,
 				BCA105030000000000000001 /* Mac */,
 				C07100212FF0000000000001 /* Sync */,
 				BC9F1BAF2EA47D2E0045FD72 /* MyRAMApp.swift */,
@@ -258,6 +262,14 @@
 				BC9F1BB82EA47D300045FD72 /* Preview Assets.xcassets */,
 			);
 			path = "Preview Content";
+			sourceTree = "<group>";
+		};
+		BCA104030000000000000001 /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				BCA104020000000000000001 /* RTFCoding.swift */,
+			);
+			path = Persistence;
 			sourceTree = "<group>";
 		};
 		BCA105030000000000000001 /* Mac */ = {
@@ -579,6 +591,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				BC9F1BB42EA47D2F0045FD72 /* Item.swift in Sources */,
+				BCA104010000000000000001 /* RTFCoding.swift in Sources */,
 				BCE65D112EA544FB00F2D0AA /* NotesViewModel.swift in Sources */,
 				C07100072FF0000000000001 /* MyRAMSyncModels.swift in Sources */,
 				BC9F1BB02EA47D2E0045FD72 /* MyRAMApp.swift in Sources */,
@@ -650,6 +663,7 @@
 				BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */,
 				BCA106010000000000000003 /* MacEditorSampleDocument.swift in Sources */,
 				BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */,
+				BCA104010000000000000002 /* RTFCoding.swift in Sources */,
 				BCA109010000000000000001 /* MacNotePersistenceAdapter.swift in Sources */,
 				BCA109010000000000000002 /* Note.swift in Sources */,
 				BCA109010000000000000003 /* Folder.swift in Sources */,
