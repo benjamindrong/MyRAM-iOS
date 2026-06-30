@@ -419,6 +419,28 @@ final class MyRAMTests: XCTestCase {
         )
     }
 
+    func testRichTextConflictSanitizationRejectsMultipleTrailingNewlineMismatch() throws {
+        let richTextData = try makeStyledConflictRichTextData(text: "Bold Italic Underline\n\n")
+
+        XCTAssertNil(
+            RichTextContentCodec.sanitizedConflictRichTextData(
+                richTextData,
+                plainText: "Bold Italic Underline"
+            )
+        )
+    }
+
+    func testRichTextConflictSanitizationRejectsMixedTrailingNewlineWhitespaceMismatch() throws {
+        let richTextData = try makeStyledConflictRichTextData(text: "Bold Italic Underline\n ")
+
+        XCTAssertNil(
+            RichTextContentCodec.sanitizedConflictRichTextData(
+                richTextData,
+                plainText: "Bold Italic Underline"
+            )
+        )
+    }
+
     func testRichTextConflictSanitizationRejectsMalformedRichTextData() {
         XCTAssertNil(
             RichTextContentCodec.sanitizedConflictRichTextData(

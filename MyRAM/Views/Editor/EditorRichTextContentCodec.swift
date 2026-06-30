@@ -87,29 +87,37 @@ enum RichTextContentCodec {
 private extension NSAttributedString {
     func compatibleConflictText(matching plainText: String) -> NSAttributedString? {
         guard string != plainText else { return self }
-        guard string.hasPrefix(plainText) else { return nil }
+        let nsString = string as NSString
+        let nsPlainLength = (plainText as NSString).length
+        guard nsString.length > nsPlainLength else { return nil }
+        guard nsString.substring(to: nsPlainLength) == plainText else { return nil }
 
-        let extraTrailingText = String(string.dropFirst(plainText.count))
+        let extraTrailingText = nsString.substring(from: nsPlainLength)
         guard extraTrailingText.isDocumentBoundaryWhitespace else { return nil }
 
         // Only document-boundary serialization whitespace is safe to trim; any
         // interior difference must fail instead of remapping formatting.
         let mutable = NSMutableAttributedString(attributedString: self)
         let extraTrailingRange = NSRange(
-            location: (plainText as NSString).length,
-            length: (extraTrailingText as NSString).length
+            location: nsPlainLength,
+            length: nsString.length - nsPlainLength
         )
         mutable.deleteCharacters(in: extraTrailingRange)
 
-        guard mutable.string == plainText else { return nil }
+        let matchesResolvedPlainText = mutable.string == plainText
+        assert(
+            matchesResolvedPlainText,
+            "compatibleConflictText range arithmetic produced wrong result"
+        )
+        guard matchesResolvedPlainText else { return nil }
         return mutable
     }
 }
 
 private extension String {
     var isDocumentBoundaryWhitespace: Bool {
-        guard !isEmpty else { return false }
-        return unicodeScalars.allSatisfy { CharacterSet.whitespacesAndNewlines.contains($0) }
+        self == "\n"
+            || (!isEmpty && unicodeScalars.allSatisfy { CharacterSet.whitespaces.contains($0) })
     }
 }
 
