@@ -1,4 +1,5 @@
 // NoteEditorView.swift
+import NearbySyncCore
 import SwiftUI
 import UIKit
 import PhotosUI
@@ -31,6 +32,8 @@ struct NoteEditorView: View {
     @State private var appendUnpinnedThoughtToggleToken = 0
     @State private var pendingUnpinnedThoughtText = ""
     @State private var restoreContentToggleToken = 0
+    @State private var activeTextPatchToggleToken = 0
+    @State private var pendingActiveTextPatch: SyncTextPatch?
     @State private var captureSelectionToggleToken = 0
     @State private var boldToggleToken = 0
     @State private var italicToggleToken = 0
@@ -217,6 +220,9 @@ struct NoteEditorView: View {
             .onChange(of: vm.activeNoteSyncRevision) {
                 reloadNoteFromSync()
             }
+            .onChange(of: vm.activeNoteTextPatch?.id) {
+                applyActiveNoteTextPatchIfNeeded()
+            }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                 isKeyboardVisible = true
             }
@@ -374,6 +380,8 @@ struct NoteEditorView: View {
             appendUnpinnedThoughtToggleToken: appendUnpinnedThoughtToggleToken,
             pendingUnpinnedThoughtText: pendingUnpinnedThoughtText,
             restoreContentToggleToken: restoreContentToggleToken,
+            activeTextPatchToggleToken: activeTextPatchToggleToken,
+            pendingActiveTextPatch: pendingActiveTextPatch,
             boldToggleToken: boldToggleToken,
             italicToggleToken: italicToggleToken,
             underlineToggleToken: underlineToggleToken,
@@ -1291,7 +1299,7 @@ struct NoteEditorView: View {
         }
         lastSnapshot = currentSnapshot
         editorBufferOwner = .localEditing
-        vm.recordActiveNoteTextEdited(note)
+        vm.recordActiveNoteTextEdited(note, content: content)
         scheduleNoteCommit()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
@@ -1324,6 +1332,21 @@ struct NoteEditorView: View {
         }
 
         applyRemoteNoteRefresh()
+    }
+
+    private func applyActiveNoteTextPatchIfNeeded() {
+        guard let activePatch = vm.activeNoteTextPatch,
+              activePatch.noteID == note.id,
+              activePatch.patch.applying(to: content) == activePatch.mergedText else { return }
+        isApplyingRemoteSyncUpdate = true
+        content = activePatch.mergedText
+        pendingActiveTextPatch = activePatch.patch
+        activeTextPatchToggleToken += 1
+        lastSnapshot = currentNoteSnapshot()
+        refreshUndoState()
+        DispatchQueue.main.async {
+            isApplyingRemoteSyncUpdate = false
+        }
     }
 
     private func applyDeferredRemoteRefreshIfNeeded() {
@@ -2681,6 +2704,8 @@ private struct SelectableTextView: UIViewRepresentable {
     let appendUnpinnedThoughtToggleToken: Int
     let pendingUnpinnedThoughtText: String
     let restoreContentToggleToken: Int
+    let activeTextPatchToggleToken: Int
+    let pendingActiveTextPatch: SyncTextPatch?
     let boldToggleToken: Int
     let italicToggleToken: Int
     let underlineToggleToken: Int
@@ -2821,6 +2846,13 @@ private struct SelectableTextView: UIViewRepresentable {
             context.coordinator.reportUndoManagerChanged(textView.undoManager)
         }
 
+        if context.coordinator.activeTextPatchToggleToken != activeTextPatchToggleToken {
+            context.coordinator.activeTextPatchToggleToken = activeTextPatchToggleToken
+            if let pendingActiveTextPatch {
+                context.coordinator.applyRemoteTextPatch(pendingActiveTextPatch, in: textView)
+            }
+        }
+
         if context.coordinator.boldToggleToken != boldToggleToken {
             context.coordinator.boldToggleToken = boldToggleToken
             context.coordinator.toggleBold(in: textView)
@@ -2918,6 +2950,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var lookupSelectionToggleToken = 0
         var appendUnpinnedThoughtToggleToken = 0
         var restoreContentToggleToken = 0
+        var activeTextPatchToggleToken = 0
         var boldToggleToken = 0
         var italicToggleToken = 0
         var underlineToggleToken = 0
@@ -2999,6 +3032,57 @@ private struct SelectableTextView: UIViewRepresentable {
             recognizer.delegate = self
             textView.addGestureRecognizer(recognizer)
             checklistTapRecognizer = recognizer
+        }
+
+        func applyRemoteTextPatch(_ patch: SyncTextPatch, in textView: UITextView) {
+            let textLength = textStorageLength(in: textView)
+            guard NSMaxRange(patch.range) <= textLength else { return }
+
+            let previousOffset = textView.contentOffset
+            let previousSelection = safeSelectedRange(in: textView)
+            let attributes = textView.typingAttributes
+            let replacement = NSAttributedString(string: patch.replacement, attributes: attributes)
+            let replacementLength = (patch.replacement as NSString).length
+            let transformedSelection = transformedSelection(
+                previousSelection,
+                throughReplacementRange: patch.range,
+                replacementLength: replacementLength,
+                textLength: textLength - patch.range.length + replacementLength
+            )
+
+            isApplyingBoundContent = true
+            textView.textStorage.replaceCharacters(in: patch.range, with: replacement)
+            applyChecklistRendering(in: textView)
+            updateEditorLayout(in: textView)
+            text.wrappedValue = textView.text
+            richTextContentData.wrappedValue = RichTextContentCodec.encode(storageAttributedText(from: textView))
+            restoreSelection(transformedSelection, preserving: previousOffset, in: textView)
+            updateLastKnownSelectionRange(from: textView)
+            markSelectionFormattingDirty(from: textView)
+            reportFormattingState(from: textView)
+            isApplyingBoundContent = false
+        }
+
+        private func transformedSelection(
+            _ selection: NSRange,
+            throughReplacementRange range: NSRange,
+            replacementLength: Int,
+            textLength: Int
+        ) -> NSRange {
+            let rangeEnd = NSMaxRange(range)
+            let selectionEnd = NSMaxRange(selection)
+            let delta = replacementLength - range.length
+            let replacementEnd = range.location + replacementLength
+
+            let transformed: NSRange
+            if selectionEnd <= range.location {
+                transformed = selection
+            } else if selection.location >= rangeEnd {
+                transformed = NSRange(location: selection.location + delta, length: selection.length)
+            } else {
+                transformed = NSRange(location: replacementEnd, length: 0)
+            }
+            return EditorSelectionRangeResolver.clampedSelectionRange(transformed, textLength: textLength)
         }
 
         @objc

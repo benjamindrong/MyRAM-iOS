@@ -919,6 +919,61 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(conflicts.first?.remoteText, "")
     }
 
+    func testIncomingNonOverlappingBodyEditDuringActiveEditReturnsPatch() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Shared title", content: "Hello world")
+        note.id = UUID()
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+
+        let remoteNote = Note(title: "Shared title", content: "Hello world remote")
+        remoteNote.id = note.id
+        remoteNote.modifiedAt = Date(timeIntervalSince1970: 200)
+        let payload = try MyRAMSyncPayloadCoding.encode(
+            MyRAMNoteSyncPayload(
+                note: remoteNote,
+                baseTitle: "Shared title",
+                baseContent: "Hello world"
+            )
+        )
+        let applier = MyRAMSyncChangeApplier(
+            context: context,
+            conflictStore: conflictStore,
+            isTextApplicationUnsafe: { entityType, entityID, field in
+                entityType == .note && entityID == note.id && field == .noteContent
+            },
+            activeText: { noteID, field in
+                noteID == note.id && field == .noteContent ? "Hello local world" : nil
+            }
+        )
+
+        let result = applier.apply(
+            [
+                SyncChange(
+                    entityType: .item,
+                    entityID: note.id.uuidString,
+                    operation: .upsert,
+                    payload: payload,
+                    updatedAt: remoteNote.modifiedAt,
+                    originDeviceID: "device-b"
+                )
+            ],
+            activeNoteID: note.id,
+            currentNoteID: note.id,
+            currentFolderID: nil
+        )
+
+        XCTAssertFalse(result.shouldRefreshActiveNote)
+        XCTAssertEqual(note.content, "Hello local world remote")
+        XCTAssertEqual(result.activeNoteTextPatch?.mergedText, "Hello local world remote")
+        XCTAssertEqual(result.activeNoteTextPatch?.patch.applying(to: "Hello local world"), "Hello local world remote")
+        XCTAssertTrue(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 201)).isEmpty)
+    }
+
     func testIncomingNewNoteAppliesWithoutConflict() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext

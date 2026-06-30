@@ -25,6 +25,7 @@ final class NotesViewModel: ObservableObject {
     @Published var currentFolder: Folder? = nil
     @Published private(set) var syncConflicts: [SyncConflictVersion] = []
     @Published private(set) var activeNoteSyncRevision = 0
+    @Published private(set) var activeNoteTextPatch: ActiveNoteTextPatch?
     @Published private(set) var hasUndoableAction = false
     @Published private(set) var hasRedoableAction = false
     
@@ -33,6 +34,7 @@ final class NotesViewModel: ObservableObject {
     private let context: ModelContext
     private let syncController: MyRAMSyncControlling?
     private let syncConflictStore: SyncConflictStore
+    private var activeNoteDraftTextByID: [UUID: String] = [:]
     private let syncConflictService: MyRAMSyncConflictService
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
@@ -386,8 +388,11 @@ final class NotesViewModel: ObservableObject {
         noteIntelligenceService.recordNoteEdited(note)
     }
 
-    func recordActiveNoteTextEdited(_ note: Note) {
+    func recordActiveNoteTextEdited(_ note: Note, content: String? = nil) {
         recentTextEditByNoteID[note.id] = Date()
+        if let content {
+            activeNoteDraftTextByID[note.id] = content
+        }
     }
 
     func refreshedNote(withID noteID: UUID) -> Note? {
@@ -405,7 +410,7 @@ final class NotesViewModel: ObservableObject {
         note.content = content
         note.richTextContentData = richTextContentData
         note.modifiedAt = .now
-        recordActiveNoteTextEdited(note)
+        recordActiveNoteTextEdited(note, content: content)
         try? context.save()
         recordNoteSyncChange(note)
     }
@@ -1355,6 +1360,10 @@ final class NotesViewModel: ObservableObject {
             conflictStore: syncConflictStore,
             isTextApplicationUnsafe: { [weak self] entityType, entityID, field in
                 self?.isIncomingTextUnsafe(entityType: entityType, entityID: entityID, field: field) ?? false
+            },
+            activeText: { [weak self] noteID, field in
+                guard field == .noteContent else { return nil }
+                return self?.activeNoteDraftTextByID[noteID]
             }
         )
         let result = applier.apply(
@@ -1378,6 +1387,10 @@ final class NotesViewModel: ObservableObject {
         refreshCurrentFolderContent()
         if result.shouldRefreshActiveNote {
             activeNoteSyncRevision += 1
+        }
+        if let patch = result.activeNoteTextPatch {
+            activeNoteDraftTextByID[patch.noteID] = patch.mergedText
+            activeNoteTextPatch = patch
         }
     }
 
