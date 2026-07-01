@@ -37,6 +37,15 @@
 		BCA109010000000000000005 /* MacNotePersistenceAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */; };
 		BCA10A010000000000000001 /* MacSidebarCollapsePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */; };
 		BCA10A010000000000000002 /* MacSidebarCollapsePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */; };
+		BCA122010000000000000001 /* MacSyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000001 /* MacSyncModels.swift */; };
+		BCA122010000000000000002 /* MacSyncDeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000002 /* MacSyncDeviceIdentity.swift */; };
+		BCA122010000000000000003 /* MacSyncSeenBatchStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000003 /* MacSyncSeenBatchStore.swift */; };
+		BCA122010000000000000004 /* MacSyncBatchAccumulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000004 /* MacSyncBatchAccumulator.swift */; };
+		BCA122010000000000000005 /* MacSyncBatchApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000005 /* MacSyncBatchApplier.swift */; };
+		BCA122010000000000000006 /* MacSyncDeviceIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000006 /* MacSyncDeviceIdentityTests.swift */; };
+		BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */; };
+		BCA122010000000000000008 /* MacSyncBatchAccumulatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000008 /* MacSyncBatchAccumulatorTests.swift */; };
+		BCA122010000000000000009 /* MacSyncBatchApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000009 /* MacSyncBatchApplierTests.swift */; };
 		BCB610022FEC610000610061 /* DebugDemoDataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */; };
 		BCF104022FF1040000000104 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D0B2EA5447D00F2D0AA /* Note.swift */; };
@@ -130,6 +139,15 @@
 		BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotePersistenceAdapterTests.swift; sourceTree = "<group>"; };
 		BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSidebarCollapsePolicy.swift; sourceTree = "<group>"; };
 		BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSidebarCollapsePolicyTests.swift; sourceTree = "<group>"; };
+		BCA122020000000000000001 /* MacSyncModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncModels.swift; sourceTree = "<group>"; };
+		BCA122020000000000000002 /* MacSyncDeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncDeviceIdentity.swift; sourceTree = "<group>"; };
+		BCA122020000000000000003 /* MacSyncSeenBatchStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncSeenBatchStore.swift; sourceTree = "<group>"; };
+		BCA122020000000000000004 /* MacSyncBatchAccumulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchAccumulator.swift; sourceTree = "<group>"; };
+		BCA122020000000000000005 /* MacSyncBatchApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchApplier.swift; sourceTree = "<group>"; };
+		BCA122020000000000000006 /* MacSyncDeviceIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncDeviceIdentityTests.swift; sourceTree = "<group>"; };
+		BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncSeenBatchStoreTests.swift; sourceTree = "<group>"; };
+		BCA122020000000000000008 /* MacSyncBatchAccumulatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchAccumulatorTests.swift; sourceTree = "<group>"; };
+		BCA122020000000000000009 /* MacSyncBatchApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchApplierTests.swift; sourceTree = "<group>"; };
 		BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDemoDataGenerator.swift; sourceTree = "<group>"; };
 		BCCAFE012FEE000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BCF104012FF1040000000104 /* MyRAMPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMPlatform.swift; sourceTree = "<group>"; };
@@ -275,6 +293,7 @@
 		BCA105030000000000000001 /* Mac */ = {
 			isa = PBXGroup;
 			children = (
+				BCA122030000000000000001 /* Sync */,
 				BCA105020000000000000002 /* MyRAMMacApp.swift */,
 				BCA105020000000000000003 /* MyRAMMacRootView.swift */,
 				BCA106020000000000000001 /* MacNoteEditorView.swift */,
@@ -284,6 +303,18 @@
 				BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */,
 			);
 			path = Mac;
+			sourceTree = "<group>";
+		};
+		BCA122030000000000000001 /* Sync */ = {
+			isa = PBXGroup;
+			children = (
+				BCA122020000000000000001 /* MacSyncModels.swift */,
+				BCA122020000000000000002 /* MacSyncDeviceIdentity.swift */,
+				BCA122020000000000000003 /* MacSyncSeenBatchStore.swift */,
+				BCA122020000000000000004 /* MacSyncBatchAccumulator.swift */,
+				BCA122020000000000000005 /* MacSyncBatchApplier.swift */,
+			);
+			path = Sync;
 			sourceTree = "<group>";
 		};
 		BC9F1BC12EA47D310045FD72 /* MyRAMTests */ = {
@@ -312,6 +343,10 @@
 				BCA107020000000000000001 /* MacEditorSampleDocumentTests.swift */,
 				BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */,
 				BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */,
+				BCA122020000000000000006 /* MacSyncDeviceIdentityTests.swift */,
+				BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */,
+				BCA122020000000000000008 /* MacSyncBatchAccumulatorTests.swift */,
+				BCA122020000000000000009 /* MacSyncBatchApplierTests.swift */,
 			);
 			path = MyRAMMacTests;
 			sourceTree = "<group>";
@@ -669,6 +704,11 @@
 				BCA109010000000000000003 /* Folder.swift in Sources */,
 				BCA109010000000000000004 /* PersistenceManager.swift in Sources */,
 				BCA10A010000000000000001 /* MacSidebarCollapsePolicy.swift in Sources */,
+				BCA122010000000000000001 /* MacSyncModels.swift in Sources */,
+				BCA122010000000000000002 /* MacSyncDeviceIdentity.swift in Sources */,
+				BCA122010000000000000003 /* MacSyncSeenBatchStore.swift in Sources */,
+				BCA122010000000000000004 /* MacSyncBatchAccumulator.swift in Sources */,
+				BCA122010000000000000005 /* MacSyncBatchApplier.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -679,6 +719,10 @@
 				BCA107010000000000000001 /* MacEditorSampleDocumentTests.swift in Sources */,
 				BCA109010000000000000005 /* MacNotePersistenceAdapterTests.swift in Sources */,
 				BCA10A010000000000000002 /* MacSidebarCollapsePolicyTests.swift in Sources */,
+				BCA122010000000000000006 /* MacSyncDeviceIdentityTests.swift in Sources */,
+				BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */,
+				BCA122010000000000000008 /* MacSyncBatchAccumulatorTests.swift in Sources */,
+				BCA122010000000000000009 /* MacSyncBatchApplierTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
