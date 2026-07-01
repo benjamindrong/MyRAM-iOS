@@ -26,6 +26,7 @@
 		BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000002 /* MyRAMMacApp.swift */; };
 		BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000003 /* MyRAMMacRootView.swift */; };
 		BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
+		BCA105010000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BC9F1BB52EA47D300045FD72 /* Assets.xcassets */; };
 		BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000001 /* MacNoteEditorView.swift */; };
 		BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000002 /* MacTextViewRepresentable.swift */; };
 		BCA106010000000000000003 /* MacEditorSampleDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000003 /* MacEditorSampleDocument.swift */; };
@@ -692,6 +693,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				BCA105010000000000000004 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1107,6 +1109,7 @@
 		BCA105060000000000000001 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5FF5MBB334;
@@ -1134,6 +1137,7 @@
 		BCA105060000000000000002 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5FF5MBB334;
