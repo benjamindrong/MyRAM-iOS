@@ -3,7 +3,7 @@ import AppKit
 import SwiftUI
 
 struct MyRAMMacRootView: View {
-    @StateObject private var syncController = MacSyncBatchController()
+    @StateObject private var syncController = MacSyncBatchController(context: PersistenceManager.shared.context)
     @State private var notes: [Note] = []
     @State private var selectedNoteID: UUID?
     @State private var attributedText = NSAttributedString(string: "")

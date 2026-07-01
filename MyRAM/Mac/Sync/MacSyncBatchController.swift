@@ -27,16 +27,18 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     private let advertiser: MCNearbyServiceAdvertiser
     private let browser: MCNearbyServiceBrowser
     private let accumulator: MacSyncBatchAccumulator
+    private let context: ModelContext
     private var readyBatchTask: Task<Void, Never>?
     private var unsentBatches = SyncBatchUnsentQueue()
 
-    override init() {
+    init(context: ModelContext) {
         let identity = MacSyncDeviceIdentityProvider().currentIdentity()
         peerID = MCPeerID(displayName: "\(identity.displayName)|\(identity.id.uuidString)")
         session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
         advertiser = MCNearbyServiceAdvertiser(peer: peerID, discoveryInfo: nil, serviceType: serviceType)
         browser = MCNearbyServiceBrowser(peer: peerID, serviceType: serviceType)
         accumulator = MacSyncBatchAccumulator(originDeviceID: identity.id)
+        self.context = context
 
         super.init()
 
@@ -119,7 +121,7 @@ final class MacSyncBatchController: NSObject, ObservableObject {
 
     private func receive(_ batch: MacSyncBatch) {
         do {
-            try MacSyncBatchApplier(context: PersistenceManager.shared.context).apply(batch)
+            try MacSyncBatchApplier(context: context).apply(batch)
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
             onBatchApplied?()
