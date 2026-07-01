@@ -28,8 +28,7 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     private let browser: MCNearbyServiceBrowser
     private let accumulator: MacSyncBatchAccumulator
     private var readyBatchTask: Task<Void, Never>?
-    private var unsentBatches: [MacSyncBatch] = []
-    private let unsentBatchLimit = 100
+    private var unsentBatches = SyncBatchUnsentQueue()
 
     override init() {
         let identity = MacSyncDeviceIdentityProvider().currentIdentity()
@@ -109,20 +108,13 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     private func flushUnsentBatches() async {
         guard !session.connectedPeers.isEmpty, !unsentBatches.isEmpty else { return }
 
-        let pending = unsentBatches
-        unsentBatches.removeAll()
-        for batch in pending {
+        for batch in unsentBatches.drain() {
             await send(batch)
         }
     }
 
     private func enqueueUnsent(_ batch: MacSyncBatch) {
-        // Keep local edits available for the next connection without growing indefinitely.
-        guard !unsentBatches.contains(where: { $0.id == batch.id }) else { return }
-        unsentBatches.append(batch)
-        if unsentBatches.count > unsentBatchLimit {
-            unsentBatches.removeFirst(unsentBatches.count - unsentBatchLimit)
-        }
+        unsentBatches.enqueue(batch)
     }
 
     private func receive(_ batch: MacSyncBatch) {

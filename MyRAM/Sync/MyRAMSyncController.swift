@@ -134,6 +134,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private lazy var debouncedSender = DebouncedChangeSender { [weak self] in
         await self?.sendPendingChanges()
     }
+    private var unsentBatches = SyncBatchUnsentQueue()
 
     override init() {
         let deviceName = MyRAMDeviceIdentity.currentDisplayName()
@@ -290,7 +291,10 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     private func sendBatch(_ batch: SyncBatch) async {
         let peers = await transport.connectedPeers()
-        guard !peers.isEmpty else { return }
+        guard !peers.isEmpty else {
+            enqueueUnsentBatch(batch)
+            return
+        }
 
         do {
             let data = try MultipeerSyncMessageCoding.encodeBatchEnvelope(SyncBatchEnvelope(batch: batch))
@@ -298,8 +302,21 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
         } catch {
+            enqueueUnsentBatch(batch)
             lastErrorMessage = "Unable to sync nearby batch changes."
         }
+    }
+
+    private func flushUnsentBatches() async {
+        guard !(await transport.connectedPeers()).isEmpty, !unsentBatches.isEmpty else { return }
+
+        for batch in unsentBatches.drain() {
+            await sendBatch(batch)
+        }
+    }
+
+    private func enqueueUnsentBatch(_ batch: SyncBatch) {
+        unsentBatches.enqueue(batch)
     }
 
     private static func pendingChangesFileURL() -> URL {
@@ -369,6 +386,7 @@ extension MyRAMSyncController: MCSessionDelegate {
                 rememberTrustedPeer(peerID)
                 Task {
                     await sendPendingChanges()
+                    await flushUnsentBatches()
                 }
             }
         }
