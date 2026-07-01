@@ -69,6 +69,8 @@
 		BCA123010000000000000020 /* SyncBatchUnsentQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000014 /* SyncBatchUnsentQueue.swift */; };
 		BCA123010000000000000021 /* SyncBatchUnsentQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000014 /* SyncBatchUnsentQueue.swift */; };
 		BCA123010000000000000022 /* SyncBatchUnsentQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */; };
+		BCA123010000000000000023 /* FileBackedSyncBatchQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */; };
+		BCA123010000000000000024 /* FileBackedSyncBatchQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */; };
 		BCB610022FEC610000610061 /* DebugDemoDataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */; };
 		BCF104022FF1040000000104 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D0B2EA5447D00F2D0AA /* Note.swift */; };
@@ -186,6 +188,7 @@
 		BCA123020000000000000013 /* MacSyncBatchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchController.swift; sourceTree = "<group>"; };
 		BCA123020000000000000014 /* SyncBatchUnsentQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchUnsentQueue.swift; sourceTree = "<group>"; };
 		BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchUnsentQueueTests.swift; sourceTree = "<group>"; };
+		BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBackedSyncBatchQueue.swift; sourceTree = "<group>"; };
 		BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDemoDataGenerator.swift; sourceTree = "<group>"; };
 		BCCAFE012FEE000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BCF104012FF1040000000104 /* MyRAMPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMPlatform.swift; sourceTree = "<group>"; };
@@ -367,6 +370,7 @@
 				BCA123020000000000000005 /* SyncBatchUTF16Helpers.swift */,
 				BCA123020000000000000012 /* SyncBatchNoteChangeCapture.swift */,
 				BCA123020000000000000014 /* SyncBatchUnsentQueue.swift */,
+				BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */,
 			);
 			path = Batch;
 			sourceTree = "<group>";
@@ -720,6 +724,7 @@
 				BCA123010000000000000005 /* SyncBatchUTF16Helpers.swift in Sources */,
 				BCA123010000000000000017 /* SyncBatchNoteChangeCapture.swift in Sources */,
 				BCA123010000000000000020 /* SyncBatchUnsentQueue.swift in Sources */,
+				BCA123010000000000000023 /* FileBackedSyncBatchQueue.swift in Sources */,
 				BCE65D112EA544FB00F2D0AA /* NotesViewModel.swift in Sources */,
 				C07100072FF0000000000001 /* MyRAMSyncModels.swift in Sources */,
 				BC9F1BB02EA47D2E0045FD72 /* MyRAMApp.swift in Sources */,
@@ -811,6 +816,7 @@
 				BCA123010000000000000010 /* SyncBatchUTF16Helpers.swift in Sources */,
 				BCA123010000000000000018 /* SyncBatchNoteChangeCapture.swift in Sources */,
 				BCA123010000000000000021 /* SyncBatchUnsentQueue.swift in Sources */,
+				BCA123010000000000000024 /* FileBackedSyncBatchQueue.swift in Sources */,
 				BCA122010000000000000001 /* MacSyncModels.swift in Sources */,
 				BCA122010000000000000002 /* MacSyncDeviceIdentity.swift in Sources */,
 				BCA122010000000000000003 /* MacSyncSeenBatchStore.swift in Sources */,

@@ -29,9 +29,12 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     private let accumulator: MacSyncBatchAccumulator
     private let context: ModelContext
     private var readyBatchTask: Task<Void, Never>?
-    private var unsentBatches = SyncBatchUnsentQueue()
+    private let unsentBatches: FileBackedSyncBatchQueue
 
-    init(context: ModelContext) {
+    init(
+        context: ModelContext,
+        unsentBatchQueueFileURL: URL? = MacSyncBatchController.unsentBatchQueueFileURL()
+    ) {
         let identity = MacSyncDeviceIdentityProvider().currentIdentity()
         peerID = MCPeerID(displayName: "\(identity.displayName)|\(identity.id.uuidString)")
         session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
@@ -39,6 +42,7 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         browser = MCNearbyServiceBrowser(peer: peerID, serviceType: serviceType)
         accumulator = MacSyncBatchAccumulator(originDeviceID: identity.id)
         self.context = context
+        unsentBatches = FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
 
         super.init()
 
@@ -90,10 +94,18 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     }
 
     private func send(_ batch: MacSyncBatch) async {
+        let sent = await sendQueuedBatch(batch)
+        if sent {
+            unsentBatches.removeAll(withIDs: [batch.id])
+        } else {
+            enqueueUnsent(batch)
+        }
+    }
+
+    private func sendQueuedBatch(_ batch: MacSyncBatch) async -> Bool {
         let peers = session.connectedPeers
         guard !peers.isEmpty else {
-            enqueueUnsent(batch)
-            return
+            return false
         }
 
         do {
@@ -101,17 +113,21 @@ final class MacSyncBatchController: NSObject, ObservableObject {
             try session.send(data, toPeers: peers, with: .reliable)
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
+            return true
         } catch {
-            enqueueUnsent(batch)
             lastErrorMessage = "Unable to sync nearby batch changes."
+            return false
         }
     }
 
     private func flushUnsentBatches() async {
         guard !session.connectedPeers.isEmpty, !unsentBatches.isEmpty else { return }
 
-        for batch in unsentBatches.drain() {
-            await send(batch)
+        for batch in unsentBatches.pendingBatches {
+            let sent = await sendQueuedBatch(batch)
+            if sent {
+                unsentBatches.removeAll(withIDs: [batch.id])
+            }
         }
     }
 
@@ -139,6 +155,19 @@ final class MacSyncBatchController: NSObject, ObservableObject {
 
     private func displayName(for peerID: MCPeerID) -> String {
         MacSyncPeerIdentity(peerID: peerID).displayName
+    }
+
+    nonisolated private static func unsentBatchQueueFileURL() -> URL? {
+        guard let supportDirectory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            return nil
+        }
+
+        return supportDirectory
+            .appendingPathComponent("MyRAM", isDirectory: true)
+            .appendingPathComponent("mac-unsent-batch-queue.json")
     }
 }
 
