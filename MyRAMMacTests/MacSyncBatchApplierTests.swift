@@ -97,7 +97,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
         XCTAssertEqual(note.content, "abcdef")
     }
 
-    func testIncomingPlainTextMutationPreservesUnmappableRichTextData() throws {
+    func testIncomingPlainTextMutationClearsUnmappableRichTextData() throws {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000200B")!, content: "abc", in: container)
         let originalRichTextData = Data("not valid rtf".utf8)
@@ -110,7 +110,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
         )
 
         XCTAssertEqual(note.content, "axbc")
-        XCTAssertEqual(note.richTextContentData, originalRichTextData)
+        XCTAssertNil(note.richTextContentData)
     }
 
     func testIncomingChangeWithMissingFolderReferenceCreatesNoteAtRoot() throws {

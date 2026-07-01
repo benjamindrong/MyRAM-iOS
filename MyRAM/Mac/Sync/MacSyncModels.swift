@@ -27,6 +27,8 @@ struct MacSyncNoteCreatedChange: Codable, Equatable, Sendable {
     let folderID: MacSyncFolderID?
     let createdAt: Date
     let modifiedAt: Date
+    // TODO: MYR-124 richTextContentData is not synced on note creation.
+    // Notes with rich text formatting arrive as plain text on the receiving device.
 }
 
 struct MacSyncNoteTitleChangedChange: Codable, Equatable, Sendable {

@@ -121,7 +121,9 @@ final class MacSyncBatchApplier {
                 documentAttributes: nil
               ),
               attributedText.string == originalPlainText else {
-            // Plain text is authoritative for sync; preserve existing RTF rather than dropping formatting.
+            // RTF is absent, stale, or cannot be decoded. Clear it so the Mac loader
+            // falls back to note.content rather than displaying a mismatched rich-text body.
+            note.richTextContentData = nil
             return
         }
 
@@ -158,7 +160,8 @@ private extension String {
         }
 
         let range = NSRange(location: location, length: length)
-        return Range(range, in: self) == nil && length > 0 ? nil : range
+        guard Range(range, in: self) != nil else { return nil }
+        return range
     }
 
     private func isValidUTF16Boundary(_ offset: Int) -> Bool {
