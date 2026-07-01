@@ -77,6 +77,7 @@ private final class MyRAMMultipeerTransport {
 protocol MyRAMSyncControlling: AnyObject {
     var onChangesReceived: (([SyncChange]) async -> Void)? { get set }
     var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)? { get set }
+    var onBatchReceived: ((SyncBatch) async -> Void)? { get set }
 
     func recordLocalChange(
         entityType: SyncEntityType,
@@ -85,6 +86,8 @@ protocol MyRAMSyncControlling: AnyObject {
         payload: Data,
         updatedAt: Date
     )
+
+    func recordLocalBatch(_ batch: SyncBatch)
 }
 
 extension MyRAMSyncControlling {
@@ -116,6 +119,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     let localPeerName: String
     var onChangesReceived: (([SyncChange]) async -> Void)?
     var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
+    var onBatchReceived: ((SyncBatch) async -> Void)?
 
     private let serviceType = "myram-sync"
     private let peerID: MCPeerID
@@ -223,7 +227,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
 
         do {
-            let data = try JSONEncoder().encode(envelope)
+            let payload = try JSONEncoder().encode(envelope)
+            let data = try MultipeerSyncMessageCoding.encode(kind: .legacySyncEnvelope, payload: payload)
             try await transport.send(data, toPeers: peers, mode: .reliable)
             lastSyncAt = envelope.sentAt
             lastErrorMessage = nil
@@ -232,6 +237,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
 
         await updatePendingCount()
+    }
+
+    func recordLocalBatch(_ batch: SyncBatch) {
+        Task {
+            await sendBatch(batch)
+        }
     }
 
     private func updatePendingCount() async {
@@ -267,12 +278,27 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         )
 
         do {
-            let data = try JSONEncoder().encode(envelope)
+            let payload = try JSONEncoder().encode(envelope)
+            let data = try MultipeerSyncMessageCoding.encode(kind: .legacySyncEnvelope, payload: payload)
             try await transport.send(data, toPeers: [peerID], mode: .reliable)
             await syncEngine.markAcknowledgementSent(changes.map(\.id))
             lastErrorMessage = nil
         } catch {
             lastErrorMessage = "Unable to confirm nearby sync."
+        }
+    }
+
+    private func sendBatch(_ batch: SyncBatch) async {
+        let peers = await transport.connectedPeers()
+        guard !peers.isEmpty else { return }
+
+        do {
+            let data = try MultipeerSyncMessageCoding.encodeBatchEnvelope(SyncBatchEnvelope(batch: batch))
+            try await transport.send(data, toPeers: peers, mode: .reliable)
+            lastSyncAt = batch.createdAt
+            lastErrorMessage = nil
+        } catch {
+            lastErrorMessage = "Unable to sync nearby batch changes."
         }
     }
 
@@ -350,20 +376,37 @@ extension MyRAMSyncController: MCSessionDelegate {
 
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
-            guard let envelope = try? JSONDecoder().decode(SyncEnvelope.self, from: data) else { return }
-            let result = await syncEngine.applyIncomingEnvelope(envelope)
-            if !result.acknowledgedLocalChanges.isEmpty {
-                await onLocalChangesAcknowledged?(result.acknowledgedLocalChanges)
+            guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                  message.canDecodeWithCurrentSchema else { return }
+
+            switch message.kind {
+            case .legacySyncEnvelope:
+                guard let envelope = try? JSONDecoder().decode(SyncEnvelope.self, from: message.payload) else { return }
+                await receiveLegacyEnvelope(envelope, from: peerID)
+
+            case .batchSync:
+                guard let envelope = try? JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload),
+                      envelope.canDecodeWithCurrentSchema else { return }
+                await onBatchReceived?(envelope.batch)
+                lastSyncAt = envelope.batch.createdAt
             }
-            let changesByID = Dictionary(uniqueKeysWithValues: envelope.changes.map { ($0.id, $0) })
-            let appliedChanges = result.appliedChangeIDs.compactMap { changesByID[$0] }
-            await onChangesReceived?(appliedChanges)
-            await sendAcknowledgement(for: envelope.changes, to: peerID)
+
             rememberTrustedPeer(peerID)
             lastConnectionEvent = "Received sync from \(displayName(for: peerID))"
-            lastSyncAt = envelope.sentAt
             await updatePendingCount()
         }
+    }
+
+    private func receiveLegacyEnvelope(_ envelope: SyncEnvelope, from peerID: MCPeerID) async {
+        let result = await syncEngine.applyIncomingEnvelope(envelope)
+        if !result.acknowledgedLocalChanges.isEmpty {
+            await onLocalChangesAcknowledged?(result.acknowledgedLocalChanges)
+        }
+        let changesByID = Dictionary(uniqueKeysWithValues: envelope.changes.map { ($0.id, $0) })
+        let appliedChanges = result.appliedChangeIDs.compactMap { changesByID[$0] }
+        await onChangesReceived?(appliedChanges)
+        await sendAcknowledgement(for: envelope.changes, to: peerID)
+        lastSyncAt = envelope.sentAt
     }
 
     nonisolated func session(

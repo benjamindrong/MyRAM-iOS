@@ -84,7 +84,9 @@ final class MyRAMTests: XCTestCase {
     private final class RecordingSyncController: MyRAMSyncControlling {
         var onChangesReceived: (([SyncChange]) async -> Void)?
         var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
+        var onBatchReceived: ((SyncBatch) async -> Void)?
         private(set) var recordedChanges: [SyncChange] = []
+        private(set) var recordedBatches: [SyncBatch] = []
 
         func recordLocalChange(
             entityType: SyncEntityType,
@@ -103,6 +105,10 @@ final class MyRAMTests: XCTestCase {
                     originDeviceID: "test-device"
                 )
             )
+        }
+
+        func recordLocalBatch(_ batch: SyncBatch) {
+            recordedBatches.append(batch)
         }
     }
 

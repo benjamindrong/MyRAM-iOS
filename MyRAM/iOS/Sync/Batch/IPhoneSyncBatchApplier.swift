@@ -1,20 +1,17 @@
-#if os(macOS)
-// AppKit provides macOS RTF decoding/encoding support for NSAttributedString.
-import AppKit
 import Foundation
 import SwiftData
 
 @MainActor
-final class MacSyncBatchApplier {
+final class IPhoneSyncBatchApplier {
     private let context: ModelContext
-    private let seenBatchStore: MacSyncSeenBatchStore
+    private let seenBatchStore: SyncBatchSeenBatchStore
 
-    init(context: ModelContext, seenBatchStore: MacSyncSeenBatchStore = MacSyncSeenBatchStore()) {
+    init(context: ModelContext, seenBatchStore: SyncBatchSeenBatchStore = SyncBatchSeenBatchStore()) {
         self.context = context
         self.seenBatchStore = seenBatchStore
     }
 
-    func apply(_ batch: MacSyncBatch) throws {
+    func apply(_ batch: SyncBatch) throws {
         guard !seenBatchStore.hasSeen(batch.id) else { return }
 
         for change in batch.changes {
@@ -25,7 +22,7 @@ final class MacSyncBatchApplier {
         seenBatchStore.markSeen(batch.id)
     }
 
-    private func apply(_ change: MacSyncChange) throws {
+    private func apply(_ change: SyncBatchChange) throws {
         switch change {
         case .noteCreated(let change):
             try applyNoteCreated(change)
@@ -38,7 +35,7 @@ final class MacSyncBatchApplier {
         }
     }
 
-    private func applyNoteCreated(_ change: MacSyncNoteCreatedChange) throws {
+    private func applyNoteCreated(_ change: SyncBatchNoteCreatedChange) throws {
         guard try loadNote(id: change.noteID) == nil else { return }
 
         let note = Note(title: change.title, content: change.body, folder: try loadFolder(id: change.folderID))
@@ -48,27 +45,24 @@ final class MacSyncBatchApplier {
         context.insert(note)
     }
 
-    private func applyTitleChanged(_ change: MacSyncNoteTitleChangedChange) throws {
+    private func applyTitleChanged(_ change: SyncBatchNoteTitleChangedChange) throws {
         guard let note = try loadNote(id: change.noteID) else { return }
 
         note.title = change.title
         note.modifiedAt = change.modifiedAt
     }
 
-    private func applyBodyTextInserted(_ change: MacSyncNoteBodyTextInsertedChange) throws {
+    private func applyBodyTextInserted(_ change: SyncBatchNoteBodyTextInsertedChange) throws {
         guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return }
 
-        let originalContent = note.content
-        let clampedOffset = originalContent.syncBatchClampedUTF16Offset(change.utf16Offset)
-        let insertionOffset = originalContent.syncBatchSafeInsertionOffset(fallingForwardFrom: clampedOffset)
-        note.content = originalContent.syncBatchInserting(change.text, atUTF16Offset: insertionOffset)
-        updateRichTextContent(for: note, originalPlainText: originalContent) { attributedText in
-            attributedText.insert(NSAttributedString(string: change.text), at: insertionOffset)
-        }
+        let clampedOffset = note.content.syncBatchClampedUTF16Offset(change.utf16Offset)
+        let insertionOffset = note.content.syncBatchSafeInsertionOffset(fallingForwardFrom: clampedOffset)
+        note.content = note.content.syncBatchInserting(change.text, atUTF16Offset: insertionOffset)
+        note.richTextContentData = nil
         note.modifiedAt = change.modifiedAt
     }
 
-    private func applyBodyTextDeleted(_ change: MacSyncNoteBodyTextDeletedChange) throws {
+    private func applyBodyTextDeleted(_ change: SyncBatchNoteBodyTextDeletedChange) throws {
         guard let note = try loadNote(id: change.noteID),
               change.utf16Length > 0,
               let range = note.content.syncBatchSafeUTF16Range(location: change.utf16Offset, length: change.utf16Length) else {
@@ -80,12 +74,8 @@ final class MacSyncBatchApplier {
             return
         }
 
-        let originalContent = note.content
         note.content = (note.content as NSString).replacingCharacters(in: range, with: "")
-        updateRichTextContent(for: note, originalPlainText: originalContent) { attributedText in
-            guard NSMaxRange(range) <= attributedText.length else { return }
-            attributedText.deleteCharacters(in: range)
-        }
+        note.richTextContentData = nil
         note.modifiedAt = change.modifiedAt
     }
 
@@ -105,30 +95,7 @@ final class MacSyncBatchApplier {
                 folder.id == id
             }
         )
-        // Missing folder references intentionally fall back to root so the note is preserved.
+        // Missing folders fall back to root so incoming notes are preserved.
         return try context.fetch(descriptor).first
     }
-
-    private func updateRichTextContent(
-        for note: Note,
-        originalPlainText: String,
-        mutation: (NSMutableAttributedString) -> Void
-    ) {
-        guard let richTextContentData = note.richTextContentData,
-              let attributedText = try? NSMutableAttributedString(
-                data: richTextContentData,
-                options: [.documentType: NSAttributedString.DocumentType.rtf],
-                documentAttributes: nil
-              ),
-              attributedText.string == originalPlainText else {
-            // RTF is absent, stale, or cannot be decoded. Clear it so the Mac loader
-            // falls back to note.content rather than displaying a mismatched rich-text body.
-            note.richTextContentData = nil
-            return
-        }
-
-        mutation(attributedText)
-        note.richTextContentData = RTFCoding.encode(attributedText)
-    }
 }
-#endif
