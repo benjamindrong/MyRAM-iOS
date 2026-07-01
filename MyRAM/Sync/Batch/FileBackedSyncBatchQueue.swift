@@ -19,13 +19,17 @@ final class FileBackedSyncBatchQueue {
     }
 
     func enqueue(_ batch: SyncBatch) {
-        queue.enqueue(batch)
-        persistQueue()
+        let didChange = queue.enqueue(batch)
+        if didChange {
+            persistQueue()
+        }
     }
 
     func removeAll(withIDs ids: Set<SyncBatchID>) {
-        queue.removeAll(withIDs: ids)
-        persistQueue()
+        let didChange = queue.removeAll(withIDs: ids)
+        if didChange {
+            persistQueue()
+        }
     }
 
     private func loadPersistedQueue() {

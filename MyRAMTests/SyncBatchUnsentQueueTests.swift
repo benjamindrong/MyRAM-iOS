@@ -79,6 +79,18 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(reloadedQueue.pendingBatches, [second])
     }
 
+    func testFileBackedQueueDoesNotRewriteFileForUnknownRemovalIDs() throws {
+        let fileURL = temporaryQueueFileURL()
+        let batch = makeBatch(idSuffix: 1)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        queue.enqueue(batch)
+        let originalModifiedAt = try fileModificationDate(fileURL)
+        queue.removeAll(withIDs: [UUID(uuidString: "00000000-0000-0000-0000-000000999999")!])
+
+        XCTAssertEqual(try fileModificationDate(fileURL), originalModifiedAt)
+    }
+
     func testFileBackedQueueCanRunMemoryOnlyWithNilFileURL() {
         let batch = makeBatch(idSuffix: 1)
         let queue = FileBackedSyncBatchQueue(fileURL: nil, limit: 10)
@@ -102,5 +114,10 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("mac-unsent-batch-queue.json")
+    }
+
+    private func fileModificationDate(_ fileURL: URL) throws -> Date {
+        let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+        return try XCTUnwrap(attributes[.modificationDate] as? Date)
     }
 }
