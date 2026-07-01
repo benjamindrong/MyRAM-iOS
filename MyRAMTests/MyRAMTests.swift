@@ -84,7 +84,9 @@ final class MyRAMTests: XCTestCase {
     private final class RecordingSyncController: MyRAMSyncControlling {
         var onChangesReceived: (([SyncChange]) async -> Void)?
         var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
+        var onBatchReceived: ((SyncBatch) async -> Void)?
         private(set) var recordedChanges: [SyncChange] = []
+        private(set) var recordedBatches: [SyncBatch] = []
 
         func recordLocalChange(
             entityType: SyncEntityType,
@@ -103,6 +105,10 @@ final class MyRAMTests: XCTestCase {
                     originDeviceID: "test-device"
                 )
             )
+        }
+
+        func recordLocalBatch(_ batch: SyncBatch) {
+            recordedBatches.append(batch)
         }
     }
 
@@ -2088,6 +2094,40 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(conflictStore.activeConflicts(now: Date(timeIntervalSince1970: 202)).first, conflict)
     }
 
+    func testSupportedNoteBodyInsertPublishesBatchOnly() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let recorder = RecordingSyncController()
+        let note = Note(title: "Shared", content: "Hello")
+        context.insert(note)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: recorder,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            syncBatchQuietWindow: 0
+        )
+
+        vm.commitNoteEdit(note, title: "Shared", content: "Hello world")
+        for _ in 0..<20 where recorder.recordedBatches.isEmpty {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        XCTAssertFalse(recorder.recordedChanges.contains {
+            $0.entityType == .item && $0.entityID == note.id.uuidString
+        })
+        let batch = try XCTUnwrap(recorder.recordedBatches.first)
+        XCTAssertEqual(batch.changes.count, 1)
+        guard case .noteBodyTextInserted(let change) = try XCTUnwrap(batch.changes.first) else {
+            return XCTFail("Expected body insert batch change")
+        }
+        XCTAssertEqual(change.noteID, note.id)
+        XCTAssertEqual(change.utf16Offset, "Hello".utf16.count)
+        XCTAssertEqual(change.text, " world")
+    }
+
     func testEditorBufferDefersRemoteRefreshDuringPendingLocalEdit() {
         XCTAssertTrue(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
             owner: .localEditing,
@@ -2305,7 +2345,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(conflicts.count, 1)
         XCTAssertEqual(conflicts.first?.localText, "Shared body\nDevice B text")
         XCTAssertEqual(conflicts.first?.remoteText, "Shared body\nDevice A text")
-        XCTAssertEqual(recorder.recordedChanges.map(\.entityType), [.item, .conflict])
+        XCTAssertEqual(recorder.recordedChanges.map(\.entityType), [.conflict])
     }
 
     func testKeepLocalConflictPreservesTextTypedAfterConflictCreation() throws {

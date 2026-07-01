@@ -34,10 +34,12 @@ final class NotesViewModel: ObservableObject {
     private let syncController: MyRAMSyncControlling?
     private let syncConflictStore: SyncConflictStore
     private let syncConflictService: MyRAMSyncConflictService
+    private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
     private var isApplyingRemoteSyncChange = false
     private var recentTextEditByNoteID: [UUID: Date] = [:]
+    private var syncBatchReadyTask: Task<Void, Never>?
     private var undoStack: [UndoAction] = [] {
         didSet {
             hasUndoableAction = !undoStack.isEmpty
@@ -52,11 +54,16 @@ final class NotesViewModel: ObservableObject {
     init(
         context: ModelContext,
         syncController: MyRAMSyncControlling? = nil,
-        syncConflictStore: SyncConflictStore = SyncConflictStore()
+        syncConflictStore: SyncConflictStore = SyncConflictStore(),
+        syncBatchQuietWindow: TimeInterval = 3
     ) {
         self.context = context
         self.syncController = syncController
         self.syncConflictStore = syncConflictStore
+        syncBatchAccumulator = IPhoneSyncBatchAccumulator(
+            originDeviceID: UUID(uuidString: MyRAMDeviceIdentity.currentDeviceID()) ?? UUID(),
+            quietWindow: syncBatchQuietWindow
+        )
         syncConflictService = MyRAMSyncConflictService(context: context, store: syncConflictStore)
         self.syncController?.onChangesReceived = { [weak self] changes in
             await self?.applyIncomingSyncChanges(changes)
@@ -64,10 +71,23 @@ final class NotesViewModel: ObservableObject {
         self.syncController?.onLocalChangesAcknowledged = { [weak self] changes in
             await self?.advanceSyncBaselines(forAcknowledgedLocalChanges: changes)
         }
+        self.syncController?.onBatchReceived = { [weak self] batch in
+            await self?.applyIncomingSyncBatch(batch)
+        }
+        syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
+            let stream = await syncBatchAccumulator.readyBatches()
+            for await batch in stream {
+                self?.sendReadySyncBatch(batch)
+            }
+        }
         syncConflicts = syncConflictService.activeConflicts()
         purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
+    }
+
+    deinit {
+        syncBatchReadyTask?.cancel()
     }
 
     func undoLastAction() {
@@ -201,7 +221,7 @@ final class NotesViewModel: ObservableObject {
         context.insert(note)
         currentFolder?.modifiedAt = .now
         try? context.save()
-        recordNoteSyncChange(note)
+        recordSyncBatchChange(IPhoneSyncBatchCaptureHook.noteCreated(note))
         if let currentFolder {
             recordFolderSyncChange(currentFolder)
         }
@@ -249,11 +269,20 @@ final class NotesViewModel: ObservableObject {
 
     func renameNote(_ note: Note, to newTitle: String) {
         guard note.deletedAt == nil else { return }
-        note.title = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        let oldTitle = note.title
+        let trimmedTitle = newTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        note.title = trimmedTitle
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
-        recordNoteSyncChange(note)
+        if let change = IPhoneSyncBatchCaptureHook.titleChanged(
+            noteID: note.id,
+            oldTitle: oldTitle,
+            newTitle: trimmedTitle,
+            modifiedAt: note.modifiedAt
+        ) {
+            recordSyncBatchChange(change)
+        }
         if let folder = note.folder {
             recordFolderSyncChange(folder)
         }
@@ -401,13 +430,19 @@ final class NotesViewModel: ObservableObject {
         richTextContentData: Data? = nil
     ) {
         guard note.deletedAt == nil else { return }
+        let oldTitle = note.title
+        let oldContent = note.content
         note.title = title
         note.content = content
         note.richTextContentData = richTextContentData
         note.modifiedAt = .now
         recordActiveNoteTextEdited(note)
         try? context.save()
-        recordNoteSyncChange(note)
+        recordSyncBatchChanges(
+            oldTitle: oldTitle,
+            oldContent: oldContent,
+            note: note
+        )
     }
 
     func updateNote(
@@ -1151,6 +1186,37 @@ final class NotesViewModel: ObservableObject {
         )
     }
 
+    private func recordSyncBatchChanges(oldTitle: String, oldContent: String, note: Note) {
+        if let change = IPhoneSyncBatchCaptureHook.titleChanged(
+            noteID: note.id,
+            oldTitle: oldTitle,
+            newTitle: note.title,
+            modifiedAt: note.modifiedAt
+        ) {
+            recordSyncBatchChange(change)
+        }
+
+        if let change = IPhoneSyncBatchCaptureHook.bodyTextChanged(
+            noteID: note.id,
+            oldBody: oldContent,
+            newBody: note.content,
+            modifiedAt: note.modifiedAt
+        ) {
+            recordSyncBatchChange(change)
+        }
+    }
+
+    private func recordSyncBatchChange(_ change: SyncBatchChange) {
+        guard !isApplyingRemoteSyncChange else { return }
+        Task {
+            await syncBatchAccumulator.record(change)
+        }
+    }
+
+    private func sendReadySyncBatch(_ batch: SyncBatch) {
+        syncController?.recordLocalBatch(batch)
+    }
+
     private func recordFolderSyncChange(_ folder: Folder) {
         guard !isApplyingRemoteSyncChange,
               let payload = try? MyRAMSyncPayloadCoding.encode(MyRAMFolderSyncPayload(folder: folder)) else { return }
@@ -1378,6 +1444,21 @@ final class NotesViewModel: ObservableObject {
         refreshCurrentFolderContent()
         if result.shouldRefreshActiveNote {
             activeNoteSyncRevision += 1
+        }
+    }
+
+    func applyIncomingSyncBatch(_ batch: SyncBatch) async {
+        guard !batch.changes.isEmpty else { return }
+        isApplyingRemoteSyncChange = true
+        defer { isApplyingRemoteSyncChange = false }
+
+        let applier = IPhoneSyncBatchApplier(context: context)
+        do {
+            try applier.apply(batch)
+            refreshCurrentFolderContent()
+            activeNoteSyncRevision += 1
+        } catch {
+            debugPrint("Unable to apply incoming sync batch: \(error)")
         }
     }
 
