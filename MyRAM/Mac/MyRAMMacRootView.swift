@@ -3,6 +3,7 @@ import AppKit
 import SwiftUI
 
 struct MyRAMMacRootView: View {
+    @StateObject private var syncController = MacSyncBatchController()
     @State private var notes: [Note] = []
     @State private var selectedNoteID: UUID?
     @State private var attributedText = NSAttributedString(string: "")
@@ -21,6 +22,7 @@ struct MyRAMMacRootView: View {
             MacNoteListView(
                 notes: notes,
                 selectedNoteID: selectedNoteID,
+                syncController: syncController,
                 onSelect: selectNote,
                 onCreateNote: createNote
             )
@@ -44,6 +46,11 @@ struct MyRAMMacRootView: View {
             handleColumnVisibilityChange(newValue)
         }
         .onAppear(perform: loadNotesIfNeeded)
+        .onAppear {
+            syncController.onBatchApplied = {
+                loadNotesKeepingSelection()
+            }
+        }
         .onDisappear {
             _ = flushPendingSave()
         }
@@ -107,6 +114,27 @@ struct MyRAMMacRootView: View {
         }
     }
 
+    private func loadNotesKeepingSelection() {
+        do {
+            let loadedNotes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
+            notes = loadedNotes
+            if let selectedNoteID, loadedNotes.contains(where: { $0.id == selectedNoteID }) {
+                attributedText = selectedNote.map {
+                    MacNotePersistenceAdapter().attributedContent(for: $0)
+                } ?? NSAttributedString(string: "")
+            } else {
+                selectedNoteID = loadedNotes.first?.id
+                attributedText = loadedNotes.first.map {
+                    MacNotePersistenceAdapter().attributedContent(for: $0)
+                } ?? NSAttributedString(string: "")
+            }
+            hasUnsavedChanges = false
+            loadError = nil
+        } catch {
+            loadError = "Unable to load notes: \(error.localizedDescription)"
+        }
+    }
+
     private func selectNote(_ note: Note) {
         guard note.id != selectedNoteID else { return }
         guard flushPendingSave() else { return }
@@ -122,6 +150,16 @@ struct MyRAMMacRootView: View {
 
         do {
             let newNote = try MacNotePersistenceAdapter().createNote()
+            syncController.record(
+                SyncBatchNoteChangeCapture.noteCreated(
+                    noteID: newNote.id,
+                    title: newNote.title,
+                    body: newNote.content,
+                    folderID: newNote.folder?.id,
+                    createdAt: newNote.createdAt,
+                    modifiedAt: newNote.modifiedAt
+                )
+            )
             notes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
             selectedNoteID = newNote.id
             attributedText = MacNotePersistenceAdapter().attributedContent(for: newNote)
@@ -161,7 +199,10 @@ struct MyRAMMacRootView: View {
                 saveError = "Unable to save note: note was not found."
                 return false
             }
+            let oldTitle = note.title
+            let oldContent = note.content
             try adapter.save(note: note, attributedContent: attributedContent)
+            recordSyncBatchChanges(note: note, oldTitle: oldTitle, oldContent: oldContent)
             notes = try adapter.loadNotesCreatingFirstIfNeeded()
             hasUnsavedChanges = selectedNoteID == noteID ? false : hasUnsavedChanges
             saveError = nil
@@ -169,6 +210,26 @@ struct MyRAMMacRootView: View {
         } catch {
             saveError = "Unable to save note: \(error.localizedDescription)"
             return false
+        }
+    }
+
+    private func recordSyncBatchChanges(note: Note, oldTitle: String, oldContent: String) {
+        if let change = SyncBatchNoteChangeCapture.titleChanged(
+            noteID: note.id,
+            oldTitle: oldTitle,
+            newTitle: note.title,
+            modifiedAt: note.modifiedAt
+        ) {
+            syncController.record(change)
+        }
+
+        if let change = SyncBatchNoteChangeCapture.bodyTextChanged(
+            noteID: note.id,
+            oldBody: oldContent,
+            newBody: note.content,
+            modifiedAt: note.modifiedAt
+        ) {
+            syncController.record(change)
         }
     }
 
@@ -214,11 +275,16 @@ struct MyRAMMacRootView: View {
 private struct MacNoteListView: View {
     let notes: [Note]
     let selectedNoteID: UUID?
+    @ObservedObject var syncController: MacSyncBatchController
     let onSelect: (Note) -> Void
     let onCreateNote: () -> Void
 
     var body: some View {
         List(selection: selectedBinding) {
+            Section {
+                MacSyncStatusView(syncController: syncController)
+            }
+
             ForEach(notes, id: \.id) { note in
                 Button {
                     onSelect(note)
@@ -291,6 +357,58 @@ private struct MacNoteListView: View {
         } else {
             Color.clear
         }
+    }
+}
+
+private struct MacSyncStatusView: View {
+    @ObservedObject var syncController: MacSyncBatchController
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Sync")
+                    .font(.subheadline.weight(.semibold))
+                Spacer()
+                Button {
+                    syncController.flushPendingBatch()
+                } label: {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                }
+                .buttonStyle(.borderless)
+                .help("Sync Now")
+                .disabled(!syncController.hasConnectedPeers)
+            }
+
+            Text(syncController.connectionSummary)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+            if !syncController.availablePeers.isEmpty {
+                ForEach(syncController.availablePeers) { peer in
+                    HStack {
+                        Text(peer.displayName)
+                            .font(.caption)
+                            .lineLimit(1)
+                        Spacer()
+                        Button("Pair") {
+                            syncController.invite(peer)
+                        }
+                        .controlSize(.mini)
+                    }
+                }
+            }
+
+            Text(syncController.lastConnectionEvent)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+
+            if let error = syncController.lastErrorMessage {
+                Text(error)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(.vertical, 6)
     }
 }
 #endif
