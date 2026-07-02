@@ -1,6 +1,11 @@
 import Foundation
 
 final class FileBackedSyncBatchQueue {
+    enum QueueError: Error, Equatable {
+        case capacityExceeded
+        case persistenceFailed
+    }
+
     private let fileURL: URL?
     private var queue: SyncBatchUnsentQueue
 
@@ -30,6 +35,19 @@ final class FileBackedSyncBatchQueue {
         let didChange = queue.enqueue(batch)
         if didChange {
             persistQueue()
+        }
+    }
+
+    func enqueueIncoming(_ batch: SyncBatch) throws {
+        do {
+            let didChange = try queue.enqueuePreservingExisting(batch)
+            if didChange {
+                try persistQueueThrowing()
+            }
+        } catch SyncBatchUnsentQueue.EnqueueError.capacityExceeded {
+            throw QueueError.capacityExceeded
+        } catch {
+            throw QueueError.persistenceFailed
         }
     }
 
@@ -65,22 +83,22 @@ final class FileBackedSyncBatchQueue {
     }
 
     private func persistQueue() {
+        try? persistQueueThrowing()
+    }
+
+    private func persistQueueThrowing() throws {
         guard let fileURL else { return }
 
-        do {
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let persistedQueue = PersistedSyncBatchQueue(
-                version: PersistedSyncBatchQueue.currentVersion,
-                batches: queue.pendingBatches
-            )
-            let data = try JSONEncoder().encode(persistedQueue)
-            try data.write(to: fileURL, options: .atomic)
-        } catch {
-            return
-        }
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let persistedQueue = PersistedSyncBatchQueue(
+            version: PersistedSyncBatchQueue.currentVersion,
+            batches: queue.pendingBatches
+        )
+        let data = try JSONEncoder().encode(persistedQueue)
+        try data.write(to: fileURL, options: .atomic)
     }
 }
 

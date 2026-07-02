@@ -16,7 +16,19 @@ enum IPhoneSyncBatchCaptureHook {
         SyncBatchNoteChangeCapture.titleChanged(noteID: noteID, oldTitle: oldTitle, newTitle: newTitle, modifiedAt: modifiedAt)
     }
 
-    static func bodyTextChanged(noteID: UUID, oldBody: String, newBody: String, modifiedAt: Date) -> SyncBatchChange? {
-        SyncBatchNoteChangeCapture.bodyTextChanged(noteID: noteID, oldBody: oldBody, newBody: newBody, modifiedAt: modifiedAt)
+    static func bodyTextChanged(
+        noteID: UUID,
+        oldBody: String,
+        newBody: String,
+        modifiedAt: Date,
+        bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled
+    ) -> SyncBatchChange? {
+        SyncBatchNoteChangeCapture.bodyTextChanged(
+            noteID: noteID,
+            oldBody: oldBody,
+            newBody: newBody,
+            modifiedAt: modifiedAt,
+            bodyHashCapabilityEnabled: bodyHashCapabilityEnabled
+        )
     }
 }

@@ -9,14 +9,17 @@ final class MacSyncBatchApplier {
     private let context: ModelContext
     private let seenBatchStore: MacSyncSeenBatchStore
     private let performSave: () throws -> Void
+    private let bodyHashCapabilityEnabled: Bool
 
     init(
         context: ModelContext,
         seenBatchStore: MacSyncSeenBatchStore = MacSyncSeenBatchStore(),
+        bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
         performSave: (() throws -> Void)? = nil
     ) {
         self.context = context
         self.seenBatchStore = seenBatchStore
+        self.bodyHashCapabilityEnabled = bodyHashCapabilityEnabled
         self.performSave = performSave ?? { try context.save() }
     }
 
@@ -27,6 +30,10 @@ final class MacSyncBatchApplier {
 
         var rollbackSnapshots: [UUID: NoteRollbackSnapshot] = [:]
         do {
+            try SyncBatchPreflight(bodyHashCapabilityEnabled: bodyHashCapabilityEnabled).validate(batch: batch) { [weak self] noteID in
+                try self?.loadNote(id: noteID)?.content
+            }
+
             var appliedChanges: [MacAppliedSyncChange] = []
             for change in batch.changes {
                 if let appliedChange = try apply(change, rollbackSnapshots: &rollbackSnapshots) {
@@ -108,7 +115,6 @@ final class MacSyncBatchApplier {
     ) throws -> MacAppliedSyncChange? {
         guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return nil }
 
-        try validateBaseContentHash(change.baseContentHash, for: note)
         captureRollbackSnapshot(for: note, in: &rollbackSnapshots)
         let originalContent = note.content
         let clampedOffset = originalContent.syncBatchClampedUTF16Offset(change.utf16Offset)
@@ -142,7 +148,6 @@ final class MacSyncBatchApplier {
             return nil
         }
 
-        try validateBaseContentHash(change.baseContentHash, for: note)
         let targetText = (note.content as NSString).substring(with: range)
         if let expectedText = change.expectedText, targetText != expectedText {
             return nil
@@ -216,18 +221,6 @@ final class MacSyncBatchApplier {
         note.richTextContentData = RTFCoding.encode(attributedText)
     }
 
-    private func validateBaseContentHash(_ expectedHash: String?, for note: Note) throws {
-        guard let expectedHash else { return }
-
-        let actualHash = SyncBatchContentHash.sha256Hex(for: note.content)
-        guard actualHash == expectedHash else {
-            throw SyncBatchApplyPreflightError.mismatchedBaseContentHash(
-                noteID: note.id,
-                expected: expectedHash,
-                actual: actualHash
-            )
-        }
-    }
 }
 
 @MainActor

@@ -96,14 +96,273 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
     }
 
     func testBatchSequencePersistsPerDeviceIdentity() {
-        let defaults = makeDefaults()
-        let store = SyncBatchSequenceStore(defaults: defaults)
+        let directoryURL = temporarySequenceDirectoryURL()
+        let store = SyncBatchSequenceStore(directoryURL: directoryURL)
         let firstDevice = UUID(uuidString: "00000000-0000-0000-0000-000000123251")!
         let secondDevice = UUID(uuidString: "00000000-0000-0000-0000-000000123252")!
 
-        XCTAssertEqual(store.nextSequence(for: firstDevice), 1)
-        XCTAssertEqual(SyncBatchSequenceStore(defaults: defaults).nextSequence(for: firstDevice), 2)
-        XCTAssertEqual(store.nextSequence(for: secondDevice), 1)
+        XCTAssertEqual(store.nextSequence(for: firstDevice), .reserved(1))
+        XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: firstDevice), .reserved(2))
+        XCTAssertEqual(store.nextSequence(for: secondDevice), .reserved(1))
+    }
+
+    func testSequenceReservationAllowsGapsWithoutReuse() {
+        let directoryURL = temporarySequenceDirectoryURL()
+        let deviceID = UUID(uuidString: "00000000-0000-0000-0000-000000123253")!
+
+        XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: deviceID), .reserved(1))
+        XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: deviceID), .reserved(2))
+    }
+
+    func testTransientSequenceFailureDoesNotLatchAndRetriesLater() {
+        let directoryURL = temporarySequenceDirectoryURL()
+        let store = SyncBatchSequenceStore(directoryURL: directoryURL)
+        let deviceID = UUID(uuidString: "00000000-0000-0000-0000-000000123254")!
+
+        XCTAssertEqual(store.nextSequence(for: deviceID), .reserved(1))
+        store.injectFaultForNextReservation(.transientReservationFailure)
+        XCTAssertEqual(store.nextSequence(for: deviceID), .sequenceLess(.transientFailure))
+        XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: deviceID), .reserved(2))
+    }
+
+    func testConfirmedSequenceCorruptionLatchesIdentity() throws {
+        let directoryURL = temporarySequenceDirectoryURL()
+        let store = SyncBatchSequenceStore(directoryURL: directoryURL)
+        let deviceID = UUID(uuidString: "00000000-0000-0000-0000-000000123255")!
+
+        store.injectFaultForNextReservation(.confirmedCorruption)
+        XCTAssertEqual(store.nextSequence(for: deviceID), .sequenceLess(.confirmedCorruption))
+        XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: deviceID), .sequenceLess(.alreadyLatched))
+
+        try Data(#"{"lastReserved":99}"#.utf8).write(
+            to: directoryURL.appendingPathComponent("\(deviceID.uuidString)-counter.json"),
+            options: .atomic
+        )
+        XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: deviceID), .sequenceLess(.alreadyLatched))
+
+        let newDeviceID = UUID(uuidString: "00000000-0000-0000-0000-000000123256")!
+        XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: newDeviceID), .reserved(1))
+    }
+
+    func testDisabledBodyHashGateMakesCaptureHashless() {
+        guard case .noteBodyTextInserted(let change) = SyncBatchNoteChangeCapture.bodyTextChanged(
+            noteID: UUID(uuidString: "00000000-0000-0000-0000-000000123257")!,
+            oldBody: "Hello",
+            newBody: "Hello!",
+            modifiedAt: Date(timeIntervalSince1970: 1)
+        ) else {
+            return XCTFail("Expected insert")
+        }
+
+        XCTAssertNil(change.baseContentHash)
+    }
+
+    func testEnabledBodyHashGateCapturesBaseHash() {
+        guard case .noteBodyTextInserted(let change) = SyncBatchNoteChangeCapture.bodyTextChanged(
+            noteID: UUID(uuidString: "00000000-0000-0000-0000-000000123258")!,
+            oldBody: "Hello",
+            newBody: "Hello!",
+            modifiedAt: Date(timeIntervalSince1970: 1),
+            bodyHashCapabilityEnabled: true
+        ) else {
+            return XCTFail("Expected insert")
+        }
+
+        XCTAssertEqual(change.baseContentHash, SyncBatchContentHash.sha256Hex(for: "Hello"))
+    }
+
+    func testPreflightAcceptsValidSameNoteHashChain() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123259")!
+        let batch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000123260")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000123261")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 1,
+                        text: "B",
+                        modifiedAt: Date(timeIntervalSince1970: 2),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                    )
+                ),
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 2,
+                        text: "C",
+                        modifiedAt: Date(timeIntervalSince1970: 3),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB")
+                    )
+                )
+            ]
+        )
+
+        XCTAssertNoThrow(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in "A" })
+    }
+
+    func testPreflightRejectsInvalidChainBeforeMutation() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123262")!
+        let batch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000123263")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000123264")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 1,
+                        text: "B",
+                        modifiedAt: Date(timeIntervalSince1970: 2),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                    )
+                ),
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 2,
+                        text: "C",
+                        modifiedAt: Date(timeIntervalSince1970: 3),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "wrong")
+                    )
+                )
+            ]
+        )
+
+        XCTAssertThrowsError(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in "A" })
+    }
+
+    func testPreflightUsesPostLegacyBodyForLaterHashedOperation() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123265")!
+        let batch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000123266")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000123267")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 1,
+                        text: "B",
+                        modifiedAt: Date(timeIntervalSince1970: 2)
+                    )
+                ),
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 2,
+                        text: "C",
+                        modifiedAt: Date(timeIntervalSince1970: 3),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB")
+                    )
+                )
+            ]
+        )
+
+        XCTAssertNoThrow(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in "A" })
+    }
+
+    func testPreflightUsesNewlyCreatedNoteBodyForLaterHashedOperation() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123271")!
+        let batch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000123272")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000123273")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteCreated(
+                    SyncBatchNoteCreatedChange(
+                        noteID: noteID,
+                        title: "New",
+                        body: "A",
+                        folderID: nil,
+                        createdAt: Date(timeIntervalSince1970: 1),
+                        modifiedAt: Date(timeIntervalSince1970: 1)
+                    )
+                ),
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 1,
+                        text: "B",
+                        modifiedAt: Date(timeIntervalSince1970: 2),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                    )
+                )
+            ]
+        )
+
+        XCTAssertNoThrow(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in nil })
+    }
+
+    func testSkippedDeleteDoesNotAdvancePreflightWorkingBody() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123274")!
+        let batch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000123275")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000123276")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextDeleted(
+                    SyncBatchNoteBodyTextDeletedChange(
+                        noteID: noteID,
+                        utf16Offset: 0,
+                        utf16Length: 1,
+                        expectedText: "Z",
+                        modifiedAt: Date(timeIntervalSince1970: 2),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                    )
+                ),
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 1,
+                        text: "B",
+                        modifiedAt: Date(timeIntervalSince1970: 3),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                    )
+                )
+            ]
+        )
+
+        XCTAssertNoThrow(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in "A" })
+    }
+
+    func testPreflightHashCacheReusesUnchangedBodyHash() throws {
+        var hashCallCount = 0
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123268")!
+        let cache = SyncBatchHashCache { body in
+            hashCallCount += 1
+            return SyncBatchContentHash.sha256Hex(for: body)
+        }
+        let batch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000123269")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000123270")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 0,
+                        text: "",
+                        modifiedAt: Date(timeIntervalSince1970: 2),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                    )
+                ),
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 0,
+                        text: "",
+                        modifiedAt: Date(timeIntervalSince1970: 3),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                    )
+                )
+            ]
+        )
+
+        try SyncBatchPreflight(bodyHashCapabilityEnabled: true, hashCache: cache).validate(batch: batch) { _ in "A" }
+
+        XCTAssertEqual(hashCallCount, 1)
     }
 
     func testMixedLegacyAndSequencedReplayKeysHaveTotalOrder() {
@@ -170,10 +429,10 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         )
     }
 
-    private func makeDefaults() -> UserDefaults {
-        let suiteName = "SyncBatchPayloadCompatibilityTests-\(UUID().uuidString)"
-        let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.removePersistentDomain(forName: suiteName)
-        return defaults
+    private func temporarySequenceDirectoryURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("sequences", isDirectory: true)
     }
+
 }

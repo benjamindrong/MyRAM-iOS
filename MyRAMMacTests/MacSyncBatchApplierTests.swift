@@ -511,7 +511,11 @@ final class MacSyncBatchApplierTests: XCTestCase {
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000200F")!, content: "local", in: container)
         let batchID = UUID(uuidString: "00000000-0000-0000-0000-00000000210F")!
         let seenBatchStore = MacSyncSeenBatchStore(defaults: defaults)
-        let applier = MacSyncBatchApplier(context: container.mainContext, seenBatchStore: seenBatchStore)
+        let applier = MacSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: seenBatchStore,
+            bodyHashCapabilityEnabled: true
+        )
 
         XCTAssertThrowsError(try applier.apply(MacSyncBatch(
             id: batchID,
@@ -540,6 +544,93 @@ final class MacSyncBatchApplierTests: XCTestCase {
         }
 
         XCTAssertEqual(note.content, "local")
+        XCTAssertFalse(seenBatchStore.hasSeen(batchID))
+    }
+
+    func testTitleBeforeMismatchedBodyDoesNotPartiallyApply() throws {
+        let defaults = makeDefaults()
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000201F")!, content: "local", in: container)
+        note.title = "Original"
+        try container.mainContext.save()
+        let batchID = UUID(uuidString: "00000000-0000-0000-0000-00000000211F")!
+        let seenBatchStore = MacSyncSeenBatchStore(defaults: defaults)
+        let applier = MacSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: seenBatchStore,
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertThrowsError(try applier.apply(MacSyncBatch(
+            id: batchID,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteTitleChanged(
+                    MacSyncNoteTitleChangedChange(
+                        noteID: note.id,
+                        title: "Remote",
+                        modifiedAt: Date(timeIntervalSince1970: 15)
+                    )
+                ),
+                .noteBodyTextInserted(
+                    MacSyncNoteBodyTextInsertedChange(
+                        noteID: note.id,
+                        utf16Offset: 0,
+                        text: "remote ",
+                        modifiedAt: Date(timeIntervalSince1970: 16),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "remote-base")
+                    )
+                )
+            ]
+        )))
+
+        XCTAssertEqual(note.title, "Original")
+        XCTAssertEqual(note.content, "local")
+        XCTAssertFalse(seenBatchStore.hasSeen(batchID))
+    }
+
+    func testEarlierValidNoteChangeDoesNotApplyWhenLaterNoteMismatches() throws {
+        let defaults = makeDefaults()
+        let container = try makeInMemoryContainer()
+        let first = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000202F")!, content: "A", in: container)
+        let second = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000203F")!, content: "B", in: container)
+        let batchID = UUID(uuidString: "00000000-0000-0000-0000-00000000212F")!
+        let seenBatchStore = MacSyncSeenBatchStore(defaults: defaults)
+        let applier = MacSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: seenBatchStore,
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertThrowsError(try applier.apply(MacSyncBatch(
+            id: batchID,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(
+                    MacSyncNoteBodyTextInsertedChange(
+                        noteID: first.id,
+                        utf16Offset: 1,
+                        text: "1",
+                        modifiedAt: Date(timeIntervalSince1970: 17),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                    )
+                ),
+                .noteBodyTextInserted(
+                    MacSyncNoteBodyTextInsertedChange(
+                        noteID: second.id,
+                        utf16Offset: 1,
+                        text: "2",
+                        modifiedAt: Date(timeIntervalSince1970: 18),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "wrong")
+                    )
+                )
+            ]
+        )))
+
+        XCTAssertEqual(first.content, "A")
+        XCTAssertEqual(second.content, "B")
         XCTAssertFalse(seenBatchStore.hasSeen(batchID))
     }
 

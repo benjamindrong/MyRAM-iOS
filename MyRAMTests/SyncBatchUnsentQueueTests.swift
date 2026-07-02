@@ -31,6 +31,19 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(queue.drain(), [second, third])
     }
 
+    func testIncomingPolicyRejectsNewBatchInsteadOfEvictingHead() throws {
+        var queue = SyncBatchUnsentQueue(limit: 2)
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+        let third = makeBatch(idSuffix: 3)
+
+        try queue.enqueuePreservingExisting(first)
+        try queue.enqueuePreservingExisting(second)
+        XCTAssertThrowsError(try queue.enqueuePreservingExisting(third))
+
+        XCTAssertEqual(queue.pendingBatches, [first, second])
+    }
+
     func testPendingBatchesDoesNotDrainQueue() {
         let batch = makeBatch(idSuffix: 1)
         var queue = SyncBatchUnsentQueue(limit: 10)
@@ -129,6 +142,21 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 2)
 
         XCTAssertEqual(reloadedQueue.pendingBatches, [second, third])
+    }
+
+    func testFileBackedIncomingQueueRejectsCapacityWithoutChangingExistingEntries() throws {
+        let fileURL = temporaryQueueFileURL()
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+        let third = makeBatch(idSuffix: 3)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 2)
+
+        try queue.enqueueIncoming(first)
+        try queue.enqueueIncoming(second)
+        XCTAssertThrowsError(try queue.enqueueIncoming(third))
+
+        let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 2)
+        XCTAssertEqual(reloadedQueue.pendingBatches, [first, second])
     }
 
     func testFileBackedQueueRemovesOnlySuccessfulIDsFromDisk() {

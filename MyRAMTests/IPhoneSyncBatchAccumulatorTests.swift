@@ -75,7 +75,8 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
                 noteID: note.id,
                 oldBody: "A😀B",
                 newBody: "A😀xB",
-                modifiedAt: Date(timeIntervalSince1970: 2)
+                modifiedAt: Date(timeIntervalSince1970: 2),
+                bodyHashCapabilityEnabled: true
             ),
             .noteBodyTextInserted(
                 SyncBatchNoteBodyTextInsertedChange(
@@ -93,7 +94,8 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
                 noteID: note.id,
                 oldBody: "abcdef",
                 newBody: "abef",
-                modifiedAt: Date(timeIntervalSince1970: 3)
+                modifiedAt: Date(timeIntervalSince1970: 3),
+                bodyHashCapabilityEnabled: true
             ),
             .noteBodyTextDeleted(
                 SyncBatchNoteBodyTextDeletedChange(
@@ -113,7 +115,7 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000124103")!,
             quietWindow: 3,
             batchIDProvider: { UUID(uuidString: "00000000-0000-0000-0000-000000124104")! },
-            batchSequenceProvider: { 42 }
+            batchSequenceProvider: { .reserved(42) }
         )
         let start = Date(timeIntervalSince1970: 500)
 

@@ -2126,7 +2126,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(change.noteID, note.id)
         XCTAssertEqual(change.utf16Offset, "Hello".utf16.count)
         XCTAssertEqual(change.text, " world")
-        XCTAssertEqual(change.baseContentHash, SyncBatchContentHash.sha256Hex(for: "Hello"))
+        XCTAssertNil(change.baseContentHash)
     }
 
     func testIPhoneIncomingHashedMismatchRemainsQueuedAndBlocksLaterBatch() async throws {
@@ -2147,6 +2147,7 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            bodyHashCapabilityEnabled: true,
             syncBatchQuietWindow: 0
         )
         let mismatchedBatch = SyncBatch(

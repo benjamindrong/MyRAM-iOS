@@ -57,7 +57,7 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000101")!,
             quietWindow: 3,
             batchIDProvider: { UUID(uuidString: "00000000-0000-0000-0000-000000000102")! },
-            batchSequenceProvider: { 7 }
+            batchSequenceProvider: { .reserved(7) }
         )
         let start = Date(timeIntervalSince1970: 500)
 

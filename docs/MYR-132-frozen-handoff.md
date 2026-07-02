@@ -198,6 +198,8 @@ The canonical new-batch order value is the emitter's persisted monotonic `batchS
 
 The sequence must survive relaunch, increase monotonically for one device identity, be persisted before or atomically with batch creation, reset only when device identity also changes, and never be independently synthesized by a receiver.
 
+Sequence reservation durability covers crashes and ordinary application operation under the selected durability policy. Manual deletion, replacement, or modification of pristine application-support sequence state is outside scope. An existing corruption latch survives later counter deletion, but deliberate removal of all pristine counter and guard state cannot be distinguished from a fresh installation.
+
 A merge may contain both legacy batches and sequenced batches. Define one shared total-order representation, such as:
 
 ```swift
@@ -240,6 +242,8 @@ Interim release policy:
 - keep hashed emission and mismatch refusal behind one capability gate until PR 2 is ready
 
 Do not distribute hashed operations to peers that cannot safely process mismatches.
+
+Amendment for PR #76 remediation: hashed body-operation emission and mismatch refusal remain capability-gated until PR 3 is available, unless the release explicitly accepts persistent note-scoped stalls for unreconstructable replacement-derived bases during the PR 2-PR 3 interval. This amendment is driven by the concrete finding that PR 2 cannot reconstruct a base containing an untransmitted replacement operation.
 
 Deferring a batch because one note mismatches may also delay unrelated-note operations in that batch and later FIFO batches. This is an accepted temporary PR 1 limitation.
 

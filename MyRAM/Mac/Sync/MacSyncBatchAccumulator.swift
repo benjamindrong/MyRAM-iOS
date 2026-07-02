@@ -5,9 +5,10 @@ actor MacSyncBatchAccumulator {
     private let originDeviceID: MacSyncDeviceID
     private let quietWindow: TimeInterval
     private let batchIDProvider: @Sendable () -> MacSyncBatchID
-    private let batchSequenceProvider: @Sendable () -> UInt64
+    private let batchSequenceProvider: @Sendable () -> SyncBatchSequenceReservation
     private let sleep: @Sendable (TimeInterval) async -> Void
     private var pendingBatch: PendingBatch?
+    private var lastSequenceReservationIssue: SyncBatchSequenceReservation.SequenceIssue?
     private var readinessTask: Task<Void, Never>?
     private var continuations: [UUID: AsyncStream<MacSyncBatch>.Continuation] = [:]
 
@@ -15,7 +16,7 @@ actor MacSyncBatchAccumulator {
         originDeviceID: MacSyncDeviceID,
         quietWindow: TimeInterval = 3,
         batchIDProvider: @escaping @Sendable () -> MacSyncBatchID = { UUID() },
-        batchSequenceProvider: (@Sendable () -> UInt64)? = nil,
+        batchSequenceProvider: (@Sendable () -> SyncBatchSequenceReservation)? = nil,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = { interval in
             try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
         }
@@ -42,10 +43,21 @@ actor MacSyncBatchAccumulator {
 
     func record(_ change: MacSyncChange, at date: Date = .now) {
         if pendingBatch == nil {
+            let reservation = batchSequenceProvider()
+            let batchSequence: UInt64?
+            switch reservation {
+            case .reserved(let sequence):
+                batchSequence = sequence
+                lastSequenceReservationIssue = nil
+            case .sequenceLess(let issue):
+                batchSequence = nil
+                lastSequenceReservationIssue = issue
+            }
+
             pendingBatch = PendingBatch(
                 id: batchIDProvider(),
                 createdAt: date,
-                batchSequence: batchSequenceProvider(),
+                batchSequence: batchSequence,
                 changes: [],
                 readyAt: date.addingTimeInterval(quietWindow)
             )
@@ -62,6 +74,11 @@ actor MacSyncBatchAccumulator {
 
     func pendingReadyAt() -> Date? {
         pendingBatch?.readyAt
+    }
+
+    func takeLastSequenceReservationIssue() -> SyncBatchSequenceReservation.SequenceIssue? {
+        defer { lastSequenceReservationIssue = nil }
+        return lastSequenceReservationIssue
     }
 
     func emitReadyBatches(at date: Date = .now) {
@@ -116,7 +133,7 @@ actor MacSyncBatchAccumulator {
 private struct PendingBatch {
     let id: MacSyncBatchID
     let createdAt: Date
-    let batchSequence: UInt64
+    let batchSequence: UInt64?
     var changes: [MacSyncChange]
     var readyAt: Date
 }

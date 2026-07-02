@@ -4,9 +4,10 @@ actor IPhoneSyncBatchAccumulator {
     private let originDeviceID: SyncBatchDeviceID
     private let quietWindow: TimeInterval
     private let batchIDProvider: @Sendable () -> SyncBatchID
-    private let batchSequenceProvider: @Sendable () -> UInt64
+    private let batchSequenceProvider: @Sendable () -> SyncBatchSequenceReservation
     private let sleep: @Sendable (TimeInterval) async -> Void
     private var pendingBatch: PendingBatch?
+    private var lastSequenceReservationIssue: SyncBatchSequenceReservation.SequenceIssue?
     private var readinessTask: Task<Void, Never>?
     private var continuations: [UUID: AsyncStream<SyncBatch>.Continuation] = [:]
 
@@ -14,7 +15,7 @@ actor IPhoneSyncBatchAccumulator {
         originDeviceID: SyncBatchDeviceID,
         quietWindow: TimeInterval = 3,
         batchIDProvider: @escaping @Sendable () -> SyncBatchID = { UUID() },
-        batchSequenceProvider: (@Sendable () -> UInt64)? = nil,
+        batchSequenceProvider: (@Sendable () -> SyncBatchSequenceReservation)? = nil,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = { interval in
             try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
         }
@@ -41,10 +42,21 @@ actor IPhoneSyncBatchAccumulator {
 
     func record(_ change: SyncBatchChange, at date: Date = .now) {
         if pendingBatch == nil {
+            let reservation = batchSequenceProvider()
+            let batchSequence: UInt64?
+            switch reservation {
+            case .reserved(let sequence):
+                batchSequence = sequence
+                lastSequenceReservationIssue = nil
+            case .sequenceLess(let issue):
+                batchSequence = nil
+                lastSequenceReservationIssue = issue
+            }
+
             pendingBatch = PendingBatch(
                 id: batchIDProvider(),
                 createdAt: date,
-                batchSequence: batchSequenceProvider(),
+                batchSequence: batchSequence,
                 changes: [],
                 readyAt: date.addingTimeInterval(quietWindow)
             )
@@ -61,6 +73,11 @@ actor IPhoneSyncBatchAccumulator {
 
     func pendingReadyAt() -> Date? {
         pendingBatch?.readyAt
+    }
+
+    func takeLastSequenceReservationIssue() -> SyncBatchSequenceReservation.SequenceIssue? {
+        defer { lastSequenceReservationIssue = nil }
+        return lastSequenceReservationIssue
     }
 
     func emitReadyBatches(at date: Date = .now) {
@@ -115,7 +132,7 @@ actor IPhoneSyncBatchAccumulator {
 private struct PendingBatch {
     let id: SyncBatchID
     let createdAt: Date
-    let batchSequence: UInt64
+    let batchSequence: UInt64?
     var changes: [SyncBatchChange]
     var readyAt: Date
 }

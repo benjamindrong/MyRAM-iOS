@@ -223,7 +223,11 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000012500C")!, content: "local", in: container)
         let batchID = UUID(uuidString: "00000000-0000-0000-0000-00000012510C")!
         let seenBatchStore = SyncBatchSeenBatchStore(defaults: defaults)
-        let applier = IPhoneSyncBatchApplier(context: container.mainContext, seenBatchStore: seenBatchStore)
+        let applier = IPhoneSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: seenBatchStore,
+            bodyHashCapabilityEnabled: true
+        )
 
         XCTAssertThrowsError(try applier.apply(SyncBatch(
             id: batchID,
@@ -255,6 +259,93 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         XCTAssertFalse(seenBatchStore.hasSeen(batchID))
     }
 
+    func testTitleBeforeMismatchedBodyDoesNotPartiallyApply() throws {
+        let defaults = makeDefaults()
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000012500D")!, content: "local", in: container)
+        note.title = "Original"
+        try container.mainContext.save()
+        let batchID = UUID(uuidString: "00000000-0000-0000-0000-00000012510D")!
+        let seenBatchStore = SyncBatchSeenBatchStore(defaults: defaults)
+        let applier = IPhoneSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: seenBatchStore,
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertThrowsError(try applier.apply(SyncBatch(
+            id: batchID,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-00000012520D")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteTitleChanged(
+                    SyncBatchNoteTitleChangedChange(
+                        noteID: note.id,
+                        title: "Remote",
+                        modifiedAt: Date(timeIntervalSince1970: 10)
+                    )
+                ),
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: note.id,
+                        utf16Offset: 0,
+                        text: "remote ",
+                        modifiedAt: Date(timeIntervalSince1970: 11),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "remote-base")
+                    )
+                )
+            ]
+        )))
+
+        XCTAssertEqual(note.title, "Original")
+        XCTAssertEqual(note.content, "local")
+        XCTAssertFalse(seenBatchStore.hasSeen(batchID))
+    }
+
+    func testEarlierValidNoteChangeDoesNotApplyWhenLaterNoteMismatches() throws {
+        let defaults = makeDefaults()
+        let container = try makeInMemoryContainer()
+        let first = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000012500E")!, content: "A", in: container)
+        let second = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000012500F")!, content: "B", in: container)
+        let batchID = UUID(uuidString: "00000000-0000-0000-0000-00000012510E")!
+        let seenBatchStore = SyncBatchSeenBatchStore(defaults: defaults)
+        let applier = IPhoneSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: seenBatchStore,
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertThrowsError(try applier.apply(SyncBatch(
+            id: batchID,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-00000012520E")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: first.id,
+                        utf16Offset: 1,
+                        text: "1",
+                        modifiedAt: Date(timeIntervalSince1970: 12),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                    )
+                ),
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: second.id,
+                        utf16Offset: 1,
+                        text: "2",
+                        modifiedAt: Date(timeIntervalSince1970: 13),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "wrong")
+                    )
+                )
+            ]
+        )))
+
+        XCTAssertEqual(first.content, "A")
+        XCTAssertEqual(second.content, "B")
+        XCTAssertFalse(seenBatchStore.hasSeen(batchID))
+    }
+
     private func apply(
         batchID: String = "00000000-0000-0000-0000-000000125100",
         changes: [SyncBatchChange],
@@ -262,7 +353,8 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
     ) throws {
         let applier = IPhoneSyncBatchApplier(
             context: container.mainContext,
-            seenBatchStore: SyncBatchSeenBatchStore(defaults: makeDefaults())
+            seenBatchStore: SyncBatchSeenBatchStore(defaults: makeDefaults()),
+            bodyHashCapabilityEnabled: true
         )
         try applier.apply(
             SyncBatch(

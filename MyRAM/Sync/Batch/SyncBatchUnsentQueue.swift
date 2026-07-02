@@ -1,6 +1,10 @@
 import Foundation
 
 struct SyncBatchUnsentQueue {
+    enum EnqueueError: Error, Equatable {
+        case capacityExceeded(limit: Int)
+    }
+
     private let limit: Int
     private var batches: [SyncBatch] = []
 
@@ -32,6 +36,16 @@ struct SyncBatchUnsentQueue {
         if batches.count > limit {
             batches.removeFirst(batches.count - limit)
         }
+        return true
+    }
+
+    @discardableResult
+    mutating func enqueuePreservingExisting(_ batch: SyncBatch) throws -> Bool {
+        guard limit > 0 else { throw EnqueueError.capacityExceeded(limit: limit) }
+        guard !batches.contains(where: { $0.id == batch.id }) else { return false }
+        guard batches.count < limit else { throw EnqueueError.capacityExceeded(limit: limit) }
+
+        batches.append(batch)
         return true
     }
 
