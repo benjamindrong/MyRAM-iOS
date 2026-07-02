@@ -71,6 +71,7 @@
 		BCA123010000000000000022 /* SyncBatchUnsentQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */; };
 		BCA123010000000000000023 /* FileBackedSyncBatchQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */; };
 		BCA123010000000000000024 /* FileBackedSyncBatchQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */; };
+		BCA123010000000000000025 /* SyncBatchUnsentQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */; };
 		BCB610022FEC610000610061 /* DebugDemoDataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */; };
 		BCF104022FF1040000000104 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D0B2EA5447D00F2D0AA /* Note.swift */; };
@@ -837,6 +838,7 @@
 				BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */,
 				BCA122010000000000000008 /* MacSyncBatchAccumulatorTests.swift in Sources */,
 				BCA122010000000000000009 /* MacSyncBatchApplierTests.swift in Sources */,
+				BCA123010000000000000025 /* SyncBatchUnsentQueueTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
