@@ -38,6 +38,10 @@ final class MacSyncBatchApplier {
             seenBatchStore.markSeen(batch.id)
             return MacAppliedSyncBatch(batchID: batch.id, changes: appliedChanges)
         } catch {
+            // Both mechanisms are needed: rollback() discards unsaved changes, but the main
+            // context's autosave can persist mid-apply mutations before performSave() throws,
+            // and the snapshots restore those. noteCreated needs no snapshot because the
+            // exists-guard makes re-applying it on retry idempotent.
             context.rollback()
             rollbackSnapshots.values.forEach { $0.restore() }
             throw error

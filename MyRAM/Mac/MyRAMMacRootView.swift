@@ -160,7 +160,7 @@ struct MyRAMMacRootView: View {
 
     private func reloadSelectedEditor(reason: MacSelectedEditorReloadReason) {
         guard !hasUnsavedChanges else {
-            // Defensive only: pre-apply save should normally clear edits before fallback reload for \(reason).
+            // Defensive only: the pre-apply flush should have saved local edits before any fallback reload reason can fire.
             saveError = "Incoming sync is waiting for local edits to save."
             return
         }
