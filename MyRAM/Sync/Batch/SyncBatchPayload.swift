@@ -351,6 +351,10 @@ enum SyncBatchDrainFailureKind: Equatable {
     case persistence
     case queueCapacity
     case queuePersistence
+    case corruptHistory
+    case invalidMergePlan
+    case inconsistentIncorporationState
+    case unsupportedDigestFormat
     case unexpected
 }
 
@@ -399,6 +403,14 @@ enum SyncBatchDrainFailureClassifier {
             "Incoming sync queue is full; newest batch could not be retained."
         case .queuePersistence:
             "Unable to persist incoming sync batch."
+        case .corruptHistory:
+            "Incoming sync history cannot be replayed safely."
+        case .invalidMergePlan:
+            "Incoming sync merge plan is invalid."
+        case .inconsistentIncorporationState:
+            "Incoming sync incorporation state needs repair."
+        case .unsupportedDigestFormat:
+            "Incoming sync history uses an unsupported digest format."
         case .unexpected:
             "Unable to apply incoming sync batch."
         }

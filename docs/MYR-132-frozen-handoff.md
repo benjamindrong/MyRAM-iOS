@@ -454,3 +454,13 @@ Reject any PR that:
 - mishandles dual-degraded crossing
 - loses or duplicates surviving text
 - introduces OT, CRDTs, version vectors, rich-text merging, Mac Catalyst work, or multi-peer causality
+
+## Approved Amendment - Permanent Compact Idempotency Ledger
+
+PR 2 code discovery confirms that the never-reapply invariant requires durable retention of incorporated batch identities. The current protocol contains no transport acknowledgement, globally bounded duplicate-delivery window, or other evidence that would make deletion of an old incorporated identity safe. Deleting all evidence for an incorporated batch could allow a delayed queue residue, restored backup, compatibility retry, or duplicate transport delivery to apply that batch again.
+
+PR 2 may therefore retain one permanent compact fixed-size tombstone per incorporated batch as an explicit exception to the global rejection criterion against unbounded state. This exception applies only to the irreducible batch-identity idempotency ledger. Full incorporation evidence, retained operations, snapshots, diagnostics, cleanup state, presentation state, and reconciliation evidence remain deterministically bounded and compactable.
+
+Each tombstone must have a versioned fixed maximum encoded size and retain only the batch identity and digests required to skip identical duplicates and fail closed on contradictory collisions. Tombstones may not retain note bodies, titles, operation arrays, variable-sized diagnostics, or other historical payloads. Tombstone deletion requires a future approved protocol amendment establishing a safe acknowledgement or expiry horizon.
+
+Permanent tombstone compatibility also requires retaining the complete historical digest-format implementation for every digest format version still present in full incorporation records or tombstones. That implementation includes the normalized semantic schema, numeric discriminator assignments, exact field order, primitive encoding, canonical byte generation, and SHA-256 hexadecimal representation. Historical digest-format implementations become compatibility code with golden-vector tests and may not be removed, rewritten, or used to rewrite old tombstone digests without a future approved migration or protocol amendment.

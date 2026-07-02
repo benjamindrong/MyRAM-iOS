@@ -12,14 +12,15 @@ final class PersistenceManager {
     private init() {
         do {
             let isUITestMode = ProcessInfo.processInfo.arguments.contains("UITEST_MODE")
+            let isUnitTestMode = ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] != nil
             let configuration = ModelConfiguration(
                 isUITestMode ? "MyRAM_UITests" : "MyRAM_Main",
-                schema: Schema([Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self]),
-                isStoredInMemoryOnly: isUITestMode
+                schema: Schema(MyRAMModelRegistry.models),
+                isStoredInMemoryOnly: isUITestMode || isUnitTestMode
             )
             
             container = try ModelContainer(
-                for: Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self,
+                for: Schema(MyRAMModelRegistry.models),
                 configurations: configuration
             )
             
