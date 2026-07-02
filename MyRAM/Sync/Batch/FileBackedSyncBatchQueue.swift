@@ -8,6 +8,7 @@ final class FileBackedSyncBatchQueue {
 
     private let fileURL: URL?
     private var queue: SyncBatchUnsentQueue
+    private var shouldFailNextPersistence = false
 
     init(fileURL: URL?, limit: Int = 100) {
         self.fileURL = fileURL
@@ -39,6 +40,7 @@ final class FileBackedSyncBatchQueue {
     }
 
     func enqueueIncoming(_ batch: SyncBatch) throws {
+        let originalBatches = queue.pendingBatches
         do {
             let didChange = try queue.enqueuePreservingExisting(batch)
             if didChange {
@@ -47,8 +49,13 @@ final class FileBackedSyncBatchQueue {
         } catch SyncBatchUnsentQueue.EnqueueError.capacityExceeded {
             throw QueueError.capacityExceeded
         } catch {
+            queue.replacePendingBatches(originalBatches)
             throw QueueError.persistenceFailed
         }
+    }
+
+    func injectPersistenceFailureForNextWrite() {
+        shouldFailNextPersistence = true
     }
 
     func removeAll(withIDs ids: Set<SyncBatchID>) {
@@ -88,6 +95,10 @@ final class FileBackedSyncBatchQueue {
 
     private func persistQueueThrowing() throws {
         guard let fileURL else { return }
+        if shouldFailNextPersistence {
+            shouldFailNextPersistence = false
+            throw QueueError.persistenceFailed
+        }
 
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(),

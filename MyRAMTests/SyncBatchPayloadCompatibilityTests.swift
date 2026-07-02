@@ -144,6 +144,44 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: newDeviceID), .reserved(1))
     }
 
+    func testMalformedSequenceLatchFailsClosedAndRewritesLatch() throws {
+        let directoryURL = temporarySequenceDirectoryURL()
+        let deviceID = UUID(uuidString: "00000000-0000-0000-0000-000000123281")!
+        try createDirectory(directoryURL)
+        try Data("not json".utf8).write(to: latchURL(for: deviceID, in: directoryURL), options: .atomic)
+        try Data(#"{"lastReserved":41}"#.utf8).write(to: counterURL(for: deviceID, in: directoryURL), options: .atomic)
+
+        XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: deviceID), .sequenceLess(.confirmedCorruption))
+        XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: deviceID), .sequenceLess(.alreadyLatched))
+    }
+
+    func testMalformedSequenceLatchFailedRewriteIsTransientAndDoesNotAdvanceCounter() throws {
+        let directoryURL = temporarySequenceDirectoryURL()
+        let deviceID = UUID(uuidString: "00000000-0000-0000-0000-000000123282")!
+        try createDirectory(directoryURL)
+        try Data("not json".utf8).write(to: latchURL(for: deviceID, in: directoryURL), options: .atomic)
+        try Data(#"{"lastReserved":41}"#.utf8).write(to: counterURL(for: deviceID, in: directoryURL), options: .atomic)
+        let store = SyncBatchSequenceStore(directoryURL: directoryURL)
+
+        store.injectFaultForNextReservation(.latchPersistenceFailure)
+        XCTAssertEqual(store.nextSequence(for: deviceID), .sequenceLess(.transientFailure))
+        XCTAssertEqual(try JSONDecoder().decode(TestSequenceCounter.self, from: Data(contentsOf: counterURL(for: deviceID, in: directoryURL))).lastReserved, 41)
+        XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: deviceID), .sequenceLess(.confirmedCorruption))
+    }
+
+    func testCorruptCounterFailedLatchWriteIsTransientAndRetryLatches() throws {
+        let directoryURL = temporarySequenceDirectoryURL()
+        let deviceID = UUID(uuidString: "00000000-0000-0000-0000-000000123283")!
+        try createDirectory(directoryURL)
+        try Data("not json".utf8).write(to: counterURL(for: deviceID, in: directoryURL), options: .atomic)
+        let store = SyncBatchSequenceStore(directoryURL: directoryURL)
+
+        store.injectFaultForNextReservation(.latchPersistenceFailure)
+        XCTAssertEqual(store.nextSequence(for: deviceID), .sequenceLess(.transientFailure))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: latchURL(for: deviceID, in: directoryURL).path))
+        XCTAssertEqual(SyncBatchSequenceStore(directoryURL: directoryURL).nextSequence(for: deviceID), .sequenceLess(.confirmedCorruption))
+    }
+
     func testDisabledBodyHashGateMakesCaptureHashless() {
         guard case .noteBodyTextInserted(let change) = SyncBatchNoteChangeCapture.bodyTextChanged(
             noteID: UUID(uuidString: "00000000-0000-0000-0000-000000123257")!,
@@ -295,6 +333,69 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         XCTAssertNoThrow(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in nil })
     }
 
+    func testPreflightSkipsEmptyInsertBeforeHashValidation() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123284")!
+        let batch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000123285")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000123286")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 0,
+                        text: "",
+                        modifiedAt: Date(timeIntervalSince1970: 2),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "wrong")
+                    )
+                )
+            ]
+        )
+
+        XCTAssertNoThrow(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in "A" })
+    }
+
+    func testIdempotentlySkippedNoteCreatedDoesNotResetAdvancedWorkingBody() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123287")!
+        let batch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000123288")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000123289")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 1,
+                        text: "B",
+                        modifiedAt: Date(timeIntervalSince1970: 2),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                    )
+                ),
+                .noteCreated(
+                    SyncBatchNoteCreatedChange(
+                        noteID: noteID,
+                        title: "Existing",
+                        body: "stale",
+                        folderID: nil,
+                        createdAt: Date(timeIntervalSince1970: 1),
+                        modifiedAt: Date(timeIntervalSince1970: 3)
+                    )
+                ),
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 2,
+                        text: "C",
+                        modifiedAt: Date(timeIntervalSince1970: 4),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB")
+                    )
+                )
+            ]
+        )
+
+        XCTAssertNoThrow(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in "A" })
+    }
+
     func testSkippedDeleteDoesNotAdvancePreflightWorkingBody() throws {
         let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123274")!
         let batch = SyncBatch(
@@ -339,20 +440,22 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000123270")!,
             createdAt: Date(timeIntervalSince1970: 1),
             changes: [
-                .noteBodyTextInserted(
-                    SyncBatchNoteBodyTextInsertedChange(
+                .noteBodyTextDeleted(
+                    SyncBatchNoteBodyTextDeletedChange(
                         noteID: noteID,
                         utf16Offset: 0,
-                        text: "",
+                        utf16Length: 1,
+                        expectedText: "Z",
                         modifiedAt: Date(timeIntervalSince1970: 2),
                         baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
                     )
                 ),
-                .noteBodyTextInserted(
-                    SyncBatchNoteBodyTextInsertedChange(
+                .noteBodyTextDeleted(
+                    SyncBatchNoteBodyTextDeletedChange(
                         noteID: noteID,
                         utf16Offset: 0,
-                        text: "",
+                        utf16Length: 1,
+                        expectedText: "Z",
                         modifiedAt: Date(timeIntervalSince1970: 3),
                         baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
                     )
@@ -435,4 +538,19 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
             .appendingPathComponent("sequences", isDirectory: true)
     }
 
+    private func createDirectory(_ url: URL) throws {
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    }
+
+    private func counterURL(for deviceID: UUID, in directoryURL: URL) -> URL {
+        directoryURL.appendingPathComponent("\(deviceID.uuidString)-counter.json")
+    }
+
+    private func latchURL(for deviceID: UUID, in directoryURL: URL) -> URL {
+        directoryURL.appendingPathComponent("\(deviceID.uuidString)-sequence-less.json")
+    }
+}
+
+private struct TestSequenceCounter: Decodable {
+    let lastReserved: UInt64
 }

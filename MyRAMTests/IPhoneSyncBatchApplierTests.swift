@@ -91,6 +91,39 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         XCTAssertEqual(note.content, "A😀xB")
     }
 
+    func testReplacementSkippedThenDefaultGateInsertAppliesHashless() throws {
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000125106")!, content: "remote", in: container)
+
+        XCTAssertNil(SyncBatchNoteChangeCapture.bodyTextChanged(
+            noteID: note.id,
+            oldBody: "local",
+            newBody: "remote",
+            modifiedAt: Date(timeIntervalSince1970: 3)
+        ))
+        guard case .noteBodyTextInserted(let change) = SyncBatchNoteChangeCapture.bodyTextChanged(
+            noteID: note.id,
+            oldBody: "remote",
+            newBody: "remote!",
+            modifiedAt: Date(timeIntervalSince1970: 4)
+        ) else {
+            return XCTFail("Expected follow-up insert")
+        }
+
+        XCTAssertNil(change.baseContentHash)
+        try IPhoneSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: SyncBatchSeenBatchStore(defaults: makeDefaults())
+        ).apply(SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000125206")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000125306")!,
+            createdAt: Date(timeIntervalSince1970: 5),
+            changes: [.noteBodyTextInserted(change)]
+        ))
+
+        XCTAssertEqual(note.content, "remote!")
+    }
+
     func testDeleteAppliesOnlyWhenSafeAndExpectedTextMatches() throws {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000125006")!, content: "abcdef", in: container)

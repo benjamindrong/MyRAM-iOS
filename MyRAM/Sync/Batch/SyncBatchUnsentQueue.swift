@@ -24,6 +24,10 @@ struct SyncBatchUnsentQueue {
         batches.first
     }
 
+    mutating func replacePendingBatches(_ batches: [SyncBatch]) {
+        self.batches = Array(batches.prefix(limit))
+    }
+
     func contains(_ batchID: SyncBatchID) -> Bool {
         batches.contains { $0.id == batchID }
     }

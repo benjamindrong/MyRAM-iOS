@@ -200,6 +200,10 @@ The sequence must survive relaunch, increase monotonically for one device identi
 
 Sequence reservation durability covers crashes and ordinary application operation under the selected durability policy. Manual deletion, replacement, or modification of pristine application-support sequence state is outside scope. An existing corruption latch survives later counter deletion, but deliberate removal of all pristine counter and guard state cannot be distinguished from a fresh installation.
 
+PR #76 follow-up clarification: PR 1 durability means process-crash durability after successful file persistence and explicit failure reporting when persistence fails. It does not claim power-loss atomicity across filesystem and SwiftData stores.
+
+PR #76 follow-up clarification: sequence corruption handling is fail-closed. A malformed latch is corruption, not absence; the store must rewrite the identity-keyed sequence-less latch before returning confirmed corruption, and failed latch persistence returns a transient sequence failure without allocating or advancing a counter.
+
 A merge may contain both legacy batches and sequenced batches. Define one shared total-order representation, such as:
 
 ```swift
@@ -248,6 +252,8 @@ Amendment for PR #76 remediation: hashed body-operation emission and mismatch re
 Deferring a batch because one note mismatches may also delay unrelated-note operations in that batch and later FIFO batches. This is an accepted temporary PR 1 limitation.
 
 Before PR 1 merges, confirm that the durable queue preserves deferred batches across relaunch, does not discard them because of ordinary caps, and tolerates the expected temporary accumulation.
+
+PR #76 follow-up clarification: incoming queue enqueue must be transactional at the queue abstraction boundary. A failed enqueue persistence attempt must restore the in-memory pending list to the pre-enqueue state and surface a typed persistence error. Both platforms must classify queue capacity, queue persistence, mismatched-base, unsupported-reconciliation, and generic save failures distinctly enough for tests and visible status.
 
 Do not introduce partial-batch splitting solely for this temporary phase unless required to prevent data loss.
 

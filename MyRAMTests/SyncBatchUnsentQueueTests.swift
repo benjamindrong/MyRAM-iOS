@@ -159,6 +159,25 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(reloadedQueue.pendingBatches, [first, second])
     }
 
+    func testFileBackedIncomingQueueRollsBackMemoryAndDiskOnPersistenceFailure() throws {
+        let fileURL = temporaryQueueFileURL()
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        try queue.enqueueIncoming(first)
+        queue.injectPersistenceFailureForNextWrite()
+        XCTAssertThrowsError(try queue.enqueueIncoming(second)) { error in
+            XCTAssertEqual(error as? FileBackedSyncBatchQueue.QueueError, .persistenceFailed)
+        }
+
+        XCTAssertEqual(queue.pendingBatches, [first])
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [first])
+
+        try queue.enqueueIncoming(second)
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [first, second])
+    }
+
     func testFileBackedQueueRemovesOnlySuccessfulIDsFromDisk() {
         let fileURL = temporaryQueueFileURL()
         let first = makeBatch(idSuffix: 1)
@@ -281,12 +300,88 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(queue.pendingBatches, [batch])
     }
 
+    func testMixedReplayKeysSortLegacyBeforeSequencedThenOperationIndex() {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123801")!
+        let originDeviceID = UUID(uuidString: "00000000-0000-0000-0000-000000123802")!
+        let firstLegacy = makeOrderingBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000123803")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSince1970: 1),
+            sequence: nil,
+            noteID: noteID
+        )
+        let secondLegacy = makeOrderingBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000123804")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSince1970: 2),
+            sequence: nil,
+            noteID: noteID
+        )
+        let sequenced = makeOrderingBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000123805")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSince1970: 0),
+            sequence: 1,
+            noteID: noteID
+        )
+
+        let secondOperation = SyncBatchReplayKey(batch: sequenced, change: sequenced.changes[1], operationIndex: 1)
+        let firstOperation = SyncBatchReplayKey(batch: sequenced, change: sequenced.changes[0], operationIndex: 0)
+        let keys = [
+            secondOperation,
+            SyncBatchReplayKey(batch: secondLegacy, change: secondLegacy.changes[0], operationIndex: 0),
+            firstOperation,
+            SyncBatchReplayKey(batch: firstLegacy, change: firstLegacy.changes[0], operationIndex: 0)
+        ]
+
+        XCTAssertEqual(
+            keys.sorted(),
+            [
+                SyncBatchReplayKey(batch: firstLegacy, change: firstLegacy.changes[0], operationIndex: 0),
+                SyncBatchReplayKey(batch: secondLegacy, change: secondLegacy.changes[0], operationIndex: 0),
+                firstOperation,
+                secondOperation
+            ]
+        )
+    }
+
     private func makeBatch(idSuffix: Int) -> SyncBatch {
         SyncBatch(
             id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", idSuffix))!,
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000123999")!,
             createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
             changes: []
+        )
+    }
+
+    private func makeOrderingBatch(
+        id: UUID,
+        originDeviceID: UUID,
+        createdAt: Date,
+        sequence: UInt64?,
+        noteID: UUID
+    ) -> SyncBatch {
+        SyncBatch(
+            id: id,
+            originDeviceID: originDeviceID,
+            createdAt: createdAt,
+            batchSequence: sequence,
+            changes: [
+                .noteTitleChanged(
+                    SyncBatchNoteTitleChangedChange(
+                        noteID: noteID,
+                        title: "First",
+                        modifiedAt: Date(timeIntervalSince1970: 50)
+                    )
+                ),
+                .noteTitleChanged(
+                    SyncBatchNoteTitleChangedChange(
+                        noteID: noteID,
+                        title: "Second",
+                        modifiedAt: Date(timeIntervalSince1970: 50)
+                    )
+                )
+            ]
         )
     }
 

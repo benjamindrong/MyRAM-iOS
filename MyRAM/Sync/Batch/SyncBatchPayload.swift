@@ -147,6 +147,7 @@ final class SyncBatchSequenceStore: @unchecked Sendable {
     enum Fault: Equatable {
         case transientReservationFailure
         case confirmedCorruption
+        case latchPersistenceFailure
     }
 
     private let directoryURL: URL
@@ -169,13 +170,23 @@ final class SyncBatchSequenceStore: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
 
-        if isLatched(deviceID: deviceID) {
+        switch latchState(deviceID: deviceID) {
+        case .active:
             return .sequenceLess(.alreadyLatched)
+        case .corrupt:
+            do {
+                try writeLatch(deviceID: deviceID)
+                return .sequenceLess(.confirmedCorruption)
+            } catch {
+                return .sequenceLess(.transientFailure)
+            }
+        case .absent:
+            break
         }
 
         do {
             try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-            if let injectedFault {
+            if let injectedFault, injectedFault != .latchPersistenceFailure {
                 self.injectedFault = nil
                 switch injectedFault {
                 case .transientReservationFailure:
@@ -183,6 +194,8 @@ final class SyncBatchSequenceStore: @unchecked Sendable {
                 case .confirmedCorruption:
                     try writeLatch(deviceID: deviceID)
                     return .sequenceLess(.confirmedCorruption)
+                case .latchPersistenceFailure:
+                    break
                 }
             }
 
@@ -240,19 +253,28 @@ final class SyncBatchSequenceStore: @unchecked Sendable {
     }
 
     private func writeLatch(deviceID: SyncBatchDeviceID) throws {
+        if injectedFault == .latchPersistenceFailure {
+            injectedFault = nil
+            throw SequenceStoreError.injectedLatchPersistenceFailure
+        }
         let data = try JSONEncoder().encode(Latch(deviceID: deviceID, createdAt: .now))
         let url = latchURL(for: deviceID)
         try data.write(to: url, options: .atomic)
         try durabilitySync(url)
     }
 
-    private func isLatched(deviceID: SyncBatchDeviceID) -> Bool {
+    private func latchState(deviceID: SyncBatchDeviceID) -> SequenceLatchState {
         let url = latchURL(for: deviceID)
-        guard let data = try? Data(contentsOf: url),
-              let latch = try? JSONDecoder().decode(Latch.self, from: data) else {
-            return false
+        guard fileManager.fileExists(atPath: url.path) else {
+            return .absent
         }
-        return latch.deviceID == deviceID
+        do {
+            let data = try Data(contentsOf: url)
+            let latch = try JSONDecoder().decode(Latch.self, from: data)
+            return latch.deviceID == deviceID ? .active : .corrupt
+        } catch {
+            return .corrupt
+        }
     }
 
     private func counterURL(for deviceID: SyncBatchDeviceID) -> URL {
@@ -282,6 +304,145 @@ final class SyncBatchSequenceStore: @unchecked Sendable {
     private enum CounterReadError: Error {
         case missing
         case corrupt
+    }
+
+    private enum SequenceLatchState {
+        case absent
+        case active
+        case corrupt
+    }
+
+    private enum SequenceStoreError: Error {
+        case injectedLatchPersistenceFailure
+    }
+}
+
+enum SyncBatchPlatform {
+    case iPhone
+    case nativeMac
+}
+
+enum SyncBatchQueueFileLocation {
+    static func pendingIncoming(for platform: SyncBatchPlatform) -> URL? {
+        guard let supportDirectory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            return nil
+        }
+
+        let filename: String
+        switch platform {
+        case .iPhone:
+            filename = "ios-pending-incoming-batch-queue.json"
+        case .nativeMac:
+            filename = "mac-pending-incoming-batch-queue.json"
+        }
+
+        return supportDirectory
+            .appendingPathComponent("MyRAM", isDirectory: true)
+            .appendingPathComponent(filename)
+    }
+}
+
+enum SyncBatchDrainFailureKind: Equatable {
+    case mismatchedBase
+    case unsupportedReconciliation
+    case persistence
+    case queueCapacity
+    case queuePersistence
+    case unexpected
+}
+
+struct SyncBatchDrainFailure: Equatable {
+    let batchID: SyncBatchID?
+    let kind: SyncBatchDrainFailureKind
+}
+
+enum SyncBatchDrainResult: Equatable {
+    case drained
+    case blocked(SyncBatchDrainFailure)
+    case alreadyDraining
+}
+
+enum SyncBatchDrainFailureClassifier {
+    static func classify(_ error: Error, batchID: SyncBatchID? = nil) -> SyncBatchDrainFailure {
+        let kind: SyncBatchDrainFailureKind
+        if let preflightError = error as? SyncBatchApplyPreflightError {
+            switch preflightError {
+            case .mismatchedBaseContentHash:
+                kind = .mismatchedBase
+            case .unsupportedReconciliation:
+                kind = .unsupportedReconciliation
+            }
+        } else if let queueError = error as? FileBackedSyncBatchQueue.QueueError {
+            switch queueError {
+            case .capacityExceeded:
+                kind = .queueCapacity
+            case .persistenceFailed:
+                kind = .queuePersistence
+            }
+        } else {
+            kind = .persistence
+        }
+        return SyncBatchDrainFailure(batchID: batchID, kind: kind)
+    }
+
+    static func userMessage(for failure: SyncBatchDrainFailure) -> String {
+        switch failure.kind {
+        case .mismatchedBase:
+            "Incoming changes are waiting for deterministic merge support."
+        case .unsupportedReconciliation:
+            "Incoming reconciliation cannot be processed by this version."
+        case .persistence:
+            "Unable to save incoming sync changes."
+        case .queueCapacity:
+            "Incoming sync queue is full; newest batch could not be retained."
+        case .queuePersistence:
+            "Unable to persist incoming sync batch."
+        case .unexpected:
+            "Unable to apply incoming sync batch."
+        }
+    }
+}
+
+enum SyncBatchSequenceIssueDescription {
+    static func message(for issue: SyncBatchSequenceReservation.SequenceIssue) -> String {
+        switch issue {
+        case .transientFailure:
+            "Unable to reserve sync batch order; this batch will use legacy ordering."
+        case .confirmedCorruption:
+            "Sync batch order storage is corrupt; this device will use legacy ordering until its identity changes."
+        case .alreadyLatched:
+            "Sync batch order is disabled for this device identity due to prior corruption."
+        }
+    }
+}
+
+enum SyncBatchDrainCoordinator {
+    static func drain<Applied>(
+        isDraining: inout Bool,
+        nextBatch: () -> SyncBatch?,
+        apply: (SyncBatch) throws -> Applied,
+        remove: (SyncBatchID) -> Void,
+        didApply: (SyncBatch, Applied) -> Void
+    ) -> SyncBatchDrainResult {
+        guard !isDraining else { return .alreadyDraining }
+
+        isDraining = true
+        defer { isDraining = false }
+
+        while let batch = nextBatch() {
+            do {
+                let applied = try apply(batch)
+                remove(batch.id)
+                didApply(batch, applied)
+            } catch {
+                return .blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id))
+            }
+        }
+
+        return .drained
     }
 }
 
@@ -326,6 +487,9 @@ struct SyncBatchPreflight {
         for change in batch.changes {
             switch change {
             case .noteCreated(let change):
+                if workingBodies[change.noteID] != nil {
+                    continue
+                }
                 if let existingBody = try bodyProvider(change.noteID) {
                     workingBodies[change.noteID] = existingBody
                 } else {
@@ -344,8 +508,8 @@ struct SyncBatchPreflight {
                     bodyProvider: bodyProvider
                 ) else { continue }
 
-                try validateBaseHash(change.baseContentHash, noteID: change.noteID, body: body)
                 guard !change.text.isEmpty else { continue }
+                try validateBaseHash(change.baseContentHash, noteID: change.noteID, body: body)
                 let clampedOffset = body.syncBatchClampedUTF16Offset(change.utf16Offset)
                 let insertionOffset = body.syncBatchSafeInsertionOffset(fallingForwardFrom: clampedOffset)
                 body = body.syncBatchInserting(change.text, atUTF16Offset: insertionOffset)

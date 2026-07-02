@@ -41,6 +41,7 @@ final class NotesViewModel: ObservableObject {
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
     private var isApplyingRemoteSyncChange = false
+    private var isDrainingPendingIncomingBatches = false
     private var recentTextEditByNoteID: [UUID: Date] = [:]
     private var syncBatchReadyTask: Task<Void, Never>?
     private var undoStack: [UndoAction] = [] {
@@ -59,13 +60,17 @@ final class NotesViewModel: ObservableObject {
         syncController: MyRAMSyncControlling? = nil,
         syncConflictStore: SyncConflictStore = SyncConflictStore(),
         pendingIncomingBatchQueueFileURL: URL? = NotesViewModel.pendingIncomingBatchQueueFileURL(),
+        pendingIncomingBatchQueueLimit: Int = 100,
         bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
         syncBatchQuietWindow: TimeInterval = 3
     ) {
         self.context = context
         self.syncController = syncController
         self.syncConflictStore = syncConflictStore
-        pendingIncomingBatches = FileBackedSyncBatchQueue(fileURL: pendingIncomingBatchQueueFileURL)
+        pendingIncomingBatches = FileBackedSyncBatchQueue(
+            fileURL: pendingIncomingBatchQueueFileURL,
+            limit: pendingIncomingBatchQueueLimit
+        )
         self.bodyHashCapabilityEnabled = bodyHashCapabilityEnabled
         syncBatchAccumulator = IPhoneSyncBatchAccumulator(
             originDeviceID: UUID(uuidString: MyRAMDeviceIdentity.currentDeviceID()) ?? UUID(),
@@ -1218,7 +1223,7 @@ final class NotesViewModel: ObservableObject {
         Task {
             await syncBatchAccumulator.record(change)
             if let issue = await syncBatchAccumulator.takeLastSequenceReservationIssue() {
-                syncBatchErrorMessage = NotesViewModel.sequenceIssueMessage(issue)
+                syncBatchErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
             }
         }
     }
@@ -1462,11 +1467,9 @@ final class NotesViewModel: ObservableObject {
         if !pendingIncomingBatches.contains(batch.id) {
             do {
                 try pendingIncomingBatches.enqueueIncoming(batch)
-            } catch FileBackedSyncBatchQueue.QueueError.capacityExceeded {
-                syncBatchErrorMessage = "Incoming sync queue is full; newest batch could not be retained."
-                return
             } catch {
-                syncBatchErrorMessage = "Unable to persist incoming sync batch."
+                let failure = SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id)
+                syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
                 return
             }
         }
@@ -1478,43 +1481,26 @@ final class NotesViewModel: ObservableObject {
         defer { isApplyingRemoteSyncChange = false }
 
         let applier = IPhoneSyncBatchApplier(context: context, bodyHashCapabilityEnabled: bodyHashCapabilityEnabled)
-        while let batch = pendingIncomingBatches.first {
-            do {
-                try applier.apply(batch)
-                pendingIncomingBatches.remove(batch.id)
+        let result = SyncBatchDrainCoordinator.drain(
+            isDraining: &isDrainingPendingIncomingBatches,
+            nextBatch: { [pendingIncomingBatches] in pendingIncomingBatches.first },
+            apply: { batch in try applier.apply(batch) },
+            remove: { [pendingIncomingBatches] batchID in pendingIncomingBatches.remove(batchID) },
+            didApply: { [weak self] _, _ in
+                guard let self else { return }
                 refreshCurrentFolderContent()
                 activeNoteSyncRevision += 1
                 syncBatchErrorMessage = nil
-            } catch {
-                syncBatchErrorMessage = "Incoming sync batch is waiting for deterministic merge support."
-                debugPrint("Unable to apply incoming sync batch: \(error)")
-                return
             }
+        )
+
+        if case .blocked(let failure) = result {
+            syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
         }
     }
 
     nonisolated private static func pendingIncomingBatchQueueFileURL() -> URL? {
-        guard let supportDirectory = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first else {
-            return nil
-        }
-
-        return supportDirectory
-            .appendingPathComponent("MyRAM", isDirectory: true)
-            .appendingPathComponent("ios-pending-incoming-batch-queue.json")
-    }
-
-    nonisolated private static func sequenceIssueMessage(_ issue: SyncBatchSequenceReservation.SequenceIssue) -> String {
-        switch issue {
-        case .transientFailure:
-            "Unable to reserve sync batch order; this batch will use legacy ordering."
-        case .confirmedCorruption:
-            "Sync batch order storage is corrupt; this device will use legacy ordering until its identity changes."
-        case .alreadyLatched:
-            "Sync batch order is disabled for this device identity due to prior corruption."
-        }
+        SyncBatchQueueFileLocation.pendingIncoming(for: .iPhone)
     }
 
     private func isIncomingTextUnsafe(

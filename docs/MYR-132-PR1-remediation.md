@@ -61,3 +61,12 @@ Coverage must include:
 ## Acceptance Criteria
 
 The remediation is complete when neither platform mutates managed state before complete chained preflight passes, deferred queued batches are never silently evicted, queue-capacity and persistence failures are visible, distributed PR 1 builds cannot stall from skipped replacements while the gate is disabled, `batchSequence` remains independent of body hashing, unchanged content is not repeatedly hashed, sequence reservation is durable before use, transient sequence failures affect only the current reservation, confirmed corruption creates an identity-keyed sequence-less latch, only a new device identity resumes sequencing after corruption, matching-base and legacy positional behavior remain unchanged, `SyncBatchEnvelope.currentSchemaVersion` remains `1`, and PR 2/PR 3 behavior remains out of scope.
+
+## Follow-Up Remediation Clarifications
+
+- Incoming queue insertion is transactional for process-crash durability: if persistence fails, the in-memory pending list rolls back to the persisted pre-enqueue state and the caller sees an explicit queue persistence error. This is not a power-loss atomicity guarantee.
+- Sequence corruption is fail-closed. A valid latch disables sequencing for that device identity; a malformed latch is treated as corrupt, rewritten as the confirmed corruption latch when possible, and never allows counter allocation before that rewrite succeeds.
+- If a corrupt latch or corrupt counter cannot persist its sequence-less latch, the reservation returns a transient failure and leaves the counter unadvanced.
+- iPhone and native Mac use the same pending-incoming queue path policy, drain state machine, sequence issue text, and typed drain failure classification.
+- iPhone drain errors distinguish mismatched bases, unsupported reconciliation, queue capacity, queue persistence, and generic save failures.
+- Preflight skips empty inserts before hash validation and does not let an idempotently skipped `noteCreated` reset an already advanced working body.

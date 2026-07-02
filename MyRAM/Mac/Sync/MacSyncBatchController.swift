@@ -97,7 +97,7 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         Task {
             await accumulator.record(change)
             if let issue = await accumulator.takeLastSequenceReservationIssue() {
-                lastErrorMessage = MacSyncBatchController.sequenceIssueMessage(issue)
+                lastErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
             }
         }
     }
@@ -155,11 +155,9 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         if !pendingIncomingBatches.contains(batch.id) {
             do {
                 try pendingIncomingBatches.enqueueIncoming(batch)
-            } catch FileBackedSyncBatchQueue.QueueError.capacityExceeded {
-                lastErrorMessage = "Incoming sync queue is full; newest batch could not be retained."
-                return
             } catch {
-                lastErrorMessage = "Unable to persist incoming sync batch."
+                let failure = SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id)
+                lastErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
                 return
             }
         }
@@ -167,27 +165,26 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     }
 
     func drainPendingIncomingBatchesIfPossible() {
-        guard !isDrainingPendingIncomingBatches else { return }
-
-        isDrainingPendingIncomingBatches = true
-        defer { isDrainingPendingIncomingBatches = false }
-
         guard onBeforeApplyingRemoteBatch?() ?? false else {
             lastErrorMessage = "Incoming sync is waiting for local edits to save."
             return
         }
 
-        while let batch = pendingIncomingBatches.first {
-            do {
-                let appliedBatch = try applyBatch(batch)
-                pendingIncomingBatches.remove(batch.id)
+        let result = SyncBatchDrainCoordinator.drain(
+            isDraining: &isDrainingPendingIncomingBatches,
+            nextBatch: { [pendingIncomingBatches] in pendingIncomingBatches.first },
+            apply: { [applyBatch] batch in try applyBatch(batch) },
+            remove: { [pendingIncomingBatches] batchID in pendingIncomingBatches.remove(batchID) },
+            didApply: { [weak self] batch, appliedBatch in
+                guard let self else { return }
                 lastSyncAt = batch.createdAt
                 lastErrorMessage = nil
                 onBatchApplied?(appliedBatch)
-            } catch {
-                lastErrorMessage = "Unable to apply nearby batch changes."
-                return
             }
+        )
+
+        if case .blocked(let failure) = result {
+            lastErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
         }
     }
 
@@ -220,27 +217,7 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     }
 
     nonisolated private static func pendingIncomingBatchQueueFileURL() -> URL? {
-        guard let supportDirectory = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first else {
-            return nil
-        }
-
-        return supportDirectory
-            .appendingPathComponent("MyRAM", isDirectory: true)
-            .appendingPathComponent("mac-pending-incoming-batch-queue.json")
-    }
-
-    private static func sequenceIssueMessage(_ issue: SyncBatchSequenceReservation.SequenceIssue) -> String {
-        switch issue {
-        case .transientFailure:
-            "Unable to reserve sync batch order; this batch will use legacy ordering."
-        case .confirmedCorruption:
-            "Sync batch order storage is corrupt; this device will use legacy ordering until its identity changes."
-        case .alreadyLatched:
-            "Sync batch order is disabled for this device identity due to prior corruption."
-        }
+        SyncBatchQueueFileLocation.pendingIncoming(for: .nativeMac)
     }
 }
 
