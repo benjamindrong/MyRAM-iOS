@@ -2126,6 +2126,70 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(change.noteID, note.id)
         XCTAssertEqual(change.utf16Offset, "Hello".utf16.count)
         XCTAssertEqual(change.text, " world")
+        XCTAssertEqual(change.baseContentHash, SyncBatchContentHash.sha256Hex(for: "Hello"))
+    }
+
+    func testIPhoneIncomingHashedMismatchRemainsQueuedAndBlocksLaterBatch() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let note = Note(title: "Shared", content: "local")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-000000127001")!
+        context.insert(note)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            syncBatchQuietWindow: 0
+        )
+        let mismatchedBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127101")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127201")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            batchSequence: 1,
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: note.id,
+                        utf16Offset: 0,
+                        text: "remote ",
+                        modifiedAt: Date(timeIntervalSince1970: 2),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "remote-base")
+                    )
+                )
+            ]
+        )
+        let laterBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127102")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127201")!,
+            createdAt: Date(timeIntervalSince1970: 3),
+            batchSequence: 2,
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: note.id,
+                        utf16Offset: note.content.utf16.count,
+                        text: " later",
+                        modifiedAt: Date(timeIntervalSince1970: 4),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "local")
+                    )
+                )
+            ]
+        )
+
+        await vm.applyIncomingSyncBatch(mismatchedBatch)
+        await vm.applyIncomingSyncBatch(laterBatch)
+
+        let reloadedQueue = FileBackedSyncBatchQueue(fileURL: queueFileURL)
+        XCTAssertEqual(note.content, "local")
+        XCTAssertEqual(reloadedQueue.pendingBatches.map(\.id), [mismatchedBatch.id, laterBatch.id])
     }
 
     func testEditorBufferDefersRemoteRefreshDuringPendingLocalEdit() {
@@ -5465,6 +5529,12 @@ final class MyRAMTests: XCTestCase {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("sync-pending-changes.json")
+    }
+
+    private func temporarySyncBatchQueueFileURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("sync-pending-batches.json")
     }
 
     private func temporarySyncConflictFileURL() -> URL {

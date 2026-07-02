@@ -35,6 +35,7 @@ final class NotesViewModel: ObservableObject {
     private let syncConflictStore: SyncConflictStore
     private let syncConflictService: MyRAMSyncConflictService
     private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
+    private let pendingIncomingBatches: FileBackedSyncBatchQueue
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
     private var isApplyingRemoteSyncChange = false
@@ -55,11 +56,13 @@ final class NotesViewModel: ObservableObject {
         context: ModelContext,
         syncController: MyRAMSyncControlling? = nil,
         syncConflictStore: SyncConflictStore = SyncConflictStore(),
+        pendingIncomingBatchQueueFileURL: URL? = NotesViewModel.pendingIncomingBatchQueueFileURL(),
         syncBatchQuietWindow: TimeInterval = 3
     ) {
         self.context = context
         self.syncController = syncController
         self.syncConflictStore = syncConflictStore
+        pendingIncomingBatches = FileBackedSyncBatchQueue(fileURL: pendingIncomingBatchQueueFileURL)
         syncBatchAccumulator = IPhoneSyncBatchAccumulator(
             originDeviceID: UUID(uuidString: MyRAMDeviceIdentity.currentDeviceID()) ?? UUID(),
             quietWindow: syncBatchQuietWindow
@@ -1449,17 +1452,41 @@ final class NotesViewModel: ObservableObject {
 
     func applyIncomingSyncBatch(_ batch: SyncBatch) async {
         guard !batch.changes.isEmpty else { return }
+        if !pendingIncomingBatches.contains(batch.id) {
+            pendingIncomingBatches.enqueue(batch)
+        }
+        drainPendingIncomingSyncBatches()
+    }
+
+    private func drainPendingIncomingSyncBatches() {
         isApplyingRemoteSyncChange = true
         defer { isApplyingRemoteSyncChange = false }
 
         let applier = IPhoneSyncBatchApplier(context: context)
-        do {
-            try applier.apply(batch)
-            refreshCurrentFolderContent()
-            activeNoteSyncRevision += 1
-        } catch {
-            debugPrint("Unable to apply incoming sync batch: \(error)")
+        while let batch = pendingIncomingBatches.first {
+            do {
+                try applier.apply(batch)
+                pendingIncomingBatches.remove(batch.id)
+                refreshCurrentFolderContent()
+                activeNoteSyncRevision += 1
+            } catch {
+                debugPrint("Unable to apply incoming sync batch: \(error)")
+                return
+            }
         }
+    }
+
+    nonisolated private static func pendingIncomingBatchQueueFileURL() -> URL? {
+        guard let supportDirectory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            return nil
+        }
+
+        return supportDirectory
+            .appendingPathComponent("MyRAM", isDirectory: true)
+            .appendingPathComponent("ios-pending-incoming-batch-queue.json")
     }
 
     private func isIncomingTextUnsafe(

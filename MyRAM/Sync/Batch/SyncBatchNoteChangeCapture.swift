@@ -63,7 +63,8 @@ enum SyncBatchNoteChangeCapture {
                     noteID: noteID,
                     utf16Offset: prefixLength,
                     text: (newBody as NSString).substring(with: range),
-                    modifiedAt: modifiedAt
+                    modifiedAt: modifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: oldBody)
                 )
             )
         }
@@ -76,7 +77,8 @@ enum SyncBatchNoteChangeCapture {
                     utf16Offset: prefixLength,
                     utf16Length: deletedLength,
                     expectedText: (oldBody as NSString).substring(with: range),
-                    modifiedAt: modifiedAt
+                    modifiedAt: modifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: oldBody)
                 )
             )
         }

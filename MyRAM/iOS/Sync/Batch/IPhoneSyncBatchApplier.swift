@@ -32,6 +32,8 @@ final class IPhoneSyncBatchApplier {
             try applyBodyTextInserted(change)
         case .noteBodyTextDeleted(let change):
             try applyBodyTextDeleted(change)
+        case .noteBodyReconciled(let change):
+            throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
         }
     }
 
@@ -55,6 +57,7 @@ final class IPhoneSyncBatchApplier {
     private func applyBodyTextInserted(_ change: SyncBatchNoteBodyTextInsertedChange) throws {
         guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return }
 
+        try validateBaseContentHash(change.baseContentHash, for: note)
         let clampedOffset = note.content.syncBatchClampedUTF16Offset(change.utf16Offset)
         let insertionOffset = note.content.syncBatchSafeInsertionOffset(fallingForwardFrom: clampedOffset)
         note.content = note.content.syncBatchInserting(change.text, atUTF16Offset: insertionOffset)
@@ -69,6 +72,7 @@ final class IPhoneSyncBatchApplier {
             return
         }
 
+        try validateBaseContentHash(change.baseContentHash, for: note)
         let targetText = (note.content as NSString).substring(with: range)
         if let expectedText = change.expectedText, targetText != expectedText {
             return
@@ -97,5 +101,18 @@ final class IPhoneSyncBatchApplier {
         )
         // Missing folders fall back to root so incoming notes are preserved.
         return try context.fetch(descriptor).first
+    }
+
+    private func validateBaseContentHash(_ expectedHash: String?, for note: Note) throws {
+        guard let expectedHash else { return }
+
+        let actualHash = SyncBatchContentHash.sha256Hex(for: note.content)
+        guard actualHash == expectedHash else {
+            throw SyncBatchApplyPreflightError.mismatchedBaseContentHash(
+                noteID: note.id,
+                expected: expectedHash,
+                actual: actualHash
+            )
+        }
     }
 }

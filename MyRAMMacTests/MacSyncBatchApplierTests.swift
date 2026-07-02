@@ -93,6 +93,41 @@ final class MacSyncBatchApplierTests: XCTestCase {
         )
     }
 
+    func testMatchingBaseHashUsesExistingPositionalInsertionPath() throws {
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000211A")!, content: "A😀B", in: container)
+
+        let appliedBatch = try apply(
+            changes: [
+                .noteBodyTextInserted(
+                    MacSyncNoteBodyTextInsertedChange(
+                        noteID: note.id,
+                        utf16Offset: 2,
+                        text: "x",
+                        modifiedAt: Date(timeIntervalSince1970: 11),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A😀B")
+                    )
+                )
+            ],
+            in: container
+        )
+
+        XCTAssertEqual(note.content, "A😀xB")
+        XCTAssertEqual(
+            appliedBatch.changes,
+            [
+                .bodyInserted(
+                    MacAppliedBodyInsertion(
+                        noteID: note.id,
+                        utf16Offset: 3,
+                        text: "x",
+                        modifiedAt: Date(timeIntervalSince1970: 11)
+                    )
+                )
+            ]
+        )
+    }
+
     func testIncomingDeleteAppliesOnlyWhenExpectedTextMatches() throws {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000002005")!, content: "abcdef", in: container)
@@ -468,6 +503,44 @@ final class MacSyncBatchApplierTests: XCTestCase {
                 )
             ]
         )
+    }
+
+    func testMismatchedHashedInsertionDoesNotApplyOrMarkSeen() throws {
+        let defaults = makeDefaults()
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000200F")!, content: "local", in: container)
+        let batchID = UUID(uuidString: "00000000-0000-0000-0000-00000000210F")!
+        let seenBatchStore = MacSyncSeenBatchStore(defaults: defaults)
+        let applier = MacSyncBatchApplier(context: container.mainContext, seenBatchStore: seenBatchStore)
+
+        XCTAssertThrowsError(try applier.apply(MacSyncBatch(
+            id: batchID,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(
+                    MacSyncNoteBodyTextInsertedChange(
+                        noteID: note.id,
+                        utf16Offset: 0,
+                        text: "remote ",
+                        modifiedAt: Date(timeIntervalSince1970: 14),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "remote-base")
+                    )
+                )
+            ]
+        ))) { error in
+            XCTAssertEqual(
+                error as? SyncBatchApplyPreflightError,
+                .mismatchedBaseContentHash(
+                    noteID: note.id,
+                    expected: SyncBatchContentHash.sha256Hex(for: "remote-base"),
+                    actual: SyncBatchContentHash.sha256Hex(for: "local")
+                )
+            )
+        }
+
+        XCTAssertEqual(note.content, "local")
+        XCTAssertFalse(seenBatchStore.hasSeen(batchID))
     }
 
     private func apply(

@@ -61,6 +61,8 @@ final class MacSyncBatchApplier {
             return try applyBodyTextInserted(change, rollbackSnapshots: &rollbackSnapshots)
         case .noteBodyTextDeleted(let change):
             return try applyBodyTextDeleted(change, rollbackSnapshots: &rollbackSnapshots)
+        case .noteBodyReconciled(let change):
+            throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
         }
     }
 
@@ -106,6 +108,7 @@ final class MacSyncBatchApplier {
     ) throws -> MacAppliedSyncChange? {
         guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return nil }
 
+        try validateBaseContentHash(change.baseContentHash, for: note)
         captureRollbackSnapshot(for: note, in: &rollbackSnapshots)
         let originalContent = note.content
         let clampedOffset = originalContent.syncBatchClampedUTF16Offset(change.utf16Offset)
@@ -139,6 +142,7 @@ final class MacSyncBatchApplier {
             return nil
         }
 
+        try validateBaseContentHash(change.baseContentHash, for: note)
         let targetText = (note.content as NSString).substring(with: range)
         if let expectedText = change.expectedText, targetText != expectedText {
             return nil
@@ -210,6 +214,19 @@ final class MacSyncBatchApplier {
 
         mutation(attributedText)
         note.richTextContentData = RTFCoding.encode(attributedText)
+    }
+
+    private func validateBaseContentHash(_ expectedHash: String?, for note: Note) throws {
+        guard let expectedHash else { return }
+
+        let actualHash = SyncBatchContentHash.sha256Hex(for: note.content)
+        guard actualHash == expectedHash else {
+            throw SyncBatchApplyPreflightError.mismatchedBaseContentHash(
+                noteID: note.id,
+                expected: expectedHash,
+                actual: actualHash
+            )
+        }
     }
 }
 

@@ -52,6 +52,22 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertEqual(batch?.changes, [titleChange("Ready")])
     }
 
+    func testBatchSequenceIsAssignedWhenPendingBatchStarts() async {
+        let accumulator = MacSyncBatchAccumulator(
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000101")!,
+            quietWindow: 3,
+            batchIDProvider: { UUID(uuidString: "00000000-0000-0000-0000-000000000102")! },
+            batchSequenceProvider: { 7 }
+        )
+        let start = Date(timeIntervalSince1970: 500)
+
+        await accumulator.record(titleChange("First"), at: start)
+        await accumulator.record(titleChange("Second"), at: start.addingTimeInterval(1))
+        let batch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+
+        XCTAssertEqual(batch?.batchSequence, 7)
+    }
+
     private func makeAccumulator() -> MacSyncBatchAccumulator {
         MacSyncBatchAccumulator(
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,

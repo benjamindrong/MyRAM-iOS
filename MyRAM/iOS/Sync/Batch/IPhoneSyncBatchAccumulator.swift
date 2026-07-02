@@ -4,6 +4,7 @@ actor IPhoneSyncBatchAccumulator {
     private let originDeviceID: SyncBatchDeviceID
     private let quietWindow: TimeInterval
     private let batchIDProvider: @Sendable () -> SyncBatchID
+    private let batchSequenceProvider: @Sendable () -> UInt64
     private let sleep: @Sendable (TimeInterval) async -> Void
     private var pendingBatch: PendingBatch?
     private var readinessTask: Task<Void, Never>?
@@ -13,6 +14,7 @@ actor IPhoneSyncBatchAccumulator {
         originDeviceID: SyncBatchDeviceID,
         quietWindow: TimeInterval = 3,
         batchIDProvider: @escaping @Sendable () -> SyncBatchID = { UUID() },
+        batchSequenceProvider: (@Sendable () -> UInt64)? = nil,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = { interval in
             try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
         }
@@ -20,6 +22,10 @@ actor IPhoneSyncBatchAccumulator {
         self.originDeviceID = originDeviceID
         self.quietWindow = quietWindow
         self.batchIDProvider = batchIDProvider
+        let sequenceStore = SyncBatchSequenceStore()
+        self.batchSequenceProvider = batchSequenceProvider ?? {
+            sequenceStore.nextSequence(for: originDeviceID)
+        }
         self.sleep = sleep
     }
 
@@ -38,6 +44,7 @@ actor IPhoneSyncBatchAccumulator {
             pendingBatch = PendingBatch(
                 id: batchIDProvider(),
                 createdAt: date,
+                batchSequence: batchSequenceProvider(),
                 changes: [],
                 readyAt: date.addingTimeInterval(quietWindow)
             )
@@ -79,6 +86,7 @@ actor IPhoneSyncBatchAccumulator {
             id: pendingBatch.id,
             originDeviceID: originDeviceID,
             createdAt: pendingBatch.createdAt,
+            batchSequence: pendingBatch.batchSequence,
             changes: pendingBatch.changes
         )
     }
@@ -107,6 +115,7 @@ actor IPhoneSyncBatchAccumulator {
 private struct PendingBatch {
     let id: SyncBatchID
     let createdAt: Date
+    let batchSequence: UInt64
     var changes: [SyncBatchChange]
     var readyAt: Date
 }
