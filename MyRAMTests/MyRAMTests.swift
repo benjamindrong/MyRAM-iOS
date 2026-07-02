@@ -2306,6 +2306,100 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(vm.syncBatchErrorMessage, "Unable to persist incoming sync batch.")
     }
 
+    func testNestedIncomingDrainDoesNotClearRemoteApplySuppression() async throws {
+        // NotesViewModel's applier uses the default UserDefaults-backed seen-batch store,
+        // which persists across test runs on the same simulator. Clear just this test's
+        // batch IDs so a prior run (including a crashed one) can't make this run's batches
+        // look already-applied.
+        let seenBatchIDsKey = SyncBatchSeenBatchStore.defaultSeenBatchIDsKey
+        let thisTestBatchIDStrings: Set<String> = [
+            "00000000-0000-0000-0000-000000128101",
+            "00000000-0000-0000-0000-000000128102"
+        ]
+        UserDefaults.standard.set(
+            (UserDefaults.standard.stringArray(forKey: seenBatchIDsKey) ?? []).filter { !thisTestBatchIDStrings.contains($0) },
+            forKey: seenBatchIDsKey
+        )
+
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let noteA = Note(title: "A", content: "hello")
+        noteA.id = UUID(uuidString: "00000000-0000-0000-0000-000000128001")!
+        let noteB = Note(title: "B", content: "world")
+        noteB.id = UUID(uuidString: "00000000-0000-0000-0000-000000128002")!
+        context.insert(noteA)
+        context.insert(noteB)
+        try context.save()
+
+        let firstBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000128101")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000128201")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteA.id,
+                        utf16Offset: noteA.content.utf16.count,
+                        text: " remote-a",
+                        modifiedAt: Date(timeIntervalSince1970: 2)
+                    )
+                )
+            ]
+        )
+        let secondBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000128102")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000128201")!,
+            createdAt: Date(timeIntervalSince1970: 3),
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteB.id,
+                        utf16Offset: noteB.content.utf16.count,
+                        text: " remote-b",
+                        modifiedAt: Date(timeIntervalSince1970: 4)
+                    )
+                )
+            ]
+        )
+        // Pre-enqueue both batches directly so the view model's own drain loop, once
+        // started, has a second queued batch to process after the nested attempt.
+        try FileBackedSyncBatchQueue(fileURL: queueFileURL).enqueueIncoming(firstBatch)
+        try FileBackedSyncBatchQueue(fileURL: queueFileURL).enqueueIncoming(secondBatch)
+
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            syncBatchQuietWindow: 0
+        )
+
+        var suppressionDuringSecondBatch: Bool?
+        vm.onDrainBatchApplied = { [weak vm] batch in
+            guard let vm else { return }
+            if batch.id == firstBatch.id {
+                // Simulate a callback or refresh path re-entering the drain while the
+                // outer drain triggered by `applyIncomingSyncBatch` below is still active.
+                vm.drainPendingIncomingSyncBatchesForTesting()
+            } else if batch.id == secondBatch.id {
+                suppressionDuringSecondBatch = vm.isApplyingRemoteSyncChange
+            }
+        }
+
+        await vm.applyIncomingSyncBatch(firstBatch)
+
+        XCTAssertEqual(suppressionDuringSecondBatch, true)
+        XCTAssertFalse(vm.isApplyingRemoteSyncChange)
+        XCTAssertEqual(noteA.content, "hello remote-a")
+        XCTAssertEqual(noteB.content, "world remote-b")
+    }
+
     func testEditorBufferDefersRemoteRefreshDuringPendingLocalEdit() {
         XCTAssertTrue(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
             owner: .localEditing,

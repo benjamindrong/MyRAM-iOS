@@ -165,13 +165,22 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     }
 
     func drainPendingIncomingBatchesIfPossible() {
+        // Admission must happen, and `isDrainingPendingIncomingBatches` must be fully owned,
+        // before calling into the coordinator. `didApply`/`onBatchApplied` can synchronously
+        // trigger a reentrant call, and holding this flag open via `inout` across that call
+        // would trip Swift's exclusivity enforcement. A rejected nested call must also skip
+        // `onBeforeApplyingRemoteBatch`'s side effects (for example flushing a pending save).
+        guard !isDrainingPendingIncomingBatches else { return }
+
         guard onBeforeApplyingRemoteBatch?() ?? false else {
             lastErrorMessage = "Incoming sync is waiting for local edits to save."
             return
         }
 
+        isDrainingPendingIncomingBatches = true
+        defer { isDrainingPendingIncomingBatches = false }
+
         let result = SyncBatchDrainCoordinator.drain(
-            isDraining: &isDrainingPendingIncomingBatches,
             nextBatch: { [pendingIncomingBatches] in pendingIncomingBatches.first },
             apply: { [applyBatch] batch in try applyBatch(batch) },
             remove: { [pendingIncomingBatches] batchID in pendingIncomingBatches.remove(batchID) },

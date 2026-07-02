@@ -40,8 +40,10 @@ final class NotesViewModel: ObservableObject {
     private let bodyHashCapabilityEnabled: Bool
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
-    private var isApplyingRemoteSyncChange = false
+    private(set) var isApplyingRemoteSyncChange = false
     private var isDrainingPendingIncomingBatches = false
+    /// Test-only hook invoked after each batch is applied and removed during an incoming drain.
+    var onDrainBatchApplied: ((SyncBatch) -> Void)?
     private var recentTextEditByNoteID: [UUID: Date] = [:]
     private var syncBatchReadyTask: Task<Void, Never>?
     private var undoStack: [UndoAction] = [] {
@@ -1477,26 +1479,43 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func drainPendingIncomingSyncBatches() {
+        // Admission must happen, and both flags below must be fully owned, before calling
+        // into the coordinator. `didApply` can synchronously trigger a reentrant call, so a
+        // rejected nested call must never touch either flag: not `isDrainingPendingIncomingBatches`
+        // (only the active drainer may hold it) and not `isApplyingRemoteSyncChange` (only the
+        // active drainer may enable/disable remote-apply suppression).
+        guard !isDrainingPendingIncomingBatches else { return }
+
+        isDrainingPendingIncomingBatches = true
         isApplyingRemoteSyncChange = true
-        defer { isApplyingRemoteSyncChange = false }
+        defer {
+            isDrainingPendingIncomingBatches = false
+            isApplyingRemoteSyncChange = false
+        }
 
         let applier = IPhoneSyncBatchApplier(context: context, bodyHashCapabilityEnabled: bodyHashCapabilityEnabled)
         let result = SyncBatchDrainCoordinator.drain(
-            isDraining: &isDrainingPendingIncomingBatches,
             nextBatch: { [pendingIncomingBatches] in pendingIncomingBatches.first },
             apply: { batch in try applier.apply(batch) },
             remove: { [pendingIncomingBatches] batchID in pendingIncomingBatches.remove(batchID) },
-            didApply: { [weak self] _, _ in
+            didApply: { [weak self] batch, _ in
                 guard let self else { return }
                 refreshCurrentFolderContent()
                 activeNoteSyncRevision += 1
                 syncBatchErrorMessage = nil
+                onDrainBatchApplied?(batch)
             }
         )
 
         if case .blocked(let failure) = result {
             syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
         }
+    }
+
+    /// Test-only entry point that exercises the same reentrant call path a real
+    /// nested drain trigger would take.
+    func drainPendingIncomingSyncBatchesForTesting() {
+        drainPendingIncomingSyncBatches()
     }
 
     nonisolated private static func pendingIncomingBatchQueueFileURL() -> URL? {

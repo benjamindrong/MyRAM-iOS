@@ -362,7 +362,6 @@ struct SyncBatchDrainFailure: Equatable {
 enum SyncBatchDrainResult: Equatable {
     case drained
     case blocked(SyncBatchDrainFailure)
-    case alreadyDraining
 }
 
 enum SyncBatchDrainFailureClassifier {
@@ -420,18 +419,20 @@ enum SyncBatchSequenceIssueDescription {
 }
 
 enum SyncBatchDrainCoordinator {
+    // Reentrancy admission is intentionally the caller's responsibility, not this
+    // function's. `didApply` can synchronously trigger a reentrant call (a callback,
+    // refresh, or future integration path re-entering the drain). Holding the
+    // reentrancy flag open via `inout` for this call's whole duration would make that
+    // reentrant call's own admission check overlap with this call's exclusive access
+    // to the same stored property, which Swift's law of exclusivity traps at runtime.
+    // Callers must check, set, and clear their own reentrancy flag entirely outside
+    // this call.
     static func drain<Applied>(
-        isDraining: inout Bool,
         nextBatch: () -> SyncBatch?,
         apply: (SyncBatch) throws -> Applied,
         remove: (SyncBatchID) -> Void,
         didApply: (SyncBatch, Applied) -> Void
     ) -> SyncBatchDrainResult {
-        guard !isDraining else { return .alreadyDraining }
-
-        isDraining = true
-        defer { isDraining = false }
-
         while let batch = nextBatch() {
             do {
                 let applied = try apply(batch)
