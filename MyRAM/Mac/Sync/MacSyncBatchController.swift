@@ -137,7 +137,7 @@ final class MacSyncBatchController: NSObject, ObservableObject {
 
     private func receive(_ batch: MacSyncBatch) {
         do {
-            try MacSyncBatchApplier(context: context).apply(batch)
+            _ = try MacSyncBatchApplier(context: context).apply(batch)
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
             onBatchApplied?()

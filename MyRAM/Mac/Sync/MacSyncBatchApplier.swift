@@ -14,49 +14,75 @@ final class MacSyncBatchApplier {
         self.seenBatchStore = seenBatchStore
     }
 
-    func apply(_ batch: MacSyncBatch) throws {
-        guard !seenBatchStore.hasSeen(batch.id) else { return }
-
-        for change in batch.changes {
-            try apply(change)
+    func apply(_ batch: MacSyncBatch) throws -> MacAppliedSyncBatch {
+        guard !seenBatchStore.hasSeen(batch.id) else {
+            return MacAppliedSyncBatch(batchID: batch.id, changes: [])
         }
 
-        try context.save()
-        seenBatchStore.markSeen(batch.id)
+        do {
+            var appliedChanges: [MacAppliedSyncChange] = []
+            for change in batch.changes {
+                if let appliedChange = try apply(change) {
+                    appliedChanges.append(appliedChange)
+                }
+            }
+
+            try context.save()
+            seenBatchStore.markSeen(batch.id)
+            return MacAppliedSyncBatch(batchID: batch.id, changes: appliedChanges)
+        } catch {
+            context.rollback()
+            throw error
+        }
     }
 
-    private func apply(_ change: MacSyncChange) throws {
+    private func apply(_ change: MacSyncChange) throws -> MacAppliedSyncChange? {
         switch change {
         case .noteCreated(let change):
-            try applyNoteCreated(change)
+            return try applyNoteCreated(change)
         case .noteTitleChanged(let change):
-            try applyTitleChanged(change)
+            return try applyTitleChanged(change)
         case .noteBodyTextInserted(let change):
-            try applyBodyTextInserted(change)
+            return try applyBodyTextInserted(change)
         case .noteBodyTextDeleted(let change):
-            try applyBodyTextDeleted(change)
+            return try applyBodyTextDeleted(change)
         }
     }
 
-    private func applyNoteCreated(_ change: MacSyncNoteCreatedChange) throws {
-        guard try loadNote(id: change.noteID) == nil else { return }
+    private func applyNoteCreated(_ change: MacSyncNoteCreatedChange) throws -> MacAppliedSyncChange? {
+        guard try loadNote(id: change.noteID) == nil else { return nil }
 
         let note = Note(title: change.title, content: change.body, folder: try loadFolder(id: change.folderID))
         note.id = change.noteID
         note.createdAt = change.createdAt
         note.modifiedAt = change.modifiedAt
         context.insert(note)
+        return .noteCreated(
+            MacAppliedNoteCreated(
+                noteID: change.noteID,
+                title: change.title,
+                body: change.body,
+                modifiedAt: change.modifiedAt
+            )
+        )
     }
 
-    private func applyTitleChanged(_ change: MacSyncNoteTitleChangedChange) throws {
-        guard let note = try loadNote(id: change.noteID) else { return }
+    private func applyTitleChanged(_ change: MacSyncNoteTitleChangedChange) throws -> MacAppliedSyncChange? {
+        guard let note = try loadNote(id: change.noteID) else { return nil }
 
         note.title = change.title
         note.modifiedAt = change.modifiedAt
+        return .titleChanged(
+            MacAppliedTitleChanged(
+                noteID: change.noteID,
+                title: change.title,
+                modifiedAt: change.modifiedAt
+            )
+        )
     }
 
-    private func applyBodyTextInserted(_ change: MacSyncNoteBodyTextInsertedChange) throws {
-        guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return }
+    private func applyBodyTextInserted(_ change: MacSyncNoteBodyTextInsertedChange) throws -> MacAppliedSyncChange? {
+        guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return nil }
 
         let originalContent = note.content
         let clampedOffset = originalContent.syncBatchClampedUTF16Offset(change.utf16Offset)
@@ -66,18 +92,26 @@ final class MacSyncBatchApplier {
             attributedText.insert(NSAttributedString(string: change.text), at: insertionOffset)
         }
         note.modifiedAt = change.modifiedAt
+        return .bodyInserted(
+            MacAppliedBodyInsertion(
+                noteID: change.noteID,
+                utf16Offset: insertionOffset,
+                text: change.text,
+                modifiedAt: change.modifiedAt
+            )
+        )
     }
 
-    private func applyBodyTextDeleted(_ change: MacSyncNoteBodyTextDeletedChange) throws {
+    private func applyBodyTextDeleted(_ change: MacSyncNoteBodyTextDeletedChange) throws -> MacAppliedSyncChange? {
         guard let note = try loadNote(id: change.noteID),
               change.utf16Length > 0,
               let range = note.content.syncBatchSafeUTF16Range(location: change.utf16Offset, length: change.utf16Length) else {
-            return
+            return nil
         }
 
         let targetText = (note.content as NSString).substring(with: range)
         if let expectedText = change.expectedText, targetText != expectedText {
-            return
+            return nil
         }
 
         let originalContent = note.content
@@ -87,6 +121,14 @@ final class MacSyncBatchApplier {
             attributedText.deleteCharacters(in: range)
         }
         note.modifiedAt = change.modifiedAt
+        return .bodyDeleted(
+            MacAppliedBodyDeletion(
+                noteID: change.noteID,
+                range: range,
+                deletedText: targetText,
+                modifiedAt: change.modifiedAt
+            )
+        )
     }
 
     private func loadNote(id: UUID) throws -> Note? {

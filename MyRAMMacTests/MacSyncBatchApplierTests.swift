@@ -21,43 +21,82 @@ final class MacSyncBatchApplierTests: XCTestCase {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000002003")!, content: "", in: container)
 
-        try apply(
+        let appliedBatch = try apply(
             changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 0, text: "Remote"))],
             in: container
         )
 
         XCTAssertEqual(note.content, "Remote")
+        XCTAssertEqual(
+            appliedBatch.changes,
+            [
+                .bodyInserted(
+                    MacAppliedBodyInsertion(
+                        noteID: note.id,
+                        utf16Offset: 0,
+                        text: "Remote",
+                        modifiedAt: Date(timeIntervalSince1970: 11)
+                    )
+                )
+            ]
+        )
     }
 
     func testIncomingInsertionAtOccupiedTargetPositionInsertsAtRequestedBoundary() throws {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000002004")!, content: "AB", in: container)
 
-        try apply(
+        let appliedBatch = try apply(
             changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 0, text: "x"))],
             in: container
         )
 
         XCTAssertEqual(note.content, "xAB")
+        XCTAssertEqual(
+            appliedBatch.changes,
+            [
+                .bodyInserted(
+                    MacAppliedBodyInsertion(
+                        noteID: note.id,
+                        utf16Offset: 0,
+                        text: "x",
+                        modifiedAt: Date(timeIntervalSince1970: 11)
+                    )
+                )
+            ]
+        )
     }
 
     func testIncomingInsertionAtInvalidUTF16BoundaryFallsForward() throws {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000200A")!, content: "A😀B", in: container)
 
-        try apply(
+        let appliedBatch = try apply(
             changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 2, text: "x"))],
             in: container
         )
 
         XCTAssertEqual(note.content, "A😀xB")
+        XCTAssertEqual(
+            appliedBatch.changes,
+            [
+                .bodyInserted(
+                    MacAppliedBodyInsertion(
+                        noteID: note.id,
+                        utf16Offset: 3,
+                        text: "x",
+                        modifiedAt: Date(timeIntervalSince1970: 11)
+                    )
+                )
+            ]
+        )
     }
 
     func testIncomingDeleteAppliesOnlyWhenExpectedTextMatches() throws {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000002005")!, content: "abcdef", in: container)
 
-        try apply(
+        let appliedBatch = try apply(
             changes: [
                 .noteBodyTextDeleted(
                     MacSyncNoteBodyTextDeletedChange(
@@ -73,13 +112,26 @@ final class MacSyncBatchApplierTests: XCTestCase {
         )
 
         XCTAssertEqual(note.content, "abef")
+        XCTAssertEqual(
+            appliedBatch.changes,
+            [
+                .bodyDeleted(
+                    MacAppliedBodyDeletion(
+                        noteID: note.id,
+                        range: NSRange(location: 2, length: 2),
+                        deletedText: "cd",
+                        modifiedAt: Date(timeIntervalSince1970: 11)
+                    )
+                )
+            ]
+        )
     }
 
     func testUnsafeIncomingDeleteDoesNotDeleteUnrelatedLocalText() throws {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000002006")!, content: "abcdef", in: container)
 
-        try apply(
+        let appliedBatch = try apply(
             changes: [
                 .noteBodyTextDeleted(
                     MacSyncNoteBodyTextDeletedChange(
@@ -95,6 +147,88 @@ final class MacSyncBatchApplierTests: XCTestCase {
         )
 
         XCTAssertEqual(note.content, "abcdef")
+        XCTAssertTrue(appliedBatch.changes.isEmpty)
+    }
+
+    func testSkippedChangesDoNotAppearInAppliedMetadata() throws {
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000200C")!, content: "abcdef", in: container)
+
+        let appliedBatch = try apply(
+            changes: [
+                .noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "")),
+                .noteBodyTextDeleted(
+                    MacSyncNoteBodyTextDeletedChange(
+                        noteID: note.id,
+                        utf16Offset: 2,
+                        utf16Length: 2,
+                        expectedText: "xy",
+                        modifiedAt: Date(timeIntervalSince1970: 11)
+                    )
+                ),
+                .noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "Z"))
+            ],
+            in: container
+        )
+
+        XCTAssertEqual(note.content, "aZbcdef")
+        XCTAssertEqual(
+            appliedBatch.changes,
+            [
+                .bodyInserted(
+                    MacAppliedBodyInsertion(
+                        noteID: note.id,
+                        utf16Offset: 1,
+                        text: "Z",
+                        modifiedAt: Date(timeIntervalSince1970: 11)
+                    )
+                )
+            ]
+        )
+    }
+
+    func testMultiChangeBatchEmitsMetadataInApplicationOrder() throws {
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000200D")!, content: "abcd", in: container)
+
+        let appliedBatch = try apply(
+            changes: [
+                .noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "X")),
+                .noteBodyTextDeleted(
+                    MacSyncNoteBodyTextDeletedChange(
+                        noteID: note.id,
+                        utf16Offset: 2,
+                        utf16Length: 1,
+                        expectedText: "b",
+                        modifiedAt: Date(timeIntervalSince1970: 12)
+                    )
+                )
+            ],
+            in: container
+        )
+
+        XCTAssertEqual(note.content, "aXcd")
+        XCTAssertEqual(
+            appliedBatch.changes,
+            [
+                .bodyInserted(
+                    MacAppliedBodyInsertion(
+                        noteID: note.id,
+                        utf16Offset: 1,
+                        text: "X",
+                        modifiedAt: Date(timeIntervalSince1970: 11)
+                    )
+                ),
+                .bodyDeleted(
+                    MacAppliedBodyDeletion(
+                        noteID: note.id,
+                        range: NSRange(location: 2, length: 1),
+                        deletedText: "b",
+                        modifiedAt: Date(timeIntervalSince1970: 12)
+                    )
+                )
+            ]
+        )
     }
 
     func testIncomingPlainTextMutationClearsUnmappableRichTextData() throws {
@@ -117,7 +251,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
         let container = try makeInMemoryContainer()
         let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000002007")!
 
-        try apply(
+        let appliedBatch = try apply(
             changes: [
                 .noteCreated(
                     MacSyncNoteCreatedChange(
@@ -136,6 +270,19 @@ final class MacSyncBatchApplierTests: XCTestCase {
         let note = try XCTUnwrap(try fetchNote(id: noteID, in: container))
         XCTAssertEqual(note.title, "Remote")
         XCTAssertNil(note.folder)
+        XCTAssertEqual(
+            appliedBatch.changes,
+            [
+                .noteCreated(
+                    MacAppliedNoteCreated(
+                        noteID: noteID,
+                        title: "Remote",
+                        body: "Body",
+                        modifiedAt: Date(timeIntervalSince1970: 2)
+                    )
+                )
+            ]
+        )
     }
 
     func testDuplicateBatchIDIsIgnored() throws {
@@ -151,22 +298,57 @@ final class MacSyncBatchApplierTests: XCTestCase {
             changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 0, text: "Once"))]
         )
 
-        try applier.apply(batch)
-        try applier.apply(batch)
+        let firstApply = try applier.apply(batch)
+        let secondApply = try applier.apply(batch)
 
         XCTAssertEqual(note.content, "Once")
+        XCTAssertEqual(firstApply.changes.count, 1)
+        XCTAssertTrue(secondApply.changes.isEmpty)
+        XCTAssertEqual(secondApply.batchID, batchID)
+    }
+
+    func testTitleChangeEmitsAppliedMetadata() throws {
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000200E")!, content: "Body", in: container)
+
+        let appliedBatch = try apply(
+            changes: [
+                .noteTitleChanged(
+                    MacSyncNoteTitleChangedChange(
+                        noteID: note.id,
+                        title: "Remote Title",
+                        modifiedAt: Date(timeIntervalSince1970: 13)
+                    )
+                )
+            ],
+            in: container
+        )
+
+        XCTAssertEqual(note.title, "Remote Title")
+        XCTAssertEqual(
+            appliedBatch.changes,
+            [
+                .titleChanged(
+                    MacAppliedTitleChanged(
+                        noteID: note.id,
+                        title: "Remote Title",
+                        modifiedAt: Date(timeIntervalSince1970: 13)
+                    )
+                )
+            ]
+        )
     }
 
     private func apply(
         batchID: String = "00000000-0000-0000-0000-000000002100",
         changes: [MacSyncChange],
         in container: ModelContainer
-    ) throws {
+    ) throws -> MacAppliedSyncBatch {
         let applier = MacSyncBatchApplier(
             context: container.mainContext,
             seenBatchStore: MacSyncSeenBatchStore(defaults: makeDefaults())
         )
-        try applier.apply(
+        return try applier.apply(
             MacSyncBatch(
                 id: UUID(uuidString: batchID)!,
                 originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
