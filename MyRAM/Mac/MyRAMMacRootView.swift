@@ -49,8 +49,11 @@ struct MyRAMMacRootView: View {
         }
         .onAppear(perform: loadNotesIfNeeded)
         .onAppear {
-            syncController.onBatchApplied = { _ in
-                loadNotesKeepingSelection()
+            syncController.onBeforeApplyingRemoteBatch = {
+                flushPendingSave()
+            }
+            syncController.onBatchApplied = { appliedBatch in
+                handleAppliedSyncBatch(appliedBatch)
             }
         }
         .onDisappear {
@@ -137,6 +140,58 @@ struct MyRAMMacRootView: View {
         }
     }
 
+    private func refreshNotesList() {
+        do {
+            let loadedNotes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
+            notes = loadedNotes
+            guard let selectedNoteID, loadedNotes.contains(where: { $0.id == selectedNoteID }) else {
+                selectedNoteID = loadedNotes.first?.id
+                attributedText = loadedNotes.first.map {
+                    MacNotePersistenceAdapter().attributedContent(for: $0)
+                } ?? NSAttributedString(string: "")
+                hasUnsavedChanges = false
+                return
+            }
+            loadError = nil
+        } catch {
+            loadError = "Unable to load notes: \(error.localizedDescription)"
+        }
+    }
+
+    private func reloadSelectedEditor(reason: MacSelectedEditorReloadReason) {
+        guard !hasUnsavedChanges else {
+            saveError = "Incoming sync is waiting for local edits to save."
+            return
+        }
+
+        guard let selectedNote else { return }
+        attributedText = MacNotePersistenceAdapter().attributedContent(for: selectedNote)
+        saveError = nil
+    }
+
+    private func handleAppliedSyncBatch(_ appliedBatch: MacAppliedSyncBatch) {
+        let plan = MacIncomingSyncApplicationPolicy.plan(
+            appliedBatch: appliedBatch,
+            selectedNoteID: selectedNoteID,
+            editorState: hasUnsavedChanges ? .unsafeForIncrementalApply : .ready
+        )
+
+        if plan.shouldRefreshNotesList {
+            refreshNotesList()
+        }
+
+        if let reason = plan.reloadSelectedEditorReason {
+            reloadSelectedEditor(reason: reason)
+            return
+        }
+
+        guard let selectedNoteID, !plan.editorActions.isEmpty else { return }
+        let result = editorSyncBridge.applyBatch(plan.editorActions, selectedNoteID: selectedNoteID)
+        if result.requiresFallbackReload {
+            reloadSelectedEditor(reason: .unsafeIncrementalApply)
+        }
+    }
+
     private func selectNote(_ note: Note) {
         guard note.id != selectedNoteID else { return }
         guard flushPendingSave() else { return }
@@ -208,6 +263,7 @@ struct MyRAMMacRootView: View {
             notes = try adapter.loadNotesCreatingFirstIfNeeded()
             hasUnsavedChanges = selectedNoteID == noteID ? false : hasUnsavedChanges
             saveError = nil
+            syncController.drainPendingIncomingBatchesIfPossible()
             return true
         } catch {
             saveError = "Unable to save note: \(error.localizedDescription)"
