@@ -4,6 +4,7 @@ import SwiftUI
 
 struct MyRAMMacRootView: View {
     @StateObject private var syncController = MacSyncBatchController(context: PersistenceManager.shared.context)
+    @StateObject private var editorSyncBridge = MacEditorSyncBridge()
     @State private var notes: [Note] = []
     @State private var selectedNoteID: UUID?
     @State private var attributedText = NSAttributedString(string: "")
@@ -30,6 +31,7 @@ struct MyRAMMacRootView: View {
             MacNoteEditorView(
                 note: selectedNote,
                 attributedText: $attributedText,
+                syncBridge: editorSyncBridge,
                 loadError: loadError,
                 saveError: saveError,
                 onTextChanged: scheduleSave

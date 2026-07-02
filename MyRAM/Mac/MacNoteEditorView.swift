@@ -5,6 +5,7 @@ import SwiftUI
 struct MacNoteEditorView: View {
     let note: Note?
     @Binding var attributedText: NSAttributedString
+    @ObservedObject var syncBridge: MacEditorSyncBridge
     let loadError: String?
     let saveError: String?
     let onTextChanged: () -> Void
@@ -13,7 +14,11 @@ struct MacNoteEditorView: View {
         VStack(alignment: .leading, spacing: 14) {
             header
 
-            MacTextViewRepresentable(attributedText: $attributedText, onTextChanged: onTextChanged)
+            MacTextViewRepresentable(
+                attributedText: $attributedText,
+                syncBridge: syncBridge,
+                onTextChanged: onTextChanged
+            )
                 .frame(minWidth: 160, minHeight: 200)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .overlay {
