@@ -16,14 +16,6 @@ struct SyncBatchUnsentQueue {
         batches
     }
 
-    var first: SyncBatch? {
-        batches.first
-    }
-
-    func contains(_ batchID: SyncBatchID) -> Bool {
-        batches.contains { $0.id == batchID }
-    }
-
     @discardableResult
     mutating func enqueue(_ batch: SyncBatch) -> Bool {
         // Batch IDs are stable, so retries should retain one copy of each offline batch.
@@ -41,11 +33,6 @@ struct SyncBatchUnsentQueue {
         let originalCount = batches.count
         batches.removeAll { ids.contains($0.id) }
         return batches.count != originalCount
-    }
-
-    @discardableResult
-    mutating func remove(_ batchID: SyncBatchID) -> Bool {
-        removeAll(withIDs: [batchID])
     }
 
     mutating func drain() -> [SyncBatch] {
