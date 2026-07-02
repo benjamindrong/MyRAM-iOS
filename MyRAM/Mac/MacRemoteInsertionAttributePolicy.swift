@@ -8,6 +8,7 @@ enum MacRemoteInsertionAttributePolicy {
         defaultAttributes: [NSAttributedString.Key: Any] = [:]
     ) -> [NSAttributedString.Key: Any] {
         guard attributedString.length > 0 else {
+            // Stored RTF has no editor typing attributes; the open editor's defaults win on the next local save.
             return defaultAttributes
         }
 

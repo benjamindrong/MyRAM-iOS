@@ -101,9 +101,99 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         XCTAssertEqual(result, MacEditorRemoteBatchApplyResult(appliedCount: 0, requiresFallbackReload: false))
     }
 
+    func testRemoteBridgeMutationsDoNotNotifyOutgoingCaptureButLocalEditsDo() {
+        let noteID = UUID()
+        let textView = makeTextView("Hello")
+        let bridge = MacEditorSyncBridge()
+        var changeCount = 0
+        let coordinator = MacTextViewRepresentable.Coordinator(
+            attributedText: .constant(NSAttributedString(string: "Hello")),
+            syncBridge: bridge,
+            onTextChanged: { changeCount += 1 }
+        )
+        coordinator.textView = textView
+        textView.textStorage?.delegate = coordinator
+        coordinator.register(textView)
+
+        _ = bridge.applyBatch(
+            [.applyBodyInsertion(MacAppliedBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
+            selectedNoteID: noteID
+        )
+        _ = bridge.applyBatch(
+            [
+                .applyBodyDeletion(
+                    MacAppliedBodyDeletion(
+                        noteID: noteID,
+                        range: NSRange(location: 5, length: 1),
+                        deletedText: "!",
+                        modifiedAt: Date()
+                    )
+                )
+            ],
+            selectedNoteID: noteID
+        )
+        XCTAssertEqual(changeCount, 0)
+
+        textView.textStorage?.replaceCharacters(in: NSRange(location: 5, length: 0), with: "?")
+
+        XCTAssertEqual(changeCount, 1)
+    }
+
+    func testRemoteMutationClearsUndoManager() {
+        let noteID = UUID()
+        let textView = makeTextView("Hello")
+        let undoManager = UndoManager()
+        let delegate = UndoProvidingTextViewDelegate(undoManager: undoManager)
+        textView.delegate = delegate
+        let target = UndoTarget()
+        undoManager.registerUndo(withTarget: target) { $0.didUndo = true }
+        XCTAssertTrue(undoManager.canUndo)
+
+        let bridge = MacEditorSyncBridge()
+        bridge.textView = textView
+        _ = bridge.applyBatch(
+            [.applyBodyInsertion(MacAppliedBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
+            selectedNoteID: noteID
+        )
+
+        XCTAssertFalse(undoManager.canUndo)
+    }
+
+    func testZeroActionApplyDoesNotClearUndoManager() {
+        let textView = makeTextView("Hello")
+        let undoManager = UndoManager()
+        let delegate = UndoProvidingTextViewDelegate(undoManager: undoManager)
+        textView.delegate = delegate
+        let target = UndoTarget()
+        undoManager.registerUndo(withTarget: target) { $0.didUndo = true }
+        XCTAssertTrue(undoManager.canUndo)
+
+        let bridge = MacEditorSyncBridge()
+        bridge.textView = textView
+        _ = bridge.applyBatch([], selectedNoteID: UUID())
+
+        XCTAssertTrue(undoManager.canUndo)
+    }
+
     private func makeTextView(_ string: String) -> NSTextView {
         let textView = NSTextView()
         textView.textStorage?.setAttributedString(NSAttributedString(string: string))
         return textView
+    }
+
+    private final class UndoProvidingTextViewDelegate: NSObject, NSTextViewDelegate {
+        let undoManager: UndoManager
+
+        init(undoManager: UndoManager) {
+            self.undoManager = undoManager
+        }
+
+        func undoManager(for view: NSTextView) -> UndoManager? {
+            undoManager
+        }
+    }
+
+    private final class UndoTarget: NSObject {
+        var didUndo = false
     }
 }

@@ -6,6 +6,7 @@ struct MacEditorRemoteBatchApplyResult: Equatable {
     let requiresFallbackReload: Bool
 }
 
+@MainActor
 final class MacEditorSyncBridge: ObservableObject {
     weak var textView: NSTextView?
     var publishAttributedText: ((NSAttributedString) -> Void)?
@@ -28,12 +29,13 @@ final class MacEditorSyncBridge: ObservableObject {
         textStorage.beginEditing()
         defer {
             textStorage.endEditing()
-            textView.setSelectedRange(selection.clampedForEditorSync(toLength: textStorage.length))
+            textView.setSelectedRange(selection.macClamped(toLength: textStorage.length))
             if let originalScrollOrigin {
                 textView.enclosingScrollView?.contentView.setBoundsOrigin(originalScrollOrigin)
             }
             if appliedCount > 0 {
-                textView.undoManager?.removeAllActions()
+                let undoManager = textView.delegate?.undoManager?(for: textView) ?? textView.undoManager
+                undoManager?.removeAllActions()
                 publishAttributedText?(NSAttributedString(attributedString: textView.attributedString()))
             }
             isApplyingRemoteSync = false
@@ -103,11 +105,4 @@ private extension MacSelectedEditorAction {
     }
 }
 
-private extension NSRange {
-    func clampedForEditorSync(toLength length: Int) -> NSRange {
-        let safeLocation = min(max(location, 0), max(length, 0))
-        let maxLength = max(length - safeLocation, 0)
-        return NSRange(location: safeLocation, length: min(self.length, maxLength))
-    }
-}
 #endif

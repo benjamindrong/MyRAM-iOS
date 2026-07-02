@@ -74,4 +74,54 @@ final class MacEditorSelectionMapperTests: XCTestCase {
 
         XCTAssertEqual(mapped, NSRange(location: 2, length: 3))
     }
+
+    func testDeletionOverlapFromBeforeKeepsDeletionStart() {
+        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+            current: NSRange(location: 5, length: 4),
+            deletedRange: NSRange(location: 3, length: 4),
+            resultingTextLength: 6
+        )
+
+        XCTAssertEqual(mapped, NSRange(location: 3, length: 2))
+    }
+
+    func testDeletionStraddlingSelectionStartKeepsDeletionStart() {
+        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+            current: NSRange(location: 5, length: 4),
+            deletedRange: NSRange(location: 4, length: 2),
+            resultingTextLength: 7
+        )
+
+        XCTAssertEqual(mapped, NSRange(location: 4, length: 3))
+    }
+
+    func testLongDeletionFromZeroKeepsDeletionStart() {
+        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+            current: NSRange(location: 5, length: 4),
+            deletedRange: NSRange(location: 0, length: 6),
+            resultingTextLength: 3
+        )
+
+        XCTAssertEqual(mapped, NSRange(location: 0, length: 3))
+    }
+
+    func testDeletionInsideSelectionTailShrinksSelection() {
+        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+            current: NSRange(location: 5, length: 4),
+            deletedRange: NSRange(location: 7, length: 2),
+            resultingTextLength: 7
+        )
+
+        XCTAssertEqual(mapped, NSRange(location: 5, length: 2))
+    }
+
+    func testDeletionContainingSelectionCollapsesToDeletionStart() {
+        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+            current: NSRange(location: 4, length: 2),
+            deletedRange: NSRange(location: 3, length: 4),
+            resultingTextLength: 3
+        )
+
+        XCTAssertEqual(mapped, NSRange(location: 3, length: 0))
+    }
 }

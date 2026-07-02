@@ -74,12 +74,13 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             let selectedRange = textView.selectedRange()
             context.coordinator.isApplyingSwiftUIUpdate = true
             textView.textStorage?.setAttributedString(attributedText)
-            textView.setSelectedRange(selectedRange.clamped(toLength: attributedText.length))
+            textView.setSelectedRange(selectedRange.macClamped(toLength: attributedText.length))
             context.coordinator.isApplyingSwiftUIUpdate = false
         }
     }
 
-    final class Coordinator: NSObject, NSTextStorageDelegate, NSTextViewDelegate {
+    @MainActor
+    final class Coordinator: NSObject, @MainActor NSTextStorageDelegate, NSTextViewDelegate {
         var attributedText: Binding<NSAttributedString>
         var syncBridge: MacEditorSyncBridge
         var onTextChanged: () -> Void
@@ -122,14 +123,6 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             attributedText.wrappedValue = NSAttributedString(attributedString: textView.attributedString())
             onTextChanged()
         }
-    }
-}
-
-private extension NSRange {
-    func clamped(toLength length: Int) -> NSRange {
-        let safeLocation = min(location, length)
-        let maxLength = length - safeLocation
-        return NSRange(location: safeLocation, length: min(self.length, maxLength))
     }
 }
 #endif

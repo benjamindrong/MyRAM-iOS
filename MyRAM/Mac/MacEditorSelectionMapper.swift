@@ -17,14 +17,14 @@ enum MacEditorSelectionMapper {
             return NSRange(
                 location: current.location + insertedUTF16Length,
                 length: current.length
-            ).clampedForSelectionMapper(toLength: resultingTextLength)
+            ).macClamped(toLength: resultingTextLength)
         }
 
         if insertionOffset < currentEnd {
             return NSRange(
                 location: current.location,
                 length: current.length + insertedUTF16Length
-            ).clampedForSelectionMapper(toLength: resultingTextLength)
+            ).macClamped(toLength: resultingTextLength)
         }
 
         return clamped(current, toLength: resultingTextLength)
@@ -46,7 +46,7 @@ enum MacEditorSelectionMapper {
             return NSRange(
                 location: current.location - deletedRange.length,
                 length: current.length
-            ).clampedForSelectionMapper(toLength: resultingTextLength)
+            ).macClamped(toLength: resultingTextLength)
         }
 
         if deletedRange.location >= currentEnd {
@@ -55,31 +55,27 @@ enum MacEditorSelectionMapper {
 
         if current.length == 0 {
             return NSRange(location: deletedRange.location, length: 0)
-                .clampedForSelectionMapper(toLength: resultingTextLength)
+                .macClamped(toLength: resultingTextLength)
         }
 
-        let survivingStart = min(current.location, deletedRange.location)
         let overlapStart = max(current.location, deletedRange.location)
         let overlapEnd = min(currentEnd, deletedEnd)
         let removedFromSelection = max(0, overlapEnd - overlapStart)
-        let deletedBeforeSelection = max(0, min(deletedEnd, current.location) - deletedRange.location)
-        let adjustedLocation = max(0, survivingStart - deletedBeforeSelection)
+        let adjustedLocation: Int
+        if current.location >= deletedRange.location && current.location < deletedEnd {
+            adjustedLocation = deletedRange.location
+        } else {
+            let deletedBeforeSelection = max(0, min(deletedEnd, current.location) - deletedRange.location)
+            adjustedLocation = current.location - deletedBeforeSelection
+        }
         let adjustedLength = max(0, current.length - removedFromSelection)
 
         return NSRange(location: adjustedLocation, length: adjustedLength)
-            .clampedForSelectionMapper(toLength: resultingTextLength)
+            .macClamped(toLength: resultingTextLength)
     }
 
     private static func clamped(_ range: NSRange, toLength length: Int) -> NSRange {
-        range.clampedForSelectionMapper(toLength: length)
-    }
-}
-
-private extension NSRange {
-    func clampedForSelectionMapper(toLength length: Int) -> NSRange {
-        let safeLocation = min(max(location, 0), max(length, 0))
-        let maxLength = max(length - safeLocation, 0)
-        return NSRange(location: safeLocation, length: min(self.length, maxLength))
+        range.macClamped(toLength: length)
     }
 }
 #endif

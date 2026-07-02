@@ -1,3 +1,4 @@
+import AppKit
 import SwiftData
 import XCTest
 @testable import MyRAMMac
@@ -9,8 +10,8 @@ final class MacSyncBatchApplierTests: XCTestCase {
         let firstID = UUID(uuidString: "00000000-0000-0000-0000-000000002001")!
         let secondID = UUID(uuidString: "00000000-0000-0000-0000-000000002002")!
 
-        try apply(batchID: "00000000-0000-0000-0000-000000002101", changes: [createChange(noteID: firstID)], in: container)
-        try apply(batchID: "00000000-0000-0000-0000-000000002102", changes: [createChange(noteID: secondID)], in: container)
+        _ = try apply(batchID: "00000000-0000-0000-0000-000000002101", changes: [createChange(noteID: firstID)], in: container)
+        _ = try apply(batchID: "00000000-0000-0000-0000-000000002102", changes: [createChange(noteID: secondID)], in: container)
 
         let notes = try container.mainContext.fetch(FetchDescriptor<Note>())
         XCTAssertEqual(Set(notes.map(\.id)), [firstID, secondID])
@@ -238,13 +239,143 @@ final class MacSyncBatchApplierTests: XCTestCase {
         note.richTextContentData = originalRichTextData
         try container.mainContext.save()
 
-        try apply(
+        _ = try apply(
             changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "x"))],
             in: container
         )
 
         XCTAssertEqual(note.content, "axbc")
         XCTAssertNil(note.richTextContentData)
+    }
+
+    func testStoredRichTextInsertionInheritsPreviousCharacterAttributes() throws {
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000210A")!, content: "abc", in: container)
+        note.richTextContentData = richTextData([
+            ("a", [.foregroundColor: NSColor.systemRed]),
+            ("b", [.foregroundColor: NSColor.systemBlue]),
+            ("c", [.foregroundColor: NSColor.systemGreen])
+        ])
+        try container.mainContext.save()
+
+        _ = try apply(
+            changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 2, text: "x"))],
+            in: container
+        )
+
+        let attributedText = try XCTUnwrap(decodedRichText(for: note))
+        XCTAssertEqual(attributedText.string, "abxc")
+        XCTAssertEqual(
+            attributedText.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor,
+            NSColor.systemBlue
+        )
+    }
+
+    func testStoredRichTextInsertionAtZeroUsesFirstCharacterAttributes() throws {
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000210B")!, content: "abc", in: container)
+        note.richTextContentData = richTextData([
+            ("a", [.foregroundColor: NSColor.systemRed]),
+            ("b", [.foregroundColor: NSColor.systemBlue]),
+            ("c", [.foregroundColor: NSColor.systemGreen])
+        ])
+        try container.mainContext.save()
+
+        _ = try apply(
+            changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 0, text: "x"))],
+            in: container
+        )
+
+        let attributedText = try XCTUnwrap(decodedRichText(for: note))
+        XCTAssertEqual(attributedText.string, "xabc")
+        XCTAssertEqual(
+            attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor,
+            NSColor.systemRed
+        )
+    }
+
+    func testStoredRichTextAndBridgeInsertionUseMatchingAttributes() throws {
+        let container = try makeInMemoryContainer()
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-00000000210C")!
+        let note = try insertNote(id: noteID, content: "abc", in: container)
+        let styledText = NSMutableAttributedString()
+        styledText.append(NSAttributedString(string: "a", attributes: [.foregroundColor: NSColor.systemRed]))
+        styledText.append(NSAttributedString(string: "b", attributes: [.foregroundColor: NSColor.systemBlue]))
+        styledText.append(NSAttributedString(string: "c", attributes: [.foregroundColor: NSColor.systemGreen]))
+        note.richTextContentData = RTFCoding.encode(styledText)
+        try container.mainContext.save()
+
+        _ = try apply(
+            changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 2, text: "x"))],
+            in: container
+        )
+        let storedText = try XCTUnwrap(decodedRichText(for: note))
+
+        let textView = NSTextView()
+        textView.textStorage?.setAttributedString(styledText)
+        let bridge = MacEditorSyncBridge()
+        bridge.textView = textView
+        _ = bridge.applyBatch(
+            [.applyBodyInsertion(MacAppliedBodyInsertion(noteID: noteID, utf16Offset: 2, text: "x", modifiedAt: Date()))],
+            selectedNoteID: noteID
+        )
+
+        XCTAssertEqual(storedText.string, textView.string)
+        XCTAssertEqual(
+            storedText.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor,
+            textView.textStorage?.attribute(.foregroundColor, at: 2, effectiveRange: nil) as? NSColor
+        )
+    }
+
+    func testSaveFailureRollsBackContentAndDoesNotMarkBatchSeen() throws {
+        struct SaveFailure: Error {}
+
+        let defaults = makeDefaults()
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000210D")!, content: "abc", in: container)
+        let batchID = UUID(uuidString: "00000000-0000-0000-0000-00000000220D")!
+        let seenBatchStore = MacSyncSeenBatchStore(defaults: defaults)
+        let applier = MacSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: seenBatchStore,
+            performSave: { throw SaveFailure() }
+        )
+
+        XCTAssertThrowsError(try applier.apply(batch(id: batchID, changes: [
+            .noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "x"))
+        ])))
+
+        XCTAssertEqual(note.content, "abc")
+        XCTAssertFalse(seenBatchStore.hasSeen(batchID))
+    }
+
+    func testSaveFailureThenRetryAppliesInsertionExactlyOnce() throws {
+        struct SaveFailure: Error {}
+
+        let defaults = makeDefaults()
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000210E")!, content: "abc", in: container)
+        let batch = batch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000000220E")!,
+            changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "x"))]
+        )
+        var saveAttempts = 0
+        let applier = MacSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: MacSyncSeenBatchStore(defaults: defaults),
+            performSave: {
+                saveAttempts += 1
+                if saveAttempts == 1 {
+                    throw SaveFailure()
+                }
+                try container.mainContext.save()
+            }
+        )
+
+        XCTAssertThrowsError(try applier.apply(batch))
+        _ = try applier.apply(batch)
+
+        XCTAssertEqual(note.content, "axbc")
     }
 
     func testIncomingChangeWithMissingFolderReferenceCreatesNoteAtRoot() throws {
@@ -358,6 +489,15 @@ final class MacSyncBatchApplierTests: XCTestCase {
         )
     }
 
+    private func batch(id: UUID, changes: [MacSyncChange]) -> MacSyncBatch {
+        MacSyncBatch(
+            id: id,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: changes
+        )
+    }
+
     private func createChange(noteID: UUID) -> MacSyncChange {
         .noteCreated(
             MacSyncNoteCreatedChange(
@@ -395,6 +535,23 @@ final class MacSyncBatchApplierTests: XCTestCase {
             }
         )
         return try container.mainContext.fetch(descriptor).first
+    }
+
+    private func richTextData(_ runs: [(String, [NSAttributedString.Key: Any])]) -> Data? {
+        let attributedText = NSMutableAttributedString()
+        for run in runs {
+            attributedText.append(NSAttributedString(string: run.0, attributes: run.1))
+        }
+        return RTFCoding.encode(attributedText)
+    }
+
+    private func decodedRichText(for note: Note) throws -> NSAttributedString? {
+        guard let richTextContentData = note.richTextContentData else { return nil }
+        return try NSMutableAttributedString(
+            data: richTextContentData,
+            options: [.documentType: NSAttributedString.DocumentType.rtf],
+            documentAttributes: nil
+        )
     }
 
     private func makeInMemoryContainer() throws -> ModelContainer {
