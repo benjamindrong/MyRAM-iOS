@@ -58,6 +58,40 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(queue.pendingBatches, [second])
     }
 
+    func testQueueFirstReturnsOldestPendingBatchWithoutDraining() {
+        var queue = SyncBatchUnsentQueue(limit: 10)
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+
+        queue.enqueue(first)
+        queue.enqueue(second)
+
+        XCTAssertEqual(queue.first, first)
+        XCTAssertEqual(queue.pendingBatches, [first, second])
+    }
+
+    func testQueueContainsDetectsPendingBatchIDs() {
+        var queue = SyncBatchUnsentQueue(limit: 10)
+        let batch = makeBatch(idSuffix: 1)
+
+        queue.enqueue(batch)
+
+        XCTAssertTrue(queue.contains(batch.id))
+        XCTAssertFalse(queue.contains(UUID(uuidString: "00000000-0000-0000-0000-000000999999")!))
+    }
+
+    func testQueueRemoveDropsOneBatchByID() {
+        var queue = SyncBatchUnsentQueue(limit: 10)
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+
+        queue.enqueue(first)
+        queue.enqueue(second)
+        queue.remove(first.id)
+
+        XCTAssertEqual(queue.pendingBatches, [second])
+    }
+
     func testFileBackedQueueReloadsPersistedBatchesWithStableIDs() {
         let fileURL = temporaryQueueFileURL()
         let batch = makeBatch(idSuffix: 1)
@@ -137,6 +171,46 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         queue.removeAll(withIDs: [UUID(uuidString: "00000000-0000-0000-0000-000000999999")!])
 
         XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+    }
+
+    func testFileBackedQueueFirstReturnsOldestPersistedBatch() {
+        let fileURL = temporaryQueueFileURL()
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        queue.enqueue(first)
+        queue.enqueue(second)
+        let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        XCTAssertEqual(reloadedQueue.first, first)
+        XCTAssertEqual(reloadedQueue.pendingBatches, [first, second])
+    }
+
+    func testFileBackedQueueContainsDetectsPersistedBatchID() {
+        let fileURL = temporaryQueueFileURL()
+        let batch = makeBatch(idSuffix: 1)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        queue.enqueue(batch)
+        let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        XCTAssertTrue(reloadedQueue.contains(batch.id))
+        XCTAssertFalse(reloadedQueue.contains(UUID(uuidString: "00000000-0000-0000-0000-000000999999")!))
+    }
+
+    func testFileBackedQueueRemoveDropsOneBatchFromDisk() {
+        let fileURL = temporaryQueueFileURL()
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        queue.enqueue(first)
+        queue.enqueue(second)
+        queue.remove(first.id)
+        let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        XCTAssertEqual(reloadedQueue.pendingBatches, [second])
     }
 
     func testFileBackedQueueRecoversFromCorruptJSONAndRemainsUsable() throws {

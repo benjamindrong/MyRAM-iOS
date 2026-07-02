@@ -18,6 +18,14 @@ final class FileBackedSyncBatchQueue {
         queue.pendingBatches
     }
 
+    var first: SyncBatch? {
+        queue.first
+    }
+
+    func contains(_ batchID: SyncBatchID) -> Bool {
+        queue.contains(batchID)
+    }
+
     func enqueue(_ batch: SyncBatch) {
         let didChange = queue.enqueue(batch)
         if didChange {
@@ -27,6 +35,13 @@ final class FileBackedSyncBatchQueue {
 
     func removeAll(withIDs ids: Set<SyncBatchID>) {
         let didChange = queue.removeAll(withIDs: ids)
+        if didChange {
+            persistQueue()
+        }
+    }
+
+    func remove(_ batchID: SyncBatchID) {
+        let didChange = queue.remove(batchID)
         if didChange {
             persistQueue()
         }
