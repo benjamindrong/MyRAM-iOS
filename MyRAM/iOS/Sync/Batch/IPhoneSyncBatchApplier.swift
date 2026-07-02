@@ -5,14 +5,24 @@ import SwiftData
 final class IPhoneSyncBatchApplier {
     private let context: ModelContext
     private let seenBatchStore: SyncBatchSeenBatchStore
+    private let bodyHashCapabilityEnabled: Bool
 
-    init(context: ModelContext, seenBatchStore: SyncBatchSeenBatchStore = SyncBatchSeenBatchStore()) {
+    init(
+        context: ModelContext,
+        seenBatchStore: SyncBatchSeenBatchStore = SyncBatchSeenBatchStore(),
+        bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled
+    ) {
         self.context = context
         self.seenBatchStore = seenBatchStore
+        self.bodyHashCapabilityEnabled = bodyHashCapabilityEnabled
     }
 
     func apply(_ batch: SyncBatch) throws {
         guard !seenBatchStore.hasSeen(batch.id) else { return }
+
+        try SyncBatchPreflight(bodyHashCapabilityEnabled: bodyHashCapabilityEnabled).validate(batch: batch) { [weak self] noteID in
+            try self?.loadNote(id: noteID)?.content
+        }
 
         for change in batch.changes {
             try apply(change)
@@ -32,6 +42,8 @@ final class IPhoneSyncBatchApplier {
             try applyBodyTextInserted(change)
         case .noteBodyTextDeleted(let change):
             try applyBodyTextDeleted(change)
+        case .noteBodyReconciled(let change):
+            throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
         }
     }
 
@@ -98,4 +110,5 @@ final class IPhoneSyncBatchApplier {
         // Missing folders fall back to root so incoming notes are preserved.
         return try context.fetch(descriptor).first
     }
+
 }

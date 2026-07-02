@@ -75,14 +75,16 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
                 noteID: note.id,
                 oldBody: "A😀B",
                 newBody: "A😀xB",
-                modifiedAt: Date(timeIntervalSince1970: 2)
+                modifiedAt: Date(timeIntervalSince1970: 2),
+                bodyHashCapabilityEnabled: true
             ),
             .noteBodyTextInserted(
                 SyncBatchNoteBodyTextInsertedChange(
                     noteID: note.id,
                     utf16Offset: 3,
                     text: "x",
-                    modifiedAt: Date(timeIntervalSince1970: 2)
+                    modifiedAt: Date(timeIntervalSince1970: 2),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "A😀B")
                 )
             )
         )
@@ -92,7 +94,8 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
                 noteID: note.id,
                 oldBody: "abcdef",
                 newBody: "abef",
-                modifiedAt: Date(timeIntervalSince1970: 3)
+                modifiedAt: Date(timeIntervalSince1970: 3),
+                bodyHashCapabilityEnabled: true
             ),
             .noteBodyTextDeleted(
                 SyncBatchNoteBodyTextDeletedChange(
@@ -100,10 +103,27 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
                     utf16Offset: 2,
                     utf16Length: 2,
                     expectedText: "cd",
-                    modifiedAt: Date(timeIntervalSince1970: 3)
+                    modifiedAt: Date(timeIntervalSince1970: 3),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "abcdef")
                 )
             )
         )
+    }
+
+    func testBatchSequenceIsAssignedWhenPendingBatchStarts() async {
+        let accumulator = IPhoneSyncBatchAccumulator(
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000124103")!,
+            quietWindow: 3,
+            batchIDProvider: { UUID(uuidString: "00000000-0000-0000-0000-000000124104")! },
+            batchSequenceProvider: { .reserved(42) }
+        )
+        let start = Date(timeIntervalSince1970: 500)
+
+        await accumulator.record(titleChange("First"), at: start)
+        await accumulator.record(titleChange("Second"), at: start.addingTimeInterval(1))
+        let batch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+
+        XCTAssertEqual(batch?.batchSequence, 42)
     }
 
     func testAmbiguousReplacementIsSkipped() {

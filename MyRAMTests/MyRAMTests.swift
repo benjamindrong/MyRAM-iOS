@@ -2126,6 +2126,278 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(change.noteID, note.id)
         XCTAssertEqual(change.utf16Offset, "Hello".utf16.count)
         XCTAssertEqual(change.text, " world")
+        XCTAssertNil(change.baseContentHash)
+    }
+
+    func testIPhoneIncomingHashedMismatchRemainsQueuedAndBlocksLaterBatch() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let note = Note(title: "Shared", content: "local")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-000000127001")!
+        context.insert(note)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            bodyHashCapabilityEnabled: true,
+            syncBatchQuietWindow: 0
+        )
+        let mismatchedBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127101")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127201")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            batchSequence: 1,
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: note.id,
+                        utf16Offset: 0,
+                        text: "remote ",
+                        modifiedAt: Date(timeIntervalSince1970: 2),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "remote-base")
+                    )
+                )
+            ]
+        )
+        let laterBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127102")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127201")!,
+            createdAt: Date(timeIntervalSince1970: 3),
+            batchSequence: 2,
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: note.id,
+                        utf16Offset: note.content.utf16.count,
+                        text: " later",
+                        modifiedAt: Date(timeIntervalSince1970: 4),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "local")
+                    )
+                )
+            ]
+        )
+
+        await vm.applyIncomingSyncBatch(mismatchedBatch)
+        await vm.applyIncomingSyncBatch(laterBatch)
+
+        let reloadedQueue = FileBackedSyncBatchQueue(fileURL: queueFileURL)
+        XCTAssertEqual(note.content, "local")
+        XCTAssertEqual(reloadedQueue.pendingBatches.map(\.id), [mismatchedBatch.id, laterBatch.id])
+        XCTAssertEqual(vm.syncBatchErrorMessage, "Incoming changes are waiting for deterministic merge support.")
+    }
+
+    func testIPhoneIncomingUnsupportedReconciliationShowsDistinctError() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let note = Note(title: "Shared", content: "local")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-000000127003")!
+        context.insert(note)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            bodyHashCapabilityEnabled: true,
+            syncBatchQuietWindow: 0
+        )
+
+        await vm.applyIncomingSyncBatch(SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127103")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127203")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyReconciled(
+                    SyncBatchNoteBodyReconciledChange(
+                        noteID: note.id,
+                        replacementBody: "remote",
+                        replacementContentHash: SyncBatchContentHash.sha256Hex(for: "remote"),
+                        modifiedAt: Date(timeIntervalSince1970: 2)
+                    )
+                )
+            ]
+        ))
+
+        XCTAssertEqual(vm.syncBatchErrorMessage, "Incoming reconciliation cannot be processed by this version.")
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: queueFileURL).pendingBatches.count, 1)
+    }
+
+    func testIPhoneIncomingQueueCapacityShowsDistinctError() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let note = Note(title: "Shared", content: "local")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-000000127004")!
+        context.insert(note)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingIncomingBatchQueueLimit: 1,
+            syncBatchQuietWindow: 0
+        )
+
+        await vm.applyIncomingSyncBatch(SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127104")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127204")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyReconciled(
+                    SyncBatchNoteBodyReconciledChange(
+                        noteID: note.id,
+                        replacementBody: "remote",
+                        replacementContentHash: SyncBatchContentHash.sha256Hex(for: "remote"),
+                        modifiedAt: Date(timeIntervalSince1970: 2)
+                    )
+                )
+            ]
+        ))
+        await vm.applyIncomingSyncBatch(makeTitleOnlyBatch(idSuffix: 127105, title: "Second"))
+
+        XCTAssertEqual(vm.syncBatchErrorMessage, "Incoming sync queue is full; newest batch could not be retained.")
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: queueFileURL).pendingBatches.map(\.id), [
+            UUID(uuidString: "00000000-0000-0000-0000-000000127104")!
+        ])
+    }
+
+    func testIPhoneIncomingQueuePersistenceShowsDistinctError() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("ios-pending-incoming-batch-queue.json")
+        try FileManager.default.createDirectory(at: queueFileURL, withIntermediateDirectories: true)
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL)
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            syncBatchQuietWindow: 0
+        )
+
+        await vm.applyIncomingSyncBatch(makeTitleOnlyBatch(idSuffix: 127106, title: "Persist"))
+
+        XCTAssertEqual(vm.syncBatchErrorMessage, "Unable to persist incoming sync batch.")
+    }
+
+    func testNestedIncomingDrainDoesNotClearRemoteApplySuppression() async throws {
+        // NotesViewModel's applier uses the default UserDefaults-backed seen-batch store,
+        // which persists across test runs on the same simulator. Clear just this test's
+        // batch IDs so a prior run (including a crashed one) can't make this run's batches
+        // look already-applied.
+        let seenBatchIDsKey = SyncBatchSeenBatchStore.defaultSeenBatchIDsKey
+        let thisTestBatchIDStrings: Set<String> = [
+            "00000000-0000-0000-0000-000000128101",
+            "00000000-0000-0000-0000-000000128102"
+        ]
+        UserDefaults.standard.set(
+            (UserDefaults.standard.stringArray(forKey: seenBatchIDsKey) ?? []).filter { !thisTestBatchIDStrings.contains($0) },
+            forKey: seenBatchIDsKey
+        )
+
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let noteA = Note(title: "A", content: "hello")
+        noteA.id = UUID(uuidString: "00000000-0000-0000-0000-000000128001")!
+        let noteB = Note(title: "B", content: "world")
+        noteB.id = UUID(uuidString: "00000000-0000-0000-0000-000000128002")!
+        context.insert(noteA)
+        context.insert(noteB)
+        try context.save()
+
+        let firstBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000128101")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000128201")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteA.id,
+                        utf16Offset: noteA.content.utf16.count,
+                        text: " remote-a",
+                        modifiedAt: Date(timeIntervalSince1970: 2)
+                    )
+                )
+            ]
+        )
+        let secondBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000128102")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000128201")!,
+            createdAt: Date(timeIntervalSince1970: 3),
+            changes: [
+                .noteBodyTextInserted(
+                    SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteB.id,
+                        utf16Offset: noteB.content.utf16.count,
+                        text: " remote-b",
+                        modifiedAt: Date(timeIntervalSince1970: 4)
+                    )
+                )
+            ]
+        )
+        // Pre-enqueue both batches directly so the view model's own drain loop, once
+        // started, has a second queued batch to process after the nested attempt.
+        try FileBackedSyncBatchQueue(fileURL: queueFileURL).enqueueIncoming(firstBatch)
+        try FileBackedSyncBatchQueue(fileURL: queueFileURL).enqueueIncoming(secondBatch)
+
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            syncBatchQuietWindow: 0
+        )
+
+        var suppressionDuringSecondBatch: Bool?
+        vm.onDrainBatchApplied = { [weak vm] batch in
+            guard let vm else { return }
+            if batch.id == firstBatch.id {
+                // Simulate a callback or refresh path re-entering the drain while the
+                // outer drain triggered by `applyIncomingSyncBatch` below is still active.
+                vm.drainPendingIncomingSyncBatchesForTesting()
+            } else if batch.id == secondBatch.id {
+                suppressionDuringSecondBatch = vm.isApplyingRemoteSyncChange
+            }
+        }
+
+        await vm.applyIncomingSyncBatch(firstBatch)
+
+        XCTAssertEqual(suppressionDuringSecondBatch, true)
+        XCTAssertFalse(vm.isApplyingRemoteSyncChange)
+        XCTAssertEqual(noteA.content, "hello remote-a")
+        XCTAssertEqual(noteB.content, "world remote-b")
     }
 
     func testEditorBufferDefersRemoteRefreshDuringPendingLocalEdit() {
@@ -5465,6 +5737,29 @@ final class MyRAMTests: XCTestCase {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("sync-pending-changes.json")
+    }
+
+    private func temporarySyncBatchQueueFileURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("sync-pending-batches.json")
+    }
+
+    private func makeTitleOnlyBatch(idSuffix: Int, title: String) -> SyncBatch {
+        SyncBatch(
+            id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", idSuffix))!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127299")!,
+            createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
+            changes: [
+                .noteTitleChanged(
+                    SyncBatchNoteTitleChangedChange(
+                        noteID: UUID(uuidString: "00000000-0000-0000-0000-000000127399")!,
+                        title: title,
+                        modifiedAt: Date(timeIntervalSince1970: TimeInterval(idSuffix + 1))
+                    )
+                )
+            ]
+        )
     }
 
     private func temporarySyncConflictFileURL() -> URL {

@@ -96,6 +96,9 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     func record(_ change: MacSyncChange) {
         Task {
             await accumulator.record(change)
+            if let issue = await accumulator.takeLastSequenceReservationIssue() {
+                lastErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
+            }
         }
     }
 
@@ -150,33 +153,47 @@ final class MacSyncBatchController: NSObject, ObservableObject {
 
     func receive(_ batch: MacSyncBatch) {
         if !pendingIncomingBatches.contains(batch.id) {
-            pendingIncomingBatches.enqueue(batch)
+            do {
+                try pendingIncomingBatches.enqueueIncoming(batch)
+            } catch {
+                let failure = SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id)
+                lastErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
+                return
+            }
         }
         drainPendingIncomingBatchesIfPossible()
     }
 
     func drainPendingIncomingBatchesIfPossible() {
+        // Admission must happen, and `isDrainingPendingIncomingBatches` must be fully owned,
+        // before calling into the coordinator. `didApply`/`onBatchApplied` can synchronously
+        // trigger a reentrant call, and holding this flag open via `inout` across that call
+        // would trip Swift's exclusivity enforcement. A rejected nested call must also skip
+        // `onBeforeApplyingRemoteBatch`'s side effects (for example flushing a pending save).
         guard !isDrainingPendingIncomingBatches else { return }
-
-        isDrainingPendingIncomingBatches = true
-        defer { isDrainingPendingIncomingBatches = false }
 
         guard onBeforeApplyingRemoteBatch?() ?? false else {
             lastErrorMessage = "Incoming sync is waiting for local edits to save."
             return
         }
 
-        while let batch = pendingIncomingBatches.first {
-            do {
-                let appliedBatch = try applyBatch(batch)
-                pendingIncomingBatches.remove(batch.id)
+        isDrainingPendingIncomingBatches = true
+        defer { isDrainingPendingIncomingBatches = false }
+
+        let result = SyncBatchDrainCoordinator.drain(
+            nextBatch: { [pendingIncomingBatches] in pendingIncomingBatches.first },
+            apply: { [applyBatch] batch in try applyBatch(batch) },
+            remove: { [pendingIncomingBatches] batchID in pendingIncomingBatches.remove(batchID) },
+            didApply: { [weak self] batch, appliedBatch in
+                guard let self else { return }
                 lastSyncAt = batch.createdAt
                 lastErrorMessage = nil
                 onBatchApplied?(appliedBatch)
-            } catch {
-                lastErrorMessage = "Unable to apply nearby batch changes."
-                return
             }
+        )
+
+        if case .blocked(let failure) = result {
+            lastErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
         }
     }
 
@@ -209,16 +226,7 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     }
 
     nonisolated private static func pendingIncomingBatchQueueFileURL() -> URL? {
-        guard let supportDirectory = FileManager.default.urls(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask
-        ).first else {
-            return nil
-        }
-
-        return supportDirectory
-            .appendingPathComponent("MyRAM", isDirectory: true)
-            .appendingPathComponent("mac-pending-incoming-batch-queue.json")
+        SyncBatchQueueFileLocation.pendingIncoming(for: .nativeMac)
     }
 }
 

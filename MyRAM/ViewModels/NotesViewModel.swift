@@ -25,6 +25,7 @@ final class NotesViewModel: ObservableObject {
     @Published var currentFolder: Folder? = nil
     @Published private(set) var syncConflicts: [SyncConflictVersion] = []
     @Published private(set) var activeNoteSyncRevision = 0
+    @Published private(set) var syncBatchErrorMessage: String?
     @Published private(set) var hasUndoableAction = false
     @Published private(set) var hasRedoableAction = false
     
@@ -35,9 +36,14 @@ final class NotesViewModel: ObservableObject {
     private let syncConflictStore: SyncConflictStore
     private let syncConflictService: MyRAMSyncConflictService
     private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
+    private let pendingIncomingBatches: FileBackedSyncBatchQueue
+    private let bodyHashCapabilityEnabled: Bool
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
-    private var isApplyingRemoteSyncChange = false
+    private(set) var isApplyingRemoteSyncChange = false
+    private var isDrainingPendingIncomingBatches = false
+    /// Test-only hook invoked after each batch is applied and removed during an incoming drain.
+    var onDrainBatchApplied: ((SyncBatch) -> Void)?
     private var recentTextEditByNoteID: [UUID: Date] = [:]
     private var syncBatchReadyTask: Task<Void, Never>?
     private var undoStack: [UndoAction] = [] {
@@ -55,11 +61,19 @@ final class NotesViewModel: ObservableObject {
         context: ModelContext,
         syncController: MyRAMSyncControlling? = nil,
         syncConflictStore: SyncConflictStore = SyncConflictStore(),
+        pendingIncomingBatchQueueFileURL: URL? = NotesViewModel.pendingIncomingBatchQueueFileURL(),
+        pendingIncomingBatchQueueLimit: Int = 100,
+        bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
         syncBatchQuietWindow: TimeInterval = 3
     ) {
         self.context = context
         self.syncController = syncController
         self.syncConflictStore = syncConflictStore
+        pendingIncomingBatches = FileBackedSyncBatchQueue(
+            fileURL: pendingIncomingBatchQueueFileURL,
+            limit: pendingIncomingBatchQueueLimit
+        )
+        self.bodyHashCapabilityEnabled = bodyHashCapabilityEnabled
         syncBatchAccumulator = IPhoneSyncBatchAccumulator(
             originDeviceID: UUID(uuidString: MyRAMDeviceIdentity.currentDeviceID()) ?? UUID(),
             quietWindow: syncBatchQuietWindow
@@ -1210,6 +1224,9 @@ final class NotesViewModel: ObservableObject {
         guard !isApplyingRemoteSyncChange else { return }
         Task {
             await syncBatchAccumulator.record(change)
+            if let issue = await syncBatchAccumulator.takeLastSequenceReservationIssue() {
+                syncBatchErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
+            }
         }
     }
 
@@ -1449,17 +1466,60 @@ final class NotesViewModel: ObservableObject {
 
     func applyIncomingSyncBatch(_ batch: SyncBatch) async {
         guard !batch.changes.isEmpty else { return }
-        isApplyingRemoteSyncChange = true
-        defer { isApplyingRemoteSyncChange = false }
-
-        let applier = IPhoneSyncBatchApplier(context: context)
-        do {
-            try applier.apply(batch)
-            refreshCurrentFolderContent()
-            activeNoteSyncRevision += 1
-        } catch {
-            debugPrint("Unable to apply incoming sync batch: \(error)")
+        if !pendingIncomingBatches.contains(batch.id) {
+            do {
+                try pendingIncomingBatches.enqueueIncoming(batch)
+            } catch {
+                let failure = SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id)
+                syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
+                return
+            }
         }
+        drainPendingIncomingSyncBatches()
+    }
+
+    private func drainPendingIncomingSyncBatches() {
+        // Admission must happen, and both flags below must be fully owned, before calling
+        // into the coordinator. `didApply` can synchronously trigger a reentrant call, so a
+        // rejected nested call must never touch either flag: not `isDrainingPendingIncomingBatches`
+        // (only the active drainer may hold it) and not `isApplyingRemoteSyncChange` (only the
+        // active drainer may enable/disable remote-apply suppression).
+        guard !isDrainingPendingIncomingBatches else { return }
+
+        isDrainingPendingIncomingBatches = true
+        isApplyingRemoteSyncChange = true
+        defer {
+            isDrainingPendingIncomingBatches = false
+            isApplyingRemoteSyncChange = false
+        }
+
+        let applier = IPhoneSyncBatchApplier(context: context, bodyHashCapabilityEnabled: bodyHashCapabilityEnabled)
+        let result = SyncBatchDrainCoordinator.drain(
+            nextBatch: { [pendingIncomingBatches] in pendingIncomingBatches.first },
+            apply: { batch in try applier.apply(batch) },
+            remove: { [pendingIncomingBatches] batchID in pendingIncomingBatches.remove(batchID) },
+            didApply: { [weak self] batch, _ in
+                guard let self else { return }
+                refreshCurrentFolderContent()
+                activeNoteSyncRevision += 1
+                syncBatchErrorMessage = nil
+                onDrainBatchApplied?(batch)
+            }
+        )
+
+        if case .blocked(let failure) = result {
+            syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
+        }
+    }
+
+    /// Test-only entry point that exercises the same reentrant call path a real
+    /// nested drain trigger would take.
+    func drainPendingIncomingSyncBatchesForTesting() {
+        drainPendingIncomingSyncBatches()
+    }
+
+    nonisolated private static func pendingIncomingBatchQueueFileURL() -> URL? {
+        SyncBatchQueueFileLocation.pendingIncoming(for: .iPhone)
     }
 
     private func isIncomingTextUnsafe(

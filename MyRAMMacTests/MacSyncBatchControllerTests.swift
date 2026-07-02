@@ -76,7 +76,33 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(appliedIDs, [first.id])
         XCTAssertEqual(controller.pendingIncomingBatchCount, 2)
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: queueURL).pendingBatches, [first, second])
-        XCTAssertEqual(controller.lastErrorMessage, "Unable to apply nearby batch changes.")
+        XCTAssertEqual(controller.lastErrorMessage, "Unable to save incoming sync changes.")
+    }
+
+    func testDrainBlocksOnMismatchedHeadBatchWithoutApplyingLaterQueuedBatch() throws {
+        let queueURL = temporaryQueueFileURL()
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+        let queue = FileBackedSyncBatchQueue(fileURL: queueURL)
+        queue.enqueue(first)
+        queue.enqueue(second)
+        var attemptedIDs: [UUID] = []
+        let controller = try makeController(pendingIncomingBatchQueueFileURL: queueURL) { batch in
+            attemptedIDs.append(batch.id)
+            throw SyncBatchApplyPreflightError.mismatchedBaseContentHash(
+                noteID: UUID(uuidString: "00000000-0000-0000-0000-000000000101")!,
+                expected: "expected",
+                actual: "actual"
+            )
+        }
+        controller.onBeforeApplyingRemoteBatch = { true }
+
+        controller.drainPendingIncomingBatchesIfPossible()
+
+        XCTAssertEqual(attemptedIDs, [first.id])
+        XCTAssertEqual(controller.pendingIncomingBatchCount, 2)
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: queueURL).pendingBatches, [first, second])
+        XCTAssertEqual(controller.lastErrorMessage, "Incoming changes are waiting for deterministic merge support.")
     }
 
     func testAlreadySeenZeroChangeBatchIsRemovedHarmlessly() throws {

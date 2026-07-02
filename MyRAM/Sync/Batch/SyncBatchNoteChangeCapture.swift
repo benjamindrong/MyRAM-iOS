@@ -32,7 +32,13 @@ enum SyncBatchNoteChangeCapture {
         )
     }
 
-    static func bodyTextChanged(noteID: UUID, oldBody: String, newBody: String, modifiedAt: Date) -> SyncBatchChange? {
+    static func bodyTextChanged(
+        noteID: UUID,
+        oldBody: String,
+        newBody: String,
+        modifiedAt: Date,
+        bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled
+    ) -> SyncBatchChange? {
         guard oldBody != newBody else { return nil }
 
         let oldUTF16 = Array(oldBody.utf16)
@@ -63,7 +69,8 @@ enum SyncBatchNoteChangeCapture {
                     noteID: noteID,
                     utf16Offset: prefixLength,
                     text: (newBody as NSString).substring(with: range),
-                    modifiedAt: modifiedAt
+                    modifiedAt: modifiedAt,
+                    baseContentHash: bodyHashCapabilityEnabled ? SyncBatchContentHash.sha256Hex(for: oldBody) : nil
                 )
             )
         }
@@ -76,7 +83,8 @@ enum SyncBatchNoteChangeCapture {
                     utf16Offset: prefixLength,
                     utf16Length: deletedLength,
                     expectedText: (oldBody as NSString).substring(with: range),
-                    modifiedAt: modifiedAt
+                    modifiedAt: modifiedAt,
+                    baseContentHash: bodyHashCapabilityEnabled ? SyncBatchContentHash.sha256Hex(for: oldBody) : nil
                 )
             )
         }

@@ -1,8 +1,14 @@
 import Foundation
 
 final class FileBackedSyncBatchQueue {
+    enum QueueError: Error, Equatable {
+        case capacityExceeded
+        case persistenceFailed
+    }
+
     private let fileURL: URL?
     private var queue: SyncBatchUnsentQueue
+    private var shouldFailNextPersistence = false
 
     init(fileURL: URL?, limit: Int = 100) {
         self.fileURL = fileURL
@@ -31,6 +37,25 @@ final class FileBackedSyncBatchQueue {
         if didChange {
             persistQueue()
         }
+    }
+
+    func enqueueIncoming(_ batch: SyncBatch) throws {
+        let originalBatches = queue.pendingBatches
+        do {
+            let didChange = try queue.enqueuePreservingExisting(batch)
+            if didChange {
+                try persistQueueThrowing()
+            }
+        } catch SyncBatchUnsentQueue.EnqueueError.capacityExceeded {
+            throw QueueError.capacityExceeded
+        } catch {
+            queue.replacePendingBatches(originalBatches)
+            throw QueueError.persistenceFailed
+        }
+    }
+
+    func injectPersistenceFailureForNextWrite() {
+        shouldFailNextPersistence = true
     }
 
     func removeAll(withIDs ids: Set<SyncBatchID>) {
@@ -65,22 +90,26 @@ final class FileBackedSyncBatchQueue {
     }
 
     private func persistQueue() {
-        guard let fileURL else { return }
+        try? persistQueueThrowing()
+    }
 
-        do {
-            try FileManager.default.createDirectory(
-                at: fileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            let persistedQueue = PersistedSyncBatchQueue(
-                version: PersistedSyncBatchQueue.currentVersion,
-                batches: queue.pendingBatches
-            )
-            let data = try JSONEncoder().encode(persistedQueue)
-            try data.write(to: fileURL, options: .atomic)
-        } catch {
-            return
+    private func persistQueueThrowing() throws {
+        guard let fileURL else { return }
+        if shouldFailNextPersistence {
+            shouldFailNextPersistence = false
+            throw QueueError.persistenceFailed
         }
+
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let persistedQueue = PersistedSyncBatchQueue(
+            version: PersistedSyncBatchQueue.currentVersion,
+            batches: queue.pendingBatches
+        )
+        let data = try JSONEncoder().encode(persistedQueue)
+        try data.write(to: fileURL, options: .atomic)
     }
 }
 

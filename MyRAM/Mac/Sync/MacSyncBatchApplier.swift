@@ -9,14 +9,17 @@ final class MacSyncBatchApplier {
     private let context: ModelContext
     private let seenBatchStore: MacSyncSeenBatchStore
     private let performSave: () throws -> Void
+    private let bodyHashCapabilityEnabled: Bool
 
     init(
         context: ModelContext,
         seenBatchStore: MacSyncSeenBatchStore = MacSyncSeenBatchStore(),
+        bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
         performSave: (() throws -> Void)? = nil
     ) {
         self.context = context
         self.seenBatchStore = seenBatchStore
+        self.bodyHashCapabilityEnabled = bodyHashCapabilityEnabled
         self.performSave = performSave ?? { try context.save() }
     }
 
@@ -27,6 +30,10 @@ final class MacSyncBatchApplier {
 
         var rollbackSnapshots: [UUID: NoteRollbackSnapshot] = [:]
         do {
+            try SyncBatchPreflight(bodyHashCapabilityEnabled: bodyHashCapabilityEnabled).validate(batch: batch) { [weak self] noteID in
+                try self?.loadNote(id: noteID)?.content
+            }
+
             var appliedChanges: [MacAppliedSyncChange] = []
             for change in batch.changes {
                 if let appliedChange = try apply(change, rollbackSnapshots: &rollbackSnapshots) {
@@ -61,6 +68,8 @@ final class MacSyncBatchApplier {
             return try applyBodyTextInserted(change, rollbackSnapshots: &rollbackSnapshots)
         case .noteBodyTextDeleted(let change):
             return try applyBodyTextDeleted(change, rollbackSnapshots: &rollbackSnapshots)
+        case .noteBodyReconciled(let change):
+            throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
         }
     }
 
@@ -211,6 +220,7 @@ final class MacSyncBatchApplier {
         mutation(attributedText)
         note.richTextContentData = RTFCoding.encode(attributedText)
     }
+
 }
 
 @MainActor
