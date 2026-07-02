@@ -47,7 +47,7 @@ struct MyRAMMacRootView: View {
         }
         .onAppear(perform: loadNotesIfNeeded)
         .onAppear {
-            syncController.onBatchApplied = {
+            syncController.onBatchApplied = { _ in
                 loadNotesKeepingSelection()
             }
         }
