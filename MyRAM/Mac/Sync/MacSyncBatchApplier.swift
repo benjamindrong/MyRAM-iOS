@@ -8,78 +8,143 @@ import SwiftData
 final class MacSyncBatchApplier {
     private let context: ModelContext
     private let seenBatchStore: MacSyncSeenBatchStore
+    private let performSave: () throws -> Void
 
-    init(context: ModelContext, seenBatchStore: MacSyncSeenBatchStore = MacSyncSeenBatchStore()) {
+    init(
+        context: ModelContext,
+        seenBatchStore: MacSyncSeenBatchStore = MacSyncSeenBatchStore(),
+        performSave: (() throws -> Void)? = nil
+    ) {
         self.context = context
         self.seenBatchStore = seenBatchStore
+        self.performSave = performSave ?? { try context.save() }
     }
 
-    func apply(_ batch: MacSyncBatch) throws {
-        guard !seenBatchStore.hasSeen(batch.id) else { return }
-
-        for change in batch.changes {
-            try apply(change)
+    func apply(_ batch: MacSyncBatch) throws -> MacAppliedSyncBatch {
+        guard !seenBatchStore.hasSeen(batch.id) else {
+            return MacAppliedSyncBatch(batchID: batch.id, changes: [])
         }
 
-        try context.save()
-        seenBatchStore.markSeen(batch.id)
+        var rollbackSnapshots: [UUID: NoteRollbackSnapshot] = [:]
+        do {
+            var appliedChanges: [MacAppliedSyncChange] = []
+            for change in batch.changes {
+                if let appliedChange = try apply(change, rollbackSnapshots: &rollbackSnapshots) {
+                    appliedChanges.append(appliedChange)
+                }
+            }
+
+            try performSave()
+            seenBatchStore.markSeen(batch.id)
+            return MacAppliedSyncBatch(batchID: batch.id, changes: appliedChanges)
+        } catch {
+            // Both mechanisms are needed: rollback() discards unsaved changes, but the main
+            // context's autosave can persist mid-apply mutations before performSave() throws,
+            // and the snapshots restore those. noteCreated needs no snapshot because the
+            // exists-guard makes re-applying it on retry idempotent.
+            context.rollback()
+            rollbackSnapshots.values.forEach { $0.restore() }
+            throw error
+        }
     }
 
-    private func apply(_ change: MacSyncChange) throws {
+    private func apply(
+        _ change: MacSyncChange,
+        rollbackSnapshots: inout [UUID: NoteRollbackSnapshot]
+    ) throws -> MacAppliedSyncChange? {
         switch change {
         case .noteCreated(let change):
-            try applyNoteCreated(change)
+            return try applyNoteCreated(change)
         case .noteTitleChanged(let change):
-            try applyTitleChanged(change)
+            return try applyTitleChanged(change, rollbackSnapshots: &rollbackSnapshots)
         case .noteBodyTextInserted(let change):
-            try applyBodyTextInserted(change)
+            return try applyBodyTextInserted(change, rollbackSnapshots: &rollbackSnapshots)
         case .noteBodyTextDeleted(let change):
-            try applyBodyTextDeleted(change)
+            return try applyBodyTextDeleted(change, rollbackSnapshots: &rollbackSnapshots)
         }
     }
 
-    private func applyNoteCreated(_ change: MacSyncNoteCreatedChange) throws {
-        guard try loadNote(id: change.noteID) == nil else { return }
+    private func applyNoteCreated(_ change: MacSyncNoteCreatedChange) throws -> MacAppliedSyncChange? {
+        guard try loadNote(id: change.noteID) == nil else { return nil }
 
         let note = Note(title: change.title, content: change.body, folder: try loadFolder(id: change.folderID))
         note.id = change.noteID
         note.createdAt = change.createdAt
         note.modifiedAt = change.modifiedAt
         context.insert(note)
+        return .noteCreated(
+            MacAppliedNoteCreated(
+                noteID: change.noteID,
+                title: change.title,
+                body: change.body,
+                modifiedAt: change.modifiedAt
+            )
+        )
     }
 
-    private func applyTitleChanged(_ change: MacSyncNoteTitleChangedChange) throws {
-        guard let note = try loadNote(id: change.noteID) else { return }
+    private func applyTitleChanged(
+        _ change: MacSyncNoteTitleChangedChange,
+        rollbackSnapshots: inout [UUID: NoteRollbackSnapshot]
+    ) throws -> MacAppliedSyncChange? {
+        guard let note = try loadNote(id: change.noteID) else { return nil }
 
+        captureRollbackSnapshot(for: note, in: &rollbackSnapshots)
         note.title = change.title
         note.modifiedAt = change.modifiedAt
+        return .titleChanged(
+            MacAppliedTitleChanged(
+                noteID: change.noteID,
+                title: change.title,
+                modifiedAt: change.modifiedAt
+            )
+        )
     }
 
-    private func applyBodyTextInserted(_ change: MacSyncNoteBodyTextInsertedChange) throws {
-        guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return }
+    private func applyBodyTextInserted(
+        _ change: MacSyncNoteBodyTextInsertedChange,
+        rollbackSnapshots: inout [UUID: NoteRollbackSnapshot]
+    ) throws -> MacAppliedSyncChange? {
+        guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return nil }
 
+        captureRollbackSnapshot(for: note, in: &rollbackSnapshots)
         let originalContent = note.content
         let clampedOffset = originalContent.syncBatchClampedUTF16Offset(change.utf16Offset)
         let insertionOffset = originalContent.syncBatchSafeInsertionOffset(fallingForwardFrom: clampedOffset)
         note.content = originalContent.syncBatchInserting(change.text, atUTF16Offset: insertionOffset)
         updateRichTextContent(for: note, originalPlainText: originalContent) { attributedText in
-            attributedText.insert(NSAttributedString(string: change.text), at: insertionOffset)
+            let attributes = MacRemoteInsertionAttributePolicy.attributesForRemoteInsertion(
+                in: attributedText,
+                at: insertionOffset
+            )
+            attributedText.insert(NSAttributedString(string: change.text, attributes: attributes), at: insertionOffset)
         }
         note.modifiedAt = change.modifiedAt
+        return .bodyInserted(
+            MacAppliedBodyInsertion(
+                noteID: change.noteID,
+                utf16Offset: insertionOffset,
+                text: change.text,
+                modifiedAt: change.modifiedAt
+            )
+        )
     }
 
-    private func applyBodyTextDeleted(_ change: MacSyncNoteBodyTextDeletedChange) throws {
+    private func applyBodyTextDeleted(
+        _ change: MacSyncNoteBodyTextDeletedChange,
+        rollbackSnapshots: inout [UUID: NoteRollbackSnapshot]
+    ) throws -> MacAppliedSyncChange? {
         guard let note = try loadNote(id: change.noteID),
               change.utf16Length > 0,
               let range = note.content.syncBatchSafeUTF16Range(location: change.utf16Offset, length: change.utf16Length) else {
-            return
+            return nil
         }
 
         let targetText = (note.content as NSString).substring(with: range)
         if let expectedText = change.expectedText, targetText != expectedText {
-            return
+            return nil
         }
 
+        captureRollbackSnapshot(for: note, in: &rollbackSnapshots)
         let originalContent = note.content
         note.content = (note.content as NSString).replacingCharacters(in: range, with: "")
         updateRichTextContent(for: note, originalPlainText: originalContent) { attributedText in
@@ -87,6 +152,14 @@ final class MacSyncBatchApplier {
             attributedText.deleteCharacters(in: range)
         }
         note.modifiedAt = change.modifiedAt
+        return .bodyDeleted(
+            MacAppliedBodyDeletion(
+                noteID: change.noteID,
+                range: range,
+                deletedText: targetText,
+                modifiedAt: change.modifiedAt
+            )
+        )
     }
 
     private func loadNote(id: UUID) throws -> Note? {
@@ -109,6 +182,14 @@ final class MacSyncBatchApplier {
         return try context.fetch(descriptor).first
     }
 
+    private func captureRollbackSnapshot(
+        for note: Note,
+        in rollbackSnapshots: inout [UUID: NoteRollbackSnapshot]
+    ) {
+        guard rollbackSnapshots[note.id] == nil else { return }
+        rollbackSnapshots[note.id] = NoteRollbackSnapshot(note: note)
+    }
+
     private func updateRichTextContent(
         for note: Note,
         originalPlainText: String,
@@ -129,6 +210,30 @@ final class MacSyncBatchApplier {
 
         mutation(attributedText)
         note.richTextContentData = RTFCoding.encode(attributedText)
+    }
+}
+
+@MainActor
+private struct NoteRollbackSnapshot {
+    let note: Note
+    let title: String
+    let content: String
+    let richTextContentData: Data?
+    let modifiedAt: Date
+
+    init(note: Note) {
+        self.note = note
+        title = note.title
+        content = note.content
+        richTextContentData = note.richTextContentData
+        modifiedAt = note.modifiedAt
+    }
+
+    func restore() {
+        note.title = title
+        note.content = content
+        note.richTextContentData = richTextContentData
+        note.modifiedAt = modifiedAt
     }
 }
 #endif

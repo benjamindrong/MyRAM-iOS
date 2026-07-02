@@ -19,7 +19,8 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var lastSyncAt: Date?
 
-    var onBatchApplied: (() -> Void)?
+    var onBeforeApplyingRemoteBatch: (() -> Bool)?
+    var onBatchApplied: ((MacAppliedSyncBatch) -> Void)?
 
     private let serviceType = "myram-sync"
     private let peerID: MCPeerID
@@ -30,10 +31,16 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     private let context: ModelContext
     private var readyBatchTask: Task<Void, Never>?
     private let unsentBatches: FileBackedSyncBatchQueue
+    private let pendingIncomingBatches: FileBackedSyncBatchQueue
+    private let applyBatch: (MacSyncBatch) throws -> MacAppliedSyncBatch
+    private var isDrainingPendingIncomingBatches = false
 
     init(
         context: ModelContext,
-        unsentBatchQueueFileURL: URL? = MacSyncBatchController.unsentBatchQueueFileURL()
+        unsentBatchQueueFileURL: URL? = MacSyncBatchController.unsentBatchQueueFileURL(),
+        pendingIncomingBatchQueueFileURL: URL? = MacSyncBatchController.pendingIncomingBatchQueueFileURL(),
+        startsNetworking: Bool = true,
+        applyBatch: ((MacSyncBatch) throws -> MacAppliedSyncBatch)? = nil
     ) {
         let identity = MacSyncDeviceIdentityProvider().currentIdentity()
         peerID = MCPeerID(displayName: "\(identity.displayName)|\(identity.id.uuidString)")
@@ -43,14 +50,20 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         accumulator = MacSyncBatchAccumulator(originDeviceID: identity.id)
         self.context = context
         unsentBatches = FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
+        pendingIncomingBatches = FileBackedSyncBatchQueue(fileURL: pendingIncomingBatchQueueFileURL)
+        self.applyBatch = applyBatch ?? { batch in
+            try MacSyncBatchApplier(context: context).apply(batch)
+        }
 
         super.init()
 
         session.delegate = self
         advertiser.delegate = self
         browser.delegate = self
-        advertiser.startAdvertisingPeer()
-        browser.startBrowsingForPeers()
+        if startsNetworking {
+            advertiser.startAdvertisingPeer()
+            browser.startBrowsingForPeers()
+        }
 
         readyBatchTask = Task { [weak self, accumulator] in
             let stream = await accumulator.readyBatches()
@@ -135,15 +148,40 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         unsentBatches.enqueue(batch)
     }
 
-    private func receive(_ batch: MacSyncBatch) {
-        do {
-            try MacSyncBatchApplier(context: context).apply(batch)
-            lastSyncAt = batch.createdAt
-            lastErrorMessage = nil
-            onBatchApplied?()
-        } catch {
-            lastErrorMessage = "Unable to apply nearby batch changes."
+    func receive(_ batch: MacSyncBatch) {
+        if !pendingIncomingBatches.contains(batch.id) {
+            pendingIncomingBatches.enqueue(batch)
         }
+        drainPendingIncomingBatchesIfPossible()
+    }
+
+    func drainPendingIncomingBatchesIfPossible() {
+        guard !isDrainingPendingIncomingBatches else { return }
+
+        isDrainingPendingIncomingBatches = true
+        defer { isDrainingPendingIncomingBatches = false }
+
+        guard onBeforeApplyingRemoteBatch?() ?? false else {
+            lastErrorMessage = "Incoming sync is waiting for local edits to save."
+            return
+        }
+
+        while let batch = pendingIncomingBatches.first {
+            do {
+                let appliedBatch = try applyBatch(batch)
+                pendingIncomingBatches.remove(batch.id)
+                lastSyncAt = batch.createdAt
+                lastErrorMessage = nil
+                onBatchApplied?(appliedBatch)
+            } catch {
+                lastErrorMessage = "Unable to apply nearby batch changes."
+                return
+            }
+        }
+    }
+
+    var pendingIncomingBatchCount: Int {
+        pendingIncomingBatches.pendingBatches.count
     }
 
     private func remember(_ peerID: MCPeerID) {
@@ -168,6 +206,19 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         return supportDirectory
             .appendingPathComponent("MyRAM", isDirectory: true)
             .appendingPathComponent("mac-unsent-batch-queue.json")
+    }
+
+    nonisolated private static func pendingIncomingBatchQueueFileURL() -> URL? {
+        guard let supportDirectory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            return nil
+        }
+
+        return supportDirectory
+            .appendingPathComponent("MyRAM", isDirectory: true)
+            .appendingPathComponent("mac-pending-incoming-batch-queue.json")
     }
 }
 

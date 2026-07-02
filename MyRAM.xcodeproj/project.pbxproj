@@ -30,7 +30,16 @@
 		BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000001 /* MacNoteEditorView.swift */; };
 		BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000002 /* MacTextViewRepresentable.swift */; };
 		BCA106010000000000000003 /* MacEditorSampleDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000003 /* MacEditorSampleDocument.swift */; };
+		BCA106010000000000000004 /* MacEditorSelectionMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000004 /* MacEditorSelectionMapper.swift */; };
+		BCA106010000000000000005 /* MacRemoteInsertionAttributePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000005 /* MacRemoteInsertionAttributePolicy.swift */; };
+		BCA106010000000000000006 /* MacIncomingSyncApplicationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000006 /* MacIncomingSyncApplicationPolicy.swift */; };
+		BCA106010000000000000007 /* MacEditorSyncBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000007 /* MacEditorSyncBridge.swift */; };
+		BCA106010000000000000008 /* MacNSRangeClamp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000008 /* MacNSRangeClamp.swift */; };
 		BCA107010000000000000001 /* MacEditorSampleDocumentTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA107020000000000000001 /* MacEditorSampleDocumentTests.swift */; };
+		BCA107010000000000000003 /* MacEditorSelectionMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA107020000000000000003 /* MacEditorSelectionMapperTests.swift */; };
+		BCA107010000000000000004 /* MacRemoteInsertionAttributePolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA107020000000000000004 /* MacRemoteInsertionAttributePolicyTests.swift */; };
+		BCA107010000000000000005 /* MacIncomingSyncApplicationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA107020000000000000005 /* MacIncomingSyncApplicationPolicyTests.swift */; };
+		BCA107010000000000000006 /* MacEditorSyncBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA107020000000000000006 /* MacEditorSyncBridgeTests.swift */; };
 		BCA109010000000000000001 /* MacNotePersistenceAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */; };
 		BCA109010000000000000002 /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D0B2EA5447D00F2D0AA /* Note.swift */; };
 		BCA109010000000000000003 /* Folder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D212EA6000000F2D0AA /* Folder.swift */; };
@@ -47,6 +56,8 @@
 		BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */; };
 		BCA122010000000000000008 /* MacSyncBatchAccumulatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000008 /* MacSyncBatchAccumulatorTests.swift */; };
 		BCA122010000000000000009 /* MacSyncBatchApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000009 /* MacSyncBatchApplierTests.swift */; };
+		BCA12201000000000000000A /* MacAppliedSyncBatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA12202000000000000000A /* MacAppliedSyncBatch.swift */; };
+		BCA12201000000000000000B /* MacSyncBatchControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */; };
 		BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000001 /* SyncBatchPayload.swift */; };
 		BCA123010000000000000002 /* SyncBatchEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000002 /* SyncBatchEnvelope.swift */; };
 		BCA123010000000000000003 /* MultipeerSyncMessageEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000003 /* MultipeerSyncMessageEnvelope.swift */; };
@@ -159,8 +170,17 @@
 		BCA106020000000000000001 /* MacNoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteEditorView.swift; sourceTree = "<group>"; };
 		BCA106020000000000000002 /* MacTextViewRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTextViewRepresentable.swift; sourceTree = "<group>"; };
 		BCA106020000000000000003 /* MacEditorSampleDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSampleDocument.swift; sourceTree = "<group>"; };
+		BCA106020000000000000004 /* MacEditorSelectionMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSelectionMapper.swift; sourceTree = "<group>"; };
+		BCA106020000000000000005 /* MacRemoteInsertionAttributePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRemoteInsertionAttributePolicy.swift; sourceTree = "<group>"; };
+		BCA106020000000000000006 /* MacIncomingSyncApplicationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacIncomingSyncApplicationPolicy.swift; sourceTree = "<group>"; };
+		BCA106020000000000000007 /* MacEditorSyncBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSyncBridge.swift; sourceTree = "<group>"; };
+		BCA106020000000000000008 /* MacNSRangeClamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNSRangeClamp.swift; sourceTree = "<group>"; };
 		BCA107020000000000000001 /* MacEditorSampleDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSampleDocumentTests.swift; sourceTree = "<group>"; };
 		BCA107020000000000000002 /* MyRAMMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyRAMMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		BCA107020000000000000003 /* MacEditorSelectionMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSelectionMapperTests.swift; sourceTree = "<group>"; };
+		BCA107020000000000000004 /* MacRemoteInsertionAttributePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRemoteInsertionAttributePolicyTests.swift; sourceTree = "<group>"; };
+		BCA107020000000000000005 /* MacIncomingSyncApplicationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacIncomingSyncApplicationPolicyTests.swift; sourceTree = "<group>"; };
+		BCA107020000000000000006 /* MacEditorSyncBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSyncBridgeTests.swift; sourceTree = "<group>"; };
 		BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotePersistenceAdapter.swift; sourceTree = "<group>"; };
 		BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotePersistenceAdapterTests.swift; sourceTree = "<group>"; };
 		BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSidebarCollapsePolicy.swift; sourceTree = "<group>"; };
@@ -174,6 +194,8 @@
 		BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncSeenBatchStoreTests.swift; sourceTree = "<group>"; };
 		BCA122020000000000000008 /* MacSyncBatchAccumulatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchAccumulatorTests.swift; sourceTree = "<group>"; };
 		BCA122020000000000000009 /* MacSyncBatchApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchApplierTests.swift; sourceTree = "<group>"; };
+		BCA12202000000000000000A /* MacAppliedSyncBatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppliedSyncBatch.swift; sourceTree = "<group>"; };
+		BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchControllerTests.swift; sourceTree = "<group>"; };
 		BCA123020000000000000001 /* SyncBatchPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchPayload.swift; sourceTree = "<group>"; };
 		BCA123020000000000000002 /* SyncBatchEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchEnvelope.swift; sourceTree = "<group>"; };
 		BCA123020000000000000003 /* MultipeerSyncMessageEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipeerSyncMessageEnvelope.swift; sourceTree = "<group>"; };
@@ -342,6 +364,11 @@
 				BCA106020000000000000001 /* MacNoteEditorView.swift */,
 				BCA106020000000000000002 /* MacTextViewRepresentable.swift */,
 				BCA106020000000000000003 /* MacEditorSampleDocument.swift */,
+				BCA106020000000000000004 /* MacEditorSelectionMapper.swift */,
+				BCA106020000000000000005 /* MacRemoteInsertionAttributePolicy.swift */,
+				BCA106020000000000000006 /* MacIncomingSyncApplicationPolicy.swift */,
+				BCA106020000000000000007 /* MacEditorSyncBridge.swift */,
+				BCA106020000000000000008 /* MacNSRangeClamp.swift */,
 				BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */,
 				BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */,
 			);
@@ -356,6 +383,7 @@
 				BCA122020000000000000003 /* MacSyncSeenBatchStore.swift */,
 				BCA122020000000000000004 /* MacSyncBatchAccumulator.swift */,
 				BCA122020000000000000005 /* MacSyncBatchApplier.swift */,
+				BCA12202000000000000000A /* MacAppliedSyncBatch.swift */,
 				BCA123020000000000000013 /* MacSyncBatchController.swift */,
 			);
 			path = Sync;
@@ -430,12 +458,17 @@
 			isa = PBXGroup;
 			children = (
 				BCA107020000000000000001 /* MacEditorSampleDocumentTests.swift */,
+				BCA107020000000000000003 /* MacEditorSelectionMapperTests.swift */,
+				BCA107020000000000000004 /* MacRemoteInsertionAttributePolicyTests.swift */,
+				BCA107020000000000000005 /* MacIncomingSyncApplicationPolicyTests.swift */,
+				BCA107020000000000000006 /* MacEditorSyncBridgeTests.swift */,
 				BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */,
 				BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */,
 				BCA122020000000000000006 /* MacSyncDeviceIdentityTests.swift */,
 				BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */,
 				BCA122020000000000000008 /* MacSyncBatchAccumulatorTests.swift */,
 				BCA122020000000000000009 /* MacSyncBatchApplierTests.swift */,
+				BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */,
 			);
 			path = MyRAMMacTests;
 			sourceTree = "<group>";
@@ -803,6 +836,11 @@
 				BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */,
 				BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */,
 				BCA106010000000000000003 /* MacEditorSampleDocument.swift in Sources */,
+				BCA106010000000000000004 /* MacEditorSelectionMapper.swift in Sources */,
+				BCA106010000000000000005 /* MacRemoteInsertionAttributePolicy.swift in Sources */,
+				BCA106010000000000000006 /* MacIncomingSyncApplicationPolicy.swift in Sources */,
+				BCA106010000000000000007 /* MacEditorSyncBridge.swift in Sources */,
+				BCA106010000000000000008 /* MacNSRangeClamp.swift in Sources */,
 				BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */,
 				BCA104010000000000000002 /* RTFCoding.swift in Sources */,
 				BCA109010000000000000001 /* MacNotePersistenceAdapter.swift in Sources */,
@@ -823,6 +861,7 @@
 				BCA122010000000000000003 /* MacSyncSeenBatchStore.swift in Sources */,
 				BCA122010000000000000004 /* MacSyncBatchAccumulator.swift in Sources */,
 				BCA122010000000000000005 /* MacSyncBatchApplier.swift in Sources */,
+				BCA12201000000000000000A /* MacAppliedSyncBatch.swift in Sources */,
 				BCA123010000000000000019 /* MacSyncBatchController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -832,12 +871,17 @@
 			buildActionMask = 2147483647;
 			files = (
 				BCA107010000000000000001 /* MacEditorSampleDocumentTests.swift in Sources */,
+				BCA107010000000000000003 /* MacEditorSelectionMapperTests.swift in Sources */,
+				BCA107010000000000000004 /* MacRemoteInsertionAttributePolicyTests.swift in Sources */,
+				BCA107010000000000000005 /* MacIncomingSyncApplicationPolicyTests.swift in Sources */,
+				BCA107010000000000000006 /* MacEditorSyncBridgeTests.swift in Sources */,
 				BCA109010000000000000005 /* MacNotePersistenceAdapterTests.swift in Sources */,
 				BCA10A010000000000000002 /* MacSidebarCollapsePolicyTests.swift in Sources */,
 				BCA122010000000000000006 /* MacSyncDeviceIdentityTests.swift in Sources */,
 				BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */,
 				BCA122010000000000000008 /* MacSyncBatchAccumulatorTests.swift in Sources */,
 				BCA122010000000000000009 /* MacSyncBatchApplierTests.swift in Sources */,
+				BCA12201000000000000000B /* MacSyncBatchControllerTests.swift in Sources */,
 				BCA123010000000000000025 /* SyncBatchUnsentQueueTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
