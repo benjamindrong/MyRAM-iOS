@@ -1187,10 +1187,125 @@ final class SyncConvergencePlanningTests: XCTestCase {
             queuedBatches: [later, evidence]
         )
 
-        XCTAssertEqual(selection.eligibleEvidenceBatches.map(\.batch.id), [evidence.batch.id])
+        // The earlier batch touches a note the candidate cannot cover, so it is
+        // atomic-blocked rather than partially spliced as evidence.
+        XCTAssertTrue(selection.eligibleEvidenceBatches.isEmpty)
         XCTAssertTrue(selection.blockedNoteIDs.contains(noteB))
-        XCTAssertEqual(selection.blockedBatches.map(\.batch.id), [later.batch.id])
+        XCTAssertEqual(Set(selection.blockedBatches.map(\.batch.id)), [evidence.batch.id, later.batch.id])
         XCTAssertTrue(selection.eligibleDisjointBatches.isEmpty)
+    }
+
+    func testEarlierMultiNoteQueuedBatchIsNotPartiallyConsumedAsUnionEvidence() {
+        let noteA = uuid("00000000-0000-0000-0000-000000132741")
+        let noteB = uuid("00000000-0000-0000-0000-000000132742")
+        let base = "AB"
+        let baseHash = SyncBatchContentHash.sha256Hex(for: base)
+        let multiNoteQueued = SyncConvergenceQueuedBatch(
+            batch: SyncBatch(
+                id: uuid("00000000-0000-0000-0000-000000132861"),
+                originDeviceID: uuid("00000000-0000-0000-0000-000000132862"),
+                createdAt: date(1),
+                changes: [
+                    .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteA, utf16Offset: 1, text: "y", modifiedAt: date(2), baseContentHash: baseHash
+                    )),
+                    .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteB, utf16Offset: 0, text: "z", modifiedAt: date(2), baseContentHash: nil
+                    ))
+                ]
+            ),
+            queuePosition: 0
+        )
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132863"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132864"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteA, utf16Offset: 1, text: "x", modifiedAt: date(3), baseContentHash: baseHash
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteA, body: "AqB")],
+            retainedSnapshots: [SyncConvergenceRetainedSnapshot(noteID: noteA, contentHash: baseHash, body: base, generation: 1)],
+            queuedBatches: [multiNoteQueued]
+        ))
+
+        guard case .planned(let plan) = outcome,
+              case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected planned reconstruction without spliced evidence, got \(outcome)")
+        }
+        let queuedBatchIDLowercase = multiNoteQueued.batch.id.uuidString.lowercased()
+        XCTAssertFalse(plan.incorporationEvidence.operationIdentities.contains {
+            $0.batchIDLowercase == queuedBatchIDLowercase
+        })
+        XCTAssertFalse(bodyPlan.finalBody.contains("y"))
+        XCTAssertFalse(bodyPlan.finalBody.contains("z"))
+    }
+
+    func testCompetingValidNilBaseBranchesBacktrackToTargetPath() {
+        let noteID = uuid("00000000-0000-0000-0000-000000132743")
+        let snapshotBody = "A"
+        let targetBody = "AB"
+        let targetHash = SyncBatchContentHash.sha256Hex(for: targetBody)
+        // Earlier canonical branch: individually valid (its declared result matches its
+        // own replay from the snapshot) but not on the path to the requested target.
+        let offTargetBranch = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000132865"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132866"),
+            operationIndex: 0,
+            offset: 0,
+            text: "Q",
+            modifiedAt: date(2),
+            baseBody: snapshotBody,
+            resultBody: "QA"
+        ).withoutBaseHash()
+        let targetBranch = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000132867"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132868"),
+            operationIndex: 0,
+            offset: 1,
+            text: "B",
+            modifiedAt: date(3),
+            baseBody: snapshotBody,
+            resultBody: targetBody
+        ).withoutBaseHash()
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132869"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132870"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID, utf16Offset: 2, text: "C", modifiedAt: date(4), baseContentHash: targetHash
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: "AX")],
+            retainedSnapshots: [
+                SyncConvergenceRetainedSnapshot(
+                    noteID: noteID,
+                    contentHash: SyncBatchContentHash.sha256Hex(for: snapshotBody),
+                    body: snapshotBody,
+                    generation: 1
+                )
+            ],
+            retainedRemoteOperations: [offTargetBranch, targetBranch]
+        ))
+
+        guard case .planned(let plan) = outcome,
+              case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected backtracking reconstruction to reach the target branch, got \(outcome)")
+        }
+        XCTAssertEqual(bodyPlan.reconstructedBaseHash, targetHash)
+        XCTAssertFalse(bodyPlan.reconstructedBaseBody.contains("Q"))
     }
 
     func testExplicitCandidateQueuePositionLimitsEvidenceToEarlierBatches() {
@@ -1550,6 +1665,35 @@ final class SyncConvergencePlanningTests: XCTestCase {
                 projectedFullIncorporationEvidenceBytes: fixture.projectedBytes
             ),
             .failedBeforeCommit(.invalidMergePlan(noteID: fixture.bodyNoteID))
+        )
+
+        // Incorporation result-evidence rows must equal their owning effects.
+        let alteredRows = fixture.plan.incorporationEvidence.resultEvidence.map { row -> SyncConvergenceResultEvidence in
+            guard row.kind == .body else { return row }
+            return SyncConvergenceResultEvidence(
+                batchID: row.batchID,
+                noteID: row.noteID,
+                kind: row.kind,
+                preHash: row.preHash,
+                postHash: "deadbeef",
+                canonicalReplayKey: row.canonicalReplayKey
+            )
+        }
+        let alteredEvidence = rebuiltPlan(
+            fixture.plan,
+            incorporationEvidence: SyncConvergenceIncorporationPlan(
+                operationIdentities: fixture.plan.incorporationEvidence.operationIdentities,
+                resultEvidence: alteredRows
+            )
+        )
+        XCTAssertEqual(
+            validator.validate(
+                alteredEvidence,
+                input: fixture.input,
+                queueSelection: fixture.selection,
+                projectedFullIncorporationEvidenceBytes: try projectedBytes(for: alteredEvidence, input: fixture.input)
+            ),
+            .failedBeforeCommit(.invalidMergePlan(noteID: nil))
         )
 
         // History additions must match the body effects exactly.

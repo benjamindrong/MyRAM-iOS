@@ -943,10 +943,19 @@ struct SyncConvergenceEvidenceSelector {
             }
             let noteIDs = queued.batch.affectedNoteIDs
             if queued.queuePosition < candidatePosition && !noteIDs.isDisjoint(with: candidateNoteIDs) {
-                // An evidence batch stays queued and unincorporated, so every note it
-                // touches must stay blocked until it actually incorporates.
-                eligibleEvidence.append(queued)
-                blockedNoteIDs.formUnion(noteIDs)
+                // A queued batch is atomic: it may serve as union evidence only when the
+                // candidate can consume it completely — every affected note covered by
+                // the candidate and every change a body-text operation. Anything else
+                // must incorporate as its own candidate; splicing part of it out would
+                // be partial incorporation, so it blocks instead.
+                let fullyConsumable = noteIDs.isSubset(of: candidateNoteIDs)
+                    && queued.batch.changes.allSatisfy(\.isBodyTextOperation)
+                if fullyConsumable {
+                    eligibleEvidence.append(queued)
+                } else {
+                    blocked.append(queued)
+                    blockedNoteIDs.formUnion(noteIDs)
+                }
                 continue
             }
             if noteIDs.isDisjoint(with: blockedNoteIDs) {
@@ -1317,96 +1326,145 @@ private struct SyncBaseReconstructor {
         let replayEngine = SyncOperationReplayEngine()
         let candidates = noteSnapshots.sorted { $0.generation > $1.generation }
         for snapshot in candidates {
-            var body = snapshot.body
-            var generation = snapshot.generation
-            var consumedOperationIdentityKeys: Set<String> = []
-            // Deterministic forward chaining over the bounded retained set: each pass
-            // consumes the earliest canonical operation that verifiably extends the
-            // current body. Operations that cannot extend this chain are skipped, not
-            // fatal — an unrelated retained branch must never block a valid path.
-            var progressed = true
-            while progressed {
-                progressed = false
-                for retained in chain {
-                    guard !consumedOperationIdentityKeys.contains(retained.identityKey) else {
-                        continue
-                    }
-                    let currentHash = SyncBatchContentHash.sha256Hex(for: body)
-                    let claimsCurrentPosition: Bool
-                    if let baseContentHash = retained.baseContentHash {
-                        guard baseContentHash == currentHash else {
-                            continue
-                        }
-                        claimsCurrentPosition = true
-                    } else if retained.resultContentHash != nil {
-                        // A nil-base legacy step makes no claim about this position;
-                        // it joins the chain only when strict replay proves its result.
-                        claimsCurrentPosition = false
-                    } else {
-                        // Neither base nor result evidence: never guessed into a chain.
-                        continue
-                    }
-                    let identity = OperationIdentityPayload(
-                        batchID: retained.batchID,
-                        originDeviceID: retained.originDeviceID,
-                        operationIndex: retained.operationIndex,
-                        operationKind: retained.operationKind.rawValue,
-                        canonicalReplayKey: retained.canonicalReplayKey
-                    )
-                    switch replayEngine.planDeclaredChainStep(
-                        retained.syncBatchChange,
-                        identity: identity,
-                        current: SyncConvergenceProjectedNote(
-                            noteID: noteID,
-                            folderID: nil,
-                            title: "",
-                            body: body,
-                            createdAt: .distantPast,
-                            modifiedAt: retained.canonicalReplayKey.modifiedAt
-                        ),
-                        batchID: retained.batchID
-                    ) {
-                    case .success(let result):
-                        if let expected = retained.resultContentHash,
-                           expected != SyncBatchContentHash.sha256Hex(for: result.finalBody) {
-                            if claimsCurrentPosition {
-                                // The operation claimed this exact body and contradicted
-                                // its own declared result: present-but-contradictory.
-                                return .failed(.corruptHistory(noteID: noteID))
-                            }
-                            // A nil-base step whose result does not match simply does
-                            // not extend this chain.
-                            continue
-                        }
-                        body = result.finalBody
-                        generation += 1
-                        consumedOperationIdentityKeys.insert(retained.identityKey)
-                        if SyncBatchContentHash.sha256Hex(for: body) == requiredBaseHash {
-                            return .reconstructed(ReconstructedBase(
-                                body: body,
-                                contentHash: requiredBaseHash,
-                                generation: generation,
-                                consumedOperationIdentityKeys: consumedOperationIdentityKeys
-                            ))
-                        }
-                        progressed = true
-                    case .deferred:
-                        continue
-                    case .failed(let failure):
-                        if claimsCurrentPosition {
-                            return .failed(failure)
-                        }
-                        // A nil-base step that cannot replay from this body does not
-                        // extend this chain; it may belong to another branch.
-                        continue
-                    }
-                    if progressed {
-                        break
-                    }
-                }
+            var deadEnds: Set<String> = []
+            switch searchChain(
+                body: snapshot.body,
+                generation: snapshot.generation,
+                consumed: [],
+                chain: chain,
+                requiredBaseHash: requiredBaseHash,
+                noteID: noteID,
+                replayEngine: replayEngine,
+                deadEnds: &deadEnds
+            ) {
+            case .found(let base):
+                return .reconstructed(base)
+            case .corrupt(let failure):
+                return .failed(failure)
+            case .notFound:
+                continue
             }
         }
         return .unavailable
+    }
+
+    private enum ChainSearchResult {
+        case found(ReconstructedBase)
+        case corrupt(SyncConvergenceTransactionFailure)
+        case notFound
+    }
+
+    // Deterministic backtracking forward-chain search over the bounded retained set.
+    // Branch candidates are tried in canonical order; a branch that verifiably extends
+    // the current body but fails to establish the requested target is abandoned and
+    // the next branch is tried, so an unrelated valid extension can never hide a
+    // later valid path. Corruption remains fail-closed only for operations that claim
+    // the current position and contradict their own declared evidence.
+    private func searchChain(
+        body: String,
+        generation: Int,
+        consumed: Set<String>,
+        chain: [SyncConvergenceRetainedOperation],
+        requiredBaseHash: String,
+        noteID: UUID,
+        replayEngine: SyncOperationReplayEngine,
+        deadEnds: inout Set<String>
+    ) -> ChainSearchResult {
+        let currentHash = SyncBatchContentHash.sha256Hex(for: body)
+        if currentHash == requiredBaseHash, !consumed.isEmpty {
+            return .found(ReconstructedBase(
+                body: body,
+                contentHash: requiredBaseHash,
+                generation: generation,
+                consumedOperationIdentityKeys: consumed
+            ))
+        }
+        let stateKey = currentHash + "|" + consumed.sorted().joined(separator: ",")
+        guard !deadEnds.contains(stateKey) else {
+            return .notFound
+        }
+        for retained in chain {
+            guard !consumed.contains(retained.identityKey) else {
+                continue
+            }
+            let claimsCurrentPosition: Bool
+            if let baseContentHash = retained.baseContentHash {
+                guard baseContentHash == currentHash else {
+                    continue
+                }
+                claimsCurrentPosition = true
+            } else if retained.resultContentHash != nil {
+                // A nil-base legacy step makes no claim about this position; it joins
+                // the chain only when strict replay proves its declared result.
+                claimsCurrentPosition = false
+            } else {
+                // Neither base nor result evidence: never guessed into a chain.
+                continue
+            }
+            let identity = OperationIdentityPayload(
+                batchID: retained.batchID,
+                originDeviceID: retained.originDeviceID,
+                operationIndex: retained.operationIndex,
+                operationKind: retained.operationKind.rawValue,
+                canonicalReplayKey: retained.canonicalReplayKey
+            )
+            switch replayEngine.planDeclaredChainStep(
+                retained.syncBatchChange,
+                identity: identity,
+                current: SyncConvergenceProjectedNote(
+                    noteID: noteID,
+                    folderID: nil,
+                    title: "",
+                    body: body,
+                    createdAt: .distantPast,
+                    modifiedAt: retained.canonicalReplayKey.modifiedAt
+                ),
+                batchID: retained.batchID
+            ) {
+            case .success(let result):
+                if let expected = retained.resultContentHash,
+                   expected != SyncBatchContentHash.sha256Hex(for: result.finalBody) {
+                    if claimsCurrentPosition {
+                        // The operation claimed this exact body and contradicted its
+                        // own declared result: present-but-contradictory evidence.
+                        return .corrupt(.corruptHistory(noteID: noteID))
+                    }
+                    // A nil-base step whose result does not match does not extend
+                    // this chain; it may belong to another branch.
+                    continue
+                }
+                var nextConsumed = consumed
+                nextConsumed.insert(retained.identityKey)
+                switch searchChain(
+                    body: result.finalBody,
+                    generation: generation + 1,
+                    consumed: nextConsumed,
+                    chain: chain,
+                    requiredBaseHash: requiredBaseHash,
+                    noteID: noteID,
+                    replayEngine: replayEngine,
+                    deadEnds: &deadEnds
+                ) {
+                case .found(let base):
+                    return .found(base)
+                case .corrupt(let failure):
+                    return .corrupt(failure)
+                case .notFound:
+                    continue
+                }
+            case .deferred:
+                continue
+            case .failed(let failure):
+                if claimsCurrentPosition {
+                    return .corrupt(failure)
+                }
+                // A nil-base step that cannot replay from this body does not extend
+                // this chain; it may belong to another branch.
+                continue
+            }
+        }
+        deadEnds.insert(stateKey)
+        return .notFound
     }
 
     private func sortRetainedOperations(
@@ -1755,23 +1813,40 @@ struct SyncConvergencePlanValidator {
         let plannedIdentityKeys = seenIdentities
         var expectedRetainedAdditions: [SyncConvergencePlannedBodyOperation] = []
         var expectedSnapshotAdditions: [SyncConvergenceSnapshotAddition] = []
+        var expectedResultEvidence: [SyncConvergenceResultEvidence] = []
         for notePlan in plan.affectedNotePlans {
             guard notePlan.creationEffect != nil || notePlan.bodyEffect != nil || notePlan.titleEffect != nil else {
                 return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
             }
             let routing = plan.presentationPlan.noteRoutings[notePlan.noteID]
+            if let creationEffect = notePlan.creationEffect {
+                guard creationEffect.noteID == notePlan.noteID,
+                      creationEffect.resultEvidence.kind == .creation,
+                      creationEffect.resultEvidence.noteID == notePlan.noteID,
+                      creationEffect.resultEvidence.batchID == plan.batchID,
+                      creationEffect.resultEvidence.preHash == nil,
+                      creationEffect.resultEvidence.postHash == creationEffect.initialBodyHash else {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+                expectedResultEvidence.append(creationEffect.resultEvidence)
+            }
             switch notePlan.bodyEffect {
             case .matchingBaseIncremental(let bodyPlan):
                 guard bodyPlan.noteID == notePlan.noteID,
                       bodyPlan.initialBodyHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.initialBody),
                       bodyPlan.finalBodyHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.finalBody),
                       bodyPlan.resultEvidence.kind == .body,
+                      bodyPlan.resultEvidence.noteID == notePlan.noteID,
+                      bodyPlan.resultEvidence.batchID == plan.batchID,
+                      bodyPlan.resultEvidence.preHash == bodyPlan.initialBodyHash,
+                      bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
                       routing == .incremental,
                       bodyPlan.operations.allSatisfy({ $0.noteID == notePlan.noteID }),
                       bodyPlan.operations.allSatisfy({ plannedIdentityKeys.contains($0.operationIdentity.planIdentityKey) }) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
                 expectedRetainedAdditions.append(contentsOf: bodyPlan.operations)
+                expectedResultEvidence.append(bodyPlan.resultEvidence)
             case .reconstructedConflict(let bodyPlan):
                 guard bodyPlan.noteID == notePlan.noteID,
                       bodyPlan.reconstructedBaseHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.reconstructedBaseBody),
@@ -1779,6 +1854,10 @@ struct SyncConvergencePlanValidator {
                       bodyPlan.finalBodyHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.finalBody),
                       bodyPlan.presentationRouting == .wholeNoteFallback,
                       bodyPlan.resultEvidence.kind == .body,
+                      bodyPlan.resultEvidence.noteID == notePlan.noteID,
+                      bodyPlan.resultEvidence.batchID == plan.batchID,
+                      bodyPlan.resultEvidence.preHash == bodyPlan.projectedPreMergeCurrentHash,
+                      bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
                       routing == .wholeNoteFallback,
                       bodyPlan.retainedOperationAdditions.allSatisfy({ $0.noteID == notePlan.noteID }) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
@@ -1797,23 +1876,32 @@ struct SyncConvergencePlanValidator {
                 }
                 expectedRetainedAdditions.append(contentsOf: bodyPlan.retainedOperationAdditions)
                 expectedSnapshotAdditions.append(contentsOf: bodyPlan.snapshotAdditions)
+                expectedResultEvidence.append(bodyPlan.resultEvidence)
             case .legacyPositional(let bodyPlan):
                 guard bodyPlan.noteID == notePlan.noteID,
                       bodyPlan.finalBodyHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.finalBody),
                       bodyPlan.resultEvidence.kind == .body,
+                      bodyPlan.resultEvidence.noteID == notePlan.noteID,
+                      bodyPlan.resultEvidence.batchID == plan.batchID,
+                      bodyPlan.resultEvidence.preHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.initialBody),
+                      bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
                       routing == .incremental,
                       bodyPlan.operations.allSatisfy({ $0.noteID == notePlan.noteID }) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
                 expectedRetainedAdditions.append(contentsOf: bodyPlan.operations)
+                expectedResultEvidence.append(bodyPlan.resultEvidence)
             case .compatibilityNoopMissingNote(let bodyPlan):
                 guard bodyPlan.noteID == notePlan.noteID,
                       bodyPlan.resultEvidence.kind == .body,
+                      bodyPlan.resultEvidence.noteID == notePlan.noteID,
+                      bodyPlan.resultEvidence.batchID == plan.batchID,
                       bodyPlan.resultEvidence.preHash == nil,
                       bodyPlan.resultEvidence.postHash == nil,
                       routing == SyncConvergencePresentationRouting.none else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
+                expectedResultEvidence.append(bodyPlan.resultEvidence)
             case nil:
                 guard routing == nil else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
@@ -1836,7 +1924,24 @@ struct SyncConvergencePlanValidator {
                    titleEffect.priorWinningKey == nil {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
+                guard titleEffect.resultEvidence.kind == .title,
+                      titleEffect.resultEvidence.noteID == notePlan.noteID,
+                      titleEffect.resultEvidence.batchID == plan.batchID,
+                      titleEffect.resultEvidence.preHash == nil,
+                      titleEffect.resultEvidence.postHash == nil else {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+                expectedResultEvidence.append(titleEffect.resultEvidence)
             }
+        }
+        // Incorporation result-evidence rows must be exactly the rows owned by the
+        // planned effects: no orphan, altered, or missing row may survive validation.
+        let sortEvidence: (SyncConvergenceResultEvidence, SyncConvergenceResultEvidence) -> Bool = {
+            ($0.noteID.uuidString, $0.kind.rawValue) < ($1.noteID.uuidString, $1.kind.rawValue)
+        }
+        guard plan.incorporationEvidence.resultEvidence.sorted(by: sortEvidence)
+            == expectedResultEvidence.sorted(by: sortEvidence) else {
+            return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
         }
         // History additions must be exactly the operations and snapshots the body
         // effects produced; a compatibility no-op contributes no note-state history.
