@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 
 #if os(macOS)
@@ -29,9 +30,10 @@ final class SyncConvergencePlanningTests: XCTestCase {
             currentNotes: [projectedNote(noteID: noteID, body: "AB")]
         ))
 
-        guard case .planned(let plan) = outcome else {
+        guard case .planned(let validatedInput) = outcome else {
             return XCTFail("Expected planned outcome, got \(outcome)")
         }
+        let plan = validatedInput.plan
         XCTAssertEqual(plan.batchID, batch.id)
         XCTAssertEqual(plan.affectedNotePlans.count, 1)
         guard case .matchingBaseIncremental(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
@@ -241,7 +243,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             currentNotes: [projectedNote(noteID: noteID, body: "abc")]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .legacyPositional(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected legacy positional plan, got \(outcome)")
         }
@@ -275,7 +278,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             ]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected reconstructed conflict plan, got \(outcome)")
         }
@@ -329,7 +333,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: [retained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected retained-operation reconstruction, got \(outcome)")
         }
@@ -423,9 +428,10 @@ final class SyncConvergencePlanningTests: XCTestCase {
             persistedTitleWinners: [winner]
         ))
 
-        guard case .planned(let plan) = outcome else {
+        guard case .planned(let validatedInput) = outcome else {
             return XCTFail("Expected planned title outcome, got \(outcome)")
         }
+        let plan = validatedInput.plan
         XCTAssertEqual(plan.affectedNotePlans[0].titleEffect?.verdict, .ignoreOlder)
         XCTAssertEqual(plan.affectedNotePlans[0].titleEffect?.resultingTitle, "Newer")
     }
@@ -571,9 +577,10 @@ final class SyncConvergencePlanningTests: XCTestCase {
 
         let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(incomingBatch: batch))
 
-        guard case .planned(let plan) = outcome else {
+        guard case .planned(let validatedInput) = outcome else {
             return XCTFail("Expected planned creation outcome, got \(outcome)")
         }
+        let plan = validatedInput.plan
         XCTAssertEqual(plan.affectedNotePlans[0].creationEffect?.verdict, .create)
         guard case .matchingBaseIncremental(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected same-batch body change to use projected created note")
@@ -626,6 +633,135 @@ final class SyncConvergencePlanningTests: XCTestCase {
         XCTAssertNotEqual(try SyncConvergenceCanonicalBatchDigest.digest(for: first), try SyncConvergenceCanonicalBatchDigest.digest(for: reordered))
     }
 
+    func testProjectedNoteEffectV1GoldenVectorPreservesMainContract() throws {
+        let bytes = try projectedNoteEffectBytes(kinds: ["body", "title", "creation"])
+
+        XCTAssertEqual(bytes.count, 117)
+        XCTAssertEqual(
+            bytes.hexString,
+            "000000000000001c696e636f72706f726174696f6e2d6e6f74652d6566666563742d763100000000000000000000000000132c1000000000000000000000000000132c1100000000000000030000000000000004626f647900000000000000086372656174696f6e00000000000000057469746c65"
+        )
+        XCTAssertEqual(
+            sha256Hex(bytes),
+            "e6048b2eec3825e2394d70009c8f1234df6bdb3508b48c897b7d6df5849e55b5"
+        )
+        XCTAssertEqual(
+            String(data: bytes.dropFirst(8).prefix(28), encoding: .utf8),
+            "incorporation-note-effect-v1"
+        )
+    }
+
+    func testProjectedNoteEffectV1IsKindPermutationIndependent() throws {
+        let canonical = try projectedNoteEffectBytes(kinds: ["body", "creation", "title"])
+
+        for kinds in permutations(["body", "creation", "title"]) {
+            let bytes = try projectedNoteEffectBytes(kinds: kinds)
+            XCTAssertEqual(bytes, canonical)
+            XCTAssertEqual(bytes.count, canonical.count)
+            XCTAssertEqual(sha256Hex(bytes), sha256Hex(canonical))
+        }
+    }
+
+    func testProjectedNoteEffectV1MultiEffectPermutationIndependence() throws {
+        let cases = [
+            ["body", "title"],
+            ["creation", "body"],
+            ["creation", "title"],
+            ["creation", "body", "title"]
+        ]
+
+        for kinds in cases {
+            let canonical = try projectedNoteEffectBytes(kinds: kinds.sorted())
+            for permutation in permutations(kinds) {
+                XCTAssertEqual(try projectedNoteEffectBytes(kinds: permutation), canonical)
+            }
+        }
+    }
+
+    func testProjectedNoteEffectKindMembershipRejectsInvalidSets() {
+        XCTAssertFalse(SyncConvergenceNoteEffectKindMembership.validate(["body", "title"], expected: ["body", "title", "creation"]))
+        XCTAssertFalse(SyncConvergenceNoteEffectKindMembership.validate(["body", "title", "creation"], expected: ["body", "title"]))
+        XCTAssertFalse(SyncConvergenceNoteEffectKindMembership.validate(["body", "body"], expected: ["body"]))
+        XCTAssertFalse(SyncConvergenceNoteEffectKindMembership.validate(["body", "unsupported"], expected: ["body"]))
+        XCTAssertTrue(SyncConvergenceNoteEffectKindMembership.validate(["title", "body"], expected: ["body", "title"]))
+    }
+
+    func testCommittedResultV1GoldenVectorMatrix() throws {
+        let fixtures = committedResultGoldenFixtures()
+
+        for fixture in fixtures {
+            let bytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+                batchID: committedResultBatchID,
+                results: fixture.results
+            )
+            XCTAssertEqual(bytes.count, fixture.byteCount, fixture.name)
+            XCTAssertEqual(bytes.hexString, fixture.hex, fixture.name)
+            XCTAssertEqual(sha256Hex(bytes), fixture.digest, fixture.name)
+        }
+    }
+
+    func testCommittedResultV1ReconciliationReservedVariantIsPinned() throws {
+        let fixture = committedResultGoldenFixtures().first { $0.name == "reconciliation" }!
+        let bytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+            batchID: committedResultBatchID,
+            results: fixture.results
+        )
+
+        XCTAssertEqual(bytes.dropFirst(28).prefix(4).hexString, "00000004")
+        XCTAssertEqual(bytes.count, 296)
+        XCTAssertEqual(bytes.hexString, fixture.hex)
+        XCTAssertEqual(sha256Hex(bytes), fixture.digest)
+    }
+
+    func testCommittedResultV1OrderingAndChangeSensitivity() throws {
+        let fixtures = committedResultGoldenFixtures()
+        let multiple = fixtures.first { $0.name == "multiple" }!
+        let reorderedBytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+            batchID: committedResultBatchID,
+            results: multiple.results.reversed()
+        )
+        XCTAssertEqual(reorderedBytes.hexString, multiple.hex)
+        XCTAssertEqual(sha256Hex(reorderedBytes), multiple.digest)
+
+        let body = fixtures.first { $0.name == "body" }!
+        let changed = fixtures.first { $0.name == "changed" }!
+        let bodyBytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+            batchID: committedResultBatchID,
+            results: body.results
+        )
+        let changedBytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+            batchID: committedResultBatchID,
+            results: changed.results
+        )
+        XCTAssertNotEqual(changedBytes, bodyBytes)
+        XCTAssertNotEqual(sha256Hex(changedBytes), sha256Hex(bodyBytes))
+    }
+
+    func testCommittedResultV1ReconciliationHashFieldOrderIsSignificant() throws {
+        let identity = committedResultIdentity(kind: "reconciliation", operationIndex: 3, modifiedAt: date(5))
+        let firstBytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+            batchID: committedResultBatchID,
+            results: [.reconciliation(
+                noteID: committedResultNoteID,
+                identity: identity,
+                finalBodyHash: String(repeating: "a", count: 64),
+                replacementContentHash: String(repeating: "b", count: 64)
+            )]
+        )
+        let secondBytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+            batchID: committedResultBatchID,
+            results: [.reconciliation(
+                noteID: committedResultNoteID,
+                identity: identity,
+                finalBodyHash: String(repeating: "b", count: 64),
+                replacementContentHash: String(repeating: "a", count: 64)
+            )]
+        )
+
+        XCTAssertNotEqual(firstBytes, secondBytes)
+        XCTAssertNotEqual(sha256Hex(firstBytes), sha256Hex(secondBytes))
+    }
+
     func testTwoBodyOperationsInOneBatchProduceOneCompleteEffectAndOneBodyEvidence() {
         let noteID = uuid("00000000-0000-0000-0000-000000132212")
         let firstBase = "AB"
@@ -658,7 +794,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             currentNotes: [projectedNote(noteID: noteID, body: firstBase)]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .matchingBaseIncremental(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected grouped matching-base body plan, got \(outcome)")
         }
@@ -704,7 +841,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedLocalOperations: [retained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected reconstructed concurrent plan, got \(outcome)")
         }
@@ -752,7 +890,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             queuedBatches: [SyncConvergenceQueuedBatch(batch: queued, queuePosition: 0)]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected queued same-note evidence in reconstructed union, got \(outcome)")
         }
@@ -850,7 +989,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedLocalOperations: [retained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected chained same-batch operations to plan in one union, got \(outcome)")
         }
@@ -906,7 +1046,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedLocalOperations: [firstRetained, secondRetained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected retained concurrent candidates to merge, got \(outcome)")
         }
@@ -958,7 +1099,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: [retained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected nil-base retained reconstruction, got \(outcome)")
         }
@@ -1074,9 +1216,10 @@ final class SyncConvergencePlanningTests: XCTestCase {
 
         let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(incomingBatch: batch))
 
-        guard case .planned(let plan) = outcome else {
+        guard case .planned(let validatedInput) = outcome else {
             return XCTFail("Expected compatibility no-op plan, got \(outcome)")
         }
+        let plan = validatedInput.plan
         XCTAssertEqual(plan.affectedNotePlans.count, 2)
         let titleEffect = plan.affectedNotePlans.first { $0.noteID == titleNote }?.titleEffect
         XCTAssertEqual(titleEffect?.verdict, .compatibilityNoopMissingNote)
@@ -1234,7 +1377,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             queuedBatches: [multiNoteQueued]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected planned reconstruction without spliced evidence, got \(outcome)")
         }
@@ -1300,7 +1444,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: [offTargetBranch, targetBranch]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected backtracking reconstruction to reach the target branch, got \(outcome)")
         }
@@ -1384,7 +1529,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: [alreadyRetained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .matchingBaseIncremental(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected idempotent planned outcome, got \(outcome)")
         }
@@ -1484,7 +1630,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: [unrelatedBranch, validStep]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected unrelated nil-base branch to be skipped, got \(outcome)")
         }
@@ -2105,9 +2252,10 @@ final class SyncConvergencePlanningTests: XCTestCase {
                 projectedNote(noteID: titleNoteID, body: "Other")
             ]
         )
-        guard case .planned(let plan) = SyncConvergencePlanner().plan(input: input) else {
+        guard case .planned(let validatedInput) = SyncConvergencePlanner().plan(input: input) else {
             throw XCTSkip("validator fixture planning failed")
         }
+        let plan = validatedInput.plan
         let selection = SyncConvergenceEvidenceSelector().selectQueuedBatches(
             for: incoming,
             queuedBatches: [],
@@ -2145,6 +2293,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
             affectedNotePlans: plan.affectedNotePlans,
             incorporationEvidence: incorporationEvidence ?? plan.incorporationEvidence,
             historyPlan: historyPlan ?? plan.historyPlan,
+            cleanupPlan: plan.cleanupPlan,
             presentationPlan: presentationPlan ?? plan.presentationPlan
         )
     }
@@ -2212,7 +2361,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: retained
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected bounded stress reconstruction to plan, got \(outcome)")
         }
@@ -2297,7 +2447,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedSnapshots: snapshots,
             retainedRemoteOperations: operations
         ))
-        guard case .planned(let plan) = reachable,
+        guard case .planned(let validatedInput) = reachable,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected cycle-tolerant reconstruction to plan, got \(reachable)")
         }
@@ -2486,6 +2637,179 @@ private func uuid(_ value: String) -> UUID {
 
 private func date(_ value: TimeInterval) -> Date {
     Date(timeIntervalSinceReferenceDate: value)
+}
+
+private func projectedNoteEffectBytes(kinds: [String]) throws -> Data {
+    var encoder = CanonicalPayloadDigestFormatV1()
+    try encoder.appendProjectedNoteEffect(
+        batchID: uuid("00000000-0000-0000-0000-000000132c10"),
+        noteID: uuid("00000000-0000-0000-0000-000000132c11"),
+        kinds: kinds
+    )
+    return encoder.data
+}
+
+private let committedResultBatchID = uuid("00000000-0000-0000-0000-000000132d01")
+private let committedResultOriginID = uuid("00000000-0000-0000-0000-000000132d02")
+private let committedResultNoteID = uuid("00000000-0000-0000-0000-000000132d11")
+private let committedResultSecondNoteID = uuid("00000000-0000-0000-0000-000000132d12")
+private let committedResultFolderID = uuid("00000000-0000-0000-0000-000000132d20")
+
+private struct CommittedResultGoldenFixture {
+    let name: String
+    let results: [CanonicalCommittedResultV1]
+    let byteCount: Int
+    let hex: String
+    let digest: String
+}
+
+private func committedResultGoldenFixtures() -> [CommittedResultGoldenFixture] {
+    let preHash = String(repeating: "a", count: 64)
+    let bodyHash = String(repeating: "b", count: 64)
+    let creationHash = String(repeating: "c", count: 64)
+    let reconciliationFinalBodyHash = String(repeating: "d", count: 64)
+    let reconciliationReplacementContentHash = String(repeating: "f", count: 64)
+    let changedHash = String(repeating: "e", count: 64)
+    let insert = committedResultIdentity(kind: "insert", operationIndex: 0, modifiedAt: date(2))
+    let title = committedResultIdentity(kind: "title", operationIndex: 1, modifiedAt: date(3))
+    let creation = committedResultIdentity(kind: "creation", operationIndex: 2, modifiedAt: date(4))
+    let reconciliation = committedResultIdentity(kind: "reconciliation", operationIndex: 3, modifiedAt: date(5))
+
+    return [
+        CommittedResultGoldenFixture(
+            name: "body",
+            results: [.body(noteID: committedResultNoteID, preHash: preHash, finalBodyHash: bodyHash, identities: [insert])],
+            byteCount: 305,
+            hex: "0000000100000000000000000000000000132d0100000000000000010000000100000000000000000000000000132d110100000000000000406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000000000000406262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626200000000000000010000000200000000000000000000000000132d0100000000000000000000000000132d020000000000000000400000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000000",
+            digest: "23d4a3f4416d0ee2e62264f1508cc49797ad354269e4b48b39a5f77479858594"
+        ),
+        CommittedResultGoldenFixture(
+            name: "title",
+            results: [.title(noteID: committedResultNoteID, identity: title, key: title.canonicalReplayKey, finalTitle: "Winner")],
+            byteCount: 226,
+            hex: "0000000100000000000000000000000000132d0100000000000000010000000200000000000000000000000000132d110000000100000000000000000000000000132d0100000000000000000000000000132d020000000000000001400800000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000001400800000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000001000000000000000657696e6e6572",
+            digest: "69c7bb23b0222259172dd01238649e2c76295861db2cbabccfbe30488854bb93"
+        ),
+        CommittedResultGoldenFixture(
+            name: "creation",
+            results: [.creation(noteID: committedResultNoteID, folderID: committedResultFolderID, finalBodyHash: creationHash, titleIdentity: creation, titleKey: creation.canonicalReplayKey, creationIdentity: creation)],
+            byteCount: 405,
+            hex: "0000000100000000000000000000000000132d0100000000000000010000000300000000000000000000000000132d110100000000000000000000000000132d200000000000000040636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363630000000500000000000000000000000000132d0100000000000000000000000000132d020000000000000002401000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000002401000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d0100000000000000020000000500000000000000000000000000132d0100000000000000000000000000132d020000000000000002401000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000002",
+            digest: "c5a5d0b0076be37c47d1ce7a7bb257736077dc874cdf32c49dce2790c1e22182"
+        ),
+        CommittedResultGoldenFixture(
+            name: "reconciliation",
+            results: [.reconciliation(
+                noteID: committedResultNoteID,
+                identity: reconciliation,
+                finalBodyHash: reconciliationFinalBodyHash,
+                replacementContentHash: reconciliationReplacementContentHash
+            )],
+            byteCount: 296,
+            hex: "0000000100000000000000000000000000132d0100000000000000010000000400000000000000000000000000132d110000000400000000000000000000000000132d0100000000000000000000000000132d020000000000000003401400000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000003000000000000004064646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464000000000000004066666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666",
+            digest: "07760645e816f34f04060e19da9738d18a2e1b5e2020e7c6ce76569b4d803df8"
+        ),
+        CommittedResultGoldenFixture(
+            name: "mixed",
+            results: [
+                .title(noteID: committedResultSecondNoteID, identity: title, key: title.canonicalReplayKey, finalTitle: "Winner"),
+                .body(noteID: committedResultNoteID, preHash: preHash, finalBodyHash: bodyHash, identities: [insert]),
+                .reconciliation(
+                    noteID: committedResultNoteID,
+                    identity: reconciliation,
+                    finalBodyHash: reconciliationFinalBodyHash,
+                    replacementContentHash: reconciliationReplacementContentHash
+                )
+            ],
+            byteCount: 771,
+            hex: "0000000100000000000000000000000000132d0100000000000000030000000100000000000000000000000000132d110100000000000000406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000000000000406262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626200000000000000010000000200000000000000000000000000132d0100000000000000000000000000132d020000000000000000400000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d0100000000000000000000000400000000000000000000000000132d110000000400000000000000000000000000132d0100000000000000000000000000132d020000000000000003401400000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d0100000000000000030000000000000040646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464640000000000000040666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666666660000000200000000000000000000000000132d120000000100000000000000000000000000132d0100000000000000000000000000132d020000000000000001400800000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000001400800000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000001000000000000000657696e6e6572",
+            digest: "bce38a27fcc2447bcd2425ee45912480a3163f14e9aa9f514341bbcd343a87f2"
+        ),
+        CommittedResultGoldenFixture(
+            name: "multiple",
+            results: [
+                .body(noteID: committedResultSecondNoteID, preHash: preHash, finalBodyHash: changedHash, identities: [insert]),
+                .body(noteID: committedResultNoteID, preHash: preHash, finalBodyHash: bodyHash, identities: [insert])
+            ],
+            byteCount: 582,
+            hex: "0000000100000000000000000000000000132d0100000000000000020000000100000000000000000000000000132d110100000000000000406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000000000000406262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626200000000000000010000000200000000000000000000000000132d0100000000000000000000000000132d020000000000000000400000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d0100000000000000000000000100000000000000000000000000132d120100000000000000406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000000000000406565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656500000000000000010000000200000000000000000000000000132d0100000000000000000000000000132d020000000000000000400000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000000",
+            digest: "b57d31db3351c0941da4d8adcd15264647110e9ebcf0cc065ea2d9af31f9e66b"
+        ),
+        CommittedResultGoldenFixture(
+            name: "changed",
+            results: [.body(noteID: committedResultNoteID, preHash: preHash, finalBodyHash: changedHash, identities: [insert])],
+            byteCount: 305,
+            hex: "0000000100000000000000000000000000132d0100000000000000010000000100000000000000000000000000132d110100000000000000406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000000000000406565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656500000000000000010000000200000000000000000000000000132d0100000000000000000000000000132d020000000000000000400000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000000",
+            digest: "867ddda64066c2161ed565ad1e9f3cb7caba334a5f660a993beaa0fc564bea51"
+        )
+    ]
+}
+
+private func committedResultIdentity(kind: String, operationIndex: Int, modifiedAt: Date) -> OperationIdentityPayload {
+    let change: SyncBatchChange
+    switch kind {
+    case "title":
+        change = .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+            noteID: committedResultNoteID,
+            title: "Winner",
+            modifiedAt: modifiedAt
+        ))
+    case "creation":
+        change = .noteCreated(SyncBatchNoteCreatedChange(
+            noteID: committedResultNoteID,
+            title: "Created",
+            body: "Body",
+            folderID: committedResultFolderID,
+            createdAt: modifiedAt,
+            modifiedAt: modifiedAt
+        ))
+    case "reconciliation":
+        change = .noteBodyReconciled(SyncBatchNoteBodyReconciledChange(
+            noteID: committedResultNoteID,
+            replacementBody: "Resolved",
+            replacementContentHash: String(repeating: "d", count: 64),
+            modifiedAt: modifiedAt
+        ))
+    default:
+        change = .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+            noteID: committedResultNoteID,
+            utf16Offset: 0,
+            text: "B",
+            modifiedAt: modifiedAt,
+            baseContentHash: String(repeating: "a", count: 64)
+        ))
+    }
+    let batch = SyncBatch(
+        id: committedResultBatchID,
+        originDeviceID: committedResultOriginID,
+        createdAt: date(1),
+        changes: [change]
+    )
+    let replayKey = CanonicalReplayKeyPayload(
+        replayKey: SyncBatchReplayKey(batch: batch, change: change, operationIndex: operationIndex)
+    )
+    return OperationIdentityPayload(
+        batchID: committedResultBatchID,
+        originDeviceID: committedResultOriginID,
+        operationIndex: operationIndex,
+        operationKind: kind,
+        canonicalReplayKey: replayKey
+    )
+}
+
+private func permutations(_ values: [String]) -> [[String]] {
+    guard let first = values.first else { return [[]] }
+    return permutations(Array(values.dropFirst())).flatMap { permutation in
+        (0...permutation.count).map { index in
+            var next = permutation
+            next.insert(first, at: index)
+            return next
+        }
+    }
+}
+
+private func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
 
 private extension SyncConvergenceRetainedOperation {

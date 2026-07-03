@@ -1,6 +1,10 @@
 import CryptoKit
 import Foundation
 
+struct SyncConvergenceValidatedPlanToken: Equatable {
+    fileprivate init() {}
+}
+
 struct SyncConvergencePlanner {
     func evidenceRequest(for batch: SyncBatch) -> SyncConvergenceEvidenceRequest {
         SyncConvergenceEvidenceSelector().request(for: batch)
@@ -205,6 +209,12 @@ struct SyncConvergencePlanner {
         )
         switch historyResult {
         case .success(let historyPlan):
+            let cleanupPlan = SyncConvergenceCleanupPlan(
+                batchIDs: Set([input.incomingBatch.id]).union(queueSelection.eligibleEvidenceBatches.map(\.batch.id)),
+                retryQueueCleanup: input.candidateQueuePosition != nil || !queueSelection.eligibleEvidenceBatches.isEmpty,
+                retryLegacyCleanup: false,
+                retryPresentationRefresh: routings.values.contains { $0 != .none }
+            )
             let plan = SyncConvergenceBatchPlan(
                 batchID: input.incomingBatch.id,
                 originDeviceID: input.incomingBatch.originDeviceID,
@@ -218,14 +228,24 @@ struct SyncConvergencePlanner {
                     resultEvidence: resultEvidence
                 ),
                 historyPlan: historyPlan,
+                cleanupPlan: cleanupPlan,
                 presentationPlan: SyncConvergencePresentationPlan(noteRoutings: routings)
             )
-            return SyncConvergencePlanValidator().validate(
+            if let failure = SyncConvergencePlanValidator().validate(
                 plan,
                 input: input,
                 queueSelection: queueSelection,
                 projectedFullIncorporationEvidenceBytes: projectedFullEvidenceBytes
-            ) ?? .planned(plan)
+            ) {
+                return failure
+            }
+            return .planned(ValidatedSyncConvergenceIncorporationInput(
+                validatedPlanToken: SyncConvergenceValidatedPlanToken(),
+                plan: plan,
+                sourceBatch: input.incomingBatch,
+                sourceSchemaVersion: 1,
+                projectedFullIncorporationEvidenceBytes: projectedFullEvidenceBytes
+            ))
         case .deferred(let reason):
             return .deferred(reason)
         case .failed(let failure):
@@ -668,7 +688,7 @@ enum SyncConvergenceCanonicalBatchDigest {
     }
 }
 
-private struct CanonicalPayloadDigestFormatV1 {
+struct CanonicalPayloadDigestFormatV1 {
     private enum Domain {
         static let batch: UInt32 = 0x4d595231
         static let absent: UInt8 = 0x00
@@ -680,6 +700,11 @@ private struct CanonicalPayloadDigestFormatV1 {
         static let insert: UInt32 = 0x00000003
         static let delete: UInt32 = 0x00000004
         static let reconciliation: UInt32 = 0x00000005
+        static let committedResultSchemaVersion: UInt32 = 0x00000001
+        static let committedBodyResult: UInt32 = 0x00000001
+        static let committedTitleResult: UInt32 = 0x00000002
+        static let committedCreationResult: UInt32 = 0x00000003
+        static let committedReconciliationResult: UInt32 = 0x00000004
     }
 
     private(set) var data = Data()
@@ -775,6 +800,52 @@ private struct CanonicalPayloadDigestFormatV1 {
         }
     }
 
+    mutating func appendCommittedResultDigest(plan: SyncConvergenceBatchPlan) throws {
+        try appendCommittedResults(
+            batchID: plan.batchID,
+            results: CanonicalCommittedResultDigestPayloadV1.results(from: plan)
+        )
+    }
+
+    mutating func appendCommittedResults(batchID: UUID, results: [CanonicalCommittedResultV1]) throws {
+        appendUInt32(Domain.committedResultSchemaVersion)
+        try appendUUID(batchID)
+        appendUInt64(UInt64(results.count))
+        for result in results.sorted() {
+            switch result {
+            case .body(let noteID, let preHash, let finalBodyHash, let identities):
+                appendUInt32(Domain.committedBodyResult)
+                try appendUUID(noteID)
+                appendOptionalString(preHash)
+                appendString(finalBodyHash)
+                appendUInt64(UInt64(identities.count))
+                for identity in identities.sorted(by: { $0.operationIndex < $1.operationIndex }) {
+                    try appendDigestOperationIdentity(identity)
+                }
+            case .title(let noteID, let identity, let key, let finalTitle):
+                appendUInt32(Domain.committedTitleResult)
+                try appendUUID(noteID)
+                try appendDigestOperationIdentity(identity)
+                try appendDigestReplayKey(key)
+                appendString(finalTitle)
+            case .creation(let noteID, let folderID, let finalBodyHash, let titleIdentity, let titleKey, let creationIdentity):
+                appendUInt32(Domain.committedCreationResult)
+                try appendUUID(noteID)
+                try appendOptionalUUID(folderID)
+                appendString(finalBodyHash)
+                try appendDigestOperationIdentity(titleIdentity)
+                try appendDigestReplayKey(titleKey)
+                try appendDigestOperationIdentity(creationIdentity)
+            case .reconciliation(let noteID, let identity, let finalBodyHash, let replacementContentHash):
+                appendUInt32(Domain.committedReconciliationResult)
+                try appendUUID(noteID)
+                try appendDigestOperationIdentity(identity)
+                appendString(finalBodyHash)
+                appendString(replacementContentHash)
+            }
+        }
+    }
+
     mutating func appendProjectedIncorporationRoot(
         batch: SyncBatch,
         affectedNoteIDs: Set<UUID>,
@@ -825,6 +896,51 @@ private struct CanonicalPayloadDigestFormatV1 {
         } else {
             appendUInt8(Domain.absent)
         }
+    }
+
+    private mutating func appendDigestOperationIdentity(_ identity: OperationIdentityPayload) throws {
+        try identity.validate()
+        switch identity.operationKind {
+        case "title":
+            appendUInt32(0x00000001)
+        case "insert":
+            appendUInt32(0x00000002)
+        case "delete":
+            appendUInt32(0x00000003)
+        case "reconciliation":
+            appendUInt32(0x00000004)
+        case "creation":
+            appendUInt32(0x00000005)
+        default:
+            throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload("operationIdentity.operationKind")
+        }
+        try appendUUIDString(identity.batchIDLowercase, field: "batchIDLowercase")
+        try appendUUIDString(identity.originDeviceIDLowercase, field: "originDeviceIDLowercase")
+        try appendInt(identity.operationIndex, field: "operationIndex")
+        try appendDigestReplayKey(identity.canonicalReplayKey)
+    }
+
+    private mutating func appendDigestReplayKey(_ payload: CanonicalReplayKeyPayload) throws {
+        try payload.validate()
+        appendUInt64(payload.modifiedAtBitPattern)
+        try appendUUIDString(payload.originDeviceIDLowercase, field: "originDeviceIDLowercase")
+        switch payload.batchOrderKind {
+        case .legacy:
+            appendUInt32(Domain.legacyOrder)
+            guard let legacyCreatedAtBitPattern = payload.legacyCreatedAtBitPattern else {
+                throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload("legacyCreatedAtBitPattern")
+            }
+            appendUInt64(legacyCreatedAtBitPattern)
+            try appendUUIDString(payload.batchIDLowercase, field: "batchIDLowercase")
+        case .sequenced:
+            appendUInt32(Domain.sequencedOrder)
+            guard let sequence = payload.sequence else {
+                throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload("sequence")
+            }
+            appendUInt64(sequence)
+            try appendUUIDString(payload.batchIDLowercase, field: "batchIDLowercase")
+        }
+        try appendInt(payload.operationIndex, field: "operationIndex")
     }
 
     private mutating func appendOptionalString(_ value: String?) {
@@ -2324,9 +2440,1008 @@ struct SyncConvergenceProjectedIncorporationEvidence {
             let kinds = resultEvidence
                 .filter { $0.noteID == noteID }
                 .map(\.kind.rawValue)
+            try ExpectedNoteEffectProjection.validateKinds(kinds)
             try encoder.appendProjectedNoteEffect(batchID: batch.id, noteID: noteID, kinds: kinds)
             return encoder.data.count
         }
+    }
+}
+
+struct SyncConvergenceIncorporationExecutor {
+    func incorporate(
+        input: ValidatedSyncConvergenceIncorporationInput,
+        transaction: SyncConvergencePersistenceTransaction,
+        committedAt: Date
+    ) -> SyncConvergenceIncorporationOutcome {
+        let prepared: PreparedIncorporation
+        let historyInsertions: HistoryInsertions
+        do {
+            prepared = try PreparedIncorporation(input: input, committedAt: committedAt)
+            if let outcome = try loadAndClassifyDuplicateState(prepared, transaction: transaction) {
+                return outcome
+            }
+            try verifyAuthoritativeState(prepared, transaction: transaction)
+            historyInsertions = try verifyHistory(prepared, transaction: transaction)
+        } catch let failure as ExecutorFailure {
+            return .failedBeforeCommit(failure.transactionFailure)
+        } catch let failure as SyncConvergenceTransactionFailure {
+            return .failedBeforeCommit(failure)
+        } catch {
+            return .failedBeforeCommit(.unexpected)
+        }
+
+        do {
+            try applyNoteEffects(prepared, transaction: transaction)
+            try verifyStagedBodyHashes(prepared, transaction: transaction)
+            try persistTitleWinners(prepared, transaction: transaction, committedAt: committedAt)
+            try persistHistory(historyInsertions, transaction: transaction)
+            try persistChildren(prepared, transaction: transaction)
+            try transaction.insertIncorporatedBatch(prepared.root)
+            try transaction.save()
+            return .incorporated(prepared.result(cleanupPlan: input.plan.cleanupPlan, presentationPlan: input.plan.presentationPlan))
+        } catch let failure as ExecutorFailure {
+            transaction.rollback()
+            return .failedAndRolledBack(failure.transactionFailure)
+        } catch let failure as SyncConvergenceTransactionFailure {
+            transaction.rollback()
+            return .failedAndRolledBack(failure)
+        } catch {
+            transaction.rollback()
+            return .failedAndRolledBack(.swiftDataSave)
+        }
+    }
+
+    private func loadAndClassifyDuplicateState(
+        _ prepared: PreparedIncorporation,
+        transaction: SyncConvergencePersistenceTransaction
+    ) throws -> SyncConvergenceIncorporationOutcome? {
+        let root = try transaction.loadIncorporatedBatch(batchID: prepared.input.sourceBatchID)
+        let tombstone = try transaction.loadTombstone(batchID: prepared.input.sourceBatchID)
+        if let root, let tombstone {
+            try verifyMatching(root: root, children: try transaction.loadIncorporatedBatchChildren(batchID: prepared.input.sourceBatchID), prepared)
+            try verifyMatching(tombstone: tombstone, prepared)
+            guard root.committedAtOrderingPayloadData == tombstone.committedAtOrderingPayloadData else {
+                throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+            }
+            let state = try SyncConvergencePostCommitState.decodePayloadData(root.postCommitStatePayloadData)
+            return .alreadyIncorporated(prepared.result(
+                cleanupPlan: prepared.input.plan.cleanupPlan.gated(by: state),
+                presentationPlan: prepared.input.plan.presentationPlan.gated(by: state)
+            ))
+        }
+        if let root {
+            try verifyMatching(root: root, children: try transaction.loadIncorporatedBatchChildren(batchID: prepared.input.sourceBatchID), prepared)
+            let state = try SyncConvergencePostCommitState.decodePayloadData(root.postCommitStatePayloadData)
+            return .alreadyIncorporated(prepared.result(
+                cleanupPlan: prepared.input.plan.cleanupPlan.gated(by: state),
+                presentationPlan: prepared.input.plan.presentationPlan.gated(by: state)
+            ))
+        }
+        if let tombstone {
+            try verifyMatching(tombstone: tombstone, prepared)
+            return .alreadyIncorporated(prepared.result(
+                cleanupPlan: prepared.input.plan.cleanupPlan,
+                presentationPlan: prepared.input.plan.presentationPlan
+            ))
+        }
+        return nil
+    }
+
+    private func verifyMatching(
+        root: SyncConvergenceIncorporatedRootProjection,
+        children: SyncConvergenceIncorporatedChildrenProjection,
+        _ prepared: PreparedIncorporation
+    ) throws {
+        guard root.canonicalPayloadDigestFormatVersion == prepared.root.canonicalPayloadDigestFormatVersion else {
+            throw ExecutorFailure(.unsupportedDigestFormat(
+                noteID: nil,
+                batchID: root.batchID,
+                formatVersion: root.canonicalPayloadDigestFormatVersion
+            ))
+        }
+        let orderingPayload: CommittedAtOrderingPayload
+        do {
+            orderingPayload = try CommittedAtOrderingPayload.decodeEvidenceData(root.committedAtOrderingPayloadData)
+            guard orderingPayload.batchIDLowercase == root.batchID.uuidString.lowercased(),
+                  orderingPayload.committedAtBitPattern == SyncConvergenceDateBits.bitPattern(for: root.committedAt)
+            else {
+                throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+            }
+        } catch let failure as ExecutorFailure {
+            throw failure
+        } catch {
+            throw ExecutorFailure(.corruptHistory(noteID: nil))
+        }
+        guard root.batchID == prepared.root.batchID,
+              root.originDeviceID == prepared.root.originDeviceID,
+              root.createdAt == prepared.root.createdAt,
+              root.batchSequence == prepared.root.batchSequence,
+              root.schemaVersion == prepared.root.schemaVersion,
+              root.committedAt == orderingPayload.committedAt,
+              root.canonicalPayloadDigest == prepared.root.canonicalPayloadDigest,
+              root.canonicalPayloadDigestFormatVersion == prepared.root.canonicalPayloadDigestFormatVersion,
+              root.committedResultDigest == prepared.root.committedResultDigest,
+              root.committedResultDigestFormatVersion == prepared.root.committedResultDigestFormatVersion,
+              root.affectedNotesPayloadData == prepared.root.affectedNotesPayloadData,
+              root.authoritativeChildCount == prepared.root.authoritativeChildCount,
+              root.authoritativeChildBytes == prepared.root.authoritativeChildBytes,
+              root.authoritativeChildrenDigest == prepared.root.authoritativeChildrenDigest
+        else {
+            throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+        }
+        _ = try SyncConvergencePostCommitState.decodePayloadData(root.postCommitStatePayloadData)
+        let sortedStoredNoteEffects = children.noteEffects.sorted { $0.noteID.uuidString < $1.noteID.uuidString }
+        guard sortedStoredNoteEffects == prepared.noteEffects else {
+            throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+        }
+        let storedChildren = try PreparedIncorporation.childProjection(
+            from: children,
+            expectedNoteEffects: prepared.expectedNoteEffects
+        )
+        guard storedChildren == prepared.childProjection else {
+            throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+        }
+    }
+
+    private func verifyMatching(
+        tombstone: SyncConvergenceIncorporatedTombstoneProjection,
+        _ prepared: PreparedIncorporation
+    ) throws {
+        guard tombstone.tombstoneFormatVersion == IncorporatedBatchTombstone.supportedTombstoneFormatVersion else {
+            throw ExecutorFailure(.corruptHistory(noteID: nil))
+        }
+        guard tombstone.canonicalPayloadDigestFormatVersion == prepared.root.canonicalPayloadDigestFormatVersion else {
+            throw ExecutorFailure(.unsupportedDigestFormat(
+                noteID: nil,
+                batchID: tombstone.batchID,
+                formatVersion: tombstone.canonicalPayloadDigestFormatVersion
+            ))
+        }
+        guard tombstone.batchID == prepared.root.batchID,
+              tombstone.originDeviceID == prepared.root.originDeviceID,
+              tombstone.schemaVersion == prepared.root.schemaVersion,
+              tombstone.canonicalPayloadDigest == prepared.root.canonicalPayloadDigest,
+              tombstone.canonicalPayloadDigestFormatVersion == prepared.root.canonicalPayloadDigestFormatVersion,
+              tombstone.committedResultDigest == prepared.root.committedResultDigest,
+              tombstone.committedResultDigestFormatVersion == prepared.root.committedResultDigestFormatVersion
+        else {
+            throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+        }
+        let orderingPayload: CommittedAtOrderingPayload
+        do {
+            orderingPayload = try CommittedAtOrderingPayload.decodeEvidenceData(tombstone.committedAtOrderingPayloadData)
+            guard orderingPayload.batchIDLowercase == tombstone.batchID.uuidString.lowercased() else {
+                throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+            }
+        } catch let failure as ExecutorFailure {
+            throw failure
+        } catch {
+            throw ExecutorFailure(.corruptHistory(noteID: nil))
+        }
+    }
+
+    private func verifyAuthoritativeState(
+        _ prepared: PreparedIncorporation,
+        transaction: SyncConvergencePersistenceTransaction
+    ) throws {
+        for notePlan in prepared.input.plan.affectedNotePlans {
+            let current = try transaction.loadNote(id: notePlan.noteID)
+            if let creation = notePlan.creationEffect {
+                switch creation.verdict {
+                case .create:
+                    guard current == nil else { throw ExecutorFailure(.staleAuthoritativeState(noteID: notePlan.noteID)) }
+                case .idempotent:
+                    guard current?.matchesCreation(creation) == true else {
+                        throw ExecutorFailure(.staleAuthoritativeState(noteID: notePlan.noteID))
+                    }
+                }
+            }
+            try verifyBodyPrecondition(notePlan.bodyEffect, current: current)
+            try verifyTitlePrecondition(notePlan.titleEffect, current: current, transaction: transaction)
+        }
+    }
+
+    private func verifyBodyPrecondition(
+        _ effect: SyncConvergenceBodyEffect?,
+        current: SyncConvergenceMutableNoteRecord?
+    ) throws {
+        guard let effect else { return }
+        switch effect {
+        case .matchingBaseIncremental(let plan):
+            guard SyncBatchContentHash.sha256Hex(for: current?.body ?? "") == plan.initialBodyHash else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
+            }
+        case .reconstructedConflict(let plan):
+            guard SyncBatchContentHash.sha256Hex(for: current?.body ?? "") == plan.projectedPreMergeCurrentHash else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
+            }
+        case .legacyPositional(let plan):
+            guard current?.body == plan.initialBody else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
+            }
+        case .compatibilityNoopMissingNote(let plan):
+            guard current == nil else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
+            }
+        }
+    }
+
+    private func verifyTitlePrecondition(
+        _ effect: SyncConvergenceTitleEffect?,
+        current: SyncConvergenceMutableNoteRecord?,
+        transaction: SyncConvergencePersistenceTransaction
+    ) throws {
+        guard let effect else { return }
+        let winner = try transaction.loadTitleWinner(noteID: effect.resultEvidence.noteID)
+        if effect.verdict == .compatibilityNoopMissingNote {
+            guard current == nil else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: effect.resultEvidence.noteID))
+            }
+            guard winner == nil else {
+                throw ExecutorFailure(.inconsistentIncorporationState(noteID: effect.resultEvidence.noteID))
+            }
+            return
+        }
+        guard let current else {
+            throw ExecutorFailure(.staleAuthoritativeState(noteID: effect.resultEvidence.noteID))
+        }
+        switch effect.verdict {
+        case .apply:
+            guard current.title == effect.priorTitle,
+                  winner?.canonicalReplayKey == effect.priorWinningKey else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: effect.resultEvidence.noteID))
+            }
+        case .ignoreOlder:
+            guard current.title == effect.resultingTitle,
+                  winner?.canonicalReplayKey == effect.resultingWinningKey else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: effect.resultEvidence.noteID))
+            }
+        case .idempotent:
+            guard current.title == effect.resultingTitle,
+                  let winner,
+                  winner.canonicalReplayKey == effect.resultingWinningKey,
+                  winner.canonicalReplayKey == effect.candidateCanonicalKey else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: effect.resultEvidence.noteID))
+            }
+            guard winner.operationIdentity == effect.candidateOperationIdentity else {
+                throw ExecutorFailure(.inconsistentIncorporationState(noteID: effect.resultEvidence.noteID))
+            }
+        case .compatibilityNoopMissingNote:
+            break
+        }
+    }
+
+    private func verifyHistory(
+        _ prepared: PreparedIncorporation,
+        transaction: SyncConvergencePersistenceTransaction
+    ) throws -> HistoryInsertions {
+        var retainedOperationsToInsert: [SyncConvergenceRetainedOperationRecord] = []
+        var snapshotsToInsert: [SyncConvergenceSnapshotRecord] = []
+        for operation in prepared.retainedOperations {
+            let identity = SyncConvergenceRetainedOperationIdentity(
+                batchID: operation.batchID,
+                operationIndex: operation.operationIndex
+            )
+            if let existing = try transaction.loadRetainedOperation(identity: identity) {
+                guard existing.source == .remote else {
+                    throw ExecutorFailure(.inconsistentIncorporationState(noteID: operation.noteID))
+                }
+                if existing.operation != operation {
+                    throw ExecutorFailure(.inconsistentIncorporationState(noteID: operation.noteID))
+                }
+            } else {
+                retainedOperationsToInsert.append(operation)
+            }
+        }
+        for snapshot in prepared.snapshots {
+            let existing = try transaction.loadSnapshot(noteID: snapshot.noteID, generation: snapshot.generation)
+            if let highest = try transaction.loadHighestSnapshotGeneration(noteID: snapshot.noteID),
+               snapshot.generation < highest {
+                guard existing?.snapshot == snapshot else {
+                    throw ExecutorFailure(.inconsistentIncorporationState(noteID: snapshot.noteID))
+                }
+            }
+            if let existing {
+                if existing.snapshot != snapshot {
+                    throw ExecutorFailure(.inconsistentIncorporationState(noteID: snapshot.noteID))
+                }
+            } else {
+                snapshotsToInsert.append(snapshot)
+            }
+        }
+        return HistoryInsertions(retainedOperations: retainedOperationsToInsert, snapshots: snapshotsToInsert)
+    }
+
+    private func applyNoteEffects(
+        _ prepared: PreparedIncorporation,
+        transaction: SyncConvergencePersistenceTransaction
+    ) throws {
+        for plan in prepared.input.plan.affectedNotePlans {
+            if let creation = plan.creationEffect, creation.verdict == .create {
+                try transaction.insertNote(SyncConvergenceNewNoteRecord(
+                    noteID: creation.noteID,
+                    folderID: creation.folderID,
+                    title: creation.title,
+                    body: creation.body,
+                    createdAt: creation.createdAt,
+                    modifiedAt: creation.modifiedAt
+                ))
+            }
+            guard plan.hasMutableNoteEffect else { continue }
+            let current = try transaction.loadNote(id: plan.noteID)
+            let currentTitle = current?.title ?? plan.creationEffect?.title ?? ""
+            let currentBody = current?.body ?? plan.creationEffect?.body ?? ""
+            try transaction.updateNote(SyncConvergenceUpdatedNoteRecord(
+                noteID: plan.noteID,
+                title: plan.plannedResultingTitle ?? currentTitle,
+                body: plan.plannedFinalBody ?? currentBody,
+                modifiedAt: plan.plannedModifiedAt ?? current?.modifiedAt ?? Date(timeIntervalSinceReferenceDate: 0)
+            ))
+        }
+    }
+
+    private func verifyStagedBodyHashes(
+        _ prepared: PreparedIncorporation,
+        transaction: SyncConvergencePersistenceTransaction
+    ) throws {
+        for plan in prepared.input.plan.affectedNotePlans {
+            guard let finalBodyHash = plan.plannedFinalBodyHash else { continue }
+            let staged = try transaction.loadNote(id: plan.noteID)
+            guard let staged, SyncBatchContentHash.sha256Hex(for: staged.body) == finalBodyHash else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
+            }
+        }
+    }
+
+    private func persistTitleWinners(
+        _ prepared: PreparedIncorporation,
+        transaction: SyncConvergencePersistenceTransaction,
+        committedAt: Date
+    ) throws {
+        for plan in prepared.input.plan.affectedNotePlans {
+            guard let title = plan.titleEffect, title.verdict == .apply else { continue }
+            try transaction.insertOrUpdateTitleWinner(SyncConvergenceTitleWinnerRecord(
+                noteID: plan.noteID,
+                title: title.resultingTitle,
+                canonicalReplayKey: title.candidateCanonicalKey,
+                operationIdentity: title.candidateOperationIdentity,
+                updatedAt: committedAt
+            ))
+        }
+    }
+
+    private func persistHistory(
+        _ insertions: HistoryInsertions,
+        transaction: SyncConvergencePersistenceTransaction
+    ) throws {
+        for operation in insertions.retainedOperations {
+            try transaction.insertRetainedOperation(operation)
+        }
+        for snapshot in insertions.snapshots {
+            try transaction.insertSnapshot(snapshot)
+        }
+    }
+
+    private func persistChildren(
+        _ prepared: PreparedIncorporation,
+        transaction: SyncConvergencePersistenceTransaction
+    ) throws {
+        for identity in prepared.operationIdentities {
+            try transaction.insertOperationIdentity(identity)
+        }
+        for effect in prepared.noteEffects {
+            try transaction.insertNoteEffect(effect)
+        }
+        for evidence in prepared.resultEvidence {
+            try transaction.insertResultEvidence(evidence)
+        }
+    }
+
+    private struct ExecutorFailure: Error {
+        let transactionFailure: SyncConvergenceTransactionFailure
+
+        init(_ transactionFailure: SyncConvergenceTransactionFailure) {
+            self.transactionFailure = transactionFailure
+        }
+    }
+
+    private struct HistoryInsertions {
+        let retainedOperations: [SyncConvergenceRetainedOperationRecord]
+        let snapshots: [SyncConvergenceSnapshotRecord]
+    }
+
+    private struct PreparedIncorporation {
+        let input: ValidatedSyncConvergenceIncorporationInput
+        let root: SyncConvergenceIncorporatedBatchRecord
+        let operationIdentities: [SyncConvergenceOperationIdentityRecord]
+        let noteEffects: [SyncConvergenceNoteEffectRecord]
+        let expectedNoteEffects: [ExpectedNoteEffectProjection]
+        let resultEvidence: [SyncConvergenceResultEvidenceRecord]
+        let retainedOperations: [SyncConvergenceRetainedOperationRecord]
+        let snapshots: [SyncConvergenceSnapshotRecord]
+        let childProjection: [ChildProjection]
+
+        init(input: ValidatedSyncConvergenceIncorporationInput, committedAt: Date) throws {
+            guard input.plan.batchID == input.sourceBatchID,
+                  input.plan.originDeviceID == input.sourceOriginDeviceID,
+                  input.sourceSchemaVersion > 0
+            else {
+                throw ExecutorFailure(.invalidMergePlan(noteID: nil))
+            }
+            let affectedNoteIDs = Set(input.plan.affectedNotePlans.map(\.noteID))
+            let expectedProjectedBytes = try SyncConvergenceProjectedIncorporationEvidence(
+                batch: input.sourceBatch,
+                affectedNoteIDs: affectedNoteIDs,
+                operationIdentities: input.plan.incorporationEvidence.operationIdentities,
+                resultEvidence: input.plan.incorporationEvidence.resultEvidence
+            ).canonicalEncodedByteCount()
+            guard expectedProjectedBytes == input.projectedFullIncorporationEvidenceBytes else {
+                throw ExecutorFailure(.invalidMergePlan(noteID: nil))
+            }
+            self.input = input
+            self.operationIdentities = try input.plan.incorporationEvidence.operationIdentities
+                .sorted(by: Self.identityOrder)
+                .map { identity in
+                    guard let batchID = UUID(uuidString: identity.batchIDLowercase),
+                          let noteID = identity.canonicalReplayKey.noteIDFromKnownPlan(input.plan)
+                    else {
+                        throw ExecutorFailure(.invalidMergePlan(noteID: nil))
+                    }
+                    return SyncConvergenceOperationIdentityRecord(
+                        batchID: batchID,
+                        noteID: noteID,
+                        operationIndex: identity.operationIndex,
+                        operationIdentity: identity
+                    )
+                }
+            self.noteEffects = input.plan.affectedNotePlans
+                .sorted { $0.noteID.uuidString < $1.noteID.uuidString }
+                .map { $0.noteEffectRecord(batchID: input.sourceBatchID) }
+            self.expectedNoteEffects = self.noteEffects.map { record in
+                ExpectedNoteEffectProjection(
+                    batchID: record.batchID,
+                    noteID: record.noteID,
+                    kinds: input.plan.incorporationEvidence.resultEvidence
+                        .filter { $0.noteID == record.noteID }
+                        .map(\.kind.rawValue)
+                )
+            }
+            self.resultEvidence = input.plan.incorporationEvidence.resultEvidence
+                .sorted(by: Self.resultEvidenceOrder)
+                .map(SyncConvergenceResultEvidenceRecord.init(evidence:))
+            self.retainedOperations = input.plan.historyPlan.retainedOperationAdditions
+                .sorted(by: Self.plannedOperationOrder)
+                .map(\.retainedOperationRecord)
+            self.snapshots = input.plan.historyPlan.snapshotAdditions
+                .sorted { lhs, rhs in
+                    if lhs.noteID != rhs.noteID { return lhs.noteID.uuidString < rhs.noteID.uuidString }
+                    return lhs.generation < rhs.generation
+                }
+                .map { SyncConvergenceSnapshotRecord(
+                    noteID: $0.noteID,
+                    contentHash: $0.contentHash,
+                    body: $0.body,
+                    generation: $0.generation,
+                    createdAt: committedAt
+                ) }
+            self.childProjection = try Self.makeChildProjection(
+                operationIdentities: operationIdentities,
+                noteEffects: expectedNoteEffects,
+                resultEvidence: resultEvidence
+            )
+            let affectedNotesPayload = try SyncConvergenceAffectedNotesPayloadV1(noteIDs: affectedNoteIDs).encodedData()
+            let postCommitState = SyncConvergencePostCommitState(
+                queueCleanupPending: input.plan.cleanupPlan.retryQueueCleanup || !input.plan.cleanupPlan.batchIDs.isEmpty,
+                legacyCleanupPending: input.plan.cleanupPlan.retryLegacyCleanup,
+                presentationRefreshPending: input.plan.presentationPlan.noteRoutings.values.contains { $0 != .none }
+            )
+            let committedResultDigest = try CanonicalCommittedResultDigestPayloadV1.digest(
+                plan: input.plan,
+                sourceBatch: input.sourceBatch
+            )
+            let childBytes = childProjection.reduce(0) { $0 + $1.bytes.count }
+            let childrenDigest = CanonicalDigestEncoderV1.digest(
+                data: childProjection.reduce(into: Data()) { $0.append($1.bytes) }
+            )
+            self.root = SyncConvergenceIncorporatedBatchRecord(
+                batchID: input.sourceBatchID,
+                originDeviceID: input.sourceOriginDeviceID,
+                createdAt: input.sourceCreatedAt,
+                batchSequence: input.sourceBatchSequence,
+                schemaVersion: input.sourceSchemaVersion,
+                committedAt: committedAt,
+                canonicalPayloadDigest: input.plan.canonicalPayloadDigest,
+                canonicalPayloadDigestFormatVersion: input.plan.canonicalPayloadDigestFormatVersion,
+                committedResultDigest: committedResultDigest,
+                committedResultDigestFormatVersion: CanonicalCommittedResultDigestPayloadV1.formatVersion,
+                affectedNotesPayloadData: affectedNotesPayload,
+                authoritativeChildCount: childProjection.count,
+                authoritativeChildBytes: childBytes,
+                authoritativeChildrenDigest: childrenDigest,
+                postCommitStatePayloadData: try postCommitState.encodedPayloadData()
+            )
+        }
+
+        var persistedIdentity: SyncConvergencePersistedIncorporationIdentity {
+            SyncConvergencePersistedIncorporationIdentity(
+                batchID: root.batchID,
+                canonicalPayloadDigest: root.canonicalPayloadDigest,
+                canonicalPayloadDigestFormatVersion: root.canonicalPayloadDigestFormatVersion,
+                committedResultDigest: root.committedResultDigest,
+                committedResultDigestFormatVersion: root.committedResultDigestFormatVersion
+            )
+        }
+
+        var sourceBatch: SyncBatch { input.sourceBatch }
+
+        func result(
+            cleanupPlan: SyncConvergenceCleanupPlan,
+            presentationPlan: SyncConvergencePresentationPlan
+        ) -> SyncConvergenceIncorporationResult {
+            SyncConvergenceIncorporationResult(
+                batchID: root.batchID,
+                affectedNoteIDs: Set(input.plan.affectedNotePlans.map(\.noteID)),
+                cleanupPlan: cleanupPlan,
+                presentationPlan: presentationPlan,
+                persistedIncorporationIdentity: persistedIdentity
+            )
+        }
+
+        static func childProjection(
+            from children: SyncConvergenceIncorporatedChildrenProjection,
+            expectedNoteEffects: [ExpectedNoteEffectProjection]
+        ) throws -> [ChildProjection] {
+            try makeChildProjection(
+                operationIdentities: children.operationIdentities.sorted { $0.operationIndex < $1.operationIndex },
+                noteEffects: expectedNoteEffects.sorted { $0.noteID.uuidString < $1.noteID.uuidString },
+                resultEvidence: children.resultEvidence.sorted(by: { resultEvidenceOrder($0.evidence, $1.evidence) })
+            )
+        }
+
+        private static func makeChildProjection(
+            operationIdentities: [SyncConvergenceOperationIdentityRecord],
+            noteEffects: [ExpectedNoteEffectProjection],
+            resultEvidence: [SyncConvergenceResultEvidenceRecord]
+        ) throws -> [ChildProjection] {
+            var projections: [ChildProjection] = []
+            for record in operationIdentities {
+                var encoder = CanonicalPayloadDigestFormatV1()
+                try encoder.appendOperationIdentity(record.operationIdentity)
+                projections.append(ChildProjection(kind: "operation", key: "\(record.operationIndex)", bytes: encoder.data))
+            }
+            for record in noteEffects {
+                var encoder = CanonicalPayloadDigestFormatV1()
+                try ExpectedNoteEffectProjection.validateKinds(record.kinds)
+                try encoder.appendProjectedNoteEffect(batchID: record.batchID, noteID: record.noteID, kinds: record.kinds)
+                projections.append(ChildProjection(kind: "note-effect", key: record.noteID.uuidString.lowercased(), bytes: encoder.data))
+            }
+            for record in resultEvidence {
+                var encoder = CanonicalPayloadDigestFormatV1()
+                try encoder.appendResultEvidence(record.evidence)
+                projections.append(ChildProjection(
+                    kind: "result",
+                    key: "\(record.evidence.noteID.uuidString.lowercased())|\(record.evidence.kind.rawValue)",
+                    bytes: encoder.data
+                ))
+            }
+            return projections.sorted()
+        }
+
+        private static func identityOrder(_ lhs: OperationIdentityPayload, _ rhs: OperationIdentityPayload) -> Bool {
+            if lhs.batchIDLowercase != rhs.batchIDLowercase { return lhs.batchIDLowercase < rhs.batchIDLowercase }
+            return lhs.operationIndex < rhs.operationIndex
+        }
+
+        private static func resultEvidenceOrder(_ lhs: SyncConvergenceResultEvidence, _ rhs: SyncConvergenceResultEvidence) -> Bool {
+            if lhs.noteID != rhs.noteID { return lhs.noteID.uuidString < rhs.noteID.uuidString }
+            return lhs.kind.rawValue < rhs.kind.rawValue
+        }
+
+        private static func plannedOperationOrder(
+            _ lhs: SyncConvergencePlannedBodyOperation,
+            _ rhs: SyncConvergencePlannedBodyOperation
+        ) -> Bool {
+            if lhs.noteID != rhs.noteID { return lhs.noteID.uuidString < rhs.noteID.uuidString }
+            return lhs.operationIdentity.operationIndex < rhs.operationIdentity.operationIndex
+        }
+    }
+}
+
+private struct ExpectedNoteEffectProjection: Equatable {
+    let batchID: UUID
+    let noteID: UUID
+    let kinds: [String]
+
+    static func validateKinds(_ kinds: [String]) throws {
+        guard SyncConvergenceNoteEffectKindMembership.validate(kinds) else {
+            throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload("noteEffect.kinds")
+        }
+    }
+}
+
+private struct ChildProjection: Equatable, Comparable {
+    let kind: String
+    let key: String
+    let bytes: Data
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.kind != rhs.kind { return lhs.kind < rhs.kind }
+        return lhs.key < rhs.key
+    }
+}
+
+private struct SyncConvergenceAffectedNotesPayloadV1: Codable, Equatable {
+    static let version = 1
+
+    let version: Int
+    let noteIDsLowercase: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case version = "v"
+        case noteIDsLowercase = "n"
+    }
+
+    init(noteIDs: Set<UUID>) {
+        self.version = Self.version
+        self.noteIDsLowercase = noteIDs.map { $0.uuidString.lowercased() }.sorted()
+    }
+
+    func encodedData() throws -> Data {
+        for noteID in noteIDsLowercase {
+            try SyncConvergenceContractValidation.validateCanonicalLowercaseUUID(noteID, field: "noteID")
+        }
+        return try SyncConvergenceStableEncoding.encode(self)
+    }
+}
+
+struct CanonicalCommittedResultDigestPayloadV1 {
+    static let formatVersion = 1
+
+    static func digest(plan: SyncConvergenceBatchPlan, sourceBatch: SyncBatch) throws -> String {
+        _ = sourceBatch
+        return try digest(batchID: plan.batchID, results: results(from: plan))
+    }
+
+    static func canonicalBytes(batchID: UUID, results: [CanonicalCommittedResultV1]) throws -> Data {
+        var encoder = CanonicalPayloadDigestFormatV1()
+        try encoder.appendCommittedResults(batchID: batchID, results: results)
+        return encoder.data
+    }
+
+    static func digest(batchID: UUID, results: [CanonicalCommittedResultV1]) throws -> String {
+        try CanonicalDigestEncoderV1.digest(data: canonicalBytes(batchID: batchID, results: results))
+    }
+
+    fileprivate static func results(from plan: SyncConvergenceBatchPlan) -> [CanonicalCommittedResultV1] {
+        plan.affectedNotePlans.flatMap { notePlan -> [CanonicalCommittedResultV1] in
+            var results: [CanonicalCommittedResultV1] = []
+            if let body = notePlan.bodyEffect?.committedBodyResult(noteID: notePlan.noteID) {
+                results.append(body)
+            }
+            if let title = notePlan.titleEffect?.committedTitleResult(noteID: notePlan.noteID) {
+                results.append(title)
+            }
+            if let creation = notePlan.creationEffect {
+                results.append(.creation(
+                    noteID: creation.noteID,
+                    folderID: creation.folderID,
+                    finalBodyHash: creation.initialBodyHash,
+                    titleIdentity: creation.operationIdentity,
+                    titleKey: creation.operationIdentity.canonicalReplayKey,
+                    creationIdentity: creation.operationIdentity
+                ))
+            }
+            return results
+        }.sorted()
+    }
+}
+
+enum CanonicalCommittedResultV1: Equatable, Comparable {
+    case body(noteID: UUID, preHash: String?, finalBodyHash: String, identities: [OperationIdentityPayload])
+    case title(noteID: UUID, identity: OperationIdentityPayload, key: CanonicalReplayKeyPayload, finalTitle: String)
+    case creation(
+        noteID: UUID,
+        folderID: UUID?,
+        finalBodyHash: String,
+        titleIdentity: OperationIdentityPayload,
+        titleKey: CanonicalReplayKeyPayload,
+        creationIdentity: OperationIdentityPayload
+    )
+    case reconciliation(
+        noteID: UUID,
+        identity: OperationIdentityPayload,
+        finalBodyHash: String,
+        replacementContentHash: String
+    )
+
+    private var noteID: UUID {
+        switch self {
+        case .body(let noteID, _, _, _), .title(let noteID, _, _, _), .creation(let noteID, _, _, _, _, _),
+                .reconciliation(let noteID, _, _, _):
+            return noteID
+        }
+    }
+
+    private var discriminator: Int {
+        switch self {
+        case .body:
+            return 1
+        case .title:
+            return 2
+        case .creation:
+            return 3
+        case .reconciliation:
+            return 4
+        }
+    }
+
+    private var operationIndex: Int {
+        switch self {
+        case .body(_, _, _, let identities):
+            return identities.map(\.operationIndex).min() ?? Int.max
+        case .title(_, let identity, _, _):
+            return identity.operationIndex
+        case .creation(_, _, _, _, _, let identity):
+            return identity.operationIndex
+        case .reconciliation(_, let identity, _, _):
+            return identity.operationIndex
+        }
+    }
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.noteID != rhs.noteID { return lhs.noteID.uuidString < rhs.noteID.uuidString }
+        if lhs.discriminator != rhs.discriminator { return lhs.discriminator < rhs.discriminator }
+        return lhs.operationIndex < rhs.operationIndex
+    }
+}
+
+private enum CanonicalDigestEncoderV1 {
+    static func digest(data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+private extension SyncConvergenceMutableNoteRecord {
+    func matchesCreation(_ creation: SyncConvergenceCreationEffect) -> Bool {
+        noteID == creation.noteID
+            && folderID == creation.folderID
+            && title == creation.title
+            && body == creation.body
+            && createdAt == creation.createdAt
+            && modifiedAt == creation.modifiedAt
+    }
+}
+
+private extension SyncConvergenceNotePlan {
+    var hasMutableNoteEffect: Bool {
+        plannedFinalBody != nil || plannedResultingTitle != nil
+    }
+
+    var plannedFinalBody: String? {
+        switch bodyEffect {
+        case .matchingBaseIncremental(let plan):
+            return plan.finalBody
+        case .reconstructedConflict(let plan):
+            return plan.finalBody
+        case .legacyPositional(let plan):
+            return plan.finalBody
+        case .compatibilityNoopMissingNote, .none:
+            return nil
+        }
+    }
+
+    var plannedFinalBodyHash: String? {
+        switch bodyEffect {
+        case .matchingBaseIncremental(let plan):
+            return plan.finalBodyHash
+        case .reconstructedConflict(let plan):
+            return plan.finalBodyHash
+        case .legacyPositional(let plan):
+            return plan.finalBodyHash
+        case .compatibilityNoopMissingNote, .none:
+            return nil
+        }
+    }
+
+    var plannedResultingTitle: String? {
+        if let titleEffect, titleEffect.verdict == .apply {
+            return titleEffect.resultingTitle
+        }
+        return nil
+    }
+
+    var plannedModifiedAt: Date? {
+        if let titleEffect, titleEffect.verdict == .apply {
+            return titleEffect.candidateCanonicalKey.modifiedAt
+        }
+        return latestBodyModifiedAt
+    }
+
+    var latestBodyModifiedAt: Date? {
+        switch bodyEffect {
+        case .matchingBaseIncremental(let plan):
+            return plan.operations.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
+        case .reconstructedConflict(let plan):
+            return plan.retainedOperationAdditions.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
+        case .legacyPositional(let plan):
+            return plan.operations.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
+        case .compatibilityNoopMissingNote, .none:
+            return nil
+        }
+    }
+
+    func noteEffectRecord(batchID: UUID) -> SyncConvergenceNoteEffectRecord {
+        let bodyHashes = bodyEffect.hashes
+        let titleKeys = titleEffect.map { ($0.priorWinningKey, $0.resultingWinningKey) }
+        return SyncConvergenceNoteEffectRecord(
+            batchID: batchID,
+            noteID: noteID,
+            preBodyHash: bodyHashes?.pre,
+            postBodyHash: bodyHashes?.post,
+            preTitleKey: titleKeys?.0,
+            postTitleKey: titleKeys?.1
+        )
+    }
+}
+
+private extension SyncConvergenceBodyEffect? {
+    var hashes: (pre: String?, post: String?)? {
+        switch self {
+        case .matchingBaseIncremental(let plan):
+            return (plan.initialBodyHash, plan.finalBodyHash)
+        case .reconstructedConflict(let plan):
+            return (plan.projectedPreMergeCurrentHash, plan.finalBodyHash)
+        case .legacyPositional(let plan):
+            return (SyncBatchContentHash.sha256Hex(for: plan.initialBody), plan.finalBodyHash)
+        case .compatibilityNoopMissingNote, .none:
+            return nil
+        }
+    }
+}
+
+private extension SyncConvergenceBodyEffect {
+    func committedBodyResult(noteID: UUID) -> CanonicalCommittedResultV1? {
+        switch self {
+        case .matchingBaseIncremental(let plan):
+            return .body(
+                noteID: noteID,
+                preHash: plan.initialBodyHash,
+                finalBodyHash: plan.finalBodyHash,
+                identities: plan.operations.map(\.operationIdentity)
+            )
+        case .reconstructedConflict(let plan):
+            return .body(
+                noteID: noteID,
+                preHash: plan.projectedPreMergeCurrentHash,
+                finalBodyHash: plan.finalBodyHash,
+                identities: plan.retainedOperationAdditions.map(\.operationIdentity)
+            )
+        case .legacyPositional(let plan):
+            return .body(
+                noteID: noteID,
+                preHash: SyncBatchContentHash.sha256Hex(for: plan.initialBody),
+                finalBodyHash: plan.finalBodyHash,
+                identities: plan.operations.map(\.operationIdentity)
+            )
+        case .compatibilityNoopMissingNote:
+            return nil
+        }
+    }
+}
+
+private extension SyncConvergenceTitleEffect {
+    func committedTitleResult(noteID: UUID) -> CanonicalCommittedResultV1? {
+        switch verdict {
+        case .apply, .idempotent:
+            return .title(
+                noteID: noteID,
+                identity: candidateOperationIdentity,
+                key: candidateCanonicalKey,
+                finalTitle: resultingTitle
+            )
+        case .ignoreOlder, .compatibilityNoopMissingNote:
+            return nil
+        }
+    }
+}
+
+private extension SyncConvergencePlannedBodyOperation {
+    var retainedOperationRecord: SyncConvergenceRetainedOperationRecord {
+        SyncConvergenceRetainedOperationRecord(
+            noteID: noteID,
+            batchID: UUID(uuidString: operationIdentity.batchIDLowercase) ?? operationIdentity.canonicalReplayKey.batchID,
+            originDeviceID: UUID(uuidString: operationIdentity.originDeviceIDLowercase) ?? operationIdentity.canonicalReplayKey.originDeviceID,
+            operationIndex: operationIdentity.operationIndex,
+            operationKind: kind,
+            utf16Offset: utf16Offset,
+            utf16Length: utf16Length,
+            text: text,
+            expectedText: expectedText,
+            baseContentHash: baseContentHash,
+            resultContentHash: resultContentHash,
+            canonicalReplayKey: operationIdentity.canonicalReplayKey,
+            modifiedAt: operationIdentity.canonicalReplayKey.modifiedAt
+        )
+    }
+}
+
+private extension CanonicalReplayKeyPayload {
+    var batchID: UUID { UUID(uuidString: batchIDLowercase)! }
+    var originDeviceID: UUID { UUID(uuidString: originDeviceIDLowercase)! }
+
+    func noteIDFromKnownPlan(_ plan: SyncConvergenceBatchPlan) -> UUID? {
+        plan.affectedNotePlans.first { notePlan in
+            notePlan.creationEffect?.operationIdentity.canonicalReplayKey == self
+                || notePlan.titleEffect?.candidateCanonicalKey == self
+                || notePlan.bodyEffect?.containsReplayKey(self) == true
+        }?.noteID
+    }
+}
+
+private extension SyncConvergenceBodyEffect {
+    func containsReplayKey(_ key: CanonicalReplayKeyPayload) -> Bool {
+        switch self {
+        case .matchingBaseIncremental(let plan):
+            return plan.operations.contains { $0.operationIdentity.canonicalReplayKey == key }
+        case .reconstructedConflict(let plan):
+            return plan.retainedOperationAdditions.contains { $0.operationIdentity.canonicalReplayKey == key }
+        case .legacyPositional(let plan):
+            return plan.operations.contains { $0.operationIdentity.canonicalReplayKey == key }
+        case .compatibilityNoopMissingNote(let plan):
+            return plan.operationIdentities.contains { $0.canonicalReplayKey == key }
+        }
+    }
+}
+
+private extension SyncConvergenceIncorporatedBatchRecord {
+    var projection: SyncConvergenceIncorporatedRootProjection {
+        SyncConvergenceIncorporatedRootProjection(
+            batchID: batchID,
+            originDeviceID: originDeviceID,
+            createdAt: createdAt,
+            batchSequence: batchSequence,
+            schemaVersion: schemaVersion,
+            committedAt: committedAt,
+            canonicalPayloadDigest: canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
+            committedResultDigest: committedResultDigest,
+            committedResultDigestFormatVersion: committedResultDigestFormatVersion,
+            committedAtOrderingPayloadData: (
+                try? CommittedAtOrderingPayload(batchID: batchID, committedAt: committedAt).encodedEvidenceData()
+            ) ?? Data(),
+            affectedNotesPayloadData: affectedNotesPayloadData,
+            authoritativeChildCount: authoritativeChildCount,
+            authoritativeChildBytes: authoritativeChildBytes,
+            authoritativeChildrenDigest: authoritativeChildrenDigest,
+            postCommitStatePayloadData: postCommitStatePayloadData
+        )
+    }
+}
+
+private extension SyncConvergencePostCommitState {
+    func encodedPayloadData() throws -> Data {
+        try SyncConvergenceStableEncoding.encode(self)
+    }
+
+    static func decodePayloadData(_ data: Data) throws -> Self {
+        try SyncConvergenceStableEncoding.decode(Self.self, from: data)
+    }
+}
+
+private extension SyncConvergenceCleanupPlan {
+    func gated(by state: SyncConvergencePostCommitState) -> SyncConvergenceCleanupPlan {
+        SyncConvergenceCleanupPlan(
+            batchIDs: state.queueCleanupPending ? batchIDs : [],
+            retryQueueCleanup: state.queueCleanupPending && retryQueueCleanup,
+            retryLegacyCleanup: state.legacyCleanupPending && retryLegacyCleanup,
+            retryPresentationRefresh: state.presentationRefreshPending && retryPresentationRefresh
+        )
+    }
+}
+
+private extension SyncConvergencePresentationPlan {
+    func gated(by state: SyncConvergencePostCommitState) -> SyncConvergencePresentationPlan {
+        state.presentationRefreshPending ? self : SyncConvergencePresentationPlan(noteRoutings: [:])
     }
 }
 
