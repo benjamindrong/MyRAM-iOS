@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import CryptoKit
 #if os(macOS)
 @testable import MyRAMMac
 #else
@@ -299,6 +300,56 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             )
             assertNoPreflightMutation(transaction, testCase.0)
         }
+    }
+
+    func testDuplicateValidationRejectsUnsupportedPersistedResultKindBeforeMutation() throws {
+        let fixture = try makeTitleAndBodyFixture()
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        seed(note: fixture.initialNote, in: context)
+        try seedTitleWinner(try XCTUnwrap(fixture.priorWinner), updatedAt: date(6), in: context)
+
+        let first = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
+            committedAt: fixture.committedAt
+        )
+        guard case .incorporated = first else {
+            return XCTFail("Expected SwiftData incorporation, got \(first)")
+        }
+        var stored = try captureSwiftDataState(in: context)
+        let malformed = try XCTUnwrap(
+            try context.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>())
+                .first { $0.resultKindRaw == SyncConvergenceResultEvidence.Kind.body.rawValue }
+        )
+        malformed.resultKindRaw = "unsupported"
+        malformed.resultEvidencePayloadData = try unsupportedKindPayload(from: malformed.resultEvidencePayloadData)
+        try context.save()
+        stored.resultEvidence = try captureSwiftDataState(in: context).resultEvidence
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
+            committedAt: fixture.committedAt
+        )
+
+        XCTAssertEqual(outcome, .failedBeforeCommit(.unexpected))
+        XCTAssertEqual(try captureSwiftDataState(in: context), stored)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>()).count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<NoteTitleWinner>()).count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).count, 1)
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<NoteContentSnapshot>()).count,
+            fixture.plan.historyPlan.snapshotAdditions.count
+        )
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>()).count, 2)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>()).count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>()).count, 2)
+        XCTAssertFalse(context.hasChanges)
     }
 
     func testTombstoneOnlyDuplicateUsesDedicatedProjection() throws {
@@ -845,17 +896,14 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
     }
 
     func testSwiftDataFreshContextReloadAndDifferentTimestampDuplicate() throws {
-        let fixture = try makeReconstructedSnapshotFixture()
+        let fixture = try makeTitleAndBodyReconstructedSnapshotFixture()
         let container = try ModelContainer(
             for: Schema(MyRAMModelRegistry.models),
             configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
         )
         let context1 = ModelContext(container)
-        let note = Note(title: fixture.initialNote.title, content: fixture.initialNote.body)
-        note.id = fixture.initialNote.noteID
-        note.createdAt = fixture.initialNote.createdAt
-        note.modifiedAt = fixture.initialNote.modifiedAt
-        context1.insert(note)
+        seed(note: fixture.initialNote, in: context1)
+        try seedTitleWinner(try XCTUnwrap(fixture.priorWinner), updatedAt: date(6), in: context1)
 
         let first = SyncConvergenceIncorporationExecutor().incorporate(
             input: fixture.validatedInput,
@@ -867,16 +915,40 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         }
 
         let context2 = ModelContext(container)
+        let expectedNotePlan = try XCTUnwrap(fixture.plan.affectedNotePlans.first { $0.noteID == fixture.noteID })
+        let expectedTitle = try XCTUnwrap(expectedNotePlan.titleEffect)
+        let expectedWinningKey = try XCTUnwrap(expectedTitle.resultingWinningKey)
+        let expectedBody = try XCTUnwrap(expectedNotePlan.plannedFinalBodyForTest)
+        let expectedModifiedAt = try XCTUnwrap(expectedNotePlan.plannedModifiedAtForTest)
         let persistedNote = try XCTUnwrap(fetchOne(Note.self, in: context2))
         XCTAssertEqual(persistedNote.id, fixture.noteID)
-        XCTAssertEqual(persistedNote.title, fixture.initialNote.title)
-        XCTAssertEqual(persistedNote.content, "AxB")
+        XCTAssertNil(persistedNote.folder)
+        XCTAssertEqual(persistedNote.title, expectedTitle.resultingTitle)
+        XCTAssertEqual(persistedNote.content, expectedBody)
         XCTAssertEqual(persistedNote.createdAt, fixture.initialNote.createdAt)
-        XCTAssertEqual(persistedNote.modifiedAt, date(4))
+        XCTAssertEqual(persistedNote.modifiedAt, expectedModifiedAt)
+
+        let titleWinner = try XCTUnwrap(fetchOne(NoteTitleWinner.self, in: context2))
+        XCTAssertEqual(titleWinner.noteID, fixture.noteID)
+        XCTAssertEqual(titleWinner.title, expectedTitle.resultingTitle)
+        XCTAssertEqual(titleWinner.canonicalReplayKeyPayloadData, try expectedWinningKey.encodedEvidenceData())
+        XCTAssertEqual(titleWinner.operationIdentityPayloadData, try expectedTitle.candidateOperationIdentity.encodedPayloadData())
+        XCTAssertEqual(
+            try CanonicalReplayKeyPayload.decodeEvidenceData(titleWinner.canonicalReplayKeyPayloadData),
+            expectedWinningKey
+        )
+        XCTAssertEqual(
+            try OperationIdentityPayload.decodePayloadData(titleWinner.operationIdentityPayloadData),
+            expectedTitle.candidateOperationIdentity
+        )
+        XCTAssertEqual(titleWinner.updatedAt, fixture.committedAt)
 
         let root = try XCTUnwrap(fetchOne(IncorporatedSyncBatch.self, in: context2))
         XCTAssertEqual(root.batchID, fixture.batch.id)
         XCTAssertEqual(root.originDeviceID, fixture.batch.originDeviceID)
+        XCTAssertEqual(root.createdAt, fixture.batch.createdAt)
+        XCTAssertEqual(root.batchSequence, fixture.batch.batchSequence)
+        XCTAssertEqual(root.schemaVersion, fixture.validatedInput.sourceSchemaVersion)
         XCTAssertEqual(root.committedAt, fixture.committedAt)
         XCTAssertEqual(root.canonicalPayloadDigest, fixture.plan.canonicalPayloadDigest)
         XCTAssertEqual(root.canonicalPayloadDigestFormatVersion, fixture.plan.canonicalPayloadDigestFormatVersion)
@@ -893,27 +965,46 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             rootProjection.committedAtOrderingPayloadData,
             try CommittedAtOrderingPayload(batchID: fixture.batch.id, committedAt: fixture.committedAt).encodedEvidenceData()
         )
-        XCTAssertEqual(
-            root.affectedNotesPayloadData,
-            Data(#"{"n":["\#(fixture.noteID.uuidString.lowercased())"],"v":1}"#.utf8)
+        let committedAtOrdering = try CommittedAtOrderingPayload.decodeEvidenceData(rootProjection.committedAtOrderingPayloadData)
+        XCTAssertEqual(committedAtOrdering.batchIDLowercase, fixture.batch.id.uuidString.lowercased())
+        XCTAssertEqual(committedAtOrdering.committedAtBitPattern, SyncConvergenceDateBits.bitPattern(for: fixture.committedAt))
+        let affectedNotes = try decodedAffectedNotes(root.affectedNotesPayloadData)
+        XCTAssertEqual(affectedNotes.version, 1)
+        XCTAssertEqual(affectedNotes.noteIDs, [fixture.noteID.uuidString.lowercased()])
+        let expectedPostCommit = SyncConvergencePostCommitState(
+            queueCleanupPending: true,
+            legacyCleanupPending: fixture.plan.cleanupPlan.retryLegacyCleanup,
+            presentationRefreshPending: true
         )
+        XCTAssertEqual(try SyncConvergenceStableEncoding.decode(SyncConvergencePostCommitState.self, from: root.postCommitStatePayloadData), expectedPostCommit)
 
         let operationIdentities = try context2.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>())
         let noteEffects = try context2.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>())
         let resultEvidence = try context2.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>())
-        XCTAssertEqual(operationIdentities.count, 1)
+        XCTAssertEqual(operationIdentities.count, fixture.plan.incorporationEvidence.operationIdentities.count)
         XCTAssertEqual(noteEffects.count, 1)
-        XCTAssertEqual(resultEvidence.count, 1)
-        XCTAssertEqual(root.authoritativeChildCount, 3)
+        XCTAssertEqual(resultEvidence.count, fixture.plan.incorporationEvidence.resultEvidence.count)
 
-        let retained = try XCTUnwrap(fetchOne(RetainedBodyOperation.self, in: context2))
-        XCTAssertEqual(retained.sourceRaw, "remote")
-        XCTAssertEqual(retained.text, "x")
-        let snapshot = try XCTUnwrap(fetchOne(NoteContentSnapshot.self, in: context2))
-        XCTAssertEqual(snapshot.noteID, fixture.noteID)
-        XCTAssertEqual(snapshot.body, "AxB")
-        XCTAssertEqual(snapshot.generation, 2)
+        try assertPersistedOperationIdentities(operationIdentities, fixture: fixture)
+        try assertPersistedNoteEffects(noteEffects, fixture: fixture)
+        try assertPersistedResultEvidence(resultEvidence, fixture: fixture)
+        try assertAuthoritativeChildAccounting(
+            root: root,
+            operationIdentities: operationIdentities,
+            noteEffects: noteEffects,
+            resultEvidence: resultEvidence
+        )
 
+        try assertPersistedRetainedOperations(
+            try context2.fetch(FetchDescriptor<RetainedBodyOperation>()),
+            fixture: fixture
+        )
+        try assertPersistedSnapshots(
+            try context2.fetch(FetchDescriptor<NoteContentSnapshot>()),
+            fixture: fixture
+        )
+
+        let beforeDuplicate = try captureSwiftDataState(in: context2)
         let retryCommittedAt = date(99)
         XCTAssertNotEqual(retryCommittedAt, fixture.committedAt)
         let duplicate = SyncConvergenceIncorporationExecutor().incorporate(
@@ -927,13 +1018,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         }
         XCTAssertEqual(result.cleanupPlan.batchIDs, [fixture.batch.id])
         XCTAssertEqual(result.presentationPlan, fixture.plan.presentationPlan)
-        XCTAssertEqual(try context2.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 1)
-        XCTAssertEqual(try context2.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>()).count, 1)
-        XCTAssertEqual(try context2.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>()).count, 1)
-        XCTAssertEqual(try context2.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>()).count, 1)
-        XCTAssertEqual(try context2.fetch(FetchDescriptor<RetainedBodyOperation>()).count, 1)
-        XCTAssertEqual(try context2.fetch(FetchDescriptor<NoteContentSnapshot>()).count, 1)
-        XCTAssertEqual(try XCTUnwrap(fetchOne(Note.self, in: context2)).content, "AxB")
+        XCTAssertEqual(try captureSwiftDataState(in: context2), beforeDuplicate)
     }
 
     func testMissingNoteTitleCompatibilityNoopRequiresNoWinner() throws {
@@ -962,7 +1047,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         assertNoPreflightMutation(orphanedWinnerTransaction, "orphaned winner")
     }
 
-    private struct Fixture {
+    fileprivate struct Fixture {
         let noteID: UUID
         let batch: SyncBatch
         let plan: SyncConvergenceBatchPlan
@@ -1097,6 +1182,84 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 createdAt: date(1),
                 modifiedAt: date(2)
             )],
+            persistedTitleWinners: [priorWinner]
+        ))
+        guard case .planned(let validatedInput) = outcome else {
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        let plan = validatedInput.plan
+        let projectedBytes = try SyncConvergenceProjectedIncorporationEvidence(
+            batch: batch,
+            affectedNoteIDs: Set(plan.affectedNotePlans.map(\.noteID)),
+            operationIdentities: plan.incorporationEvidence.operationIdentities,
+            resultEvidence: plan.incorporationEvidence.resultEvidence
+        ).canonicalEncodedByteCount()
+        return Fixture(
+            noteID: noteID,
+            batch: batch,
+            plan: plan,
+            projectedBytes: projectedBytes,
+            validatedInput: validatedInput,
+            initialNote: initialNote,
+            committedAt: date(7),
+            priorWinner: priorWinner
+        )
+    }
+
+    private func makeTitleAndBodyReconstructedSnapshotFixture() throws -> Fixture {
+        let noteID = uuid("00000000-0000-0000-0000-000000133101")
+        let origin = uuid("00000000-0000-0000-0000-000000133102")
+        let batchID = uuid("00000000-0000-0000-0000-000000133103")
+        let base = "AB"
+        let baseHash = SyncBatchContentHash.sha256Hex(for: base)
+        let initialNote = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "Prior",
+            body: "ACB",
+            createdAt: date(1),
+            modifiedAt: date(2)
+        )
+        let priorBatch = titleBatch(
+            id: uuid("00000000-0000-0000-0000-000000133104"),
+            noteID: noteID,
+            title: "Prior",
+            modifiedAt: date(3)
+        )
+        let priorWinner = titleWinnerProjection(noteID: noteID, title: "Prior", batch: priorBatch)
+        let batch = SyncBatch(
+            id: batchID,
+            originDeviceID: origin,
+            createdAt: date(4),
+            batchSequence: 13,
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "x",
+                    modifiedAt: date(5),
+                    baseContentHash: baseHash
+                )),
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteID,
+                    title: "Incoming",
+                    modifiedAt: date(6)
+                ))
+            ]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [SyncConvergenceProjectedNote(
+                noteID: noteID,
+                folderID: nil,
+                title: "Prior",
+                body: "ACB",
+                createdAt: date(1),
+                modifiedAt: date(2)
+            )],
+            retainedSnapshots: [
+                SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: baseHash, body: base, generation: 1)
+            ],
             persistedTitleWinners: [priorWinner]
         ))
         guard case .planned(let validatedInput) = outcome else {
@@ -1825,6 +1988,106 @@ private struct MutationCounts: Equatable {
     let rollbackCount: Int
 }
 
+private struct SwiftDataState: Equatable {
+    let notes: [PersistedNoteState]
+    let titleWinners: [PersistedTitleWinnerState]
+    let retainedOperations: [PersistedRetainedOperationState]
+    let snapshots: [PersistedSnapshotState]
+    let roots: [PersistedRootState]
+    let operationIdentities: [PersistedOperationIdentityState]
+    let noteEffects: [PersistedNoteEffectState]
+    var resultEvidence: [PersistedResultEvidenceState]
+}
+
+private struct PersistedNoteState: Equatable {
+    let id: UUID
+    let folderID: UUID?
+    let title: String
+    let content: String
+    let createdAt: Date
+    let modifiedAt: Date
+}
+
+private struct PersistedTitleWinnerState: Equatable {
+    let noteID: UUID
+    let title: String
+    let canonicalReplayKeyPayloadData: Data
+    let operationIdentityPayloadData: Data
+    let updatedAt: Date
+}
+
+private struct PersistedRetainedOperationState: Equatable {
+    let noteID: UUID
+    let batchID: UUID
+    let originDeviceID: UUID
+    let operationIndex: Int
+    let operationKindRaw: String
+    let utf16Offset: Int
+    let utf16Length: Int?
+    let text: String?
+    let expectedText: String?
+    let baseContentHash: String?
+    let resultContentHash: String?
+    let canonicalReplayKeyPayloadData: Data
+    let modifiedAt: Date
+    let sourceRaw: String
+}
+
+private struct PersistedSnapshotState: Equatable {
+    let noteID: UUID
+    let contentHash: String
+    let body: String
+    let generation: Int
+    let createdAt: Date
+}
+
+private struct PersistedRootState: Equatable {
+    let batchID: UUID
+    let originDeviceID: UUID
+    let createdAt: Date
+    let batchSequence: UInt64?
+    let schemaVersion: Int
+    let committedAt: Date
+    let canonicalPayloadDigest: String
+    let canonicalPayloadDigestFormatVersion: Int
+    let committedResultDigest: String
+    let committedResultDigestFormatVersion: Int
+    let affectedNotesPayloadData: Data
+    let authoritativeChildCount: Int
+    let authoritativeChildBytes: Int
+    let authoritativeChildrenDigest: String
+    let postCommitStatePayloadData: Data
+}
+
+private struct PersistedOperationIdentityState: Equatable {
+    let batchID: UUID
+    let noteID: UUID
+    let operationIndex: Int
+    let operationIdentityPayloadData: Data
+    let canonicalReplayKeyPayloadData: Data
+}
+
+private struct PersistedNoteEffectState: Equatable {
+    let batchID: UUID
+    let noteID: UUID
+    let preBodyHash: String?
+    let postBodyHash: String?
+    let preTitleKeyPayloadData: Data?
+    let postTitleKeyPayloadData: Data?
+}
+
+private struct PersistedResultEvidenceState: Equatable {
+    let batchID: UUID
+    let noteID: UUID
+    let resultKindRaw: String
+    let resultEvidencePayloadData: Data
+}
+
+private struct DecodedAffectedNotes: Equatable {
+    let version: Int
+    let noteIDs: [String]
+}
+
 private func uuid(_ value: String) -> UUID {
     UUID(uuidString: value)!
 }
@@ -1920,6 +2183,310 @@ private func fetchOne<T: PersistentModel>(_ type: T.Type, in context: ModelConte
     try context.fetch(FetchDescriptor<T>()).first
 }
 
+private func seed(note record: SyncConvergenceMutableNoteRecord, in context: ModelContext) {
+    let note = Note(title: record.title, content: record.body)
+    note.id = record.noteID
+    note.createdAt = record.createdAt
+    note.modifiedAt = record.modifiedAt
+    context.insert(note)
+}
+
+private func seedTitleWinner(
+    _ winner: SyncConvergenceTitleWinnerProjection,
+    updatedAt: Date,
+    in context: ModelContext
+) throws {
+    context.insert(NoteTitleWinner(
+        noteID: winner.noteID,
+        title: winner.title,
+        canonicalReplayKeyPayloadData: try winner.canonicalReplayKey.encodedEvidenceData(),
+        operationIdentityPayloadData: try winner.operationIdentity.encodedPayloadData(),
+        updatedAt: updatedAt
+    ))
+}
+
+private func unsupportedKindPayload(from data: Data) throws -> Data {
+    var object = try XCTUnwrap(
+        JSONSerialization.jsonObject(with: data) as? [String: Any]
+    )
+    object["kind"] = "unsupported"
+    return try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+}
+
+private func decodedAffectedNotes(_ data: Data) throws -> DecodedAffectedNotes {
+    let object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+    return DecodedAffectedNotes(
+        version: try XCTUnwrap(object["v"] as? Int),
+        noteIDs: try XCTUnwrap(object["n"] as? [String])
+    )
+}
+
+private func captureSwiftDataState(in context: ModelContext) throws -> SwiftDataState {
+    SwiftDataState(
+        notes: try context.fetch(FetchDescriptor<Note>()).map {
+            PersistedNoteState(
+                id: $0.id,
+                folderID: $0.folder?.id,
+                title: $0.title,
+                content: $0.content,
+                createdAt: $0.createdAt,
+                modifiedAt: $0.modifiedAt
+            )
+        }.sorted { $0.id.uuidString < $1.id.uuidString },
+        titleWinners: try context.fetch(FetchDescriptor<NoteTitleWinner>()).map {
+            PersistedTitleWinnerState(
+                noteID: $0.noteID,
+                title: $0.title,
+                canonicalReplayKeyPayloadData: $0.canonicalReplayKeyPayloadData,
+                operationIdentityPayloadData: $0.operationIdentityPayloadData,
+                updatedAt: $0.updatedAt
+            )
+        }.sorted { $0.noteID.uuidString < $1.noteID.uuidString },
+        retainedOperations: try context.fetch(FetchDescriptor<RetainedBodyOperation>()).map {
+            PersistedRetainedOperationState(
+                noteID: $0.noteID,
+                batchID: $0.batchID,
+                originDeviceID: $0.originDeviceID,
+                operationIndex: $0.operationIndex,
+                operationKindRaw: $0.operationKindRaw,
+                utf16Offset: $0.utf16Offset,
+                utf16Length: $0.utf16Length,
+                text: $0.text,
+                expectedText: $0.expectedText,
+                baseContentHash: $0.baseContentHash,
+                resultContentHash: $0.resultContentHash,
+                canonicalReplayKeyPayloadData: $0.canonicalReplayKeyPayloadData,
+                modifiedAt: $0.modifiedAt,
+                sourceRaw: $0.sourceRaw
+            )
+        }.sorted { ($0.batchID.uuidString, $0.operationIndex) < ($1.batchID.uuidString, $1.operationIndex) },
+        snapshots: try context.fetch(FetchDescriptor<NoteContentSnapshot>()).map {
+            PersistedSnapshotState(
+                noteID: $0.noteID,
+                contentHash: $0.contentHash,
+                body: $0.body,
+                generation: $0.generation,
+                createdAt: $0.createdAt
+            )
+        }.sorted { ($0.noteID.uuidString, $0.generation) < ($1.noteID.uuidString, $1.generation) },
+        roots: try context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).map {
+            PersistedRootState(
+                batchID: $0.batchID,
+                originDeviceID: $0.originDeviceID,
+                createdAt: $0.createdAt,
+                batchSequence: $0.batchSequence,
+                schemaVersion: $0.schemaVersion,
+                committedAt: $0.committedAt,
+                canonicalPayloadDigest: $0.canonicalPayloadDigest,
+                canonicalPayloadDigestFormatVersion: $0.canonicalPayloadDigestFormatVersion,
+                committedResultDigest: $0.committedResultDigest,
+                committedResultDigestFormatVersion: $0.committedResultDigestFormatVersion,
+                affectedNotesPayloadData: $0.affectedNotesPayloadData,
+                authoritativeChildCount: $0.authoritativeChildCount,
+                authoritativeChildBytes: $0.authoritativeChildBytes,
+                authoritativeChildrenDigest: $0.authoritativeChildrenDigest,
+                postCommitStatePayloadData: $0.postCommitStatePayloadData
+            )
+        }.sorted { $0.batchID.uuidString < $1.batchID.uuidString },
+        operationIdentities: try context.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>()).map {
+            PersistedOperationIdentityState(
+                batchID: $0.batchID,
+                noteID: $0.noteID,
+                operationIndex: $0.operationIndex,
+                operationIdentityPayloadData: $0.operationIdentityPayloadData,
+                canonicalReplayKeyPayloadData: $0.canonicalReplayKeyPayloadData
+            )
+        }.sorted { ($0.batchID.uuidString, $0.operationIndex) < ($1.batchID.uuidString, $1.operationIndex) },
+        noteEffects: try context.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>()).map {
+            PersistedNoteEffectState(
+                batchID: $0.batchID,
+                noteID: $0.noteID,
+                preBodyHash: $0.preBodyHash,
+                postBodyHash: $0.postBodyHash,
+                preTitleKeyPayloadData: $0.preTitleKeyPayloadData,
+                postTitleKeyPayloadData: $0.postTitleKeyPayloadData
+            )
+        }.sorted { $0.noteID.uuidString < $1.noteID.uuidString },
+        resultEvidence: try context.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>()).map {
+            PersistedResultEvidenceState(
+                batchID: $0.batchID,
+                noteID: $0.noteID,
+                resultKindRaw: $0.resultKindRaw,
+                resultEvidencePayloadData: $0.resultEvidencePayloadData
+            )
+        }.sorted { ($0.noteID.uuidString, $0.resultKindRaw) < ($1.noteID.uuidString, $1.resultKindRaw) }
+    )
+}
+
+private func assertPersistedOperationIdentities(
+    _ rows: [IncorporatedBatchOperationIdentity],
+    fixture: SyncConvergenceIncorporationTests.Fixture,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    let expected = Dictionary(
+        uniqueKeysWithValues: fixture.plan.incorporationEvidence.operationIdentities.map { ($0.operationIndex, $0) }
+    )
+    XCTAssertEqual(Set(rows.map(\.operationIndex)), Set(expected.keys), file: file, line: line)
+    for row in rows {
+        let identity = try XCTUnwrap(expected[row.operationIndex], file: file, line: line)
+        XCTAssertEqual(row.batchID, fixture.batch.id, file: file, line: line)
+        XCTAssertEqual(row.noteID, fixture.noteID, file: file, line: line)
+        XCTAssertEqual(row.operationIdentityPayloadData, try identity.encodedPayloadData(), file: file, line: line)
+        XCTAssertEqual(row.canonicalReplayKeyPayloadData, try identity.canonicalReplayKey.encodedEvidenceData(), file: file, line: line)
+        XCTAssertEqual(try OperationIdentityPayload.decodePayloadData(row.operationIdentityPayloadData), identity, file: file, line: line)
+        XCTAssertEqual(try canonicalOperationIdentityBytes(identity), try row.testCanonicalChildBytes, file: file, line: line)
+    }
+}
+
+private func assertPersistedNoteEffects(
+    _ rows: [IncorporatedBatchNoteEffect],
+    fixture: SyncConvergenceIncorporationTests.Fixture,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    let row = try XCTUnwrap(rows.first, file: file, line: line)
+    let notePlan = try XCTUnwrap(fixture.plan.affectedNotePlans.first, file: file, line: line)
+    let expected = notePlan.testNoteEffectRecord(batchID: fixture.batch.id)
+    XCTAssertEqual(rows.count, 1, file: file, line: line)
+    XCTAssertEqual(row.batchID, expected.batchID, file: file, line: line)
+    XCTAssertEqual(row.noteID, expected.noteID, file: file, line: line)
+    XCTAssertEqual(row.preBodyHash, expected.preBodyHash, file: file, line: line)
+    XCTAssertEqual(row.postBodyHash, expected.postBodyHash, file: file, line: line)
+    XCTAssertEqual(row.preTitleKeyPayloadData, try expected.preTitleKey?.encodedEvidenceData(), file: file, line: line)
+    XCTAssertEqual(row.postTitleKeyPayloadData, try expected.postTitleKey?.encodedEvidenceData(), file: file, line: line)
+    XCTAssertTrue(SyncConvergenceNoteEffectKindMembership.validate(row.testEffectKinds, expected: ["body", "title"]), file: file, line: line)
+}
+
+private func assertPersistedResultEvidence(
+    _ rows: [IncorporatedBatchResultEvidence],
+    fixture: SyncConvergenceIncorporationTests.Fixture,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    let expected = Dictionary(
+        uniqueKeysWithValues: fixture.plan.incorporationEvidence.resultEvidence.map { ($0.kind.rawValue, $0) }
+    )
+    XCTAssertEqual(Set(rows.map(\.resultKindRaw)), Set(expected.keys), file: file, line: line)
+    for row in rows {
+        let evidence = try XCTUnwrap(expected[row.resultKindRaw], file: file, line: line)
+        XCTAssertEqual(row.batchID, fixture.batch.id, file: file, line: line)
+        XCTAssertEqual(row.noteID, fixture.noteID, file: file, line: line)
+        XCTAssertEqual(try SyncConvergenceStableEncoding.decode(SyncConvergenceResultEvidence.self, from: row.resultEvidencePayloadData), evidence, file: file, line: line)
+        XCTAssertEqual(row.resultEvidencePayloadData, try SyncConvergenceStableEncoding.encode(evidence), file: file, line: line)
+        XCTAssertEqual(try canonicalResultEvidenceBytes(evidence), try row.testCanonicalChildBytes, file: file, line: line)
+    }
+}
+
+private func assertAuthoritativeChildAccounting(
+    root: IncorporatedSyncBatch,
+    operationIdentities: [IncorporatedBatchOperationIdentity],
+    noteEffects: [IncorporatedBatchNoteEffect],
+    resultEvidence: [IncorporatedBatchResultEvidence],
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    let operationChildren = try operationIdentities.map {
+        PersistedChild(kind: "operation", key: "\($0.operationIndex)", bytes: try $0.testCanonicalChildBytes)
+    }
+    let noteEffectChildren = try noteEffects.map {
+        PersistedChild(kind: "note-effect", key: $0.noteID.uuidString.lowercased(), bytes: try $0.testCanonicalChildBytes)
+    }
+    let resultChildren = try resultEvidence.map {
+        PersistedChild(kind: "result", key: "\($0.noteID.uuidString.lowercased())|\($0.resultKindRaw)", bytes: try $0.testCanonicalChildBytes)
+    }
+    let children = (operationChildren + noteEffectChildren + resultChildren).sorted()
+    let concatenated = children.reduce(into: Data()) { $0.append($1.bytes) }
+    XCTAssertEqual(root.authoritativeChildCount, children.count, file: file, line: line)
+    XCTAssertEqual(root.authoritativeChildBytes, concatenated.count, file: file, line: line)
+    XCTAssertEqual(root.authoritativeChildrenDigest, sha256Hex(concatenated), file: file, line: line)
+}
+
+private func assertPersistedRetainedOperations(
+    _ rows: [RetainedBodyOperation],
+    fixture: SyncConvergenceIncorporationTests.Fixture,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    let expected = Dictionary(
+        uniqueKeysWithValues: fixture.plan.historyPlan.retainedOperationAdditions.map {
+            ($0.operationIdentity.operationIndex, $0.testRetainedOperationRecord)
+        }
+    )
+    XCTAssertEqual(Set(rows.map(\.operationIndex)), Set(expected.keys), file: file, line: line)
+    for row in rows {
+        let operation = try XCTUnwrap(expected[row.operationIndex], file: file, line: line)
+        XCTAssertEqual(row.noteID, operation.noteID, file: file, line: line)
+        XCTAssertEqual(row.batchID, operation.batchID, file: file, line: line)
+        XCTAssertEqual(row.originDeviceID, operation.originDeviceID, file: file, line: line)
+        XCTAssertEqual(row.operationKindRaw, operation.operationKind.rawValue, file: file, line: line)
+        XCTAssertEqual(row.utf16Offset, operation.utf16Offset, file: file, line: line)
+        XCTAssertEqual(row.utf16Length, operation.utf16Length, file: file, line: line)
+        XCTAssertEqual(row.text, operation.text, file: file, line: line)
+        XCTAssertEqual(row.expectedText, operation.expectedText, file: file, line: line)
+        XCTAssertEqual(row.baseContentHash, operation.baseContentHash, file: file, line: line)
+        XCTAssertEqual(row.resultContentHash, operation.resultContentHash, file: file, line: line)
+        XCTAssertEqual(row.canonicalReplayKeyPayloadData, try operation.canonicalReplayKey.encodedEvidenceData(), file: file, line: line)
+        XCTAssertEqual(try CanonicalReplayKeyPayload.decodeEvidenceData(row.canonicalReplayKeyPayloadData), operation.canonicalReplayKey, file: file, line: line)
+        XCTAssertEqual(row.modifiedAt, operation.modifiedAt, file: file, line: line)
+        XCTAssertEqual(row.sourceRaw, "remote", file: file, line: line)
+    }
+}
+
+private func assertPersistedSnapshots(
+    _ rows: [NoteContentSnapshot],
+    fixture: SyncConvergenceIncorporationTests.Fixture,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws {
+    let expected = Dictionary(
+        uniqueKeysWithValues: fixture.plan.historyPlan.snapshotAdditions.map {
+            ($0.generation, $0.testSnapshotRecord(createdAt: fixture.committedAt))
+        }
+    )
+    XCTAssertEqual(Set(rows.map(\.generation)), Set(expected.keys), file: file, line: line)
+    for row in rows {
+        let snapshot = try XCTUnwrap(expected[row.generation], file: file, line: line)
+        XCTAssertEqual(row.noteID, snapshot.noteID, file: file, line: line)
+        XCTAssertEqual(row.contentHash, snapshot.contentHash, file: file, line: line)
+        XCTAssertEqual(row.body, snapshot.body, file: file, line: line)
+        XCTAssertEqual(row.createdAt, snapshot.createdAt, file: file, line: line)
+    }
+}
+
+private struct PersistedChild: Comparable {
+    let kind: String
+    let key: String
+    let bytes: Data
+
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.kind != rhs.kind { return lhs.kind < rhs.kind }
+        return lhs.key < rhs.key
+    }
+}
+
+private func canonicalOperationIdentityBytes(_ identity: OperationIdentityPayload) throws -> Data {
+    var encoder = CanonicalPayloadDigestFormatV1()
+    try encoder.appendOperationIdentity(identity)
+    return encoder.data
+}
+
+private func canonicalResultEvidenceBytes(_ evidence: SyncConvergenceResultEvidence) throws -> Data {
+    var encoder = CanonicalPayloadDigestFormatV1()
+    try encoder.appendResultEvidence(evidence)
+    return encoder.data
+}
+
+private func canonicalNoteEffectBytes(batchID: UUID, noteID: UUID, kinds: [String]) throws -> Data {
+    var encoder = CanonicalPayloadDigestFormatV1()
+    try encoder.appendProjectedNoteEffect(batchID: batchID, noteID: noteID, kinds: kinds)
+    return encoder.data
+}
+
+private func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+}
+
 private extension SyncConvergencePlannedBodyOperation {
     var testRetainedOperationRecord: SyncConvergenceRetainedOperationRecord {
         SyncConvergenceRetainedOperationRecord(
@@ -1940,6 +2507,59 @@ private extension SyncConvergencePlannedBodyOperation {
     }
 }
 
+private extension SyncConvergenceNotePlan {
+    var plannedFinalBodyForTest: String? {
+        switch bodyEffect {
+        case .matchingBaseIncremental(let plan):
+            return plan.finalBody
+        case .reconstructedConflict(let plan):
+            return plan.finalBody
+        case .legacyPositional(let plan):
+            return plan.finalBody
+        case .compatibilityNoopMissingNote, .none:
+            return nil
+        }
+    }
+
+    var plannedModifiedAtForTest: Date? {
+        if let titleEffect, titleEffect.verdict == .apply {
+            return titleEffect.candidateCanonicalKey.modifiedAt
+        }
+        switch bodyEffect {
+        case .matchingBaseIncremental(let plan):
+            return plan.operations.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
+        case .reconstructedConflict(let plan):
+            return plan.retainedOperationAdditions.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
+        case .legacyPositional(let plan):
+            return plan.operations.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
+        case .compatibilityNoopMissingNote, .none:
+            return nil
+        }
+    }
+
+    func testNoteEffectRecord(batchID: UUID) -> SyncConvergenceNoteEffectRecord {
+        let bodyHashes: (String?, String?)?
+        switch bodyEffect {
+        case .matchingBaseIncremental(let plan):
+            bodyHashes = (plan.initialBodyHash, plan.finalBodyHash)
+        case .reconstructedConflict(let plan):
+            bodyHashes = (plan.projectedPreMergeCurrentHash, plan.finalBodyHash)
+        case .legacyPositional(let plan):
+            bodyHashes = (SyncBatchContentHash.sha256Hex(for: plan.initialBody), plan.finalBodyHash)
+        case .compatibilityNoopMissingNote, .none:
+            bodyHashes = nil
+        }
+        return SyncConvergenceNoteEffectRecord(
+            batchID: batchID,
+            noteID: noteID,
+            preBodyHash: bodyHashes?.0,
+            postBodyHash: bodyHashes?.1,
+            preTitleKey: titleEffect?.priorWinningKey,
+            postTitleKey: titleEffect?.resultingWinningKey
+        )
+    }
+}
+
 private extension SyncConvergenceSnapshotAddition {
     func testSnapshotRecord(createdAt: Date) -> SyncConvergenceSnapshotRecord {
         SyncConvergenceSnapshotRecord(
@@ -1954,6 +2574,42 @@ private extension SyncConvergenceSnapshotAddition {
 
 private extension SyncConvergenceSnapshotRecord {
     var testKey: String { "\(noteID.uuidString.lowercased())|\(generation)" }
+}
+
+private extension IncorporatedBatchOperationIdentity {
+    var testCanonicalChildBytes: Data {
+        get throws {
+            try canonicalOperationIdentityBytes(try OperationIdentityPayload.decodePayloadData(operationIdentityPayloadData))
+        }
+    }
+}
+
+private extension IncorporatedBatchNoteEffect {
+    var testEffectKinds: [String] {
+        var kinds: [String] = []
+        if preBodyHash != nil || postBodyHash != nil { kinds.append("body") }
+        if preTitleKeyPayloadData != nil || postTitleKeyPayloadData != nil { kinds.append("title") }
+        return kinds
+    }
+
+    var testCanonicalChildBytes: Data {
+        get throws {
+            try canonicalNoteEffectBytes(batchID: batchID, noteID: noteID, kinds: testEffectKinds)
+        }
+    }
+}
+
+private extension IncorporatedBatchResultEvidence {
+    var testCanonicalChildBytes: Data {
+        get throws {
+            try canonicalResultEvidenceBytes(
+                try SyncConvergenceStableEncoding.decode(
+                    SyncConvergenceResultEvidence.self,
+                    from: resultEvidencePayloadData
+                )
+            )
+        }
+    }
 }
 
 private extension SyncConvergenceIncorporatedChildrenProjection {
