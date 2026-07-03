@@ -228,6 +228,7 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
             createdAt: root.createdAt,
             batchSequence: root.batchSequence,
             schemaVersion: root.schemaVersion,
+            committedAt: root.committedAt,
             canonicalPayloadDigest: root.canonicalPayloadDigest,
             canonicalPayloadDigestFormatVersion: root.canonicalPayloadDigestFormatVersion,
             committedResultDigest: root.committedResultDigest,

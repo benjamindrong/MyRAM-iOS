@@ -836,11 +836,12 @@ struct CanonicalPayloadDigestFormatV1 {
                 try appendDigestOperationIdentity(titleIdentity)
                 try appendDigestReplayKey(titleKey)
                 try appendDigestOperationIdentity(creationIdentity)
-            case .reconciliation(let noteID, let finalBodyHash, let identity):
+            case .reconciliation(let noteID, let identity, let finalBodyHash, let replacementContentHash):
                 appendUInt32(Domain.committedReconciliationResult)
                 try appendUUID(noteID)
-                appendString(finalBodyHash)
                 try appendDigestOperationIdentity(identity)
+                appendString(finalBodyHash)
+                appendString(replacementContentHash)
             }
         }
     }
@@ -2538,25 +2539,29 @@ struct SyncConvergenceIncorporationExecutor {
                 formatVersion: root.canonicalPayloadDigestFormatVersion
             ))
         }
-        let expectedOrderingPayload: Data
+        let orderingPayload: CommittedAtOrderingPayload
         do {
-            expectedOrderingPayload = try CommittedAtOrderingPayload(
-                batchID: root.batchID,
-                committedAt: prepared.root.committedAt
-            ).encodedEvidenceData()
+            orderingPayload = try CommittedAtOrderingPayload.decodeEvidenceData(root.committedAtOrderingPayloadData)
+            guard orderingPayload.batchIDLowercase == root.batchID.uuidString.lowercased(),
+                  orderingPayload.committedAtBitPattern == SyncConvergenceDateBits.bitPattern(for: root.committedAt)
+            else {
+                throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+            }
+        } catch let failure as ExecutorFailure {
+            throw failure
         } catch {
-            throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+            throw ExecutorFailure(.corruptHistory(noteID: nil))
         }
         guard root.batchID == prepared.root.batchID,
               root.originDeviceID == prepared.root.originDeviceID,
               root.createdAt == prepared.root.createdAt,
               root.batchSequence == prepared.root.batchSequence,
               root.schemaVersion == prepared.root.schemaVersion,
+              root.committedAt == orderingPayload.committedAt,
               root.canonicalPayloadDigest == prepared.root.canonicalPayloadDigest,
               root.canonicalPayloadDigestFormatVersion == prepared.root.canonicalPayloadDigestFormatVersion,
               root.committedResultDigest == prepared.root.committedResultDigest,
               root.committedResultDigestFormatVersion == prepared.root.committedResultDigestFormatVersion,
-              root.committedAtOrderingPayloadData == expectedOrderingPayload,
               root.affectedNotesPayloadData == prepared.root.affectedNotesPayloadData,
               root.authoritativeChildCount == prepared.root.authoritativeChildCount,
               root.authoritativeChildBytes == prepared.root.authoritativeChildBytes,
@@ -2695,9 +2700,11 @@ struct SyncConvergenceIncorporationExecutor {
             guard current.title == effect.resultingTitle,
                   let winner,
                   winner.canonicalReplayKey == effect.resultingWinningKey,
-                  winner.canonicalReplayKey == effect.candidateCanonicalKey,
-                  winner.operationIdentity == effect.candidateOperationIdentity else {
+                  winner.canonicalReplayKey == effect.candidateCanonicalKey else {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: effect.resultEvidence.noteID))
+            }
+            guard winner.operationIdentity == effect.candidateOperationIdentity else {
+                throw ExecutorFailure(.inconsistentIncorporationState(noteID: effect.resultEvidence.noteID))
             }
         case .compatibilityNoopMissingNote:
             break
@@ -3140,12 +3147,17 @@ enum CanonicalCommittedResultV1: Equatable, Comparable {
         titleKey: CanonicalReplayKeyPayload,
         creationIdentity: OperationIdentityPayload
     )
-    case reconciliation(noteID: UUID, finalBodyHash: String, identity: OperationIdentityPayload)
+    case reconciliation(
+        noteID: UUID,
+        identity: OperationIdentityPayload,
+        finalBodyHash: String,
+        replacementContentHash: String
+    )
 
     private var noteID: UUID {
         switch self {
         case .body(let noteID, _, _, _), .title(let noteID, _, _, _), .creation(let noteID, _, _, _, _, _),
-                .reconciliation(let noteID, _, _):
+                .reconciliation(let noteID, _, _, _):
             return noteID
         }
     }
@@ -3171,7 +3183,7 @@ enum CanonicalCommittedResultV1: Equatable, Comparable {
             return identity.operationIndex
         case .creation(_, _, _, _, _, let identity):
             return identity.operationIndex
-        case .reconciliation(_, _, let identity):
+        case .reconciliation(_, let identity, _, _):
             return identity.operationIndex
         }
     }
@@ -3389,6 +3401,7 @@ private extension SyncConvergenceIncorporatedBatchRecord {
             createdAt: createdAt,
             batchSequence: batchSequence,
             schemaVersion: schemaVersion,
+            committedAt: committedAt,
             canonicalPayloadDigest: canonicalPayloadDigest,
             canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
             committedResultDigest: committedResultDigest,

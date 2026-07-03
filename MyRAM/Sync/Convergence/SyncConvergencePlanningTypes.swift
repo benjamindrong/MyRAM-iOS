@@ -390,6 +390,7 @@ struct SyncConvergenceIncorporatedRootProjection: Equatable {
     let createdAt: Date
     let batchSequence: UInt64?
     let schemaVersion: Int
+    let committedAt: Date
     let canonicalPayloadDigest: String
     let canonicalPayloadDigestFormatVersion: Int
     let committedResultDigest: String

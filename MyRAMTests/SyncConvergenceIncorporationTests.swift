@@ -193,6 +193,114 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertTrue(completedResult.presentationPlan.noteRoutings.isEmpty)
     }
 
+    func testDuplicateRootAcceptsRetryWithDifferentCommittedAtWithoutMutation() throws {
+        let fixture = try makeFixture()
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        let originalCommittedAt = fixture.committedAt
+        let retryCommittedAt = date(99)
+        XCTAssertNotEqual(originalCommittedAt, retryCommittedAt)
+
+        let first = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: originalCommittedAt
+        )
+        guard case .incorporated = first else {
+            return XCTFail("Expected first incorporation, got \(first)")
+        }
+        let preRetryState = transaction.snapshotState()
+        let preRetryCounts = transaction.mutationCounts
+
+        let duplicate = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: retryCommittedAt
+        )
+
+        guard case .alreadyIncorporated = duplicate else {
+            return XCTFail("Expected retry to be idempotent, got \(duplicate)")
+        }
+        XCTAssertEqual(transaction.snapshotState(), preRetryState)
+        XCTAssertEqual(transaction.mutationCounts, preRetryCounts)
+        XCTAssertEqual(transaction.rollbackCount, 0)
+    }
+
+    func testDuplicateValidationAcceptsReorderedNoteEffectKindsWithoutMutation() throws {
+        let fixture = try makeTitleAndBodyFixture()
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        transaction.titleWinners[fixture.noteID] = try XCTUnwrap(fixture.priorWinner)
+        let first = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+        guard case .incorporated = first else {
+            return XCTFail("Expected first incorporation, got \(first)")
+        }
+        transaction.children[fixture.batch.id] = transaction.children[fixture.batch.id]?.withResultEvidenceReversed()
+        let preRetryCounts = transaction.mutationCounts
+
+        let duplicate = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        guard case .alreadyIncorporated = duplicate else {
+            return XCTFail("Expected reordered duplicate to pass, got \(duplicate)")
+        }
+        XCTAssertEqual(transaction.mutationCounts, preRetryCounts)
+    }
+
+    func testDuplicateValidationRejectsInvalidPersistedNoteEffectMembershipsBeforeMutation() throws {
+        let fixture = try makeTitleAndBodyFixture()
+        let baseTransaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        baseTransaction.titleWinners[fixture.noteID] = try XCTUnwrap(fixture.priorWinner)
+        let first = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: baseTransaction,
+            committedAt: fixture.committedAt
+        )
+        guard case .incorporated = first,
+              let validChildren = baseTransaction.children[fixture.batch.id] else {
+            return XCTFail("Expected committed fixture")
+        }
+
+        let extraCreation = SyncConvergenceResultEvidenceRecord(evidence: SyncConvergenceResultEvidence(
+            batchID: fixture.batch.id,
+            noteID: fixture.noteID,
+            kind: .creation,
+            preHash: nil,
+            postHash: nil,
+            canonicalReplayKey: nil
+        ))
+        let cases: [(String, [SyncConvergenceResultEvidenceRecord])] = [
+            ("missing expected kind", Array(validChildren.resultEvidence.dropFirst())),
+            ("extra kind", validChildren.resultEvidence + [extraCreation]),
+            ("duplicate kind", validChildren.resultEvidence + [validChildren.resultEvidence[0]])
+        ]
+
+        for testCase in cases {
+            let transaction = InMemoryConvergenceTransaction(notes: baseTransaction.notes)
+            transaction.titleWinners = baseTransaction.titleWinners
+            transaction.roots = baseTransaction.roots
+            transaction.children[fixture.batch.id] = validChildren.withResultEvidence(testCase.1)
+
+            let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+                input: fixture.validatedInput,
+                transaction: transaction,
+                committedAt: fixture.committedAt
+            )
+
+            XCTAssertEqual(
+                outcome,
+                .failedBeforeCommit(.inconsistentIncorporationState(noteID: nil)),
+                testCase.0
+            )
+            assertNoPreflightMutation(transaction, testCase.0)
+        }
+    }
+
     func testTombstoneOnlyDuplicateUsesDedicatedProjection() throws {
         let fixture = try makeFixture()
         let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
@@ -530,6 +638,304 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         }
     }
 
+    func testTitleIgnoreOlderPreflightRejectsPriorStateBeforeMutation() throws {
+        let fixture = try makeTitleIgnoreOlderFixture()
+        let effect = try XCTUnwrap(fixture.plan.affectedNotePlans[0].titleEffect)
+        let transaction = InMemoryConvergenceTransaction(notes: [
+            fixture.noteID: SyncConvergenceMutableNoteRecord(
+                noteID: fixture.noteID,
+                folderID: nil,
+                title: effect.priorTitle,
+                body: "Body",
+                createdAt: date(1),
+                modifiedAt: date(2)
+            )
+        ])
+        transaction.titleWinners[fixture.noteID] = fixture.priorWinner
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        XCTAssertEqual(outcome, .failedBeforeCommit(.staleAuthoritativeState(noteID: fixture.noteID)))
+        assertNoPreflightMutation(transaction, "ignoreOlder prior state")
+    }
+
+    func testTitleIdempotentPreflightRejectsContradictoryOperationIdentityBeforeMutation() throws {
+        let fixture = try makeTitleIdempotentFixture()
+        let effect = try XCTUnwrap(fixture.plan.affectedNotePlans[0].titleEffect)
+        var contradictoryIdentity = effect.candidateOperationIdentity
+        contradictoryIdentity = OperationIdentityPayload(
+            batchID: uuid("00000000-0000-0000-0000-000000132e88"),
+            originDeviceID: contradictoryIdentity.canonicalReplayKey.originDeviceID,
+            operationIndex: contradictoryIdentity.operationIndex,
+            operationKind: contradictoryIdentity.operationKind,
+            canonicalReplayKey: contradictoryIdentity.canonicalReplayKey
+        )
+        let transaction = InMemoryConvergenceTransaction(notes: [
+            fixture.noteID: SyncConvergenceMutableNoteRecord(
+                noteID: fixture.noteID,
+                folderID: nil,
+                title: effect.resultingTitle,
+                body: "Body",
+                createdAt: date(1),
+                modifiedAt: date(2)
+            )
+        ])
+        transaction.titleWinners[fixture.noteID] = titleWinnerProjection(
+            noteID: fixture.noteID,
+            title: effect.resultingTitle,
+            key: effect.candidateCanonicalKey,
+            identity: contradictoryIdentity
+        )
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        XCTAssertEqual(outcome, .failedBeforeCommit(.inconsistentIncorporationState(noteID: fixture.noteID)))
+        assertNoPreflightMutation(transaction, "idempotent contradictory identity")
+    }
+
+    func testExistingSnapshotHistoryRowsAreNotRewritten() throws {
+        let fixture = try makeReconstructedSnapshotFixture()
+        let snapshot = try XCTUnwrap(fixture.plan.historyPlan.snapshotAdditions.first).testSnapshotRecord(
+            createdAt: fixture.committedAt
+        )
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        transaction.snapshots[snapshot.testKey] = SyncConvergenceSnapshotProjection(snapshot: snapshot)
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        guard case .incorporated = outcome else {
+            return XCTFail("Expected incorporation with existing snapshot, got \(outcome)")
+        }
+        XCTAssertEqual(transaction.snapshotInsertCount, 0)
+        XCTAssertEqual(transaction.snapshots[snapshot.testKey]?.snapshot, snapshot)
+    }
+
+    func testMixedExistingAndNewSnapshotHistoryRowsOnlyInsertMissingRows() throws {
+        let first = try makeReconstructedSnapshotFixture(
+            noteID: uuid("00000000-0000-0000-0000-000000133101"),
+            batchID: uuid("00000000-0000-0000-0000-000000133102"),
+            originID: uuid("00000000-0000-0000-0000-000000133103")
+        )
+        let second = try makeReconstructedSnapshotFixture(
+            noteID: uuid("00000000-0000-0000-0000-000000133201"),
+            batchID: uuid("00000000-0000-0000-0000-000000133202"),
+            originID: uuid("00000000-0000-0000-0000-000000133203")
+        )
+        let fixture = try makeCombinedFixture(first, second)
+        let snapshots = fixture.plan.historyPlan.snapshotAdditions.map {
+            $0.testSnapshotRecord(createdAt: fixture.committedAt)
+        }
+        XCTAssertEqual(snapshots.count, 2)
+        let preExisting = snapshots[0]
+        let missing = snapshots[1]
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        transaction.notes[second.initialNote.noteID] = second.initialNote
+        transaction.snapshots[preExisting.testKey] = SyncConvergenceSnapshotProjection(snapshot: preExisting)
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        guard case .incorporated = outcome else {
+            return XCTFail("Expected mixed snapshot incorporation, got \(outcome)")
+        }
+        XCTAssertEqual(transaction.snapshotInsertCount, 1)
+        XCTAssertEqual(transaction.snapshots[preExisting.testKey]?.snapshot, preExisting)
+        XCTAssertEqual(transaction.snapshots[missing.testKey]?.snapshot, missing)
+    }
+
+    func testContradictorySnapshotHistoryFailsBeforeMutation() throws {
+        let fixture = try makeReconstructedSnapshotFixture()
+        let snapshot = try XCTUnwrap(fixture.plan.historyPlan.snapshotAdditions.first).testSnapshotRecord(
+            createdAt: fixture.committedAt
+        )
+        let contradictory = SyncConvergenceSnapshotRecord(
+            noteID: snapshot.noteID,
+            contentHash: snapshot.contentHash,
+            body: "different",
+            generation: snapshot.generation,
+            createdAt: snapshot.createdAt
+        )
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        transaction.snapshots[snapshot.testKey] = SyncConvergenceSnapshotProjection(snapshot: contradictory)
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        XCTAssertEqual(outcome, .failedBeforeCommit(.inconsistentIncorporationState(noteID: fixture.noteID)))
+        assertNoPreflightMutation(transaction, "contradictory snapshot")
+    }
+
+    func testBackwardSnapshotGenerationFailsBeforeMutation() throws {
+        let fixture = try makeReconstructedSnapshotFixture()
+        let planned = try XCTUnwrap(fixture.plan.historyPlan.snapshotAdditions.first).testSnapshotRecord(
+            createdAt: fixture.committedAt
+        )
+        let newer = SyncConvergenceSnapshotRecord(
+            noteID: planned.noteID,
+            contentHash: SyncBatchContentHash.sha256Hex(for: "newer"),
+            body: "newer",
+            generation: planned.generation + 1,
+            createdAt: date(99)
+        )
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        transaction.snapshots[newer.testKey] = SyncConvergenceSnapshotProjection(snapshot: newer)
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        XCTAssertEqual(outcome, .failedBeforeCommit(.inconsistentIncorporationState(noteID: fixture.noteID)))
+        assertNoPreflightMutation(transaction, "backward snapshot")
+    }
+
+    func testExecutorRollsBackEveryStagedFailurePoint() throws {
+        let creation = try makeCreationFixture()
+        let cases: [(IncorporationFailurePoint, Fixture, [UUID: SyncConvergenceMutableNoteRecord]?, Int)] = [
+            (.noteCreation, creation, [:], 0),
+            (.noteUpdate, try makeFixture(), nil, 0),
+            (.titleWinner, try makeTitleAndBodyFixture(), nil, 0),
+            (.retainedOperation, try makeFixture(), nil, 0),
+            (.snapshot, try makeReconstructedSnapshotFixture(), nil, 0),
+            (.operationIdentity, try makeFixture(), nil, 0),
+            (.noteEffect, try makeFixture(), nil, 0),
+            (.resultEvidence, try makeFixture(), nil, 0),
+            (.incorporatedRoot, try makeFixture(), nil, 0),
+            (.save, try makeFixture(), nil, 1)
+        ]
+
+        for (failurePoint, fixture, seededNotes, expectedSaveCount) in cases {
+            let transaction = InMemoryConvergenceTransaction(
+                notes: seededNotes ?? [fixture.initialNote.noteID: fixture.initialNote]
+            )
+            if let priorWinner = fixture.priorWinner {
+                transaction.titleWinners[fixture.noteID] = priorWinner
+            }
+            transaction.failurePoint = failurePoint
+            let captured = transaction.snapshotState()
+
+            let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+                input: fixture.validatedInput,
+                transaction: transaction,
+                committedAt: fixture.committedAt
+            )
+
+            XCTAssertEqual(outcome, .failedAndRolledBack(.swiftDataSave), "\(failurePoint)")
+            assertRolledBack(transaction, equals: captured, expectedSaveCount: expectedSaveCount, "\(failurePoint)")
+        }
+    }
+
+    func testSwiftDataFreshContextReloadAndDifferentTimestampDuplicate() throws {
+        let fixture = try makeReconstructedSnapshotFixture()
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context1 = ModelContext(container)
+        let note = Note(title: fixture.initialNote.title, content: fixture.initialNote.body)
+        note.id = fixture.initialNote.noteID
+        note.createdAt = fixture.initialNote.createdAt
+        note.modifiedAt = fixture.initialNote.modifiedAt
+        context1.insert(note)
+
+        let first = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context1),
+            committedAt: fixture.committedAt
+        )
+        guard case .incorporated = first else {
+            return XCTFail("Expected SwiftData incorporation, got \(first)")
+        }
+
+        let context2 = ModelContext(container)
+        let persistedNote = try XCTUnwrap(fetchOne(Note.self, in: context2))
+        XCTAssertEqual(persistedNote.id, fixture.noteID)
+        XCTAssertEqual(persistedNote.title, fixture.initialNote.title)
+        XCTAssertEqual(persistedNote.content, "AxB")
+        XCTAssertEqual(persistedNote.createdAt, fixture.initialNote.createdAt)
+        XCTAssertEqual(persistedNote.modifiedAt, date(4))
+
+        let root = try XCTUnwrap(fetchOne(IncorporatedSyncBatch.self, in: context2))
+        XCTAssertEqual(root.batchID, fixture.batch.id)
+        XCTAssertEqual(root.originDeviceID, fixture.batch.originDeviceID)
+        XCTAssertEqual(root.committedAt, fixture.committedAt)
+        XCTAssertEqual(root.canonicalPayloadDigest, fixture.plan.canonicalPayloadDigest)
+        XCTAssertEqual(root.canonicalPayloadDigestFormatVersion, fixture.plan.canonicalPayloadDigestFormatVersion)
+        XCTAssertEqual(root.committedResultDigestFormatVersion, CanonicalCommittedResultDigestPayloadV1.formatVersion)
+        XCTAssertEqual(
+            root.committedResultDigest,
+            try CanonicalCommittedResultDigestPayloadV1.digest(plan: fixture.plan, sourceBatch: fixture.batch)
+        )
+        let rootProjection = try XCTUnwrap(
+            try SwiftDataSyncConvergencePersistenceTransaction(context: context2)
+                .loadIncorporatedBatch(batchID: fixture.batch.id)
+        )
+        XCTAssertEqual(
+            rootProjection.committedAtOrderingPayloadData,
+            try CommittedAtOrderingPayload(batchID: fixture.batch.id, committedAt: fixture.committedAt).encodedEvidenceData()
+        )
+        XCTAssertEqual(
+            root.affectedNotesPayloadData,
+            Data(#"{"n":["\#(fixture.noteID.uuidString.lowercased())"],"v":1}"#.utf8)
+        )
+
+        let operationIdentities = try context2.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>())
+        let noteEffects = try context2.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>())
+        let resultEvidence = try context2.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>())
+        XCTAssertEqual(operationIdentities.count, 1)
+        XCTAssertEqual(noteEffects.count, 1)
+        XCTAssertEqual(resultEvidence.count, 1)
+        XCTAssertEqual(root.authoritativeChildCount, 3)
+
+        let retained = try XCTUnwrap(fetchOne(RetainedBodyOperation.self, in: context2))
+        XCTAssertEqual(retained.sourceRaw, "remote")
+        XCTAssertEqual(retained.text, "x")
+        let snapshot = try XCTUnwrap(fetchOne(NoteContentSnapshot.self, in: context2))
+        XCTAssertEqual(snapshot.noteID, fixture.noteID)
+        XCTAssertEqual(snapshot.body, "AxB")
+        XCTAssertEqual(snapshot.generation, 2)
+
+        let retryCommittedAt = date(99)
+        XCTAssertNotEqual(retryCommittedAt, fixture.committedAt)
+        let duplicate = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context2),
+            committedAt: retryCommittedAt
+        )
+
+        guard case .alreadyIncorporated(let result) = duplicate else {
+            return XCTFail("Expected fresh-context duplicate, got \(duplicate)")
+        }
+        XCTAssertEqual(result.cleanupPlan.batchIDs, [fixture.batch.id])
+        XCTAssertEqual(result.presentationPlan, fixture.plan.presentationPlan)
+        XCTAssertEqual(try context2.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 1)
+        XCTAssertEqual(try context2.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>()).count, 1)
+        XCTAssertEqual(try context2.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>()).count, 1)
+        XCTAssertEqual(try context2.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>()).count, 1)
+        XCTAssertEqual(try context2.fetch(FetchDescriptor<RetainedBodyOperation>()).count, 1)
+        XCTAssertEqual(try context2.fetch(FetchDescriptor<NoteContentSnapshot>()).count, 1)
+        XCTAssertEqual(try XCTUnwrap(fetchOne(Note.self, in: context2)).content, "AxB")
+    }
+
     func testMissingNoteTitleCompatibilityNoopRequiresNoWinner() throws {
         let fixture = try makeMissingTitleFixture()
         let cleanTransaction = InMemoryConvergenceTransaction(notes: [:])
@@ -564,6 +970,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         let validatedInput: ValidatedSyncConvergenceIncorporationInput
         let initialNote: SyncConvergenceMutableNoteRecord
         let committedAt: Date
+        let priorWinner: SyncConvergenceTitleWinnerProjection?
     }
 
     private struct TitleFixture {
@@ -636,7 +1043,81 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             projectedBytes: projectedBytes,
             validatedInput: validatedInput,
             initialNote: initialNote,
-            committedAt: date(5)
+            committedAt: date(5),
+            priorWinner: nil
+        )
+    }
+
+    private func makeTitleAndBodyFixture() throws -> Fixture {
+        let noteID = uuid("00000000-0000-0000-0000-000000132d50")
+        let origin = uuid("00000000-0000-0000-0000-000000132d51")
+        let batchID = uuid("00000000-0000-0000-0000-000000132d52")
+        let initialNote = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "Prior",
+            body: "A",
+            createdAt: date(1),
+            modifiedAt: date(2)
+        )
+        let priorBatch = titleBatch(
+            id: uuid("00000000-0000-0000-0000-000000132d53"),
+            noteID: noteID,
+            title: "Prior",
+            modifiedAt: date(3)
+        )
+        let priorWinner = titleWinnerProjection(noteID: noteID, title: "Prior", batch: priorBatch)
+        let batch = SyncBatch(
+            id: batchID,
+            originDeviceID: origin,
+            createdAt: date(4),
+            batchSequence: 9,
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(5),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                )),
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteID,
+                    title: "Incoming",
+                    modifiedAt: date(6)
+                ))
+            ]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [SyncConvergenceProjectedNote(
+                noteID: noteID,
+                folderID: nil,
+                title: "Prior",
+                body: "A",
+                createdAt: date(1),
+                modifiedAt: date(2)
+            )],
+            persistedTitleWinners: [priorWinner]
+        ))
+        guard case .planned(let validatedInput) = outcome else {
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        let plan = validatedInput.plan
+        let projectedBytes = try SyncConvergenceProjectedIncorporationEvidence(
+            batch: batch,
+            affectedNoteIDs: Set(plan.affectedNotePlans.map(\.noteID)),
+            operationIdentities: plan.incorporationEvidence.operationIdentities,
+            resultEvidence: plan.incorporationEvidence.resultEvidence
+        ).canonicalEncodedByteCount()
+        return Fixture(
+            noteID: noteID,
+            batch: batch,
+            plan: plan,
+            projectedBytes: projectedBytes,
+            validatedInput: validatedInput,
+            initialNote: initialNote,
+            committedAt: date(7),
+            priorWinner: priorWinner
         )
     }
 
@@ -706,7 +1187,165 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             projectedBytes: projectedBytes,
             validatedInput: validatedInput,
             initialNote: initialNote,
-            committedAt: date(6)
+            committedAt: date(6),
+            priorWinner: nil
+        )
+    }
+
+    private func makeReconstructedSnapshotFixture(
+        noteID: UUID = uuid("00000000-0000-0000-0000-000000133001"),
+        batchID: UUID = uuid("00000000-0000-0000-0000-000000133002"),
+        originID: UUID = uuid("00000000-0000-0000-0000-000000133003")
+    ) throws -> Fixture {
+        let base = "AB"
+        let baseHash = SyncBatchContentHash.sha256Hex(for: base)
+        let initialNote = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "Title",
+            body: "ACB",
+            createdAt: date(1),
+            modifiedAt: date(2)
+        )
+        let batch = SyncBatch(
+            id: batchID,
+            originDeviceID: originID,
+            createdAt: date(3),
+            batchSequence: 10,
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "x",
+                    modifiedAt: date(4),
+                    baseContentHash: baseHash
+                ))
+            ]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [SyncConvergenceProjectedNote(
+                noteID: noteID,
+                folderID: nil,
+                title: "Title",
+                body: "ACB",
+                createdAt: date(1),
+                modifiedAt: date(2)
+            )],
+            retainedSnapshots: [
+                SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: baseHash, body: base, generation: 1)
+            ]
+        ))
+        guard case .planned(let validatedInput) = outcome else {
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        return try makeFixture(from: batch, validatedInput: validatedInput, initialNote: initialNote, committedAt: date(5))
+    }
+
+    private func makeCreationFixture() throws -> Fixture {
+        let noteID = uuid("00000000-0000-0000-0000-000000133301")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000133302"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000133303"),
+            createdAt: date(3),
+            batchSequence: 11,
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Created",
+                    body: "Body",
+                    folderID: nil,
+                    createdAt: date(1),
+                    modifiedAt: date(2)
+                ))
+            ]
+        )
+        guard case .planned(let validatedInput) = SyncConvergencePlanner().plan(
+            input: SyncConvergencePlanningInput(incomingBatch: batch)
+        ) else {
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        let initialNote = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "",
+            body: "",
+            createdAt: date(1),
+            modifiedAt: date(1)
+        )
+        return try makeFixture(from: batch, validatedInput: validatedInput, initialNote: initialNote, committedAt: date(5))
+    }
+
+    private func makeCombinedFixture(_ first: Fixture, _ second: Fixture) throws -> Fixture {
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000133401"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000133402"),
+            createdAt: date(3),
+            batchSequence: 12,
+            changes: first.batch.changes + second.batch.changes
+        )
+        guard case .planned(let validatedInput) = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [
+                SyncConvergenceProjectedNote(
+                    noteID: first.noteID,
+                    folderID: nil,
+                    title: first.initialNote.title,
+                    body: first.initialNote.body,
+                    createdAt: first.initialNote.createdAt,
+                    modifiedAt: first.initialNote.modifiedAt
+                ),
+                SyncConvergenceProjectedNote(
+                    noteID: second.noteID,
+                    folderID: nil,
+                    title: second.initialNote.title,
+                    body: second.initialNote.body,
+                    createdAt: second.initialNote.createdAt,
+                    modifiedAt: second.initialNote.modifiedAt
+                )
+            ],
+            retainedSnapshots: [
+                SyncConvergenceRetainedSnapshot(
+                    noteID: first.noteID,
+                    contentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+                    body: "AB",
+                    generation: 1
+                ),
+                SyncConvergenceRetainedSnapshot(
+                    noteID: second.noteID,
+                    contentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+                    body: "AB",
+                    generation: 1
+                )
+            ]
+        )) else {
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        return try makeFixture(from: batch, validatedInput: validatedInput, initialNote: first.initialNote, committedAt: date(5))
+    }
+
+    private func makeFixture(
+        from batch: SyncBatch,
+        validatedInput: ValidatedSyncConvergenceIncorporationInput,
+        initialNote: SyncConvergenceMutableNoteRecord,
+        committedAt: Date
+    ) throws -> Fixture {
+        let plan = validatedInput.plan
+        let projectedBytes = try SyncConvergenceProjectedIncorporationEvidence(
+            batch: batch,
+            affectedNoteIDs: Set(plan.affectedNotePlans.map(\.noteID)),
+            operationIdentities: plan.incorporationEvidence.operationIdentities,
+            resultEvidence: plan.incorporationEvidence.resultEvidence
+        ).canonicalEncodedByteCount()
+        return Fixture(
+            noteID: initialNote.noteID,
+            batch: batch,
+            plan: plan,
+            projectedBytes: projectedBytes,
+            validatedInput: validatedInput,
+            initialNote: initialNote,
+            committedAt: committedAt,
+            priorWinner: nil
         )
     }
 
@@ -775,6 +1414,80 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         )
     }
 
+    private func makeTitleIgnoreOlderFixture() throws -> TitleFixture {
+        let noteID = uuid("00000000-0000-0000-0000-000000132e03")
+        let older = titleBatch(
+            id: uuid("00000000-0000-0000-0000-000000132e14"),
+            noteID: noteID,
+            title: "Older",
+            modifiedAt: date(2)
+        )
+        let newer = titleBatch(
+            id: uuid("00000000-0000-0000-0000-000000132e15"),
+            noteID: noteID,
+            title: "Newer",
+            modifiedAt: date(4)
+        )
+        let newerWinner = titleWinnerProjection(noteID: noteID, title: "Newer", batch: newer)
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: older,
+            currentNotes: [SyncConvergenceProjectedNote(
+                noteID: noteID,
+                folderID: nil,
+                title: "Older",
+                body: "Body",
+                createdAt: date(1),
+                modifiedAt: date(2)
+            )],
+            persistedTitleWinners: [newerWinner]
+        ))
+        guard case .planned(let validatedInput) = outcome else {
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        return TitleFixture(
+            noteID: noteID,
+            validatedInput: validatedInput,
+            plan: validatedInput.plan,
+            committedAt: date(5),
+            priorWinner: newerWinner,
+            orphanedWinner: newerWinner
+        )
+    }
+
+    private func makeTitleIdempotentFixture() throws -> TitleFixture {
+        let noteID = uuid("00000000-0000-0000-0000-000000132e04")
+        let incoming = titleBatch(
+            id: uuid("00000000-0000-0000-0000-000000132e16"),
+            noteID: noteID,
+            title: "Winner",
+            modifiedAt: date(4)
+        )
+        let winner = titleWinnerProjection(noteID: noteID, title: "Winner", batch: incoming)
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [SyncConvergenceProjectedNote(
+                noteID: noteID,
+                folderID: nil,
+                title: "Winner",
+                body: "Body",
+                createdAt: date(1),
+                modifiedAt: date(2)
+            )],
+            persistedTitleWinners: [winner]
+        ))
+        guard case .planned(let validatedInput) = outcome else {
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        return TitleFixture(
+            noteID: noteID,
+            validatedInput: validatedInput,
+            plan: validatedInput.plan,
+            committedAt: date(5),
+            priorWinner: winner,
+            orphanedWinner: winner
+        )
+    }
+
     private func makeMissingTitleFixture() throws -> TitleFixture {
         let noteID = uuid("00000000-0000-0000-0000-000000132e02")
         let incoming = titleBatch(
@@ -804,9 +1517,22 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         )
     }
 
-    private enum TestFixtureError: Error {
+private enum TestFixtureError: Error {
         case unexpectedPlanningOutcome
     }
+}
+
+private enum IncorporationFailurePoint: CaseIterable {
+    case noteCreation
+    case noteUpdate
+    case titleWinner
+    case retainedOperation
+    case snapshot
+    case operationIdentity
+    case noteEffect
+    case resultEvidence
+    case incorporatedRoot
+    case save
 }
 
 private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTransaction {
@@ -831,8 +1557,9 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
     var saveCount = 0
     var rollbackCount = 0
     var failAfterUpdateNote = false
+    var failurePoint: IncorporationFailurePoint?
 
-    private var rollbackSnapshot: Snapshot?
+    private var rollbackSnapshot: TransactionState?
 
     init(notes: [UUID: SyncConvergenceMutableNoteRecord]) {
         self.notes = notes
@@ -851,6 +1578,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             createdAt: record.createdAt,
             modifiedAt: record.modifiedAt
         )
+        try throwIfConfigured(.noteCreation)
     }
 
     func updateNote(_ record: SyncConvergenceUpdatedNoteRecord) throws {
@@ -868,6 +1596,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
         if failAfterUpdateNote {
             throw SyncConvergenceTransactionFailure.swiftDataSave
         }
+        try throwIfConfigured(.noteUpdate)
     }
 
     func loadTitleWinner(noteID: UUID) throws -> SyncConvergenceTitleWinnerProjection? { titleWinners[noteID] }
@@ -881,6 +1610,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             canonicalReplayKey: record.canonicalReplayKey,
             operationIdentity: record.operationIdentity
         )
+        try throwIfConfigured(.titleWinner)
     }
 
     func loadIncorporatedBatch(batchID: UUID) throws -> SyncConvergenceIncorporatedRootProjection? { roots[batchID] }
@@ -898,6 +1628,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             createdAt: record.createdAt,
             batchSequence: record.batchSequence,
             schemaVersion: record.schemaVersion,
+            committedAt: record.committedAt,
             canonicalPayloadDigest: record.canonicalPayloadDigest,
             canonicalPayloadDigestFormatVersion: record.canonicalPayloadDigestFormatVersion,
             committedResultDigest: record.committedResultDigest,
@@ -912,6 +1643,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             authoritativeChildrenDigest: record.authoritativeChildrenDigest,
             postCommitStatePayloadData: record.postCommitStatePayloadData
         )
+        try throwIfConfigured(.incorporatedRoot)
     }
 
     func insertOperationIdentity(_ record: SyncConvergenceOperationIdentityRecord) throws {
@@ -923,6 +1655,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             noteEffects: projection.noteEffects,
             resultEvidence: projection.resultEvidence
         )
+        try throwIfConfigured(.operationIdentity)
     }
 
     func insertNoteEffect(_ record: SyncConvergenceNoteEffectRecord) throws {
@@ -934,6 +1667,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             noteEffects: projection.noteEffects + [record],
             resultEvidence: projection.resultEvidence
         )
+        try throwIfConfigured(.noteEffect)
     }
 
     func insertResultEvidence(_ record: SyncConvergenceResultEvidenceRecord) throws {
@@ -945,6 +1679,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             noteEffects: projection.noteEffects,
             resultEvidence: projection.resultEvidence + [record]
         )
+        try throwIfConfigured(.resultEvidence)
     }
 
     func loadRetainedOperation(
@@ -960,6 +1695,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             batchID: record.batchID,
             operationIndex: record.operationIndex
         )] = SyncConvergenceRetainedOperationProjection(operation: record, source: .remote)
+        try throwIfConfigured(.retainedOperation)
     }
 
     func loadSnapshot(noteID: UUID, generation: Int) throws -> SyncConvergenceSnapshotProjection? {
@@ -980,11 +1716,13 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
         snapshots["\(record.noteID.uuidString.lowercased())|\(record.generation)"] = SyncConvergenceSnapshotProjection(
             snapshot: record
         )
+        try throwIfConfigured(.snapshot)
     }
 
     func save() throws {
         saveCalled = true
         saveCount += 1
+        try throwIfConfigured(.save)
         rollbackSnapshot = nil
     }
 
@@ -1010,6 +1748,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             createdAt: root.createdAt,
             batchSequence: root.batchSequence,
             schemaVersion: root.schemaVersion,
+            committedAt: root.committedAt,
             canonicalPayloadDigest: root.canonicalPayloadDigest,
             canonicalPayloadDigestFormatVersion: root.canonicalPayloadDigestFormatVersion,
             committedResultDigest: root.committedResultDigest,
@@ -1023,9 +1762,24 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
         )
     }
 
-    private func stageRollback() {
-        guard rollbackSnapshot == nil else { return }
-        rollbackSnapshot = Snapshot(
+    var mutationCounts: MutationCounts {
+        MutationCounts(
+            noteInsertCount: noteInsertCount,
+            noteUpdateCount: noteUpdateCount,
+            titleWinnerWriteCount: titleWinnerWriteCount,
+            retainedOperationInsertCount: retainedOperationInsertCount,
+            snapshotInsertCount: snapshotInsertCount,
+            operationIdentityInsertCount: operationIdentityInsertCount,
+            noteEffectInsertCount: noteEffectInsertCount,
+            resultEvidenceInsertCount: resultEvidenceInsertCount,
+            rootInsertCount: rootInsertCount,
+            saveCount: saveCount,
+            rollbackCount: rollbackCount
+        )
+    }
+
+    func snapshotState() -> TransactionState {
+        TransactionState(
             notes: notes,
             titleWinners: titleWinners,
             roots: roots,
@@ -1036,15 +1790,39 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
         )
     }
 
-    private struct Snapshot {
-        let notes: [UUID: SyncConvergenceMutableNoteRecord]
-        let titleWinners: [UUID: SyncConvergenceTitleWinnerProjection]
-        let roots: [UUID: SyncConvergenceIncorporatedRootProjection]
-        let tombstones: [UUID: SyncConvergenceIncorporatedTombstoneProjection]
-        let children: [UUID: SyncConvergenceIncorporatedChildrenProjection]
-        let retainedOperations: [SyncConvergenceRetainedOperationIdentity: SyncConvergenceRetainedOperationProjection]
-        let snapshots: [String: SyncConvergenceSnapshotProjection]
+    private func stageRollback() {
+        guard rollbackSnapshot == nil else { return }
+        rollbackSnapshot = snapshotState()
     }
+
+    private func throwIfConfigured(_ point: IncorporationFailurePoint) throws {
+        guard failurePoint == point else { return }
+        throw SyncConvergenceTransactionFailure.swiftDataSave
+    }
+}
+
+private struct TransactionState: Equatable {
+    let notes: [UUID: SyncConvergenceMutableNoteRecord]
+    let titleWinners: [UUID: SyncConvergenceTitleWinnerProjection]
+    let roots: [UUID: SyncConvergenceIncorporatedRootProjection]
+    let tombstones: [UUID: SyncConvergenceIncorporatedTombstoneProjection]
+    let children: [UUID: SyncConvergenceIncorporatedChildrenProjection]
+    let retainedOperations: [SyncConvergenceRetainedOperationIdentity: SyncConvergenceRetainedOperationProjection]
+    let snapshots: [String: SyncConvergenceSnapshotProjection]
+}
+
+private struct MutationCounts: Equatable {
+    let noteInsertCount: Int
+    let noteUpdateCount: Int
+    let titleWinnerWriteCount: Int
+    let retainedOperationInsertCount: Int
+    let snapshotInsertCount: Int
+    let operationIdentityInsertCount: Int
+    let noteEffectInsertCount: Int
+    let resultEvidenceInsertCount: Int
+    let rootInsertCount: Int
+    let saveCount: Int
+    let rollbackCount: Int
 }
 
 private func uuid(_ value: String) -> UUID {
@@ -1125,6 +1903,23 @@ private func assertNoPreflightMutation(
     XCTAssertEqual(transaction.rollbackCount, 0, message, file: file, line: line)
 }
 
+private func assertRolledBack(
+    _ transaction: InMemoryConvergenceTransaction,
+    equals captured: TransactionState,
+    expectedSaveCount: Int,
+    _ message: String,
+    file: StaticString = #filePath,
+    line: UInt = #line
+) {
+    XCTAssertEqual(transaction.snapshotState(), captured, message, file: file, line: line)
+    XCTAssertEqual(transaction.rollbackCount, 1, message, file: file, line: line)
+    XCTAssertEqual(transaction.saveCount, expectedSaveCount, message, file: file, line: line)
+}
+
+private func fetchOne<T: PersistentModel>(_ type: T.Type, in context: ModelContext) throws -> T? {
+    try context.fetch(FetchDescriptor<T>()).first
+}
+
 private extension SyncConvergencePlannedBodyOperation {
     var testRetainedOperationRecord: SyncConvergenceRetainedOperationRecord {
         SyncConvergenceRetainedOperationRecord(
@@ -1142,6 +1937,36 @@ private extension SyncConvergencePlannedBodyOperation {
             canonicalReplayKey: operationIdentity.canonicalReplayKey,
             modifiedAt: operationIdentity.canonicalReplayKey.modifiedAt
         )
+    }
+}
+
+private extension SyncConvergenceSnapshotAddition {
+    func testSnapshotRecord(createdAt: Date) -> SyncConvergenceSnapshotRecord {
+        SyncConvergenceSnapshotRecord(
+            noteID: noteID,
+            contentHash: contentHash,
+            body: body,
+            generation: generation,
+            createdAt: createdAt
+        )
+    }
+}
+
+private extension SyncConvergenceSnapshotRecord {
+    var testKey: String { "\(noteID.uuidString.lowercased())|\(generation)" }
+}
+
+private extension SyncConvergenceIncorporatedChildrenProjection {
+    func withResultEvidence(_ resultEvidence: [SyncConvergenceResultEvidenceRecord]) -> Self {
+        SyncConvergenceIncorporatedChildrenProjection(
+            operationIdentities: operationIdentities,
+            noteEffects: noteEffects,
+            resultEvidence: resultEvidence
+        )
+    }
+
+    func withResultEvidenceReversed() -> Self {
+        withResultEvidence(resultEvidence.reversed())
     }
 }
 
