@@ -88,7 +88,7 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
         )
     }
 
-    func loadTombstone(batchID: UUID) throws -> SyncConvergenceIncorporatedRootProjection? {
+    func loadTombstone(batchID: UUID) throws -> SyncConvergenceIncorporatedTombstoneProjection? {
         try fetchOne(IncorporatedBatchTombstone.self, #Predicate { $0.batchID == batchID }).map(tombstoneProjection)
     }
 
@@ -149,7 +149,12 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
         let operationIndex = identity.operationIndex
         return try fetchOne(RetainedBodyOperation.self, #Predicate {
             $0.batchID == batchID && $0.operationIndex == operationIndex
-        }).map { try SyncConvergenceRetainedOperationProjection(operation: retainedRecord($0)) }
+        }).map { model in
+            guard let source = SyncConvergenceRetainedOperationSource(rawValue: model.sourceRaw) else {
+                throw SyncConvergenceTransactionFailure.corruptHistory(noteID: model.noteID)
+            }
+            return try SyncConvergenceRetainedOperationProjection(operation: retainedRecord(model), source: source)
+        }
     }
 
     func insertRetainedOperation(_ record: SyncConvergenceRetainedOperationRecord) throws {
@@ -167,7 +172,7 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
             resultContentHash: record.resultContentHash,
             modifiedAt: record.modifiedAt,
             canonicalReplayKeyPayloadData: try record.canonicalReplayKey.encodedEvidenceData(),
-            sourceRaw: "authoritative-convergence-incorporation"
+            sourceRaw: SyncConvergenceRetainedOperationSource.remote.rawValue
         ))
     }
 
@@ -214,8 +219,10 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
         return try fetchOne(Folder.self, #Predicate { $0.id == id })
     }
 
-    private func fullRootProjection(_ root: IncorporatedSyncBatch) -> SyncConvergenceIncorporatedRootProjection {
-        SyncConvergenceIncorporatedRootProjection(
+    private func fullRootProjection(_ root: IncorporatedSyncBatch) throws -> SyncConvergenceIncorporatedRootProjection {
+        let committedAtOrderingPayload = CommittedAtOrderingPayload(batchID: root.batchID, committedAt: root.committedAt)
+        try committedAtOrderingPayload.validate(against: root)
+        return SyncConvergenceIncorporatedRootProjection(
             batchID: root.batchID,
             originDeviceID: root.originDeviceID,
             createdAt: root.createdAt,
@@ -225,6 +232,7 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
             canonicalPayloadDigestFormatVersion: root.canonicalPayloadDigestFormatVersion,
             committedResultDigest: root.committedResultDigest,
             committedResultDigestFormatVersion: root.committedResultDigestFormatVersion,
+            committedAtOrderingPayloadData: try committedAtOrderingPayload.encodedEvidenceData(),
             affectedNotesPayloadData: root.affectedNotesPayloadData,
             authoritativeChildCount: root.authoritativeChildCount,
             authoritativeChildBytes: root.authoritativeChildBytes,
@@ -233,22 +241,18 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
         )
     }
 
-    private func tombstoneProjection(_ tombstone: IncorporatedBatchTombstone) -> SyncConvergenceIncorporatedRootProjection {
-        SyncConvergenceIncorporatedRootProjection(
+    private func tombstoneProjection(_ tombstone: IncorporatedBatchTombstone) throws -> SyncConvergenceIncorporatedTombstoneProjection {
+        _ = try tombstone.canonicalTombstonePayloadV1()
+        return SyncConvergenceIncorporatedTombstoneProjection(
             batchID: tombstone.batchID,
             originDeviceID: tombstone.originDeviceID,
-            createdAt: Date(timeIntervalSinceReferenceDate: 0),
-            batchSequence: nil,
-            schemaVersion: tombstone.schemaVersion,
             canonicalPayloadDigest: tombstone.canonicalPayloadDigest,
             canonicalPayloadDigestFormatVersion: tombstone.canonicalPayloadDigestFormatVersion,
+            schemaVersion: tombstone.schemaVersion,
             committedResultDigest: tombstone.committedResultDigest,
             committedResultDigestFormatVersion: tombstone.committedResultDigestFormatVersion,
-            affectedNotesPayloadData: Data(),
-            authoritativeChildCount: 0,
-            authoritativeChildBytes: 0,
-            authoritativeChildrenDigest: "",
-            postCommitStatePayloadData: Data()
+            committedAtOrderingPayloadData: tombstone.committedAtOrderingPayloadData,
+            tombstoneFormatVersion: tombstone.tombstoneFormatVersion
         )
     }
 

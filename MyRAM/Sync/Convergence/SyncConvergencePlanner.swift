@@ -859,7 +859,7 @@ struct CanonicalPayloadDigestFormatV1 {
         try appendUUID(batchID)
         try appendUUID(noteID)
         appendUInt64(UInt64(kinds.count))
-        for kind in kinds {
+        for kind in kinds.sorted() {
             appendString(kind)
         }
     }
@@ -2427,6 +2427,7 @@ struct SyncConvergenceProjectedIncorporationEvidence {
             let kinds = resultEvidence
                 .filter { $0.noteID == noteID }
                 .map(\.kind.rawValue)
+            try ExpectedNoteEffectProjection.validateKinds(kinds)
             try encoder.appendProjectedNoteEffect(batchID: batch.id, noteID: noteID, kinds: kinds)
             return encoder.data.count
         }
@@ -2450,6 +2451,8 @@ struct SyncConvergenceIncorporationExecutor {
             historyInsertions = try verifyHistory(prepared, transaction: transaction)
         } catch let failure as ExecutorFailure {
             return .failedBeforeCommit(failure.transactionFailure)
+        } catch let failure as SyncConvergenceTransactionFailure {
+            return .failedBeforeCommit(failure)
         } catch {
             return .failedBeforeCommit(.unexpected)
         }
@@ -2466,6 +2469,9 @@ struct SyncConvergenceIncorporationExecutor {
         } catch let failure as ExecutorFailure {
             transaction.rollback()
             return .failedAndRolledBack(failure.transactionFailure)
+        } catch let failure as SyncConvergenceTransactionFailure {
+            transaction.rollback()
+            return .failedAndRolledBack(failure)
         } catch {
             transaction.rollback()
             return .failedAndRolledBack(.swiftDataSave)
@@ -2481,6 +2487,9 @@ struct SyncConvergenceIncorporationExecutor {
         if let root, let tombstone {
             try verifyMatching(root: root, children: try transaction.loadIncorporatedBatchChildren(batchID: prepared.input.sourceBatchID), prepared)
             try verifyMatching(tombstone: tombstone, prepared)
+            guard root.committedAtOrderingPayloadData == tombstone.committedAtOrderingPayloadData else {
+                throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+            }
             let state = try SyncConvergencePostCommitState.decodePayloadData(root.postCommitStatePayloadData)
             return .alreadyIncorporated(prepared.result(
                 cleanupPlan: prepared.input.plan.cleanupPlan.gated(by: state),
@@ -2517,6 +2526,15 @@ struct SyncConvergenceIncorporationExecutor {
                 formatVersion: root.canonicalPayloadDigestFormatVersion
             ))
         }
+        let expectedOrderingPayload: Data
+        do {
+            expectedOrderingPayload = try CommittedAtOrderingPayload(
+                batchID: root.batchID,
+                committedAt: prepared.root.committedAt
+            ).encodedEvidenceData()
+        } catch {
+            throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+        }
         guard root.batchID == prepared.root.batchID,
               root.originDeviceID == prepared.root.originDeviceID,
               root.createdAt == prepared.root.createdAt,
@@ -2548,9 +2566,12 @@ struct SyncConvergenceIncorporationExecutor {
     }
 
     private func verifyMatching(
-        tombstone: SyncConvergenceIncorporatedRootProjection,
+        tombstone: SyncConvergenceIncorporatedTombstoneProjection,
         _ prepared: PreparedIncorporation
     ) throws {
+        guard tombstone.tombstoneFormatVersion == IncorporatedBatchTombstone.supportedTombstoneFormatVersion else {
+            throw ExecutorFailure(.corruptHistory(noteID: nil))
+        }
         guard tombstone.canonicalPayloadDigestFormatVersion == prepared.root.canonicalPayloadDigestFormatVersion else {
             throw ExecutorFailure(.unsupportedDigestFormat(
                 noteID: nil,
@@ -2562,10 +2583,22 @@ struct SyncConvergenceIncorporationExecutor {
               tombstone.originDeviceID == prepared.root.originDeviceID,
               tombstone.schemaVersion == prepared.root.schemaVersion,
               tombstone.canonicalPayloadDigest == prepared.root.canonicalPayloadDigest,
+              tombstone.canonicalPayloadDigestFormatVersion == prepared.root.canonicalPayloadDigestFormatVersion,
               tombstone.committedResultDigest == prepared.root.committedResultDigest,
               tombstone.committedResultDigestFormatVersion == prepared.root.committedResultDigestFormatVersion
         else {
             throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+        }
+        let orderingPayload: CommittedAtOrderingPayload
+        do {
+            orderingPayload = try CommittedAtOrderingPayload.decodeEvidenceData(tombstone.committedAtOrderingPayloadData)
+            guard orderingPayload.batchIDLowercase == tombstone.batchID.uuidString.lowercased() else {
+                throw ExecutorFailure(.inconsistentIncorporationState(noteID: nil))
+            }
+        } catch let failure as ExecutorFailure {
+            throw failure
+        } catch {
+            throw ExecutorFailure(.corruptHistory(noteID: nil))
         }
     }
 
@@ -2670,6 +2703,9 @@ struct SyncConvergenceIncorporationExecutor {
                 operationIndex: operation.operationIndex
             )
             if let existing = try transaction.loadRetainedOperation(identity: identity) {
+                guard existing.source == .remote else {
+                    throw ExecutorFailure(.inconsistentIncorporationState(noteID: operation.noteID))
+                }
                 if existing.operation != operation {
                     throw ExecutorFailure(.inconsistentIncorporationState(noteID: operation.noteID))
                 }
@@ -2955,6 +2991,7 @@ struct SyncConvergenceIncorporationExecutor {
             }
             for record in noteEffects {
                 var encoder = CanonicalPayloadDigestFormatV1()
+                try ExpectedNoteEffectProjection.validateKinds(record.kinds)
                 try encoder.appendProjectedNoteEffect(batchID: record.batchID, noteID: record.noteID, kinds: record.kinds)
                 projections.append(ChildProjection(kind: "note-effect", key: record.noteID.uuidString.lowercased(), bytes: encoder.data))
             }
@@ -2994,6 +3031,15 @@ private struct ExpectedNoteEffectProjection: Equatable {
     let batchID: UUID
     let noteID: UUID
     let kinds: [String]
+
+    static func validateKinds(_ kinds: [String]) throws {
+        let supportedKinds: Set<String> = ["body", "creation", "title"]
+        guard Set(kinds).count == kinds.count,
+              kinds.allSatisfy({ supportedKinds.contains($0) })
+        else {
+            throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload("noteEffect.kinds")
+        }
+    }
 }
 
 private struct ChildProjection: Equatable, Comparable {
@@ -3031,7 +3077,7 @@ private struct SyncConvergenceAffectedNotesPayloadV1: Codable, Equatable {
     }
 }
 
-private struct CanonicalCommittedResultDigestPayloadV1 {
+struct CanonicalCommittedResultDigestPayloadV1 {
     static let formatVersion = 1
 
     static func digest(plan: SyncConvergenceBatchPlan, sourceBatch: SyncBatch) throws -> String {
@@ -3041,7 +3087,7 @@ private struct CanonicalCommittedResultDigestPayloadV1 {
         return CanonicalDigestEncoderV1.digest(data: encoder.data)
     }
 
-    static func results(from plan: SyncConvergenceBatchPlan) -> [CanonicalCommittedNoteResultV1] {
+    fileprivate static func results(from plan: SyncConvergenceBatchPlan) -> [CanonicalCommittedNoteResultV1] {
         plan.affectedNotePlans.flatMap { notePlan -> [CanonicalCommittedNoteResultV1] in
             var results: [CanonicalCommittedNoteResultV1] = []
             if let body = notePlan.bodyEffect?.committedBodyResult(noteID: notePlan.noteID) {
@@ -3323,6 +3369,9 @@ private extension SyncConvergenceIncorporatedBatchRecord {
             canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
             committedResultDigest: committedResultDigest,
             committedResultDigestFormatVersion: committedResultDigestFormatVersion,
+            committedAtOrderingPayloadData: (
+                try? CommittedAtOrderingPayload(batchID: batchID, committedAt: committedAt).encodedEvidenceData()
+            ) ?? Data(),
             affectedNotesPayloadData: affectedNotesPayloadData,
             authoritativeChildCount: authoritativeChildCount,
             authoritativeChildBytes: authoritativeChildBytes,

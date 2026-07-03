@@ -1,3 +1,4 @@
+import CryptoKit
 import XCTest
 
 #if os(macOS)
@@ -630,6 +631,51 @@ final class SyncConvergencePlanningTests: XCTestCase {
         )
         XCTAssertEqual(try SyncConvergenceCanonicalBatchDigest.digest(for: first), try SyncConvergenceCanonicalBatchDigest.digest(for: first))
         XCTAssertNotEqual(try SyncConvergenceCanonicalBatchDigest.digest(for: first), try SyncConvergenceCanonicalBatchDigest.digest(for: reordered))
+    }
+
+    func testProjectedNoteEffectV1GoldenVectorPreservesMainContract() throws {
+        let bytes = try projectedNoteEffectBytes(kinds: ["body", "title", "creation"])
+
+        XCTAssertEqual(bytes.count, 117)
+        XCTAssertEqual(
+            bytes.hexString,
+            "000000000000001c696e636f72706f726174696f6e2d6e6f74652d6566666563742d763100000000000000000000000000132c1000000000000000000000000000132c1100000000000000030000000000000004626f647900000000000000086372656174696f6e00000000000000057469746c65"
+        )
+        XCTAssertEqual(
+            sha256Hex(bytes),
+            "e6048b2eec3825e2394d70009c8f1234df6bdb3508b48c897b7d6df5849e55b5"
+        )
+        XCTAssertEqual(
+            String(data: bytes.dropFirst(8).prefix(28), encoding: .utf8),
+            "incorporation-note-effect-v1"
+        )
+    }
+
+    func testProjectedNoteEffectV1IsKindPermutationIndependent() throws {
+        let canonical = try projectedNoteEffectBytes(kinds: ["body", "creation", "title"])
+
+        for kinds in permutations(["body", "creation", "title"]) {
+            let bytes = try projectedNoteEffectBytes(kinds: kinds)
+            XCTAssertEqual(bytes, canonical)
+            XCTAssertEqual(bytes.count, canonical.count)
+            XCTAssertEqual(sha256Hex(bytes), sha256Hex(canonical))
+        }
+    }
+
+    func testProjectedNoteEffectV1MultiEffectPermutationIndependence() throws {
+        let cases = [
+            ["body", "title"],
+            ["creation", "body"],
+            ["creation", "title"],
+            ["creation", "body", "title"]
+        ]
+
+        for kinds in cases {
+            let canonical = try projectedNoteEffectBytes(kinds: kinds.sorted())
+            for permutation in permutations(kinds) {
+                XCTAssertEqual(try projectedNoteEffectBytes(kinds: permutation), canonical)
+            }
+        }
     }
 
     func testTwoBodyOperationsInOneBatchProduceOneCompleteEffectAndOneBodyEvidence() {
@@ -2507,6 +2553,31 @@ private func uuid(_ value: String) -> UUID {
 
 private func date(_ value: TimeInterval) -> Date {
     Date(timeIntervalSinceReferenceDate: value)
+}
+
+private func projectedNoteEffectBytes(kinds: [String]) throws -> Data {
+    var encoder = CanonicalPayloadDigestFormatV1()
+    try encoder.appendProjectedNoteEffect(
+        batchID: uuid("00000000-0000-0000-0000-000000132c10"),
+        noteID: uuid("00000000-0000-0000-0000-000000132c11"),
+        kinds: kinds
+    )
+    return encoder.data
+}
+
+private func permutations(_ values: [String]) -> [[String]] {
+    guard let first = values.first else { return [[]] }
+    return permutations(Array(values.dropFirst())).flatMap { permutation in
+        (0...permutation.count).map { index in
+            var next = permutation
+            next.insert(first, at: index)
+            return next
+        }
+    }
+}
+
+private func sha256Hex(_ data: Data) -> String {
+    SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
 }
 
 private extension SyncConvergenceRetainedOperation {

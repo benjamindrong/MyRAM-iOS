@@ -380,11 +380,24 @@ struct SyncConvergenceIncorporatedRootProjection: Equatable {
     let canonicalPayloadDigestFormatVersion: Int
     let committedResultDigest: String
     let committedResultDigestFormatVersion: Int
+    let committedAtOrderingPayloadData: Data
     let affectedNotesPayloadData: Data
     let authoritativeChildCount: Int
     let authoritativeChildBytes: Int
     let authoritativeChildrenDigest: String
     let postCommitStatePayloadData: Data
+}
+
+struct SyncConvergenceIncorporatedTombstoneProjection: Equatable {
+    let batchID: UUID
+    let originDeviceID: UUID
+    let canonicalPayloadDigest: String
+    let canonicalPayloadDigestFormatVersion: Int
+    let schemaVersion: Int
+    let committedResultDigest: String
+    let committedResultDigestFormatVersion: Int
+    let committedAtOrderingPayloadData: Data
+    let tombstoneFormatVersion: Int
 }
 
 struct SyncConvergenceIncorporatedChildrenProjection: Equatable {
@@ -452,6 +465,12 @@ struct SyncConvergenceRetainedOperationIdentity: Equatable, Hashable {
 
 struct SyncConvergenceRetainedOperationProjection: Equatable {
     let operation: SyncConvergenceRetainedOperationRecord
+    let source: SyncConvergenceRetainedOperationSource
+}
+
+enum SyncConvergenceRetainedOperationSource: String, Equatable {
+    case local
+    case remote
 }
 
 struct SyncConvergenceRetainedOperationRecord: Equatable {
@@ -490,7 +509,7 @@ protocol SyncConvergencePersistenceTransaction {
     func insertOrUpdateTitleWinner(_ record: SyncConvergenceTitleWinnerRecord) throws
     func loadIncorporatedBatch(batchID: UUID) throws -> SyncConvergenceIncorporatedRootProjection?
     func loadIncorporatedBatchChildren(batchID: UUID) throws -> SyncConvergenceIncorporatedChildrenProjection
-    func loadTombstone(batchID: UUID) throws -> SyncConvergenceIncorporatedRootProjection?
+    func loadTombstone(batchID: UUID) throws -> SyncConvergenceIncorporatedTombstoneProjection?
     func insertIncorporatedBatch(_ record: SyncConvergenceIncorporatedBatchRecord) throws
     func insertOperationIdentity(_ record: SyncConvergenceOperationIdentityRecord) throws
     func insertNoteEffect(_ record: SyncConvergenceNoteEffectRecord) throws

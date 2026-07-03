@@ -193,6 +193,246 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertTrue(completedResult.presentationPlan.noteRoutings.isEmpty)
     }
 
+    func testTombstoneOnlyDuplicateUsesDedicatedProjection() throws {
+        let fixture = try makeFixture()
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        transaction.tombstones[fixture.batch.id] = try tombstoneProjection(matching: fixture)
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        guard case .alreadyIncorporated(let result) = outcome else {
+            return XCTFail("Expected tombstone duplicate, got \(outcome)")
+        }
+        XCTAssertEqual(result.batchID, fixture.batch.id)
+        XCTAssertEqual(transaction.notes[fixture.noteID], fixture.initialNote)
+        XCTAssertFalse(transaction.saveCalled)
+    }
+
+    func testMatchingRootAndTombstoneDuplicateComparesCommittedOrdering() throws {
+        let fixture = try makeFixture()
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        let first = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+        guard case .incorporated = first else {
+            return XCTFail("Expected first incorporation, got \(first)")
+        }
+        transaction.tombstones[fixture.batch.id] = try tombstoneProjection(matching: fixture)
+
+        let duplicate = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        guard case .alreadyIncorporated = duplicate else {
+            return XCTFail("Expected matching dual duplicate, got \(duplicate)")
+        }
+    }
+
+    func testContradictoryRootAndTombstoneOrderingFailsDuplicatePreflight() throws {
+        let fixture = try makeFixture()
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        let first = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+        guard case .incorporated = first else {
+            return XCTFail("Expected first incorporation, got \(first)")
+        }
+        transaction.tombstones[fixture.batch.id] = try tombstoneProjection(
+            matching: fixture,
+            committedAtOrderingPayloadData: CommittedAtOrderingPayload(
+                batchID: fixture.batch.id,
+                committedAt: date(99)
+            ).encodedEvidenceData()
+        )
+
+        let duplicate = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        XCTAssertEqual(duplicate, .failedBeforeCommit(.inconsistentIncorporationState(noteID: nil)))
+    }
+
+    func testInvalidTombstoneEvidenceFailsClosed() throws {
+        let fixture = try makeFixture()
+        let unsupported = try tombstoneProjection(matching: fixture, tombstoneFormatVersion: 2)
+        let malformed = try tombstoneProjection(matching: fixture, committedAtOrderingPayloadData: Data([0xde, 0xad]))
+
+        for tombstone in [unsupported, malformed] {
+            let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+            transaction.tombstones[fixture.batch.id] = tombstone
+
+            let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+                input: fixture.validatedInput,
+                transaction: transaction,
+                committedAt: fixture.committedAt
+            )
+
+            XCTAssertEqual(outcome, .failedBeforeCommit(.corruptHistory(noteID: nil)))
+        }
+    }
+
+    func testRetainedOperationSourceControlsIdempotency() throws {
+        let fixture = try makeFixture()
+        let retained = try XCTUnwrap(fixture.plan.historyPlan.retainedOperationAdditions.first).testRetainedOperationRecord
+        let identity = SyncConvergenceRetainedOperationIdentity(
+            batchID: retained.batchID,
+            operationIndex: retained.operationIndex
+        )
+
+        let remoteTransaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        remoteTransaction.retainedOperations[identity] = SyncConvergenceRetainedOperationProjection(
+            operation: retained,
+            source: .remote
+        )
+        let remoteOutcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: remoteTransaction,
+            committedAt: fixture.committedAt
+        )
+        guard case .incorporated = remoteOutcome else {
+            return XCTFail("Expected remote retained idempotency, got \(remoteOutcome)")
+        }
+        XCTAssertEqual(remoteTransaction.retainedOperationInsertCount, 0)
+
+        let localTransaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
+        localTransaction.retainedOperations[identity] = SyncConvergenceRetainedOperationProjection(
+            operation: retained,
+            source: .local
+        )
+        let localOutcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: localTransaction,
+            committedAt: fixture.committedAt
+        )
+        XCTAssertEqual(localOutcome, .failedBeforeCommit(.inconsistentIncorporationState(noteID: fixture.noteID)))
+    }
+
+    func testSwiftDataRetainedOperationSourceIsRemote() throws {
+        let fixture = try makeFixture()
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let note = Note(title: fixture.initialNote.title, content: fixture.initialNote.body)
+        note.id = fixture.initialNote.noteID
+        note.createdAt = fixture.initialNote.createdAt
+        note.modifiedAt = fixture.initialNote.modifiedAt
+        context.insert(note)
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
+            committedAt: fixture.committedAt
+        )
+
+        guard case .incorporated = outcome else {
+            return XCTFail("Expected SwiftData incorporation, got \(outcome)")
+        }
+        let retained = try XCTUnwrap(context.fetch(FetchDescriptor<RetainedBodyOperation>()).first)
+        XCTAssertEqual(retained.sourceRaw, "remote")
+        let projection = try XCTUnwrap(
+            try SwiftDataSyncConvergencePersistenceTransaction(context: context).loadRetainedOperation(
+                identity: SyncConvergenceRetainedOperationIdentity(
+                    batchID: retained.batchID,
+                    operationIndex: retained.operationIndex
+                )
+            )
+        )
+        XCTAssertEqual(projection.source, .remote)
+    }
+
+    func testSwiftDataTombstoneProjectionRoundTripPreservesAuthoritativeFields() throws {
+        let fixture = try makeFixture()
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let orderingPayload = try CommittedAtOrderingPayload(
+            batchID: fixture.batch.id,
+            committedAt: fixture.committedAt
+        ).encodedEvidenceData()
+        let committedResultDigest = try CanonicalCommittedResultDigestPayloadV1.digest(
+            plan: fixture.plan,
+            sourceBatch: fixture.batch
+        )
+        context.insert(try IncorporatedBatchTombstone.makeValidated(
+            batchID: fixture.batch.id,
+            originDeviceID: fixture.batch.originDeviceID,
+            canonicalPayloadDigest: fixture.plan.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: fixture.plan.canonicalPayloadDigestFormatVersion,
+            schemaVersion: fixture.validatedInput.sourceSchemaVersion,
+            committedResultDigest: committedResultDigest,
+            committedResultDigestFormatVersion: CanonicalCommittedResultDigestPayloadV1.formatVersion,
+            committedAtOrderingPayloadData: orderingPayload,
+            tombstoneFormatVersion: IncorporatedBatchTombstone.supportedTombstoneFormatVersion
+        ))
+
+        let projection = try XCTUnwrap(
+            try SwiftDataSyncConvergencePersistenceTransaction(context: context).loadTombstone(batchID: fixture.batch.id)
+        )
+
+        XCTAssertEqual(projection.batchID, fixture.batch.id)
+        XCTAssertEqual(projection.originDeviceID, fixture.batch.originDeviceID)
+        XCTAssertEqual(projection.schemaVersion, fixture.validatedInput.sourceSchemaVersion)
+        XCTAssertEqual(projection.canonicalPayloadDigest, fixture.plan.canonicalPayloadDigest)
+        XCTAssertEqual(projection.canonicalPayloadDigestFormatVersion, fixture.plan.canonicalPayloadDigestFormatVersion)
+        XCTAssertEqual(projection.committedResultDigest, committedResultDigest)
+        XCTAssertEqual(projection.committedResultDigestFormatVersion, CanonicalCommittedResultDigestPayloadV1.formatVersion)
+        XCTAssertEqual(projection.committedAtOrderingPayloadData, orderingPayload)
+        XCTAssertEqual(projection.tombstoneFormatVersion, IncorporatedBatchTombstone.supportedTombstoneFormatVersion)
+    }
+
+    func testSwiftDataUnsupportedRetainedOperationSourceFailsAsCorruptHistory() throws {
+        let fixture = try makeFixture()
+        let retained = try XCTUnwrap(fixture.plan.historyPlan.retainedOperationAdditions.first).testRetainedOperationRecord
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        context.insert(RetainedBodyOperation(
+            noteID: retained.noteID,
+            batchID: retained.batchID,
+            originDeviceID: retained.originDeviceID,
+            operationIndex: retained.operationIndex,
+            operationKindRaw: retained.operationKind.rawValue,
+            utf16Offset: retained.utf16Offset,
+            utf16Length: retained.utf16Length,
+            text: retained.text,
+            expectedText: retained.expectedText,
+            baseContentHash: retained.baseContentHash,
+            resultContentHash: retained.resultContentHash,
+            modifiedAt: retained.modifiedAt,
+            canonicalReplayKeyPayloadData: try retained.canonicalReplayKey.encodedEvidenceData(),
+            sourceRaw: "authoritative-convergence-incorporation"
+        ))
+
+        XCTAssertThrowsError(
+            try SwiftDataSyncConvergencePersistenceTransaction(context: context).loadRetainedOperation(
+                identity: SyncConvergenceRetainedOperationIdentity(
+                    batchID: retained.batchID,
+                    operationIndex: retained.operationIndex
+                )
+            )
+        ) { error in
+            XCTAssertEqual(error as? SyncConvergenceTransactionFailure, .corruptHistory(noteID: retained.noteID))
+        }
+    }
+
     private struct Fixture {
         let noteID: UUID
         let batch: SyncBatch
@@ -267,18 +507,44 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             committedAt: date(5)
         )
     }
+
+    private func tombstoneProjection(
+        matching fixture: Fixture,
+        committedAtOrderingPayloadData: Data? = nil,
+        tombstoneFormatVersion: Int = IncorporatedBatchTombstone.supportedTombstoneFormatVersion
+    ) throws -> SyncConvergenceIncorporatedTombstoneProjection {
+        let committedResultDigest = try CanonicalCommittedResultDigestPayloadV1.digest(
+            plan: fixture.plan,
+            sourceBatch: fixture.batch
+        )
+        return SyncConvergenceIncorporatedTombstoneProjection(
+            batchID: fixture.batch.id,
+            originDeviceID: fixture.batch.originDeviceID,
+            canonicalPayloadDigest: fixture.plan.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: fixture.plan.canonicalPayloadDigestFormatVersion,
+            schemaVersion: fixture.validatedInput.sourceSchemaVersion,
+            committedResultDigest: committedResultDigest,
+            committedResultDigestFormatVersion: CanonicalCommittedResultDigestPayloadV1.formatVersion,
+            committedAtOrderingPayloadData: try committedAtOrderingPayloadData ?? CommittedAtOrderingPayload(
+                batchID: fixture.batch.id,
+                committedAt: fixture.committedAt
+            ).encodedEvidenceData(),
+            tombstoneFormatVersion: tombstoneFormatVersion
+        )
+    }
 }
 
 private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTransaction {
     var notes: [UUID: SyncConvergenceMutableNoteRecord]
     var titleWinners: [UUID: SyncConvergenceTitleWinnerProjection] = [:]
     var roots: [UUID: SyncConvergenceIncorporatedRootProjection] = [:]
-    var tombstones: [UUID: SyncConvergenceIncorporatedRootProjection] = [:]
+    var tombstones: [UUID: SyncConvergenceIncorporatedTombstoneProjection] = [:]
     var children: [UUID: SyncConvergenceIncorporatedChildrenProjection] = [:]
     var retainedOperations: [SyncConvergenceRetainedOperationIdentity: SyncConvergenceRetainedOperationProjection] = [:]
     var snapshots: [String: SyncConvergenceSnapshotProjection] = [:]
     var saveCalled = false
     var rollbackCalled = false
+    var retainedOperationInsertCount = 0
     var failAfterUpdateNote = false
 
     private var rollbackSnapshot: Snapshot?
@@ -333,7 +599,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
     func loadIncorporatedBatchChildren(batchID: UUID) throws -> SyncConvergenceIncorporatedChildrenProjection {
         children[batchID] ?? .empty
     }
-    func loadTombstone(batchID: UUID) throws -> SyncConvergenceIncorporatedRootProjection? { tombstones[batchID] }
+    func loadTombstone(batchID: UUID) throws -> SyncConvergenceIncorporatedTombstoneProjection? { tombstones[batchID] }
 
     func insertIncorporatedBatch(_ record: SyncConvergenceIncorporatedBatchRecord) throws {
         stageRollback()
@@ -347,6 +613,10 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             canonicalPayloadDigestFormatVersion: record.canonicalPayloadDigestFormatVersion,
             committedResultDigest: record.committedResultDigest,
             committedResultDigestFormatVersion: record.committedResultDigestFormatVersion,
+            committedAtOrderingPayloadData: try CommittedAtOrderingPayload(
+                batchID: record.batchID,
+                committedAt: record.committedAt
+            ).encodedEvidenceData(),
             affectedNotesPayloadData: record.affectedNotesPayloadData,
             authoritativeChildCount: record.authoritativeChildCount,
             authoritativeChildBytes: record.authoritativeChildBytes,
@@ -393,10 +663,11 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
 
     func insertRetainedOperation(_ record: SyncConvergenceRetainedOperationRecord) throws {
         stageRollback()
+        retainedOperationInsertCount += 1
         retainedOperations[SyncConvergenceRetainedOperationIdentity(
             batchID: record.batchID,
             operationIndex: record.operationIndex
-        )] = SyncConvergenceRetainedOperationProjection(operation: record)
+        )] = SyncConvergenceRetainedOperationProjection(operation: record, source: .remote)
     }
 
     func loadSnapshot(noteID: UUID, generation: Int) throws -> SyncConvergenceSnapshotProjection? {
@@ -448,6 +719,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             canonicalPayloadDigestFormatVersion: root.canonicalPayloadDigestFormatVersion,
             committedResultDigest: root.committedResultDigest,
             committedResultDigestFormatVersion: root.committedResultDigestFormatVersion,
+            committedAtOrderingPayloadData: root.committedAtOrderingPayloadData,
             affectedNotesPayloadData: root.affectedNotesPayloadData,
             authoritativeChildCount: root.authoritativeChildCount,
             authoritativeChildBytes: root.authoritativeChildBytes,
@@ -473,7 +745,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
         let notes: [UUID: SyncConvergenceMutableNoteRecord]
         let titleWinners: [UUID: SyncConvergenceTitleWinnerProjection]
         let roots: [UUID: SyncConvergenceIncorporatedRootProjection]
-        let tombstones: [UUID: SyncConvergenceIncorporatedRootProjection]
+        let tombstones: [UUID: SyncConvergenceIncorporatedTombstoneProjection]
         let children: [UUID: SyncConvergenceIncorporatedChildrenProjection]
         let retainedOperations: [SyncConvergenceRetainedOperationIdentity: SyncConvergenceRetainedOperationProjection]
         let snapshots: [String: SyncConvergenceSnapshotProjection]
@@ -486,4 +758,29 @@ private func uuid(_ value: String) -> UUID {
 
 private func date(_ value: TimeInterval) -> Date {
     Date(timeIntervalSinceReferenceDate: value)
+}
+
+private extension SyncConvergencePlannedBodyOperation {
+    var testRetainedOperationRecord: SyncConvergenceRetainedOperationRecord {
+        SyncConvergenceRetainedOperationRecord(
+            noteID: noteID,
+            batchID: UUID(uuidString: operationIdentity.batchIDLowercase) ?? operationIdentity.canonicalReplayKey.batchID,
+            originDeviceID: UUID(uuidString: operationIdentity.originDeviceIDLowercase) ?? operationIdentity.canonicalReplayKey.originDeviceID,
+            operationIndex: operationIdentity.operationIndex,
+            operationKind: kind,
+            utf16Offset: utf16Offset,
+            utf16Length: utf16Length,
+            text: text,
+            expectedText: expectedText,
+            baseContentHash: baseContentHash,
+            resultContentHash: resultContentHash,
+            canonicalReplayKey: operationIdentity.canonicalReplayKey,
+            modifiedAt: operationIdentity.canonicalReplayKey.modifiedAt
+        )
+    }
+}
+
+private extension CanonicalReplayKeyPayload {
+    var batchID: UUID { UUID(uuidString: batchIDLowercase)! }
+    var originDeviceID: UUID { UUID(uuidString: originDeviceIDLowercase)! }
 }
