@@ -704,6 +704,7 @@ struct CanonicalPayloadDigestFormatV1 {
         static let committedBodyResult: UInt32 = 0x00000001
         static let committedTitleResult: UInt32 = 0x00000002
         static let committedCreationResult: UInt32 = 0x00000003
+        static let committedReconciliationResult: UInt32 = 0x00000004
     }
 
     private(set) var data = Data()
@@ -800,11 +801,17 @@ struct CanonicalPayloadDigestFormatV1 {
     }
 
     mutating func appendCommittedResultDigest(plan: SyncConvergenceBatchPlan) throws {
+        try appendCommittedResults(
+            batchID: plan.batchID,
+            results: CanonicalCommittedResultDigestPayloadV1.results(from: plan)
+        )
+    }
+
+    mutating func appendCommittedResults(batchID: UUID, results: [CanonicalCommittedResultV1]) throws {
         appendUInt32(Domain.committedResultSchemaVersion)
-        try appendUUID(plan.batchID)
-        let results = CanonicalCommittedResultDigestPayloadV1.results(from: plan)
+        try appendUUID(batchID)
         appendUInt64(UInt64(results.count))
-        for result in results {
+        for result in results.sorted() {
             switch result {
             case .body(let noteID, let preHash, let finalBodyHash, let identities):
                 appendUInt32(Domain.committedBodyResult)
@@ -829,6 +836,11 @@ struct CanonicalPayloadDigestFormatV1 {
                 try appendDigestOperationIdentity(titleIdentity)
                 try appendDigestReplayKey(titleKey)
                 try appendDigestOperationIdentity(creationIdentity)
+            case .reconciliation(let noteID, let finalBodyHash, let identity):
+                appendUInt32(Domain.committedReconciliationResult)
+                try appendUUID(noteID)
+                appendString(finalBodyHash)
+                try appendDigestOperationIdentity(identity)
             }
         }
     }
@@ -2544,6 +2556,7 @@ struct SyncConvergenceIncorporationExecutor {
               root.canonicalPayloadDigestFormatVersion == prepared.root.canonicalPayloadDigestFormatVersion,
               root.committedResultDigest == prepared.root.committedResultDigest,
               root.committedResultDigestFormatVersion == prepared.root.committedResultDigestFormatVersion,
+              root.committedAtOrderingPayloadData == expectedOrderingPayload,
               root.affectedNotesPayloadData == prepared.root.affectedNotesPayloadData,
               root.authoritativeChildCount == prepared.root.authoritativeChildCount,
               root.authoritativeChildBytes == prepared.root.authoritativeChildBytes,
@@ -3033,10 +3046,7 @@ private struct ExpectedNoteEffectProjection: Equatable {
     let kinds: [String]
 
     static func validateKinds(_ kinds: [String]) throws {
-        let supportedKinds: Set<String> = ["body", "creation", "title"]
-        guard Set(kinds).count == kinds.count,
-              kinds.allSatisfy({ supportedKinds.contains($0) })
-        else {
+        guard SyncConvergenceNoteEffectKindMembership.validate(kinds) else {
             throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload("noteEffect.kinds")
         }
     }
@@ -3081,15 +3091,23 @@ struct CanonicalCommittedResultDigestPayloadV1 {
     static let formatVersion = 1
 
     static func digest(plan: SyncConvergenceBatchPlan, sourceBatch: SyncBatch) throws -> String {
-        var encoder = CanonicalPayloadDigestFormatV1()
         _ = sourceBatch
-        try encoder.appendCommittedResultDigest(plan: plan)
-        return CanonicalDigestEncoderV1.digest(data: encoder.data)
+        return try digest(batchID: plan.batchID, results: results(from: plan))
     }
 
-    fileprivate static func results(from plan: SyncConvergenceBatchPlan) -> [CanonicalCommittedNoteResultV1] {
-        plan.affectedNotePlans.flatMap { notePlan -> [CanonicalCommittedNoteResultV1] in
-            var results: [CanonicalCommittedNoteResultV1] = []
+    static func canonicalBytes(batchID: UUID, results: [CanonicalCommittedResultV1]) throws -> Data {
+        var encoder = CanonicalPayloadDigestFormatV1()
+        try encoder.appendCommittedResults(batchID: batchID, results: results)
+        return encoder.data
+    }
+
+    static func digest(batchID: UUID, results: [CanonicalCommittedResultV1]) throws -> String {
+        try CanonicalDigestEncoderV1.digest(data: canonicalBytes(batchID: batchID, results: results))
+    }
+
+    fileprivate static func results(from plan: SyncConvergenceBatchPlan) -> [CanonicalCommittedResultV1] {
+        plan.affectedNotePlans.flatMap { notePlan -> [CanonicalCommittedResultV1] in
+            var results: [CanonicalCommittedResultV1] = []
             if let body = notePlan.bodyEffect?.committedBodyResult(noteID: notePlan.noteID) {
                 results.append(body)
             }
@@ -3111,7 +3129,7 @@ struct CanonicalCommittedResultDigestPayloadV1 {
     }
 }
 
-private enum CanonicalCommittedNoteResultV1: Equatable, Comparable {
+enum CanonicalCommittedResultV1: Equatable, Comparable {
     case body(noteID: UUID, preHash: String?, finalBodyHash: String, identities: [OperationIdentityPayload])
     case title(noteID: UUID, identity: OperationIdentityPayload, key: CanonicalReplayKeyPayload, finalTitle: String)
     case creation(
@@ -3122,10 +3140,12 @@ private enum CanonicalCommittedNoteResultV1: Equatable, Comparable {
         titleKey: CanonicalReplayKeyPayload,
         creationIdentity: OperationIdentityPayload
     )
+    case reconciliation(noteID: UUID, finalBodyHash: String, identity: OperationIdentityPayload)
 
     private var noteID: UUID {
         switch self {
-        case .body(let noteID, _, _, _), .title(let noteID, _, _, _), .creation(let noteID, _, _, _, _, _):
+        case .body(let noteID, _, _, _), .title(let noteID, _, _, _), .creation(let noteID, _, _, _, _, _),
+                .reconciliation(let noteID, _, _):
             return noteID
         }
     }
@@ -3138,6 +3158,8 @@ private enum CanonicalCommittedNoteResultV1: Equatable, Comparable {
             return 2
         case .creation:
             return 3
+        case .reconciliation:
+            return 4
         }
     }
 
@@ -3148,6 +3170,8 @@ private enum CanonicalCommittedNoteResultV1: Equatable, Comparable {
         case .title(_, let identity, _, _):
             return identity.operationIndex
         case .creation(_, _, _, _, _, let identity):
+            return identity.operationIndex
+        case .reconciliation(_, _, let identity):
             return identity.operationIndex
         }
     }
@@ -3264,7 +3288,7 @@ private extension SyncConvergenceBodyEffect? {
 }
 
 private extension SyncConvergenceBodyEffect {
-    func committedBodyResult(noteID: UUID) -> CanonicalCommittedNoteResultV1? {
+    func committedBodyResult(noteID: UUID) -> CanonicalCommittedResultV1? {
         switch self {
         case .matchingBaseIncremental(let plan):
             return .body(
@@ -3294,7 +3318,7 @@ private extension SyncConvergenceBodyEffect {
 }
 
 private extension SyncConvergenceTitleEffect {
-    func committedTitleResult(noteID: UUID) -> CanonicalCommittedNoteResultV1? {
+    func committedTitleResult(noteID: UUID) -> CanonicalCommittedResultV1? {
         switch verdict {
         case .apply, .idempotent:
             return .title(

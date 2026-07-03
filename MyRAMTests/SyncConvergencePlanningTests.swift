@@ -678,6 +678,65 @@ final class SyncConvergencePlanningTests: XCTestCase {
         }
     }
 
+    func testProjectedNoteEffectKindMembershipRejectsInvalidSets() {
+        XCTAssertFalse(SyncConvergenceNoteEffectKindMembership.validate(["body", "title"], expected: ["body", "title", "creation"]))
+        XCTAssertFalse(SyncConvergenceNoteEffectKindMembership.validate(["body", "title", "creation"], expected: ["body", "title"]))
+        XCTAssertFalse(SyncConvergenceNoteEffectKindMembership.validate(["body", "body"], expected: ["body"]))
+        XCTAssertFalse(SyncConvergenceNoteEffectKindMembership.validate(["body", "unsupported"], expected: ["body"]))
+        XCTAssertTrue(SyncConvergenceNoteEffectKindMembership.validate(["title", "body"], expected: ["body", "title"]))
+    }
+
+    func testCommittedResultV1GoldenVectorMatrix() throws {
+        let fixtures = committedResultGoldenFixtures()
+
+        for fixture in fixtures {
+            let bytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+                batchID: committedResultBatchID,
+                results: fixture.results
+            )
+            XCTAssertEqual(bytes.count, fixture.byteCount, fixture.name)
+            XCTAssertEqual(bytes.hexString, fixture.hex, fixture.name)
+            XCTAssertEqual(sha256Hex(bytes), fixture.digest, fixture.name)
+        }
+    }
+
+    func testCommittedResultV1ReconciliationReservedVariantIsPinned() throws {
+        let fixture = committedResultGoldenFixtures().first { $0.name == "reconciliation" }!
+        let bytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+            batchID: committedResultBatchID,
+            results: fixture.results
+        )
+
+        XCTAssertEqual(bytes.dropFirst(28).prefix(4).hexString, "00000004")
+        XCTAssertEqual(bytes.count, 224)
+        XCTAssertEqual(bytes.hexString, fixture.hex)
+        XCTAssertEqual(sha256Hex(bytes), fixture.digest)
+    }
+
+    func testCommittedResultV1OrderingAndChangeSensitivity() throws {
+        let fixtures = committedResultGoldenFixtures()
+        let multiple = fixtures.first { $0.name == "multiple" }!
+        let reorderedBytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+            batchID: committedResultBatchID,
+            results: multiple.results.reversed()
+        )
+        XCTAssertEqual(reorderedBytes.hexString, multiple.hex)
+        XCTAssertEqual(sha256Hex(reorderedBytes), multiple.digest)
+
+        let body = fixtures.first { $0.name == "body" }!
+        let changed = fixtures.first { $0.name == "changed" }!
+        let bodyBytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+            batchID: committedResultBatchID,
+            results: body.results
+        )
+        let changedBytes = try CanonicalCommittedResultDigestPayloadV1.canonicalBytes(
+            batchID: committedResultBatchID,
+            results: changed.results
+        )
+        XCTAssertNotEqual(changedBytes, bodyBytes)
+        XCTAssertNotEqual(sha256Hex(changedBytes), sha256Hex(bodyBytes))
+    }
+
     func testTwoBodyOperationsInOneBatchProduceOneCompleteEffectAndOneBodyEvidence() {
         let noteID = uuid("00000000-0000-0000-0000-000000132212")
         let firstBase = "AB"
@@ -2563,6 +2622,143 @@ private func projectedNoteEffectBytes(kinds: [String]) throws -> Data {
         kinds: kinds
     )
     return encoder.data
+}
+
+private let committedResultBatchID = uuid("00000000-0000-0000-0000-000000132d01")
+private let committedResultOriginID = uuid("00000000-0000-0000-0000-000000132d02")
+private let committedResultNoteID = uuid("00000000-0000-0000-0000-000000132d11")
+private let committedResultSecondNoteID = uuid("00000000-0000-0000-0000-000000132d12")
+private let committedResultFolderID = uuid("00000000-0000-0000-0000-000000132d20")
+
+private struct CommittedResultGoldenFixture {
+    let name: String
+    let results: [CanonicalCommittedResultV1]
+    let byteCount: Int
+    let hex: String
+    let digest: String
+}
+
+private func committedResultGoldenFixtures() -> [CommittedResultGoldenFixture] {
+    let preHash = String(repeating: "a", count: 64)
+    let bodyHash = String(repeating: "b", count: 64)
+    let creationHash = String(repeating: "c", count: 64)
+    let reconciliationHash = String(repeating: "d", count: 64)
+    let changedHash = String(repeating: "e", count: 64)
+    let insert = committedResultIdentity(kind: "insert", operationIndex: 0, modifiedAt: date(2))
+    let title = committedResultIdentity(kind: "title", operationIndex: 1, modifiedAt: date(3))
+    let creation = committedResultIdentity(kind: "creation", operationIndex: 2, modifiedAt: date(4))
+    let reconciliation = committedResultIdentity(kind: "reconciliation", operationIndex: 3, modifiedAt: date(5))
+
+    return [
+        CommittedResultGoldenFixture(
+            name: "body",
+            results: [.body(noteID: committedResultNoteID, preHash: preHash, finalBodyHash: bodyHash, identities: [insert])],
+            byteCount: 305,
+            hex: "0000000100000000000000000000000000132d0100000000000000010000000100000000000000000000000000132d110100000000000000406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000000000000406262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626200000000000000010000000200000000000000000000000000132d0100000000000000000000000000132d020000000000000000400000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000000",
+            digest: "23d4a3f4416d0ee2e62264f1508cc49797ad354269e4b48b39a5f77479858594"
+        ),
+        CommittedResultGoldenFixture(
+            name: "title",
+            results: [.title(noteID: committedResultNoteID, identity: title, key: title.canonicalReplayKey, finalTitle: "Winner")],
+            byteCount: 226,
+            hex: "0000000100000000000000000000000000132d0100000000000000010000000200000000000000000000000000132d110000000100000000000000000000000000132d0100000000000000000000000000132d020000000000000001400800000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000001400800000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000001000000000000000657696e6e6572",
+            digest: "69c7bb23b0222259172dd01238649e2c76295861db2cbabccfbe30488854bb93"
+        ),
+        CommittedResultGoldenFixture(
+            name: "creation",
+            results: [.creation(noteID: committedResultNoteID, folderID: committedResultFolderID, finalBodyHash: creationHash, titleIdentity: creation, titleKey: creation.canonicalReplayKey, creationIdentity: creation)],
+            byteCount: 405,
+            hex: "0000000100000000000000000000000000132d0100000000000000010000000300000000000000000000000000132d110100000000000000000000000000132d200000000000000040636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363636363630000000500000000000000000000000000132d0100000000000000000000000000132d020000000000000002401000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000002401000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d0100000000000000020000000500000000000000000000000000132d0100000000000000000000000000132d020000000000000002401000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000002",
+            digest: "c5a5d0b0076be37c47d1ce7a7bb257736077dc874cdf32c49dce2790c1e22182"
+        ),
+        CommittedResultGoldenFixture(
+            name: "reconciliation",
+            results: [.reconciliation(noteID: committedResultNoteID, finalBodyHash: reconciliationHash, identity: reconciliation)],
+            byteCount: 224,
+            hex: "0000000100000000000000000000000000132d0100000000000000010000000400000000000000000000000000132d110000000000000040646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464640000000400000000000000000000000000132d0100000000000000000000000000132d020000000000000003401400000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000003",
+            digest: "111f0194ede245c7cfa389f0334cfb6ea4412c2e11227d97064b935eb437f8c6"
+        ),
+        CommittedResultGoldenFixture(
+            name: "mixed",
+            results: [
+                .title(noteID: committedResultSecondNoteID, identity: title, key: title.canonicalReplayKey, finalTitle: "Winner"),
+                .body(noteID: committedResultNoteID, preHash: preHash, finalBodyHash: bodyHash, identities: [insert]),
+                .reconciliation(noteID: committedResultNoteID, finalBodyHash: reconciliationHash, identity: reconciliation)
+            ],
+            byteCount: 699,
+            hex: "0000000100000000000000000000000000132d0100000000000000030000000100000000000000000000000000132d110100000000000000406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000000000000406262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626200000000000000010000000200000000000000000000000000132d0100000000000000000000000000132d020000000000000000400000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d0100000000000000000000000400000000000000000000000000132d110000000000000040646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464646464640000000400000000000000000000000000132d0100000000000000000000000000132d020000000000000003401400000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d0100000000000000030000000200000000000000000000000000132d120000000100000000000000000000000000132d0100000000000000000000000000132d020000000000000001400800000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000001400800000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000001000000000000000657696e6e6572",
+            digest: "099ed3e8df45269abc0f97f26b48f00a02d49d92e322445a60f68f3575225746"
+        ),
+        CommittedResultGoldenFixture(
+            name: "multiple",
+            results: [
+                .body(noteID: committedResultSecondNoteID, preHash: preHash, finalBodyHash: changedHash, identities: [insert]),
+                .body(noteID: committedResultNoteID, preHash: preHash, finalBodyHash: bodyHash, identities: [insert])
+            ],
+            byteCount: 582,
+            hex: "0000000100000000000000000000000000132d0100000000000000020000000100000000000000000000000000132d110100000000000000406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000000000000406262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626262626200000000000000010000000200000000000000000000000000132d0100000000000000000000000000132d020000000000000000400000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d0100000000000000000000000100000000000000000000000000132d120100000000000000406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000000000000406565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656500000000000000010000000200000000000000000000000000132d0100000000000000000000000000132d020000000000000000400000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000000",
+            digest: "b57d31db3351c0941da4d8adcd15264647110e9ebcf0cc065ea2d9af31f9e66b"
+        ),
+        CommittedResultGoldenFixture(
+            name: "changed",
+            results: [.body(noteID: committedResultNoteID, preHash: preHash, finalBodyHash: changedHash, identities: [insert])],
+            byteCount: 305,
+            hex: "0000000100000000000000000000000000132d0100000000000000010000000100000000000000000000000000132d110100000000000000406161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616100000000000000406565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656565656500000000000000010000000200000000000000000000000000132d0100000000000000000000000000132d020000000000000000400000000000000000000000000000000000000000132d02000000013ff000000000000000000000000000000000000000132d010000000000000000",
+            digest: "867ddda64066c2161ed565ad1e9f3cb7caba334a5f660a993beaa0fc564bea51"
+        )
+    ]
+}
+
+private func committedResultIdentity(kind: String, operationIndex: Int, modifiedAt: Date) -> OperationIdentityPayload {
+    let change: SyncBatchChange
+    switch kind {
+    case "title":
+        change = .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+            noteID: committedResultNoteID,
+            title: "Winner",
+            modifiedAt: modifiedAt
+        ))
+    case "creation":
+        change = .noteCreated(SyncBatchNoteCreatedChange(
+            noteID: committedResultNoteID,
+            title: "Created",
+            body: "Body",
+            folderID: committedResultFolderID,
+            createdAt: modifiedAt,
+            modifiedAt: modifiedAt
+        ))
+    case "reconciliation":
+        change = .noteBodyReconciled(SyncBatchNoteBodyReconciledChange(
+            noteID: committedResultNoteID,
+            replacementBody: "Resolved",
+            replacementContentHash: String(repeating: "d", count: 64),
+            modifiedAt: modifiedAt
+        ))
+    default:
+        change = .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+            noteID: committedResultNoteID,
+            utf16Offset: 0,
+            text: "B",
+            modifiedAt: modifiedAt,
+            baseContentHash: String(repeating: "a", count: 64)
+        ))
+    }
+    let batch = SyncBatch(
+        id: committedResultBatchID,
+        originDeviceID: committedResultOriginID,
+        createdAt: date(1),
+        changes: [change]
+    )
+    let replayKey = CanonicalReplayKeyPayload(
+        replayKey: SyncBatchReplayKey(batch: batch, change: change, operationIndex: operationIndex)
+    )
+    return OperationIdentityPayload(
+        batchID: committedResultBatchID,
+        originDeviceID: committedResultOriginID,
+        operationIndex: operationIndex,
+        operationKind: kind,
+        canonicalReplayKey: replayKey
+    )
 }
 
 private func permutations(_ values: [String]) -> [[String]] {

@@ -262,6 +262,20 @@ struct SyncConvergenceResultEvidence: Codable, Equatable, Sendable {
     let canonicalReplayKey: CanonicalReplayKeyPayload?
 }
 
+enum SyncConvergenceNoteEffectKindMembership {
+    static let supportedKinds: Set<String> = ["body", "creation", "title"]
+
+    static func validate(_ kinds: [String], expected: Set<String>? = nil) -> Bool {
+        guard Set(kinds).count == kinds.count,
+              kinds.allSatisfy({ supportedKinds.contains($0) })
+        else {
+            return false
+        }
+        guard let expected else { return true }
+        return Set(kinds) == expected
+    }
+}
+
 struct SyncConvergencePlannedBodyOperation: Equatable {
     enum Kind: String, Equatable {
         case insert
