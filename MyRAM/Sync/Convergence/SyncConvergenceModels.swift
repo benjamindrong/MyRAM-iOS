@@ -46,6 +46,7 @@ final class RetainedBodyOperation {
     var expectedText: String?
     var baseContentHash: String?
     var resultContentHash: String?
+    // The bit pattern is authoritative for ordering; Date is retained for display and query convenience.
     var modifiedAt: Date
     var modifiedAtBitPattern: UInt64
     var canonicalReplayKeyPayloadData: Data
@@ -88,6 +89,18 @@ final class RetainedBodyOperation {
         self.sourceRaw = sourceRaw
         self.payloadUTF8ByteCount = (text?.utf8.count ?? 0) + (expectedText?.utf8.count ?? 0)
     }
+
+    func validateDateAuthority() throws {
+        try SyncConvergenceDateAuthority.validate(
+            date: modifiedAt,
+            bitPattern: modifiedAtBitPattern,
+            field: "modifiedAt"
+        )
+    }
+
+    func rebuildConvenienceDatesFromAuthoritativeBits() {
+        modifiedAt = SyncConvergenceDateBits.date(from: modifiedAtBitPattern)
+    }
 }
 
 @Model
@@ -96,6 +109,7 @@ final class IncorporatedSyncBatch {
     var id: UUID
     var batchID: UUID
     var originDeviceID: UUID
+    // Bit-pattern fields are authoritative for ordering and contradiction checks; Dates are convenience mirrors.
     var createdAt: Date
     var createdAtBitPattern: UInt64
     var batchSequence: UInt64?
@@ -150,11 +164,30 @@ final class IncorporatedSyncBatch {
         self.authoritativeChildrenDigest = authoritativeChildrenDigest
         self.postCommitStatePayloadData = postCommitStatePayloadData
     }
+
+    func validateDateAuthority() throws {
+        try SyncConvergenceDateAuthority.validate(
+            date: createdAt,
+            bitPattern: createdAtBitPattern,
+            field: "createdAt"
+        )
+        try SyncConvergenceDateAuthority.validate(
+            date: committedAt,
+            bitPattern: committedAtBitPattern,
+            field: "committedAt"
+        )
+    }
+
+    func rebuildConvenienceDatesFromAuthoritativeBits() {
+        createdAt = SyncConvergenceDateBits.date(from: createdAtBitPattern)
+        committedAt = SyncConvergenceDateBits.date(from: committedAtBitPattern)
+    }
 }
 
 @Model
 final class IncorporatedBatchTombstone {
     static let maximumEncodedByteCount = 512
+    static let supportedTombstoneFormatVersion = CanonicalIncorporatedBatchTombstonePayloadV1.tombstoneFormatVersion
 
     @Attribute(.unique) var tombstoneKey: String
     var id: UUID
@@ -179,7 +212,7 @@ final class IncorporatedBatchTombstone {
         committedResultDigestFormatVersion: Int,
         committedAtOrderingPayloadData: Data,
         tombstoneFormatVersion: Int = 1
-    ) {
+    ) throws {
         self.tombstoneKey = SyncConvergenceKey.incorporatedBatchTombstone(batchID: batchID)
         self.id = id
         self.batchID = batchID
@@ -191,16 +224,50 @@ final class IncorporatedBatchTombstone {
         self.committedResultDigestFormatVersion = committedResultDigestFormatVersion
         self.committedAtOrderingPayloadData = committedAtOrderingPayloadData
         self.tombstoneFormatVersion = tombstoneFormatVersion
+        try validateForPersistence()
     }
 
     var isWithinFixedSizeLimit: Bool {
-        tombstoneKey.utf8.count
-        + batchID.uuidString.utf8.count
-        + originDeviceID.uuidString.utf8.count
-        + canonicalPayloadDigest.utf8.count
-        + committedResultDigest.utf8.count
-        + committedAtOrderingPayloadData.count
-        + 64 <= Self.maximumEncodedByteCount
+        (try? canonicalEncodedPayloadBytes().count) != nil
+    }
+
+    func canonicalTombstonePayloadV1() throws -> CanonicalIncorporatedBatchTombstonePayloadV1 {
+        let committedAtOrdering = try CommittedAtOrderingPayload.decodeEvidenceData(committedAtOrderingPayloadData)
+        let payload = CanonicalIncorporatedBatchTombstonePayloadV1(
+            tombstoneFormatVersion: tombstoneFormatVersion,
+            batchIDLowercase: batchID.uuidString.lowercased(),
+            originDeviceIDLowercase: originDeviceID.uuidString.lowercased(),
+            canonicalPayloadDigest: canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
+            schemaVersion: schemaVersion,
+            committedResultDigest: committedResultDigest,
+            committedResultDigestFormatVersion: committedResultDigestFormatVersion,
+            committedAtOrdering: committedAtOrdering
+        )
+        try payload.validate()
+        try committedAtOrdering.validate(against: self)
+        return payload
+    }
+
+    func canonicalEncodedPayloadBytes() throws -> Data {
+        try canonicalTombstonePayloadV1().encodedEvidenceData()
+    }
+
+    func validateForPersistence() throws {
+        guard tombstoneFormatVersion == Self.supportedTombstoneFormatVersion else {
+            throw SyncConvergenceValidationError.unsupportedTombstoneFormat(version: tombstoneFormatVersion)
+        }
+        let encodedPayload = try canonicalEncodedPayloadBytes()
+        try Self.validateEncodedPayloadSize(encodedPayload)
+    }
+
+    static func validateEncodedPayloadSize(_ encodedPayload: Data) throws {
+        guard encodedPayload.count <= maximumEncodedByteCount else {
+            throw SyncConvergenceValidationError.encodedPayloadExceedsLimit(
+                actual: encodedPayload.count,
+                limit: maximumEncodedByteCount
+            )
+        }
     }
 }
 
@@ -359,6 +426,7 @@ final class NoteTitleWinner {
     var title: String
     var canonicalReplayKeyPayloadData: Data
     var operationIdentityPayloadData: Data
+    // updatedAtBitPattern is the authoritative update identity; updatedAt is a convenience mirror.
     var updatedAt: Date
     var updatedAtBitPattern: UInt64
 
@@ -378,6 +446,18 @@ final class NoteTitleWinner {
         self.operationIdentityPayloadData = operationIdentityPayloadData
         self.updatedAt = updatedAt
         self.updatedAtBitPattern = SyncConvergenceDateBits.bitPattern(for: updatedAt)
+    }
+
+    func validateDateAuthority() throws {
+        try SyncConvergenceDateAuthority.validate(
+            date: updatedAt,
+            bitPattern: updatedAtBitPattern,
+            field: "updatedAt"
+        )
+    }
+
+    func rebuildConvenienceDatesFromAuthoritativeBits() {
+        updatedAt = SyncConvergenceDateBits.date(from: updatedAtBitPattern)
     }
 }
 
@@ -426,6 +506,7 @@ final class ConvergenceNoteDiagnosticState {
     var statusRaw: String
     var blockingReferenceCount: Int
     var diagnosticEvidencePayloadData: Data
+    // Bit patterns are authoritative for duplicate and contradiction checks; Dates are convenience mirrors.
     var createdAt: Date
     var createdAtBitPattern: UInt64
     var updatedAt: Date
@@ -450,6 +531,24 @@ final class ConvergenceNoteDiagnosticState {
         self.createdAtBitPattern = SyncConvergenceDateBits.bitPattern(for: createdAt)
         self.updatedAt = updatedAt
         self.updatedAtBitPattern = SyncConvergenceDateBits.bitPattern(for: updatedAt)
+    }
+
+    func validateDateAuthority() throws {
+        try SyncConvergenceDateAuthority.validate(
+            date: createdAt,
+            bitPattern: createdAtBitPattern,
+            field: "createdAt"
+        )
+        try SyncConvergenceDateAuthority.validate(
+            date: updatedAt,
+            bitPattern: updatedAtBitPattern,
+            field: "updatedAt"
+        )
+    }
+
+    func rebuildConvenienceDatesFromAuthoritativeBits() {
+        createdAt = SyncConvergenceDateBits.date(from: createdAtBitPattern)
+        updatedAt = SyncConvergenceDateBits.date(from: updatedAtBitPattern)
     }
 }
 
@@ -500,6 +599,7 @@ final class ReconciliationEpisode {
     var logicalGroupingPayloadData: Data
     var didEmitLocalCandidate: Bool
     var freshAgreedHash: String?
+    // completedAtBitPattern is authoritative when present; completedAt is a convenience mirror.
     var completedAt: Date?
     var completedAtBitPattern: UInt64?
 
@@ -523,6 +623,18 @@ final class ReconciliationEpisode {
         self.freshAgreedHash = freshAgreedHash
         self.completedAt = completedAt
         self.completedAtBitPattern = completedAt.map { SyncConvergenceDateBits.bitPattern(for: $0) }
+    }
+
+    func validateDateAuthority() throws {
+        try SyncConvergenceDateAuthority.validate(
+            date: completedAt,
+            bitPattern: completedAtBitPattern,
+            field: "completedAt"
+        )
+    }
+
+    func rebuildConvenienceDatesFromAuthoritativeBits() {
+        completedAt = completedAtBitPattern.map(SyncConvergenceDateBits.date(from:))
     }
 }
 

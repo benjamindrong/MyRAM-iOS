@@ -1,84 +1,118 @@
 import Foundation
 
 enum SyncConvergenceKey {
-    private static let version = "v1"
+    private static let version = "v2"
 
     static func snapshot(noteID: UUID, contentHash: String) -> String {
-        join("snapshot", noteID.uuidString.lowercased(), contentHash)
+        join(.namespace("snapshot"), .uuid(noteID), .string(contentHash))
     }
 
     static func retainedOperation(batchID: UUID, operationIndex: Int) -> String {
-        join("operation", batchID.uuidString.lowercased(), String(operationIndex))
+        join(.namespace("operation"), .uuid(batchID), .int(operationIndex))
     }
 
     static func incorporatedBatch(batchID: UUID) -> String {
-        join("batch", batchID.uuidString.lowercased())
+        join(.namespace("batch"), .uuid(batchID))
     }
 
     static func incorporatedBatchTombstone(batchID: UUID) -> String {
-        join("batch-tombstone", batchID.uuidString.lowercased())
+        join(.namespace("batch-tombstone"), .uuid(batchID))
     }
 
     static func batchNoteEffect(batchID: UUID, noteID: UUID) -> String {
-        join("batch-note-effect", batchID.uuidString.lowercased(), noteID.uuidString.lowercased())
+        join(.namespace("batch-note-effect"), .uuid(batchID), .uuid(noteID))
     }
 
     static func batchOperationIdentity(batchID: UUID, operationIndex: Int) -> String {
-        join("batch-operation-identity", batchID.uuidString.lowercased(), String(operationIndex))
+        join(.namespace("batch-operation-identity"), .uuid(batchID), .int(operationIndex))
     }
 
     static func batchResultEvidence(batchID: UUID, noteID: UUID, kind: String) -> String {
-        join("batch-result-evidence", batchID.uuidString.lowercased(), noteID.uuidString.lowercased(), kind)
+        join(.namespace("batch-result-evidence"), .uuid(batchID), .uuid(noteID), .string(kind))
     }
 
     static func incorporationBlockingReference(batchID: UUID, blockingBatchID: UUID, noteID: UUID) -> String {
         join(
-            "incorporation-blocking-reference",
-            batchID.uuidString.lowercased(),
-            blockingBatchID.uuidString.lowercased(),
-            noteID.uuidString.lowercased()
+            .namespace("incorporation-blocking-reference"),
+            .uuid(batchID),
+            .uuid(blockingBatchID),
+            .uuid(noteID)
         )
     }
 
     static func incorporationContradiction(batchID: UUID, noteID: UUID?) -> String {
-        join("incorporation-contradiction", batchID.uuidString.lowercased(), noteID?.uuidString.lowercased() ?? "all")
+        join(.namespace("incorporation-contradiction"), .uuid(batchID), .optionalUUID(noteID))
     }
 
     static func titleWinner(noteID: UUID) -> String {
-        join("title-winner", noteID.uuidString.lowercased())
+        join(.namespace("title-winner"), .uuid(noteID))
     }
 
     static func compaction(noteID: UUID) -> String {
-        join("compaction", noteID.uuidString.lowercased())
+        join(.namespace("compaction"), .uuid(noteID))
     }
 
     static func diagnostic(noteID: UUID) -> String {
-        join("diagnostic", noteID.uuidString.lowercased())
+        join(.namespace("diagnostic"), .uuid(noteID))
     }
 
     static func diagnosticBlockingReference(noteID: UUID, blockingBatchID: UUID, affectedNoteID: UUID) -> String {
         join(
-            "diagnostic-blocking-reference",
-            noteID.uuidString.lowercased(),
-            blockingBatchID.uuidString.lowercased(),
-            affectedNoteID.uuidString.lowercased()
+            .namespace("diagnostic-blocking-reference"),
+            .uuid(noteID),
+            .uuid(blockingBatchID),
+            .uuid(affectedNoteID)
         )
     }
 
     static func episode(noteID: UUID, generation: Int) -> String {
-        join("episode", noteID.uuidString.lowercased(), String(generation))
+        join(.namespace("episode"), .uuid(noteID), .int(generation))
     }
 
     static func reconciliationCandidate(noteID: UUID, generation: Int, candidateIdentity: String) -> String {
-        join("reconciliation-candidate", noteID.uuidString.lowercased(), String(generation), candidateIdentity)
+        join(.namespace("reconciliation-candidate"), .uuid(noteID), .int(generation), .string(candidateIdentity))
     }
 
     static func reconciliationCompletionEvidence(noteID: UUID, generation: Int, kind: String) -> String {
-        join("reconciliation-completion", noteID.uuidString.lowercased(), String(generation), kind)
+        join(.namespace("reconciliation-completion"), .uuid(noteID), .int(generation), .string(kind))
     }
 
-    private static func join(_ parts: String...) -> String {
-        ([version] + parts).joined(separator: "|")
+    private static func join(_ components: Component...) -> String {
+        ([version] + components.map(\.encoded)).joined(separator: "|")
+    }
+
+    private enum Component {
+        case namespace(String)
+        case uuid(UUID)
+        case optionalUUID(UUID?)
+        case int(Int)
+        case string(String)
+
+        var encoded: String {
+            let type: String
+            let value: String
+            switch self {
+            case .namespace(let namespace):
+                type = "n"
+                value = namespace
+            case .uuid(let uuid):
+                type = "u"
+                value = uuid.uuidString.lowercased()
+            case .optionalUUID(.some(let uuid)):
+                type = "ou"
+                value = uuid.uuidString.lowercased()
+            case .optionalUUID(.none):
+                type = "on"
+                value = ""
+            case .int(let int):
+                type = "i"
+                value = String(int)
+            case .string(let string):
+                type = "s"
+                value = string
+            }
+            return "\(type):\(value.utf8.count):\(value)"
+        }
     }
 }
 
@@ -182,7 +216,12 @@ struct CanonicalReplayKeyPayload: Codable, Equatable, Comparable, Sendable {
     private var batchOrderSortKey: BatchOrderSortKey {
         switch batchOrderKind {
         case .legacy:
-            BatchOrderSortKey(kind: 0, legacyCreatedAt: legacyCreatedAtBitPattern, sequence: nil, batchID: batchIDLowercase)
+            BatchOrderSortKey(
+                kind: 0,
+                legacyCreatedAt: legacyCreatedAtBitPattern.map(SyncConvergenceDateBits.date(from:)),
+                sequence: nil,
+                batchID: batchIDLowercase
+            )
         case .sequenced:
             BatchOrderSortKey(kind: 1, legacyCreatedAt: nil, sequence: sequence, batchID: nil)
         }
@@ -190,14 +229,15 @@ struct CanonicalReplayKeyPayload: Codable, Equatable, Comparable, Sendable {
 
     private struct BatchOrderSortKey: Comparable {
         let kind: Int
-        let legacyCreatedAt: UInt64?
+        let legacyCreatedAt: Date?
         let sequence: UInt64?
         let batchID: String?
 
         static func < (lhs: BatchOrderSortKey, rhs: BatchOrderSortKey) -> Bool {
             if lhs.kind != rhs.kind { return lhs.kind < rhs.kind }
             if lhs.legacyCreatedAt != rhs.legacyCreatedAt {
-                return (lhs.legacyCreatedAt ?? 0) < (rhs.legacyCreatedAt ?? 0)
+                let fallback = Date(timeIntervalSinceReferenceDate: 0)
+                return (lhs.legacyCreatedAt ?? fallback) < (rhs.legacyCreatedAt ?? fallback)
             }
             if lhs.sequence != rhs.sequence {
                 return (lhs.sequence ?? 0) < (rhs.sequence ?? 0)
@@ -216,6 +256,206 @@ enum SyncConvergenceStableEncoding {
 
     static func decode<T: Decodable>(_ type: T.Type, from data: Data) throws -> T {
         try JSONDecoder().decode(type, from: data)
+    }
+}
+
+enum SyncConvergenceValidationError: Error, Equatable {
+    case malformedUUID(field: String, value: String)
+    case unsupportedEvidenceVersion(field: String, version: Int)
+    case unsupportedTombstoneFormat(version: Int)
+    case malformedDigest(field: String, value: String)
+    case committedAtOrderingDecodeFailed
+    case modelPayloadDisagreement(field: String)
+    case dateAuthorityMismatch(field: String)
+    case encodedPayloadExceedsLimit(actual: Int, limit: Int)
+}
+
+struct CommittedAtOrderingPayload: Codable, Equatable, Sendable {
+    static let supportedVersion = 1
+
+    let version: Int
+    let committedAtBitPattern: UInt64
+    let batchIDLowercase: String
+
+    enum CodingKeys: String, CodingKey {
+        case version = "v"
+        case committedAtBitPattern = "t"
+        case batchIDLowercase = "b"
+    }
+
+    init(version: Int = Self.supportedVersion, committedAtBitPattern: UInt64, batchIDLowercase: String) {
+        self.version = version
+        self.committedAtBitPattern = committedAtBitPattern
+        self.batchIDLowercase = batchIDLowercase
+    }
+
+    init(batchID: UUID, committedAt: Date) {
+        self.init(
+            committedAtBitPattern: SyncConvergenceDateBits.bitPattern(for: committedAt),
+            batchIDLowercase: batchID.uuidString.lowercased()
+        )
+    }
+
+    var committedAt: Date {
+        SyncConvergenceDateBits.date(from: committedAtBitPattern)
+    }
+
+    func encodedEvidenceData() throws -> Data {
+        try validate()
+        return try SyncConvergenceStableEncoding.encode(self)
+    }
+
+    static func decodeEvidenceData(_ data: Data) throws -> Self {
+        let payload: Self
+        do {
+            payload = try SyncConvergenceStableEncoding.decode(Self.self, from: data)
+        } catch {
+            throw SyncConvergenceValidationError.committedAtOrderingDecodeFailed
+        }
+        try payload.validate()
+        return payload
+    }
+
+    func validate() throws {
+        guard version == Self.supportedVersion else {
+            throw SyncConvergenceValidationError.unsupportedEvidenceVersion(field: "committedAtOrdering", version: version)
+        }
+        try SyncConvergenceContractValidation.validateCanonicalLowercaseUUID(
+            batchIDLowercase,
+            field: "batchIDLowercase"
+        )
+    }
+
+    func validate(against batch: IncorporatedSyncBatch) throws {
+        try validate()
+        guard batchIDLowercase == batch.batchID.uuidString.lowercased() else {
+            throw SyncConvergenceValidationError.modelPayloadDisagreement(field: "batchID")
+        }
+        guard committedAtBitPattern == batch.committedAtBitPattern else {
+            throw SyncConvergenceValidationError.modelPayloadDisagreement(field: "committedAtBitPattern")
+        }
+    }
+
+    func validate(against tombstone: IncorporatedBatchTombstone) throws {
+        try validate()
+        guard batchIDLowercase == tombstone.batchID.uuidString.lowercased() else {
+            throw SyncConvergenceValidationError.modelPayloadDisagreement(field: "batchID")
+        }
+    }
+}
+
+struct CanonicalIncorporatedBatchTombstonePayloadV1: Codable, Equatable, Sendable {
+    static let tombstoneFormatVersion = 1
+
+    let tombstoneFormatVersion: Int
+    let batchIDLowercase: String
+    let originDeviceIDLowercase: String
+    let canonicalPayloadDigest: String
+    let canonicalPayloadDigestFormatVersion: Int
+    let schemaVersion: Int
+    let committedResultDigest: String
+    let committedResultDigestFormatVersion: Int
+    let committedAtOrdering: CommittedAtOrderingPayload
+
+    enum CodingKeys: String, CodingKey {
+        case tombstoneFormatVersion = "v"
+        case batchIDLowercase = "b"
+        case originDeviceIDLowercase = "o"
+        case canonicalPayloadDigest = "d"
+        case canonicalPayloadDigestFormatVersion = "df"
+        case schemaVersion = "s"
+        case committedResultDigest = "r"
+        case committedResultDigestFormatVersion = "rf"
+        case committedAtOrdering = "c"
+    }
+
+    init(
+        tombstoneFormatVersion: Int = Self.tombstoneFormatVersion,
+        batchIDLowercase: String,
+        originDeviceIDLowercase: String,
+        canonicalPayloadDigest: String,
+        canonicalPayloadDigestFormatVersion: Int,
+        schemaVersion: Int,
+        committedResultDigest: String,
+        committedResultDigestFormatVersion: Int,
+        committedAtOrdering: CommittedAtOrderingPayload
+    ) {
+        self.tombstoneFormatVersion = tombstoneFormatVersion
+        self.batchIDLowercase = batchIDLowercase
+        self.originDeviceIDLowercase = originDeviceIDLowercase
+        self.canonicalPayloadDigest = canonicalPayloadDigest
+        self.canonicalPayloadDigestFormatVersion = canonicalPayloadDigestFormatVersion
+        self.schemaVersion = schemaVersion
+        self.committedResultDigest = committedResultDigest
+        self.committedResultDigestFormatVersion = committedResultDigestFormatVersion
+        self.committedAtOrdering = committedAtOrdering
+    }
+
+    func encodedEvidenceData() throws -> Data {
+        try validate()
+        return try SyncConvergenceStableEncoding.encode(self)
+    }
+
+    func validate() throws {
+        guard tombstoneFormatVersion == Self.tombstoneFormatVersion else {
+            throw SyncConvergenceValidationError.unsupportedTombstoneFormat(version: tombstoneFormatVersion)
+        }
+        try SyncConvergenceContractValidation.validateCanonicalLowercaseUUID(batchIDLowercase, field: "batchIDLowercase")
+        try SyncConvergenceContractValidation.validateCanonicalLowercaseUUID(
+            originDeviceIDLowercase,
+            field: "originDeviceIDLowercase"
+        )
+        try SyncConvergenceContractValidation.validateSHA256HexDigest(
+            canonicalPayloadDigest,
+            field: "canonicalPayloadDigest"
+        )
+        try SyncConvergenceContractValidation.validateSHA256HexDigest(
+            committedResultDigest,
+            field: "committedResultDigest"
+        )
+        try committedAtOrdering.validate()
+        guard committedAtOrdering.batchIDLowercase == batchIDLowercase else {
+            throw SyncConvergenceValidationError.modelPayloadDisagreement(field: "committedAtOrdering.batchID")
+        }
+    }
+}
+
+enum SyncConvergenceContractValidation {
+    static func validateCanonicalLowercaseUUID(_ value: String, field: String) throws {
+        guard let uuid = UUID(uuidString: value),
+              uuid.uuidString.lowercased() == value
+        else {
+            throw SyncConvergenceValidationError.malformedUUID(field: field, value: value)
+        }
+    }
+
+    static func validateSHA256HexDigest(_ value: String, field: String) throws {
+        guard value.count == 64,
+              value.allSatisfy({ character in
+                  ("0"..."9").contains(character) || ("a"..."f").contains(character)
+              })
+        else {
+            throw SyncConvergenceValidationError.malformedDigest(field: field, value: value)
+        }
+    }
+}
+
+enum SyncConvergenceDateAuthority {
+    static func validate(date: Date, bitPattern: UInt64, field: String) throws {
+        guard SyncConvergenceDateBits.bitPattern(for: date) == bitPattern else {
+            throw SyncConvergenceValidationError.dateAuthorityMismatch(field: field)
+        }
+    }
+
+    static func validate(date: Date?, bitPattern: UInt64?, field: String) throws {
+        switch (date, bitPattern) {
+        case (.none, .none):
+            return
+        case (.some(let date), .some(let bitPattern)):
+            try validate(date: date, bitPattern: bitPattern, field: field)
+        default:
+            throw SyncConvergenceValidationError.dateAuthorityMismatch(field: field)
+        }
     }
 }
 
