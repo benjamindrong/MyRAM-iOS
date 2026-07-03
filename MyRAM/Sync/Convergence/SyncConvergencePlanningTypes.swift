@@ -19,6 +19,9 @@ struct SyncConvergencePlanningInput: Equatable {
     let incorporatedTombstones: [SyncConvergenceIncorporatedBatchProjection]
     let historyStates: [SyncConvergenceHistoryAccountingProjection]
     let supportedDigestFormatVersions: Set<Int>
+    // nil means the candidate is a live newest arrival that follows every durable queue entry;
+    // a queued-drain caller must pass the candidate's durable queue position explicitly.
+    let candidateQueuePosition: Int?
 
     init(
         incomingBatch: SyncBatch,
@@ -31,7 +34,8 @@ struct SyncConvergencePlanningInput: Equatable {
         incorporatedBatches: [SyncConvergenceIncorporatedBatchProjection] = [],
         incorporatedTombstones: [SyncConvergenceIncorporatedBatchProjection] = [],
         historyStates: [SyncConvergenceHistoryAccountingProjection] = [],
-        supportedDigestFormatVersions: Set<Int> = [SyncConvergenceCanonicalBatchDigest.supportedFormatVersion]
+        supportedDigestFormatVersions: Set<Int> = [SyncConvergenceCanonicalBatchDigest.supportedFormatVersion],
+        candidateQueuePosition: Int? = nil
     ) {
         self.incomingBatch = incomingBatch
         self.currentNotes = currentNotes
@@ -44,6 +48,7 @@ struct SyncConvergencePlanningInput: Equatable {
         self.incorporatedTombstones = incorporatedTombstones
         self.historyStates = historyStates
         self.supportedDigestFormatVersions = supportedDigestFormatVersions
+        self.candidateQueuePosition = candidateQueuePosition
     }
 }
 

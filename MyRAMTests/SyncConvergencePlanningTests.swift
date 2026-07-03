@@ -1139,6 +1139,872 @@ final class SyncConvergencePlanningTests: XCTestCase {
         XCTAssertEqual(outcome, .deferred(.historyPressure(noteID: noteID, blockingBatchID: nil)))
     }
 
+    func testEarlierMultiNoteEvidenceBatchBlocksItsOtherNotes() {
+        let noteA = uuid("00000000-0000-0000-0000-000000132731")
+        let noteB = uuid("00000000-0000-0000-0000-000000132732")
+        let candidate = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132831"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132832"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteA, utf16Offset: 0, text: "c", modifiedAt: date(4), baseContentHash: nil
+                ))
+            ]
+        )
+        let evidence = SyncConvergenceQueuedBatch(
+            batch: SyncBatch(
+                id: uuid("00000000-0000-0000-0000-000000132833"),
+                originDeviceID: uuid("00000000-0000-0000-0000-000000132834"),
+                createdAt: date(1),
+                changes: [
+                    .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteA, utf16Offset: 0, text: "a", modifiedAt: date(2), baseContentHash: nil
+                    )),
+                    .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteB, utf16Offset: 0, text: "b", modifiedAt: date(2), baseContentHash: nil
+                    ))
+                ]
+            ),
+            queuePosition: 0
+        )
+        let later = SyncConvergenceQueuedBatch(
+            batch: SyncBatch(
+                id: uuid("00000000-0000-0000-0000-000000132835"),
+                originDeviceID: uuid("00000000-0000-0000-0000-000000132836"),
+                createdAt: date(1),
+                changes: [
+                    .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteB, utf16Offset: 1, text: "z", modifiedAt: date(3), baseContentHash: nil
+                    ))
+                ]
+            ),
+            queuePosition: 1
+        )
+
+        let selection = SyncConvergenceEvidenceSelector().selectQueuedBatches(
+            for: candidate,
+            queuedBatches: [later, evidence]
+        )
+
+        XCTAssertEqual(selection.eligibleEvidenceBatches.map(\.batch.id), [evidence.batch.id])
+        XCTAssertTrue(selection.blockedNoteIDs.contains(noteB))
+        XCTAssertEqual(selection.blockedBatches.map(\.batch.id), [later.batch.id])
+        XCTAssertTrue(selection.eligibleDisjointBatches.isEmpty)
+    }
+
+    func testExplicitCandidateQueuePositionLimitsEvidenceToEarlierBatches() {
+        let noteID = uuid("00000000-0000-0000-0000-000000132733")
+        let candidate = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132837"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132838"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID, utf16Offset: 0, text: "c", modifiedAt: date(4), baseContentHash: nil
+                ))
+            ]
+        )
+        func sameNoteQueued(_ suffix: String, position: Int) -> SyncConvergenceQueuedBatch {
+            SyncConvergenceQueuedBatch(
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-00000013283\(suffix)"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132840"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                            noteID: noteID, utf16Offset: 0, text: "q", modifiedAt: date(2), baseContentHash: nil
+                        ))
+                    ]
+                ),
+                queuePosition: position
+            )
+        }
+        let earlier = sameNoteQueued("9", position: 0)
+        let laterSuccessor = sameNoteQueued("A", position: 2)
+
+        let selection = SyncConvergenceEvidenceSelector().selectQueuedBatches(
+            for: candidate,
+            queuedBatches: [earlier, laterSuccessor],
+            candidateQueuePosition: 1
+        )
+
+        XCTAssertEqual(selection.candidateBatch.queuePosition, 1)
+        XCTAssertEqual(selection.eligibleEvidenceBatches.map(\.batch.id), [earlier.batch.id])
+        XCTAssertEqual(selection.blockedBatches.map(\.batch.id), [laterSuccessor.batch.id])
+    }
+
+    func testRetainedIdentityIdempotencyPreventsDoubleApplication() {
+        let noteID = uuid("00000000-0000-0000-0000-000000132734")
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132841"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132842"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID, utf16Offset: 0, text: "x", modifiedAt: date(2), baseContentHash: nil
+                ))
+            ]
+        )
+        let alreadyRetained = SyncConvergenceRetainedOperation(
+            noteID: noteID,
+            batchID: incoming.id,
+            originDeviceID: incoming.originDeviceID,
+            operationIndex: 0,
+            operationKind: .insert,
+            utf16Offset: 0,
+            utf16Length: nil,
+            text: "x",
+            expectedText: nil,
+            baseContentHash: nil,
+            resultContentHash: SyncBatchContentHash.sha256Hex(for: "xAB"),
+            canonicalReplayKey: CanonicalReplayKeyPayload(
+                replayKey: SyncBatchReplayKey(batch: incoming, change: incoming.changes[0], operationIndex: 0)
+            )
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: "xAB")],
+            retainedRemoteOperations: [alreadyRetained]
+        ))
+
+        guard case .planned(let plan) = outcome,
+              case .matchingBaseIncremental(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected idempotent planned outcome, got \(outcome)")
+        }
+        XCTAssertEqual(bodyPlan.finalBody, "xAB")
+        XCTAssertTrue(bodyPlan.operations.isEmpty)
+        XCTAssertTrue(plan.historyPlan.retainedOperationAdditions.isEmpty)
+        XCTAssertEqual(plan.incorporationEvidence.operationIdentities.count, 1)
+    }
+
+    func testRetainedIdentityContradictionFailsClosed() {
+        let noteID = uuid("00000000-0000-0000-0000-000000132735")
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132843"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132844"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID, utf16Offset: 0, text: "x", modifiedAt: date(2), baseContentHash: nil
+                ))
+            ]
+        )
+        let contradictoryRetained = SyncConvergenceRetainedOperation(
+            noteID: noteID,
+            batchID: incoming.id,
+            originDeviceID: incoming.originDeviceID,
+            operationIndex: 0,
+            operationKind: .insert,
+            utf16Offset: 0,
+            utf16Length: nil,
+            text: "DIFFERENT",
+            expectedText: nil,
+            baseContentHash: nil,
+            resultContentHash: nil,
+            canonicalReplayKey: CanonicalReplayKeyPayload(
+                replayKey: SyncBatchReplayKey(batch: incoming, change: incoming.changes[0], operationIndex: 0)
+            )
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: "AB")],
+            retainedRemoteOperations: [contradictoryRetained]
+        ))
+
+        XCTAssertEqual(outcome, .failedBeforeCommit(.inconsistentIncorporationState(noteID: noteID)))
+    }
+
+    func testUnrelatedNilBaseRetainedBranchDoesNotBlockValidReconstruction() {
+        let noteID = uuid("00000000-0000-0000-0000-000000132736")
+        let snapshotBody = "A"
+        let targetBody = "AB"
+        let targetHash = SyncBatchContentHash.sha256Hex(for: targetBody)
+        let unrelatedBranch = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000132845"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132846"),
+            operationIndex: 0,
+            offset: 0,
+            text: "Q",
+            modifiedAt: date(2),
+            baseBody: "unrelated-base",
+            resultBody: "ZZ"
+        ).withoutBaseHash()
+        let validStep = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000132847"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132848"),
+            operationIndex: 0,
+            offset: 1,
+            text: "B",
+            modifiedAt: date(3),
+            baseBody: snapshotBody,
+            resultBody: targetBody
+        ).withoutBaseHash()
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132849"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132850"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID, utf16Offset: 2, text: "C", modifiedAt: date(4), baseContentHash: targetHash
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: "AX")],
+            retainedSnapshots: [
+                SyncConvergenceRetainedSnapshot(
+                    noteID: noteID,
+                    contentHash: SyncBatchContentHash.sha256Hex(for: snapshotBody),
+                    body: snapshotBody,
+                    generation: 1
+                )
+            ],
+            retainedRemoteOperations: [unrelatedBranch, validStep]
+        ))
+
+        guard case .planned(let plan) = outcome,
+              case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected unrelated nil-base branch to be skipped, got \(outcome)")
+        }
+        XCTAssertEqual(bodyPlan.reconstructedBaseHash, targetHash)
+    }
+
+    func testNilBaseRetainedOperationWithoutEvidenceIsNeverGuessedIntoChain() {
+        let noteID = uuid("00000000-0000-0000-0000-000000132737")
+        let snapshotBody = "A"
+        let targetHash = SyncBatchContentHash.sha256Hex(for: "AB")
+        let unverifiable = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000132851"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132852"),
+            operationIndex: 0,
+            offset: 1,
+            text: "B",
+            modifiedAt: date(2),
+            baseBody: snapshotBody,
+            resultBody: "AB"
+        ).withoutBaseHash().withoutResultHash()
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132853"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132854"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID, utf16Offset: 2, text: "C", modifiedAt: date(3), baseContentHash: targetHash
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: "AX")],
+            retainedSnapshots: [
+                SyncConvergenceRetainedSnapshot(
+                    noteID: noteID,
+                    contentHash: SyncBatchContentHash.sha256Hex(for: snapshotBody),
+                    body: snapshotBody,
+                    generation: 1
+                )
+            ],
+            retainedRemoteOperations: [unverifiable]
+        ))
+
+        XCTAssertEqual(outcome, .deferred(.unreconstructableBase(
+            noteID: noteID,
+            batchID: incoming.id,
+            baseContentHash: targetHash
+        )))
+    }
+
+    func testUnencodablePlannedOperationAccountingFailsClosed() {
+        let noteID = uuid("00000000-0000-0000-0000-000000132738")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132855"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132856"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID, utf16Offset: 0, text: "x", modifiedAt: date(2), baseContentHash: nil
+                ))
+            ]
+        )
+        let identity = OperationIdentityPayload(
+            batchID: batch.id,
+            originDeviceID: batch.originDeviceID,
+            operationIndex: 0,
+            operationKind: "insert",
+            canonicalReplayKey: CanonicalReplayKeyPayload(
+                replayKey: SyncBatchReplayKey(batch: batch, change: batch.changes[0], operationIndex: 0)
+            )
+        )
+        let unencodable = SyncConvergencePlannedBodyOperation(
+            noteID: noteID,
+            kind: .insert,
+            utf16Offset: -1,
+            utf16Length: nil,
+            text: "x",
+            expectedText: nil,
+            baseContentHash: nil,
+            resultContentHash: "hash",
+            operationIdentity: identity
+        )
+
+        XCTAssertThrowsError(try unencodable.canonicalEncodedByteCount())
+    }
+
+    func testValidatorRejectsMissingSourceOperationBlockedSuccessorRoutingAndHistoryMismatch() throws {
+        let fixture = try validatorFixture()
+        let validator = SyncConvergencePlanValidator()
+
+        XCTAssertNil(validator.validate(
+            fixture.plan,
+            input: fixture.input,
+            queueSelection: fixture.selection,
+            projectedFullIncorporationEvidenceBytes: fixture.projectedBytes
+        ))
+
+        // Missing source operation: drop the title identity while its note stays represented.
+        let droppedIdentities = fixture.plan.incorporationEvidence.operationIdentities.filter {
+            $0.operationKind != "title"
+        }
+        let missingSource = rebuiltPlan(
+            fixture.plan,
+            incorporationEvidence: SyncConvergenceIncorporationPlan(
+                operationIdentities: droppedIdentities,
+                resultEvidence: fixture.plan.incorporationEvidence.resultEvidence
+            )
+        )
+        XCTAssertEqual(
+            validator.validate(
+                missingSource,
+                input: fixture.input,
+                queueSelection: fixture.selection,
+                projectedFullIncorporationEvidenceBytes: try projectedBytes(for: missingSource, input: fixture.input)
+            ),
+            .failedBeforeCommit(.invalidMergePlan(noteID: nil))
+        )
+
+        // Blocked successor identity must never contribute evidence.
+        let blockedBatch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132857"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132858"),
+            createdAt: date(1),
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: fixture.bodyNoteID, title: "Blocked", modifiedAt: date(9)
+                ))
+            ]
+        )
+        let blockedIdentity = OperationIdentityPayload(
+            batchID: blockedBatch.id,
+            originDeviceID: blockedBatch.originDeviceID,
+            operationIndex: 0,
+            operationKind: "title",
+            canonicalReplayKey: CanonicalReplayKeyPayload(
+                replayKey: SyncBatchReplayKey(batch: blockedBatch, change: blockedBatch.changes[0], operationIndex: 0)
+            )
+        )
+        let blockedSelection = SyncConvergenceQueueSelection(
+            candidateBatch: fixture.selection.candidateBatch,
+            eligibleEvidenceBatches: [],
+            eligibleDisjointBatches: [],
+            blockedBatches: [SyncConvergenceQueuedBatch(batch: blockedBatch, queuePosition: 5)],
+            blockedNoteIDs: fixture.selection.blockedNoteIDs.union([fixture.bodyNoteID])
+        )
+        let withBlockedIdentity = rebuiltPlan(
+            fixture.plan,
+            incorporationEvidence: SyncConvergenceIncorporationPlan(
+                operationIdentities: fixture.plan.incorporationEvidence.operationIdentities + [blockedIdentity],
+                resultEvidence: fixture.plan.incorporationEvidence.resultEvidence
+            )
+        )
+        XCTAssertEqual(
+            validator.validate(
+                withBlockedIdentity,
+                input: fixture.input,
+                queueSelection: blockedSelection,
+                projectedFullIncorporationEvidenceBytes: try projectedBytes(for: withBlockedIdentity, input: fixture.input)
+            ),
+            .failedBeforeCommit(.invalidMergePlan(noteID: nil))
+        )
+
+        // Presentation routing must agree with the body effect.
+        let routingMismatch = rebuiltPlan(
+            fixture.plan,
+            presentationPlan: SyncConvergencePresentationPlan(
+                noteRoutings: [fixture.bodyNoteID: .wholeNoteFallback]
+            )
+        )
+        XCTAssertEqual(
+            validator.validate(
+                routingMismatch,
+                input: fixture.input,
+                queueSelection: fixture.selection,
+                projectedFullIncorporationEvidenceBytes: fixture.projectedBytes
+            ),
+            .failedBeforeCommit(.invalidMergePlan(noteID: fixture.bodyNoteID))
+        )
+
+        // History additions must match the body effects exactly.
+        let historyMismatch = rebuiltPlan(
+            fixture.plan,
+            historyPlan: SyncConvergenceHistoryPlan(
+                retainedOperationAdditions: [],
+                snapshotAdditions: fixture.plan.historyPlan.snapshotAdditions,
+                pressureNotes: fixture.plan.historyPlan.pressureNotes
+            )
+        )
+        XCTAssertEqual(
+            validator.validate(
+                historyMismatch,
+                input: fixture.input,
+                queueSelection: fixture.selection,
+                projectedFullIncorporationEvidenceBytes: fixture.projectedBytes
+            ),
+            .failedBeforeCommit(.invalidMergePlan(noteID: nil))
+        )
+    }
+
+    func testCanonicalPayloadDigestV1GoldenVectorMatrix() throws {
+        // Expected constants generated by an independent re-implementation of the
+        // V1 contract, cross-validated against the previously frozen 173-byte fixture.
+        struct GoldenFixture {
+            let name: String
+            let batch: SyncBatch
+            let byteCount: Int
+            let canonicalHex: String
+            let digest: String
+        }
+        let fixtures: [GoldenFixture] = [
+            GoldenFixture(
+                name: "emptyBatch",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132801"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132802"),
+                    createdAt: date(1),
+                    changes: []
+                ),
+                byteCount: 57,
+                canonicalHex: "4d5952310000000100000000000000000000000000132801000000000000000000000000001328023ff0000000000000000000000000000000",
+                digest: "f5e1ccd768c594fd6eea109001cdc140c9b638820f6337592021b2fc282a9a1a"
+            ),
+            GoldenFixture(
+                name: "titleOnly",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132803"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132804"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132701"), title: "Title", modifiedAt: date(2)
+                        ))
+                    ]
+                ),
+                byteCount: 106,
+                canonicalHex: "4d5952310000000100000000000000000000000000132803000000000000000000000000001328043ff00000000000000000000000000000010000000000000000000000020000000000000000000000000013270100000000000000055469746c654000000000000000",
+                digest: "cf4e57b708b96c7e12bf59074126981f65e73d01b9edd06df12c0d3e0b45e7a3"
+            ),
+            GoldenFixture(
+                name: "creationWithoutFolder",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132805"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132806"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteCreated(SyncBatchNoteCreatedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132702"),
+                            title: "New",
+                            body: "Body",
+                            folderID: nil,
+                            createdAt: date(2),
+                            modifiedAt: date(3)
+                        ))
+                    ]
+                ),
+                byteCount: 125,
+                canonicalHex: "4d5952310000000100000000000000000000000000132805000000000000000000000000001328063ff00000000000000000000000000000010000000000000000000000010000000000000000000000000013270200000000000000034e65770000000000000004426f64790040000000000000004008000000000000",
+                digest: "fe0b720b310ba0aa0c64b3e8af5680f89252d23917ae63aa304c7334973f1ff3"
+            ),
+            GoldenFixture(
+                name: "creationWithFolder",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132807"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132808"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteCreated(SyncBatchNoteCreatedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132702"),
+                            title: "New",
+                            body: "Body",
+                            folderID: uuid("00000000-0000-0000-0000-000000132703"),
+                            createdAt: date(2),
+                            modifiedAt: date(3)
+                        ))
+                    ]
+                ),
+                byteCount: 141,
+                canonicalHex: "4d5952310000000100000000000000000000000000132807000000000000000000000000001328083ff00000000000000000000000000000010000000000000000000000010000000000000000000000000013270200000000000000034e65770000000000000004426f6479010000000000000000000000000013270340000000000000004008000000000000",
+                digest: "131014e2e4d11f20d284c9a7d749288b6827e7f7ed662e721aada10c992691ae"
+            ),
+            GoldenFixture(
+                name: "legacyInsertNilBase",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132809"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132810"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132704"),
+                            utf16Offset: 2,
+                            text: "x",
+                            modifiedAt: date(2),
+                            baseContentHash: nil
+                        ))
+                    ]
+                ),
+                byteCount: 111,
+                canonicalHex: "4d5952310000000100000000000000000000000000132809000000000000000000000000001328103ff0000000000000000000000000000001000000000000000000000003000000000000000000000000001327040000000000000002000000000000000178004000000000000000",
+                digest: "2d4463ee6e6957024fa0bff84baa45ed717c191660218a32a67bcdeef2033ec7"
+            ),
+            GoldenFixture(
+                name: "insertWithBaseHash",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132811"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132812"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132704"),
+                            utf16Offset: 2,
+                            text: "x",
+                            modifiedAt: date(2),
+                            baseContentHash: SyncBatchContentHash.sha256Hex(for: "BASE")
+                        ))
+                    ]
+                ),
+                byteCount: 183,
+                canonicalHex: "4d5952310000000100000000000000000000000000132811000000000000000000000000001328123ff0000000000000000000000000000001000000000000000000000003000000000000000000000000001327040000000000000002000000000000000178010000000000000040636266333661393634626138633038393466636339656334393162346431646439346432323161376463383833303865396336623839323434356138353734624000000000000000",
+                digest: "e8b82a2f263f67d00c23aec9e791f4bd2f7d48ed3a4e99c5959f67e110dd8817"
+            ),
+            GoldenFixture(
+                name: "deleteExpectedTextAbsent",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132813"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132814"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132705"),
+                            utf16Offset: 1,
+                            utf16Length: 2,
+                            expectedText: nil,
+                            modifiedAt: date(2),
+                            baseContentHash: nil
+                        ))
+                    ]
+                ),
+                byteCount: 111,
+                canonicalHex: "4d5952310000000100000000000000000000000000132813000000000000000000000000001328143ff0000000000000000000000000000001000000000000000000000004000000000000000000000000001327050000000000000001000000000000000200004000000000000000",
+                digest: "ef1ba79e1210e16893492c6a476c9842d8133ed4b37e7aca2c6e40e1cfb2469b"
+            ),
+            GoldenFixture(
+                name: "deleteExpectedTextPresent",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132815"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132816"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132705"),
+                            utf16Offset: 1,
+                            utf16Length: 2,
+                            expectedText: "ab",
+                            modifiedAt: date(2),
+                            baseContentHash: SyncBatchContentHash.sha256Hex(for: "BASE")
+                        ))
+                    ]
+                ),
+                byteCount: 193,
+                canonicalHex: "4d5952310000000100000000000000000000000000132815000000000000000000000000001328163ff000000000000000000000000000000100000000000000000000000400000000000000000000000000132705000000000000000100000000000000020100000000000000026162010000000000000040636266333661393634626138633038393466636339656334393162346431646439346432323161376463383833303865396336623839323434356138353734624000000000000000",
+                digest: "b374e81988355b2a53f47d27ae4b81004406eced7faeba69d89df27daabe8a7d"
+            ),
+            GoldenFixture(
+                name: "reconciliationPayload",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132817"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132818"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteBodyReconciled(SyncBatchNoteBodyReconciledChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132706"),
+                            replacementBody: "Merged",
+                            replacementContentHash: SyncBatchContentHash.sha256Hex(for: "Merged"),
+                            modifiedAt: date(2)
+                        ))
+                    ]
+                ),
+                byteCount: 179,
+                canonicalHex: "4d5952310000000100000000000000000000000000132817000000000000000000000000001328183ff00000000000000000000000000000010000000000000000000000050000000000000000000000000013270600000000000000064d65726765640000000000000040626430613036323032633434306139656538366635303136356161363638383632353964383963336432313965326566343761373539636465366133386330304000000000000000",
+                digest: "8320bb97cba52c1bf389597d9dd0855dc7c6d6c0633f1517477622d6a40b6a32"
+            ),
+            GoldenFixture(
+                name: "sequencedBatch",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132819"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132820"),
+                    createdAt: date(1),
+                    batchSequence: 7,
+                    changes: [
+                        .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132707"),
+                            utf16Offset: 0,
+                            text: "s",
+                            modifiedAt: date(2),
+                            baseContentHash: nil
+                        ))
+                    ]
+                ),
+                byteCount: 119,
+                canonicalHex: "4d5952310000000100000000000000000000000000132819000000000000000000000000001328203ff00000000000000100000000000000070000000000000001000000000000000000000003000000000000000000000000001327070000000000000000000000000000000173004000000000000000",
+                digest: "ed609684172cb0550a6691298bb09baf035e2fd24eeb7e1ec97baf961b099f86"
+            ),
+            GoldenFixture(
+                name: "legacyOrderedBatch",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132819"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132820"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132707"),
+                            utf16Offset: 0,
+                            text: "s",
+                            modifiedAt: date(2),
+                            baseContentHash: nil
+                        ))
+                    ]
+                ),
+                byteCount: 111,
+                canonicalHex: "4d5952310000000100000000000000000000000000132819000000000000000000000000001328203ff0000000000000000000000000000001000000000000000000000003000000000000000000000000001327070000000000000000000000000000000173004000000000000000",
+                digest: "788fc13606a867a1ca30c916259dedca3f18db54421477432dd9eedfa862d36e"
+            ),
+            GoldenFixture(
+                name: "multiNoteGlobalIndexes",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132821"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132822"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132708"),
+                            utf16Offset: 0,
+                            text: "a",
+                            modifiedAt: date(2),
+                            baseContentHash: nil
+                        )),
+                        .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132709"),
+                            title: "Other",
+                            modifiedAt: date(3)
+                        )),
+                        .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132708"),
+                            utf16Offset: 1,
+                            text: "b",
+                            modifiedAt: date(4),
+                            baseContentHash: nil
+                        ))
+                    ]
+                ),
+                byteCount: 214,
+                canonicalHex: "4d5952310000000100000000000000000000000000132821000000000000000000000000001328223ff00000000000000000000000000000030000000000000000000000030000000000000000000000000013270800000000000000000000000000000001610040000000000000000000000000000001000000020000000000000000000000000013270900000000000000054f746865724008000000000000000000000000000200000003000000000000000000000000001327080000000000000001000000000000000162004010000000000000",
+                digest: "50bb3d2f27774597bde7f805c30fa35e4cc6b1a116a2062c528ff6ac6be70a37"
+            ),
+            GoldenFixture(
+                name: "optionalNilBase",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132823"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132824"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132710"),
+                            utf16Offset: 0,
+                            text: "q",
+                            modifiedAt: date(2),
+                            baseContentHash: nil
+                        ))
+                    ]
+                ),
+                byteCount: 111,
+                canonicalHex: "4d5952310000000100000000000000000000000000132823000000000000000000000000001328243ff0000000000000000000000000000001000000000000000000000003000000000000000000000000001327100000000000000000000000000000000171004000000000000000",
+                digest: "2e3c607580ef87f6e323c7c7c87fc09f0e8f1b9e38da312af96e8b1dfd6dc174"
+            ),
+            GoldenFixture(
+                name: "optionalEmptyStringBase",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132823"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132824"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132710"),
+                            utf16Offset: 0,
+                            text: "q",
+                            modifiedAt: date(2),
+                            baseContentHash: ""
+                        ))
+                    ]
+                ),
+                byteCount: 119,
+                canonicalHex: "4d5952310000000100000000000000000000000000132823000000000000000000000000001328243ff00000000000000000000000000000010000000000000000000000030000000000000000000000000013271000000000000000000000000000000001710100000000000000004000000000000000",
+                digest: "3d242d531872214b659f441805903d47fc112e337acb12a0932e1c672d2cbc5d"
+            ),
+            GoldenFixture(
+                name: "dateBitPattern",
+                batch: SyncBatch(
+                    id: uuid("00000000-0000-0000-0000-000000132825"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000132826"),
+                    createdAt: date(0.5),
+                    changes: [
+                        .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                            noteID: uuid("00000000-0000-0000-0000-000000132711"),
+                            utf16Offset: 0,
+                            text: "d",
+                            modifiedAt: date(-1.5),
+                            baseContentHash: nil
+                        ))
+                    ]
+                ),
+                byteCount: 111,
+                canonicalHex: "4d5952310000000100000000000000000000000000132825000000000000000000000000001328263fe000000000000000000000000000000100000000000000000000000300000000000000000000000000132711000000000000000000000000000000016400bff8000000000000",
+                digest: "3608b6940070be428d8c750e908534b9d19ed8ae3d8bca814574a10b51fcb095"
+            ),
+            GoldenFixture(
+                name: "uuidByteOrder",
+                batch: SyncBatch(
+                    id: uuid("01234567-89AB-CDEF-0123-456789ABCDEF"),
+                    originDeviceID: uuid("FEDCBA98-7654-3210-FEDC-BA9876543210"),
+                    createdAt: date(1),
+                    changes: [
+                        .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                            noteID: uuid("0F1E2D3C-4B5A-6978-8796-A5B4C3D2E1F0"),
+                            title: "U",
+                            modifiedAt: date(2)
+                        ))
+                    ]
+                ),
+                byteCount: 102,
+                canonicalHex: "4d595231000000010123456789abcdef0123456789abcdeffedcba9876543210fedcba98765432103ff00000000000000000000000000000010000000000000000000000020f1e2d3c4b5a69788796a5b4c3d2e1f00000000000000001554000000000000000",
+                digest: "6f2d670b825ad129c6dbb6cf1aaa3551775599e2900b476c80142b4e6104fa1d"
+            )
+        ]
+
+        for fixture in fixtures {
+            let bytes = try SyncConvergenceCanonicalBatchDigest.canonicalBytes(for: fixture.batch)
+            XCTAssertEqual(bytes.count, fixture.byteCount, fixture.name)
+            XCTAssertEqual(bytes.hexString, fixture.canonicalHex, fixture.name)
+            XCTAssertEqual(
+                try SyncConvergenceCanonicalBatchDigest.digest(for: fixture.batch),
+                fixture.digest,
+                fixture.name
+            )
+        }
+
+        let byName = Dictionary(uniqueKeysWithValues: fixtures.map { ($0.name, $0.digest) })
+        XCTAssertNotEqual(byName["optionalNilBase"], byName["optionalEmptyStringBase"])
+        XCTAssertNotEqual(byName["sequencedBatch"], byName["legacyOrderedBatch"])
+    }
+
+    private struct ValidatorFixture {
+        let plan: SyncConvergenceBatchPlan
+        let input: SyncConvergencePlanningInput
+        let selection: SyncConvergenceQueueSelection
+        let projectedBytes: Int
+        let bodyNoteID: UUID
+    }
+
+    private func validatorFixture() throws -> ValidatorFixture {
+        let bodyNoteID = uuid("00000000-0000-0000-0000-000000132739")
+        let titleNoteID = uuid("00000000-0000-0000-0000-000000132740")
+        let body = "AB"
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132859"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132860"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: bodyNoteID,
+                    utf16Offset: 2,
+                    text: "C",
+                    modifiedAt: date(2),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: body)
+                )),
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: titleNoteID,
+                    title: "Renamed",
+                    modifiedAt: date(3)
+                ))
+            ]
+        )
+        let input = SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [
+                projectedNote(noteID: bodyNoteID, body: body),
+                projectedNote(noteID: titleNoteID, body: "Other")
+            ]
+        )
+        guard case .planned(let plan) = SyncConvergencePlanner().plan(input: input) else {
+            throw XCTSkip("validator fixture planning failed")
+        }
+        let selection = SyncConvergenceEvidenceSelector().selectQueuedBatches(
+            for: incoming,
+            queuedBatches: [],
+            candidateQueuePosition: nil
+        )
+        return ValidatorFixture(
+            plan: plan,
+            input: input,
+            selection: selection,
+            projectedBytes: try projectedBytes(for: plan, input: input),
+            bodyNoteID: bodyNoteID
+        )
+    }
+
+    private func projectedBytes(for plan: SyncConvergenceBatchPlan, input: SyncConvergencePlanningInput) throws -> Int {
+        try SyncConvergenceProjectedIncorporationEvidence(
+            batch: input.incomingBatch,
+            affectedNoteIDs: Set(plan.affectedNotePlans.map(\.noteID)),
+            operationIdentities: plan.incorporationEvidence.operationIdentities,
+            resultEvidence: plan.incorporationEvidence.resultEvidence
+        ).canonicalEncodedByteCount()
+    }
+
+    private func rebuiltPlan(
+        _ plan: SyncConvergenceBatchPlan,
+        incorporationEvidence: SyncConvergenceIncorporationPlan? = nil,
+        historyPlan: SyncConvergenceHistoryPlan? = nil,
+        presentationPlan: SyncConvergencePresentationPlan? = nil
+    ) -> SyncConvergenceBatchPlan {
+        SyncConvergenceBatchPlan(
+            batchID: plan.batchID,
+            originDeviceID: plan.originDeviceID,
+            canonicalPayloadDigest: plan.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: plan.canonicalPayloadDigestFormatVersion,
+            affectedNotePlans: plan.affectedNotePlans,
+            incorporationEvidence: incorporationEvidence ?? plan.incorporationEvidence,
+            historyPlan: historyPlan ?? plan.historyPlan,
+            presentationPlan: presentationPlan ?? plan.presentationPlan
+        )
+    }
+
     private func makeTitleBatch(
         noteID: UUID = uuid("00000000-0000-0000-0000-000000132200"),
         title: String,
@@ -1313,6 +2179,23 @@ private extension SyncConvergenceRetainedOperation {
             expectedText: expectedText,
             baseContentHash: nil,
             resultContentHash: resultContentHash,
+            canonicalReplayKey: canonicalReplayKey
+        )
+    }
+
+    func withoutResultHash() -> SyncConvergenceRetainedOperation {
+        SyncConvergenceRetainedOperation(
+            noteID: noteID,
+            batchID: batchID,
+            originDeviceID: originDeviceID,
+            operationIndex: operationIndex,
+            operationKind: operationKind,
+            utf16Offset: utf16Offset,
+            utf16Length: utf16Length,
+            text: text,
+            expectedText: expectedText,
+            baseContentHash: baseContentHash,
+            resultContentHash: nil,
             canonicalReplayKey: canonicalReplayKey
         )
     }
