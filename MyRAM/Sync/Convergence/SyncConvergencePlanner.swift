@@ -1326,16 +1326,13 @@ private struct SyncBaseReconstructor {
         let replayEngine = SyncOperationReplayEngine()
         let candidates = noteSnapshots.sorted { $0.generation > $1.generation }
         for snapshot in candidates {
-            var deadEnds: Set<String> = []
             switch searchChain(
-                body: snapshot.body,
-                generation: snapshot.generation,
-                consumed: [],
+                snapshotBody: snapshot.body,
+                snapshotGeneration: snapshot.generation,
                 chain: chain,
                 requiredBaseHash: requiredBaseHash,
                 noteID: noteID,
-                replayEngine: replayEngine,
-                deadEnds: &deadEnds
+                replayEngine: replayEngine
             ) {
             case .found(let base):
                 return .reconstructed(base)
@@ -1354,116 +1351,133 @@ private struct SyncBaseReconstructor {
         case notFound
     }
 
-    // Deterministic backtracking forward-chain search over the bounded retained set.
-    // Branch candidates are tried in canonical order; a branch that verifiably extends
-    // the current body but fails to establish the requested target is abandoned and
-    // the next branch is tried, so an unrelated valid extension can never hide a
-    // later valid path. Corruption remains fail-closed only for operations that claim
-    // the current position and contradict their own declared evidence.
+    // Bounded, target-directed, iterative reconstruction search.
+    //
+    // States are distinct reconstructed body hashes, each expanded at most once with
+    // a deterministic predecessor, so duplicate-result operations and insert/delete
+    // cycles can never re-explore a body. Because any successor that repeats an
+    // already-visited body hash is pruned, no operation can usefully apply twice on
+    // any explored path, which removes per-path consumed-set state entirely. Total
+    // work is polynomial: at most `maxExpandedStates` expansions, each against the
+    // base-hash-indexed claiming operations for the current body plus the nil-base
+    // candidate list. Exceeding the cap returns .notFound, which defers the batch as
+    // unreconstructable — the fail-safe outcome; the search never guesses.
+    private static let maxExpandedStates = 4_096
+
     private func searchChain(
-        body: String,
-        generation: Int,
-        consumed: Set<String>,
+        snapshotBody: String,
+        snapshotGeneration: Int,
         chain: [SyncConvergenceRetainedOperation],
         requiredBaseHash: String,
         noteID: UUID,
-        replayEngine: SyncOperationReplayEngine,
-        deadEnds: inout Set<String>
+        replayEngine: SyncOperationReplayEngine
     ) -> ChainSearchResult {
-        let currentHash = SyncBatchContentHash.sha256Hex(for: body)
-        if currentHash == requiredBaseHash, !consumed.isEmpty {
-            return .found(ReconstructedBase(
-                body: body,
-                contentHash: requiredBaseHash,
-                generation: generation,
-                consumedOperationIdentityKeys: consumed
-            ))
+        struct SearchState {
+            let body: String
+            let bodyHash: String
+            let generation: Int
+            let parentIndex: Int?
+            let consumedKey: String?
         }
-        let stateKey = currentHash + "|" + consumed.sorted().joined(separator: ",")
-        guard !deadEnds.contains(stateKey) else {
-            return .notFound
-        }
+
+        var claimingByBaseHash: [String: [SyncConvergenceRetainedOperation]] = [:]
+        var nilBaseCandidates: [SyncConvergenceRetainedOperation] = []
         for retained in chain {
-            guard !consumed.contains(retained.identityKey) else {
-                continue
-            }
-            let claimsCurrentPosition: Bool
-            if let baseContentHash = retained.baseContentHash {
-                guard baseContentHash == currentHash else {
-                    continue
-                }
-                claimsCurrentPosition = true
+            if let base = retained.baseContentHash {
+                claimingByBaseHash[base, default: []].append(retained)
             } else if retained.resultContentHash != nil {
-                // A nil-base legacy step makes no claim about this position; it joins
-                // the chain only when strict replay proves its declared result.
-                claimsCurrentPosition = false
-            } else {
-                // Neither base nor result evidence: never guessed into a chain.
-                continue
+                // A nil-base legacy step makes no claim about position; it joins the
+                // chain only when strict replay proves its declared result.
+                nilBaseCandidates.append(retained)
             }
-            let identity = OperationIdentityPayload(
-                batchID: retained.batchID,
-                originDeviceID: retained.originDeviceID,
-                operationIndex: retained.operationIndex,
-                operationKind: retained.operationKind.rawValue,
-                canonicalReplayKey: retained.canonicalReplayKey
-            )
-            switch replayEngine.planDeclaredChainStep(
-                retained.syncBatchChange,
-                identity: identity,
-                current: SyncConvergenceProjectedNote(
-                    noteID: noteID,
-                    folderID: nil,
-                    title: "",
-                    body: body,
-                    createdAt: .distantPast,
-                    modifiedAt: retained.canonicalReplayKey.modifiedAt
-                ),
-                batchID: retained.batchID
-            ) {
-            case .success(let result):
-                if let expected = retained.resultContentHash,
-                   expected != SyncBatchContentHash.sha256Hex(for: result.finalBody) {
-                    if claimsCurrentPosition {
-                        // The operation claimed this exact body and contradicted its
-                        // own declared result: present-but-contradictory evidence.
-                        return .corrupt(.corruptHistory(noteID: noteID))
-                    }
-                    // A nil-base step whose result does not match does not extend
-                    // this chain; it may belong to another branch.
-                    continue
-                }
-                var nextConsumed = consumed
-                nextConsumed.insert(retained.identityKey)
-                switch searchChain(
-                    body: result.finalBody,
-                    generation: generation + 1,
-                    consumed: nextConsumed,
-                    chain: chain,
-                    requiredBaseHash: requiredBaseHash,
-                    noteID: noteID,
-                    replayEngine: replayEngine,
-                    deadEnds: &deadEnds
-                ) {
-                case .found(let base):
-                    return .found(base)
-                case .corrupt(let failure):
-                    return .corrupt(failure)
-                case .notFound:
-                    continue
-                }
-            case .deferred:
-                continue
-            case .failed(let failure):
-                if claimsCurrentPosition {
-                    return .corrupt(failure)
-                }
-                // A nil-base step that cannot replay from this body does not extend
-                // this chain; it may belong to another branch.
-                continue
-            }
+            // Neither base nor result evidence: never guessed into a chain.
         }
-        deadEnds.insert(stateKey)
+
+        var states = [SearchState(
+            body: snapshotBody,
+            bodyHash: SyncBatchContentHash.sha256Hex(for: snapshotBody),
+            generation: snapshotGeneration,
+            parentIndex: nil,
+            consumedKey: nil
+        )]
+        var visitedBodyHashes: Set<String> = [states[0].bodyHash]
+        var index = 0
+        while index < states.count, index < Self.maxExpandedStates {
+            let state = states[index]
+            let claiming = claimingByBaseHash[state.bodyHash] ?? []
+            for retained in claiming + nilBaseCandidates {
+                let claimsCurrentPosition = retained.baseContentHash != nil
+                let identity = OperationIdentityPayload(
+                    batchID: retained.batchID,
+                    originDeviceID: retained.originDeviceID,
+                    operationIndex: retained.operationIndex,
+                    operationKind: retained.operationKind.rawValue,
+                    canonicalReplayKey: retained.canonicalReplayKey
+                )
+                switch replayEngine.planDeclaredChainStep(
+                    retained.syncBatchChange,
+                    identity: identity,
+                    current: SyncConvergenceProjectedNote(
+                        noteID: noteID,
+                        folderID: nil,
+                        title: "",
+                        body: state.body,
+                        createdAt: .distantPast,
+                        modifiedAt: retained.canonicalReplayKey.modifiedAt
+                    ),
+                    batchID: retained.batchID
+                ) {
+                case .success(let result):
+                    let finalHash = SyncBatchContentHash.sha256Hex(for: result.finalBody)
+                    if let expected = retained.resultContentHash, expected != finalHash {
+                        if claimsCurrentPosition {
+                            // The operation claimed this exact body and contradicted
+                            // its own declared result: present-but-contradictory.
+                            return .corrupt(.corruptHistory(noteID: noteID))
+                        }
+                        // A nil-base step whose result does not match does not extend
+                        // this chain; it may belong to another branch.
+                        continue
+                    }
+                    if finalHash == requiredBaseHash {
+                        var consumed: Set<String> = [retained.identityKey]
+                        var cursor: Int? = index
+                        while let current = cursor {
+                            if let key = states[current].consumedKey {
+                                consumed.insert(key)
+                            }
+                            cursor = states[current].parentIndex
+                        }
+                        return .found(ReconstructedBase(
+                            body: result.finalBody,
+                            contentHash: requiredBaseHash,
+                            generation: state.generation + 1,
+                            consumedOperationIdentityKeys: consumed
+                        ))
+                    }
+                    guard visitedBodyHashes.insert(finalHash).inserted else {
+                        continue
+                    }
+                    states.append(SearchState(
+                        body: result.finalBody,
+                        bodyHash: finalHash,
+                        generation: state.generation + 1,
+                        parentIndex: index,
+                        consumedKey: retained.identityKey
+                    ))
+                case .deferred:
+                    continue
+                case .failed(let failure):
+                    if claimsCurrentPosition {
+                        return .corrupt(failure)
+                    }
+                    // A nil-base step that cannot replay from this body does not
+                    // extend this chain; it may belong to another branch.
+                    continue
+                }
+            }
+            index += 1
+        }
         return .notFound
     }
 

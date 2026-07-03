@@ -2149,6 +2149,185 @@ final class SyncConvergencePlanningTests: XCTestCase {
         )
     }
 
+    func testReconstructionStressWithHundredsOfNilBaseCandidatesCompletesBounded() {
+        let noteID = uuid("00000000-0000-0000-0000-000000132744")
+        let snapshotBody = "A"
+        // A five-step verified chain to the target, buried among 200 replay-valid
+        // nil-base decoy branches that each verify only from the snapshot body.
+        var chainBodies = [snapshotBody]
+        for step in 1...5 {
+            chainBodies.append(chainBodies[step - 1] + String(step))
+        }
+        let targetBody = chainBodies[5]
+        let targetHash = SyncBatchContentHash.sha256Hex(for: targetBody)
+        var retained: [SyncConvergenceRetainedOperation] = []
+        for step in 1...5 {
+            retained.append(retainedInsert(
+                noteID: noteID,
+                batchID: uuid(String(format: "00000000-0000-0000-0000-9000000%05d", step)),
+                originDeviceID: uuid("00000000-0000-0000-0000-000000132871"),
+                operationIndex: 0,
+                offset: chainBodies[step - 1].utf16.count,
+                text: String(step),
+                modifiedAt: date(TimeInterval(step + 10)),
+                baseBody: chainBodies[step - 1],
+                resultBody: chainBodies[step]
+            ))
+        }
+        for decoy in 1...200 {
+            retained.append(retainedInsert(
+                noteID: noteID,
+                batchID: uuid(String(format: "00000000-0000-0000-0000-8000000%05d", decoy)),
+                originDeviceID: uuid("00000000-0000-0000-0000-000000132872"),
+                operationIndex: 0,
+                offset: 0,
+                text: "d\(decoy)-",
+                modifiedAt: date(TimeInterval(decoy)),
+                baseBody: snapshotBody,
+                resultBody: "d\(decoy)-" + snapshotBody
+            ).withoutBaseHash())
+        }
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132873"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132874"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID, utf16Offset: 0, text: "X", modifiedAt: date(400), baseContentHash: targetHash
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: "diverged")],
+            retainedSnapshots: [
+                SyncConvergenceRetainedSnapshot(
+                    noteID: noteID,
+                    contentHash: SyncBatchContentHash.sha256Hex(for: snapshotBody),
+                    body: snapshotBody,
+                    generation: 1
+                )
+            ],
+            retainedRemoteOperations: retained
+        ))
+
+        guard case .planned(let plan) = outcome,
+              case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected bounded stress reconstruction to plan, got \(outcome)")
+        }
+        XCTAssertEqual(bodyPlan.reconstructedBaseHash, targetHash)
+    }
+
+    func testCycleAndDuplicateResultOperationsDoNotReExploreBodies() {
+        let noteID = uuid("00000000-0000-0000-0000-000000132745")
+        let snapshotBody = "A"
+        let insertResult = "AB"
+        // Cycle: insert B then delete B returns to the snapshot body; a duplicate
+        // second insert declares the identical result under a different identity.
+        let insertOp = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000132875"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132876"),
+            operationIndex: 0,
+            offset: 1,
+            text: "B",
+            modifiedAt: date(2),
+            baseBody: snapshotBody,
+            resultBody: insertResult
+        ).withoutBaseHash()
+        let duplicateInsert = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000132877"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132878"),
+            operationIndex: 0,
+            offset: 1,
+            text: "B",
+            modifiedAt: date(3),
+            baseBody: snapshotBody,
+            resultBody: insertResult
+        ).withoutBaseHash()
+        let cycleDelete = retainedDelete(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000132879"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132880"),
+            operationIndex: 0,
+            offset: 1,
+            length: 1,
+            expectedText: "B",
+            modifiedAt: date(4),
+            baseBody: insertResult,
+            resultHash: SyncBatchContentHash.sha256Hex(for: snapshotBody)
+        ).withoutBaseHash()
+        let onwardTarget = "ABC"
+        let onwardTargetHash = SyncBatchContentHash.sha256Hex(for: onwardTarget)
+        let onward = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000132881"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132882"),
+            operationIndex: 0,
+            offset: 2,
+            text: "C",
+            modifiedAt: date(5),
+            baseBody: insertResult,
+            resultBody: onwardTarget
+        )
+        let snapshots = [
+            SyncConvergenceRetainedSnapshot(
+                noteID: noteID,
+                contentHash: SyncBatchContentHash.sha256Hex(for: snapshotBody),
+                body: snapshotBody,
+                generation: 1
+            )
+        ]
+        let operations = [insertOp, duplicateInsert, cycleDelete, onward]
+
+        let reachable = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: SyncBatch(
+                id: uuid("00000000-0000-0000-0000-000000132883"),
+                originDeviceID: uuid("00000000-0000-0000-0000-000000132884"),
+                createdAt: date(1),
+                changes: [
+                    .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID, utf16Offset: 0, text: "X", modifiedAt: date(9), baseContentHash: onwardTargetHash
+                    ))
+                ]
+            ),
+            currentNotes: [projectedNote(noteID: noteID, body: "diverged")],
+            retainedSnapshots: snapshots,
+            retainedRemoteOperations: operations
+        ))
+        guard case .planned(let plan) = reachable,
+              case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected cycle-tolerant reconstruction to plan, got \(reachable)")
+        }
+        XCTAssertEqual(bodyPlan.reconstructedBaseHash, onwardTargetHash)
+
+        // An unreachable target must terminate and defer, not loop through the cycle.
+        let unreachableHash = SyncBatchContentHash.sha256Hex(for: "ZZ")
+        let unreachableBatch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132885"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132886"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID, utf16Offset: 0, text: "X", modifiedAt: date(9), baseContentHash: unreachableHash
+                ))
+            ]
+        )
+        let unreachable = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: unreachableBatch,
+            currentNotes: [projectedNote(noteID: noteID, body: "diverged")],
+            retainedSnapshots: snapshots,
+            retainedRemoteOperations: operations
+        ))
+        XCTAssertEqual(unreachable, .deferred(.unreconstructableBase(
+            noteID: noteID,
+            batchID: unreachableBatch.id,
+            baseContentHash: unreachableHash
+        )))
+    }
+
     private func makeTitleBatch(
         noteID: UUID = uuid("00000000-0000-0000-0000-000000132200"),
         title: String,
