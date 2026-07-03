@@ -29,9 +29,10 @@ final class SyncConvergencePlanningTests: XCTestCase {
             currentNotes: [projectedNote(noteID: noteID, body: "AB")]
         ))
 
-        guard case .planned(let plan) = outcome else {
+        guard case .planned(let validatedInput) = outcome else {
             return XCTFail("Expected planned outcome, got \(outcome)")
         }
+        let plan = validatedInput.plan
         XCTAssertEqual(plan.batchID, batch.id)
         XCTAssertEqual(plan.affectedNotePlans.count, 1)
         guard case .matchingBaseIncremental(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
@@ -241,7 +242,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             currentNotes: [projectedNote(noteID: noteID, body: "abc")]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .legacyPositional(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected legacy positional plan, got \(outcome)")
         }
@@ -275,7 +277,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             ]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected reconstructed conflict plan, got \(outcome)")
         }
@@ -329,7 +332,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: [retained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected retained-operation reconstruction, got \(outcome)")
         }
@@ -423,9 +427,10 @@ final class SyncConvergencePlanningTests: XCTestCase {
             persistedTitleWinners: [winner]
         ))
 
-        guard case .planned(let plan) = outcome else {
+        guard case .planned(let validatedInput) = outcome else {
             return XCTFail("Expected planned title outcome, got \(outcome)")
         }
+        let plan = validatedInput.plan
         XCTAssertEqual(plan.affectedNotePlans[0].titleEffect?.verdict, .ignoreOlder)
         XCTAssertEqual(plan.affectedNotePlans[0].titleEffect?.resultingTitle, "Newer")
     }
@@ -571,9 +576,10 @@ final class SyncConvergencePlanningTests: XCTestCase {
 
         let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(incomingBatch: batch))
 
-        guard case .planned(let plan) = outcome else {
+        guard case .planned(let validatedInput) = outcome else {
             return XCTFail("Expected planned creation outcome, got \(outcome)")
         }
+        let plan = validatedInput.plan
         XCTAssertEqual(plan.affectedNotePlans[0].creationEffect?.verdict, .create)
         guard case .matchingBaseIncremental(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected same-batch body change to use projected created note")
@@ -658,7 +664,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             currentNotes: [projectedNote(noteID: noteID, body: firstBase)]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .matchingBaseIncremental(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected grouped matching-base body plan, got \(outcome)")
         }
@@ -704,7 +711,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedLocalOperations: [retained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected reconstructed concurrent plan, got \(outcome)")
         }
@@ -752,7 +760,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             queuedBatches: [SyncConvergenceQueuedBatch(batch: queued, queuePosition: 0)]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected queued same-note evidence in reconstructed union, got \(outcome)")
         }
@@ -850,7 +859,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedLocalOperations: [retained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected chained same-batch operations to plan in one union, got \(outcome)")
         }
@@ -906,7 +916,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedLocalOperations: [firstRetained, secondRetained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected retained concurrent candidates to merge, got \(outcome)")
         }
@@ -958,7 +969,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: [retained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected nil-base retained reconstruction, got \(outcome)")
         }
@@ -1074,9 +1086,10 @@ final class SyncConvergencePlanningTests: XCTestCase {
 
         let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(incomingBatch: batch))
 
-        guard case .planned(let plan) = outcome else {
+        guard case .planned(let validatedInput) = outcome else {
             return XCTFail("Expected compatibility no-op plan, got \(outcome)")
         }
+        let plan = validatedInput.plan
         XCTAssertEqual(plan.affectedNotePlans.count, 2)
         let titleEffect = plan.affectedNotePlans.first { $0.noteID == titleNote }?.titleEffect
         XCTAssertEqual(titleEffect?.verdict, .compatibilityNoopMissingNote)
@@ -1234,7 +1247,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             queuedBatches: [multiNoteQueued]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected planned reconstruction without spliced evidence, got \(outcome)")
         }
@@ -1300,7 +1314,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: [offTargetBranch, targetBranch]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected backtracking reconstruction to reach the target branch, got \(outcome)")
         }
@@ -1384,7 +1399,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: [alreadyRetained]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .matchingBaseIncremental(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected idempotent planned outcome, got \(outcome)")
         }
@@ -1484,7 +1500,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: [unrelatedBranch, validStep]
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected unrelated nil-base branch to be skipped, got \(outcome)")
         }
@@ -2105,9 +2122,10 @@ final class SyncConvergencePlanningTests: XCTestCase {
                 projectedNote(noteID: titleNoteID, body: "Other")
             ]
         )
-        guard case .planned(let plan) = SyncConvergencePlanner().plan(input: input) else {
+        guard case .planned(let validatedInput) = SyncConvergencePlanner().plan(input: input) else {
             throw XCTSkip("validator fixture planning failed")
         }
+        let plan = validatedInput.plan
         let selection = SyncConvergenceEvidenceSelector().selectQueuedBatches(
             for: incoming,
             queuedBatches: [],
@@ -2145,6 +2163,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
             affectedNotePlans: plan.affectedNotePlans,
             incorporationEvidence: incorporationEvidence ?? plan.incorporationEvidence,
             historyPlan: historyPlan ?? plan.historyPlan,
+            cleanupPlan: plan.cleanupPlan,
             presentationPlan: presentationPlan ?? plan.presentationPlan
         )
     }
@@ -2212,7 +2231,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedRemoteOperations: retained
         ))
 
-        guard case .planned(let plan) = outcome,
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected bounded stress reconstruction to plan, got \(outcome)")
         }
@@ -2297,7 +2317,8 @@ final class SyncConvergencePlanningTests: XCTestCase {
             retainedSnapshots: snapshots,
             retainedRemoteOperations: operations
         ))
-        guard case .planned(let plan) = reachable,
+        guard case .planned(let validatedInput) = reachable,
+              let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
             return XCTFail("Expected cycle-tolerant reconstruction to plan, got \(reachable)")
         }

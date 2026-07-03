@@ -1,7 +1,7 @@
 import Foundation
 
 enum SyncConvergencePlanningOutcome: Equatable {
-    case planned(SyncConvergenceBatchPlan)
+    case planned(ValidatedSyncConvergenceIncorporationInput)
     case alreadyIncorporated(SyncConvergenceCleanupPlan)
     case deferred(SyncConvergenceDeferredReason)
     case failedBeforeCommit(SyncConvergenceTransactionFailure)
@@ -9,69 +9,27 @@ enum SyncConvergencePlanningOutcome: Equatable {
 
 struct ValidatedSyncConvergenceIncorporationInput: Equatable {
     let plan: SyncConvergenceBatchPlan
-    let sourceBatchID: UUID
-    let sourceOriginDeviceID: UUID
-    let sourceCreatedAt: Date
-    let sourceBatchSequence: UInt64?
+    let sourceBatch: SyncBatch
     let sourceSchemaVersion: Int
     let projectedFullIncorporationEvidenceBytes: Int
 
-    private init(
-        plan: SyncConvergenceBatchPlan,
-        sourceBatchID: UUID,
-        sourceOriginDeviceID: UUID,
-        sourceCreatedAt: Date,
-        sourceBatchSequence: UInt64?,
-        sourceSchemaVersion: Int,
-        projectedFullIncorporationEvidenceBytes: Int
-    ) {
-        self.plan = plan
-        self.sourceBatchID = sourceBatchID
-        self.sourceOriginDeviceID = sourceOriginDeviceID
-        self.sourceCreatedAt = sourceCreatedAt
-        self.sourceBatchSequence = sourceBatchSequence
-        self.sourceSchemaVersion = sourceSchemaVersion
-        self.projectedFullIncorporationEvidenceBytes = projectedFullIncorporationEvidenceBytes
-    }
+    var sourceBatchID: UUID { sourceBatch.id }
+    var sourceOriginDeviceID: UUID { sourceBatch.originDeviceID }
+    var sourceCreatedAt: Date { sourceBatch.createdAt }
+    var sourceBatchSequence: UInt64? { sourceBatch.batchSequence }
 
-    static func make(
+    init(
+        validatedPlanToken: SyncConvergenceValidatedPlanToken,
         plan: SyncConvergenceBatchPlan,
         sourceBatch: SyncBatch,
         sourceSchemaVersion: Int,
         projectedFullIncorporationEvidenceBytes: Int
-    ) -> Result<Self, SyncConvergenceTransactionFailure> {
-        guard plan.batchID == sourceBatch.id else {
-            return .failure(.invalidMergePlan(noteID: nil))
-        }
-        guard plan.originDeviceID == sourceBatch.originDeviceID else {
-            return .failure(.invalidMergePlan(noteID: nil))
-        }
-        guard sourceSchemaVersion > 0, projectedFullIncorporationEvidenceBytes >= 0 else {
-            return .failure(.invalidMergePlan(noteID: nil))
-        }
-        let expectedBytes: Int
-        do {
-            expectedBytes = try SyncConvergenceProjectedIncorporationEvidence(
-                batch: sourceBatch,
-                affectedNoteIDs: Set(plan.affectedNotePlans.map(\.noteID)),
-                operationIdentities: plan.incorporationEvidence.operationIdentities,
-                resultEvidence: plan.incorporationEvidence.resultEvidence
-            ).canonicalEncodedByteCount()
-        } catch {
-            return .failure(.invalidMergePlan(noteID: nil))
-        }
-        guard expectedBytes == projectedFullIncorporationEvidenceBytes else {
-            return .failure(.invalidMergePlan(noteID: nil))
-        }
-        return .success(Self(
-            plan: plan,
-            sourceBatchID: sourceBatch.id,
-            sourceOriginDeviceID: sourceBatch.originDeviceID,
-            sourceCreatedAt: sourceBatch.createdAt,
-            sourceBatchSequence: sourceBatch.batchSequence,
-            sourceSchemaVersion: sourceSchemaVersion,
-            projectedFullIncorporationEvidenceBytes: projectedFullIncorporationEvidenceBytes
-        ))
+    ) {
+        _ = validatedPlanToken
+        self.plan = plan
+        self.sourceBatch = sourceBatch
+        self.sourceSchemaVersion = sourceSchemaVersion
+        self.projectedFullIncorporationEvidenceBytes = projectedFullIncorporationEvidenceBytes
     }
 }
 
@@ -162,7 +120,7 @@ struct SyncConvergenceBatchPlan: Equatable {
         affectedNotePlans: [SyncConvergenceNotePlan],
         incorporationEvidence: SyncConvergenceIncorporationPlan,
         historyPlan: SyncConvergenceHistoryPlan,
-        cleanupPlan: SyncConvergenceCleanupPlan? = nil,
+        cleanupPlan: SyncConvergenceCleanupPlan,
         presentationPlan: SyncConvergencePresentationPlan
     ) {
         self.batchID = batchID
@@ -172,12 +130,7 @@ struct SyncConvergenceBatchPlan: Equatable {
         self.affectedNotePlans = affectedNotePlans
         self.incorporationEvidence = incorporationEvidence
         self.historyPlan = historyPlan
-        self.cleanupPlan = cleanupPlan ?? SyncConvergenceCleanupPlan(
-            batchIDs: [batchID],
-            retryQueueCleanup: true,
-            retryLegacyCleanup: false,
-            retryPresentationRefresh: false
-        )
+        self.cleanupPlan = cleanupPlan
         self.presentationPlan = presentationPlan
     }
 }
@@ -294,8 +247,8 @@ enum SyncConvergencePresentationRouting: Equatable {
     case none
 }
 
-struct SyncConvergenceResultEvidence: Equatable {
-    enum Kind: String, Equatable {
+struct SyncConvergenceResultEvidence: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Equatable, Sendable {
         case body
         case title
         case creation
@@ -482,7 +435,6 @@ struct SyncConvergenceOperationIdentityRecord: Equatable {
 struct SyncConvergenceNoteEffectRecord: Equatable {
     let batchID: UUID
     let noteID: UUID
-    let kinds: [String]
     let preBodyHash: String?
     let postBodyHash: String?
     let preTitleKey: CanonicalReplayKeyPayload?
@@ -546,6 +498,7 @@ protocol SyncConvergencePersistenceTransaction {
     func loadRetainedOperation(identity: SyncConvergenceRetainedOperationIdentity) throws -> SyncConvergenceRetainedOperationProjection?
     func insertRetainedOperation(_ record: SyncConvergenceRetainedOperationRecord) throws
     func loadSnapshot(noteID: UUID, generation: Int) throws -> SyncConvergenceSnapshotProjection?
+    func loadHighestSnapshotGeneration(noteID: UUID) throws -> Int?
     func insertSnapshot(_ record: SyncConvergenceSnapshotRecord) throws
     func save() throws
     func rollback()

@@ -1,4 +1,5 @@
 import XCTest
+import SwiftData
 #if os(macOS)
 @testable import MyRAMMac
 #else
@@ -25,10 +26,10 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertEqual(SyncConvergenceDrainFailureMapping.failureKind(for: .corruptHistory(noteID: nil)), .corruptHistory)
     }
 
-    func testValidatedInputPreservesSourceMetadataAndRejectsMismatches() throws {
+    func testValidatedInputPreservesCompleteSourceBatch() throws {
         let fixture = try makeFixture(batchSequence: 42)
 
-        let input = try fixture.validatedInput.get()
+        let input = fixture.validatedInput
 
         XCTAssertEqual(input.sourceBatchID, fixture.batch.id)
         XCTAssertEqual(input.sourceOriginDeviceID, fixture.batch.originDeviceID)
@@ -36,39 +37,15 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertEqual(input.sourceBatchSequence, 42)
         XCTAssertEqual(input.sourceSchemaVersion, 1)
         XCTAssertEqual(input.projectedFullIncorporationEvidenceBytes, fixture.projectedBytes)
-
-        let mismatchedBatch = SyncBatch(
-            id: uuid("00000000-0000-0000-0000-000000132cff"),
-            originDeviceID: fixture.batch.originDeviceID,
-            createdAt: fixture.batch.createdAt,
-            batchSequence: fixture.batch.batchSequence,
-            changes: fixture.batch.changes
-        )
-        XCTAssertEqual(
-            ValidatedSyncConvergenceIncorporationInput.make(
-                plan: fixture.plan,
-                sourceBatch: mismatchedBatch,
-                sourceSchemaVersion: 1,
-                projectedFullIncorporationEvidenceBytes: fixture.projectedBytes
-            ),
-            .failure(.invalidMergePlan(noteID: nil))
-        )
-        XCTAssertEqual(
-            ValidatedSyncConvergenceIncorporationInput.make(
-                plan: fixture.plan,
-                sourceBatch: fixture.batch,
-                sourceSchemaVersion: 1,
-                projectedFullIncorporationEvidenceBytes: fixture.projectedBytes + 1
-            ),
-            .failure(.invalidMergePlan(noteID: nil))
-        )
+        XCTAssertEqual(input.sourceBatch, fixture.batch)
+        XCTAssertEqual(input.sourceBatch.changes, fixture.batch.changes)
     }
 
     func testExecutorPersistsPlannedEffectsRootChildrenAndPendingWork() throws {
         let fixture = try makeFixture()
         let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
         let outcome = SyncConvergenceIncorporationExecutor().incorporate(
-            input: try fixture.validatedInput.get(),
+            input: fixture.validatedInput,
             transaction: transaction,
             committedAt: fixture.committedAt
         )
@@ -85,7 +62,11 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertFalse(result.presentationPlan.noteRoutings.isEmpty)
         XCTAssertEqual(transaction.roots[fixture.batch.id]?.batchSequence, fixture.batch.batchSequence)
         XCTAssertEqual(transaction.children[fixture.batch.id]?.operationIdentities.count, 1)
-        XCTAssertEqual(transaction.children[fixture.batch.id]?.noteEffects.first?.kinds, ["body"])
+        XCTAssertEqual(transaction.children[fixture.batch.id]?.noteEffects.count, 1)
+        XCTAssertEqual(
+            transaction.children[fixture.batch.id]?.noteEffects.first?.postBodyHash,
+            SyncBatchContentHash.sha256Hex(for: "AB")
+        )
         XCTAssertEqual(transaction.children[fixture.batch.id]?.resultEvidence.count, 1)
         XCTAssertEqual(transaction.retainedOperations.count, 1)
         XCTAssertFalse(transaction.saveCalled == false)
@@ -113,7 +94,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         let transaction = InMemoryConvergenceTransaction(notes: [fixture.noteID: staleNote])
 
         let outcome = SyncConvergenceIncorporationExecutor().incorporate(
-            input: try fixture.validatedInput.get(),
+            input: fixture.validatedInput,
             transaction: transaction,
             committedAt: fixture.committedAt
         )
@@ -130,7 +111,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         transaction.failAfterUpdateNote = true
 
         let outcome = SyncConvergenceIncorporationExecutor().incorporate(
-            input: try fixture.validatedInput.get(),
+            input: fixture.validatedInput,
             transaction: transaction,
             committedAt: fixture.committedAt
         )
@@ -142,11 +123,40 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertNil(transaction.roots[fixture.batch.id])
     }
 
+    func testSwiftDataTransactionPersistsIncorporationEvidence() throws {
+        let fixture = try makeFixture()
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let note = Note(title: fixture.initialNote.title, content: fixture.initialNote.body)
+        note.id = fixture.initialNote.noteID
+        note.createdAt = fixture.initialNote.createdAt
+        note.modifiedAt = fixture.initialNote.modifiedAt
+        context.insert(note)
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
+            committedAt: fixture.committedAt
+        )
+
+        guard case .incorporated = outcome else {
+            return XCTFail("Expected SwiftData incorporation, got \(outcome)")
+        }
+        let persistedNote = try context.fetch(FetchDescriptor<Note>()).first
+        XCTAssertEqual(persistedNote?.content, "AB")
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>()).count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>()).count, 1)
+    }
+
     func testAlreadyIncorporatedUsesValidatedPlansGatedByPersistedPendingFlags() throws {
         let fixture = try makeFixture()
         let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
         let first = SyncConvergenceIncorporationExecutor().incorporate(
-            input: try fixture.validatedInput.get(),
+            input: fixture.validatedInput,
             transaction: transaction,
             committedAt: fixture.committedAt
         )
@@ -155,7 +165,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         }
 
         let duplicate = SyncConvergenceIncorporationExecutor().incorporate(
-            input: try fixture.validatedInput.get(),
+            input: fixture.validatedInput,
             transaction: transaction,
             committedAt: fixture.committedAt
         )
@@ -172,7 +182,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             )
         )
         let completedDuplicate = SyncConvergenceIncorporationExecutor().incorporate(
-            input: try fixture.validatedInput.get(),
+            input: fixture.validatedInput,
             transaction: transaction,
             committedAt: fixture.committedAt
         )
@@ -188,7 +198,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         let batch: SyncBatch
         let plan: SyncConvergenceBatchPlan
         let projectedBytes: Int
-        let validatedInput: Result<ValidatedSyncConvergenceIncorporationInput, SyncConvergenceTransactionFailure>
+        let validatedInput: ValidatedSyncConvergenceIncorporationInput
         let initialNote: SyncConvergenceMutableNoteRecord
         let committedAt: Date
     }
@@ -237,9 +247,10 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 )
             ]
         )
-        guard case .planned(let plan) = SyncConvergencePlanner().plan(input: input) else {
+        guard case .planned(let validatedInput) = SyncConvergencePlanner().plan(input: input) else {
             throw XCTSkip("Fixture planning failed")
         }
+        let plan = validatedInput.plan
         let projectedBytes = try SyncConvergenceProjectedIncorporationEvidence(
             batch: batch,
             affectedNoteIDs: Set(plan.affectedNotePlans.map(\.noteID)),
@@ -251,12 +262,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             batch: batch,
             plan: plan,
             projectedBytes: projectedBytes,
-            validatedInput: ValidatedSyncConvergenceIncorporationInput.make(
-                plan: plan,
-                sourceBatch: batch,
-                sourceSchemaVersion: 1,
-                projectedFullIncorporationEvidenceBytes: projectedBytes
-            ),
+            validatedInput: validatedInput,
             initialNote: initialNote,
             committedAt: date(5)
         )
@@ -395,6 +401,14 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
 
     func loadSnapshot(noteID: UUID, generation: Int) throws -> SyncConvergenceSnapshotProjection? {
         snapshots["\(noteID.uuidString.lowercased())|\(generation)"]
+    }
+
+    func loadHighestSnapshotGeneration(noteID: UUID) throws -> Int? {
+        let prefix = "\(noteID.uuidString.lowercased())|"
+        return snapshots.keys.compactMap { key in
+            guard key.hasPrefix(prefix) else { return nil }
+            return Int(key.dropFirst(prefix.count))
+        }.max()
     }
 
     func insertSnapshot(_ record: SyncConvergenceSnapshotRecord) throws {

@@ -1,0 +1,322 @@
+import Foundation
+import SwiftData
+
+final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersistenceTransaction {
+    private let context: ModelContext
+
+    init(context: ModelContext) {
+        self.context = context
+    }
+
+    func loadNote(id: UUID) throws -> SyncConvergenceMutableNoteRecord? {
+        try fetchOne(Note.self, #Predicate { $0.id == id }).map {
+            SyncConvergenceMutableNoteRecord(
+                noteID: $0.id,
+                folderID: $0.folder?.id,
+                title: $0.title,
+                body: $0.content,
+                createdAt: $0.createdAt,
+                modifiedAt: $0.modifiedAt
+            )
+        }
+    }
+
+    func insertNote(_ record: SyncConvergenceNewNoteRecord) throws {
+        let note = Note(title: record.title, content: record.body, folder: try folder(id: record.folderID))
+        note.id = record.noteID
+        note.createdAt = record.createdAt
+        note.modifiedAt = record.modifiedAt
+        context.insert(note)
+    }
+
+    func updateNote(_ record: SyncConvergenceUpdatedNoteRecord) throws {
+        let noteID = record.noteID
+        guard let note = try fetchOne(Note.self, #Predicate { $0.id == noteID }) else {
+            throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: record.noteID)
+        }
+        note.title = record.title
+        note.content = record.body
+        note.modifiedAt = record.modifiedAt
+    }
+
+    func loadTitleWinner(noteID: UUID) throws -> SyncConvergenceTitleWinnerProjection? {
+        try fetchOne(NoteTitleWinner.self, #Predicate { $0.noteID == noteID }).map {
+            SyncConvergenceTitleWinnerProjection(
+                noteID: $0.noteID,
+                title: $0.title,
+                canonicalReplayKey: try CanonicalReplayKeyPayload.decodeEvidenceData($0.canonicalReplayKeyPayloadData),
+                operationIdentity: try OperationIdentityPayload.decodePayloadData($0.operationIdentityPayloadData)
+            )
+        }
+    }
+
+    func insertOrUpdateTitleWinner(_ record: SyncConvergenceTitleWinnerRecord) throws {
+        let replayData = try record.canonicalReplayKey.encodedEvidenceData()
+        let identityData = try record.operationIdentity.encodedPayloadData()
+        let noteID = record.noteID
+        if let existing = try fetchOne(NoteTitleWinner.self, #Predicate { $0.noteID == noteID }) {
+            existing.title = record.title
+            existing.canonicalReplayKeyPayloadData = replayData
+            existing.operationIdentityPayloadData = identityData
+            existing.setUpdatedAt(record.updatedAt)
+        } else {
+            context.insert(NoteTitleWinner(
+                noteID: record.noteID,
+                title: record.title,
+                canonicalReplayKeyPayloadData: replayData,
+                operationIdentityPayloadData: identityData,
+                updatedAt: record.updatedAt
+            ))
+        }
+    }
+
+    func loadIncorporatedBatch(batchID: UUID) throws -> SyncConvergenceIncorporatedRootProjection? {
+        try fetchOne(IncorporatedSyncBatch.self, #Predicate { $0.batchID == batchID }).map(fullRootProjection)
+    }
+
+    func loadIncorporatedBatchChildren(batchID: UUID) throws -> SyncConvergenceIncorporatedChildrenProjection {
+        let identities = try fetch(IncorporatedBatchOperationIdentity.self, #Predicate { $0.batchID == batchID })
+            .map(operationIdentityRecord)
+        let effects = try fetch(IncorporatedBatchNoteEffect.self, #Predicate { $0.batchID == batchID })
+            .map(noteEffectRecord)
+        let results = try fetch(IncorporatedBatchResultEvidence.self, #Predicate { $0.batchID == batchID })
+            .map(resultEvidenceRecord)
+        return SyncConvergenceIncorporatedChildrenProjection(
+            operationIdentities: identities,
+            noteEffects: effects,
+            resultEvidence: results
+        )
+    }
+
+    func loadTombstone(batchID: UUID) throws -> SyncConvergenceIncorporatedRootProjection? {
+        try fetchOne(IncorporatedBatchTombstone.self, #Predicate { $0.batchID == batchID }).map(tombstoneProjection)
+    }
+
+    func insertIncorporatedBatch(_ record: SyncConvergenceIncorporatedBatchRecord) throws {
+        context.insert(IncorporatedSyncBatch(
+            batchID: record.batchID,
+            originDeviceID: record.originDeviceID,
+            createdAt: record.createdAt,
+            batchSequence: record.batchSequence,
+            schemaVersion: record.schemaVersion,
+            committedAt: record.committedAt,
+            canonicalPayloadDigest: record.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: record.canonicalPayloadDigestFormatVersion,
+            committedResultDigest: record.committedResultDigest,
+            committedResultDigestFormatVersion: record.committedResultDigestFormatVersion,
+            affectedNotesPayloadData: record.affectedNotesPayloadData,
+            authoritativeChildCount: record.authoritativeChildCount,
+            authoritativeChildBytes: record.authoritativeChildBytes,
+            authoritativeChildrenDigest: record.authoritativeChildrenDigest,
+            postCommitStatePayloadData: record.postCommitStatePayloadData
+        ))
+    }
+
+    func insertOperationIdentity(_ record: SyncConvergenceOperationIdentityRecord) throws {
+        context.insert(IncorporatedBatchOperationIdentity(
+            batchID: record.batchID,
+            noteID: record.noteID,
+            operationIndex: record.operationIndex,
+            operationIdentityPayloadData: try record.operationIdentity.encodedPayloadData(),
+            canonicalReplayKeyPayloadData: try record.operationIdentity.canonicalReplayKey.encodedEvidenceData()
+        ))
+    }
+
+    func insertNoteEffect(_ record: SyncConvergenceNoteEffectRecord) throws {
+        context.insert(IncorporatedBatchNoteEffect(
+            batchID: record.batchID,
+            noteID: record.noteID,
+            preBodyHash: record.preBodyHash,
+            postBodyHash: record.postBodyHash,
+            preTitleKeyPayloadData: try record.preTitleKey?.encodedEvidenceData(),
+            postTitleKeyPayloadData: try record.postTitleKey?.encodedEvidenceData()
+        ))
+    }
+
+    func insertResultEvidence(_ record: SyncConvergenceResultEvidenceRecord) throws {
+        context.insert(IncorporatedBatchResultEvidence(
+            batchID: record.evidence.batchID,
+            noteID: record.evidence.noteID,
+            resultKindRaw: record.evidence.kind.rawValue,
+            resultEvidencePayloadData: try SyncConvergenceStableEncoding.encode(record.evidence)
+        ))
+    }
+
+    func loadRetainedOperation(
+        identity: SyncConvergenceRetainedOperationIdentity
+    ) throws -> SyncConvergenceRetainedOperationProjection? {
+        let batchID = identity.batchID
+        let operationIndex = identity.operationIndex
+        return try fetchOne(RetainedBodyOperation.self, #Predicate {
+            $0.batchID == batchID && $0.operationIndex == operationIndex
+        }).map { try SyncConvergenceRetainedOperationProjection(operation: retainedRecord($0)) }
+    }
+
+    func insertRetainedOperation(_ record: SyncConvergenceRetainedOperationRecord) throws {
+        context.insert(RetainedBodyOperation(
+            noteID: record.noteID,
+            batchID: record.batchID,
+            originDeviceID: record.originDeviceID,
+            operationIndex: record.operationIndex,
+            operationKindRaw: record.operationKind.rawValue,
+            utf16Offset: record.utf16Offset,
+            utf16Length: record.utf16Length,
+            text: record.text,
+            expectedText: record.expectedText,
+            baseContentHash: record.baseContentHash,
+            resultContentHash: record.resultContentHash,
+            modifiedAt: record.modifiedAt,
+            canonicalReplayKeyPayloadData: try record.canonicalReplayKey.encodedEvidenceData(),
+            sourceRaw: "authoritative-convergence-incorporation"
+        ))
+    }
+
+    func loadSnapshot(noteID: UUID, generation: Int) throws -> SyncConvergenceSnapshotProjection? {
+        try fetchOne(NoteContentSnapshot.self, #Predicate {
+            $0.noteID == noteID && $0.generation == generation
+        }).map {
+            SyncConvergenceSnapshotProjection(snapshot: SyncConvergenceSnapshotRecord(
+                noteID: $0.noteID,
+                contentHash: $0.contentHash,
+                body: $0.body,
+                generation: $0.generation,
+                createdAt: $0.createdAt
+            ))
+        }
+    }
+
+    func loadHighestSnapshotGeneration(noteID: UUID) throws -> Int? {
+        try fetch(NoteContentSnapshot.self, #Predicate { $0.noteID == noteID })
+            .map(\.generation)
+            .max()
+    }
+
+    func insertSnapshot(_ record: SyncConvergenceSnapshotRecord) throws {
+        context.insert(NoteContentSnapshot(
+            noteID: record.noteID,
+            contentHash: record.contentHash,
+            body: record.body,
+            generation: record.generation,
+            createdAt: record.createdAt
+        ))
+    }
+
+    func save() throws {
+        try context.save()
+    }
+
+    func rollback() {
+        context.rollback()
+    }
+
+    private func folder(id: UUID?) throws -> Folder? {
+        guard let id else { return nil }
+        return try fetchOne(Folder.self, #Predicate { $0.id == id })
+    }
+
+    private func fullRootProjection(_ root: IncorporatedSyncBatch) -> SyncConvergenceIncorporatedRootProjection {
+        SyncConvergenceIncorporatedRootProjection(
+            batchID: root.batchID,
+            originDeviceID: root.originDeviceID,
+            createdAt: root.createdAt,
+            batchSequence: root.batchSequence,
+            schemaVersion: root.schemaVersion,
+            canonicalPayloadDigest: root.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: root.canonicalPayloadDigestFormatVersion,
+            committedResultDigest: root.committedResultDigest,
+            committedResultDigestFormatVersion: root.committedResultDigestFormatVersion,
+            affectedNotesPayloadData: root.affectedNotesPayloadData,
+            authoritativeChildCount: root.authoritativeChildCount,
+            authoritativeChildBytes: root.authoritativeChildBytes,
+            authoritativeChildrenDigest: root.authoritativeChildrenDigest,
+            postCommitStatePayloadData: root.postCommitStatePayloadData
+        )
+    }
+
+    private func tombstoneProjection(_ tombstone: IncorporatedBatchTombstone) -> SyncConvergenceIncorporatedRootProjection {
+        SyncConvergenceIncorporatedRootProjection(
+            batchID: tombstone.batchID,
+            originDeviceID: tombstone.originDeviceID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 0),
+            batchSequence: nil,
+            schemaVersion: tombstone.schemaVersion,
+            canonicalPayloadDigest: tombstone.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: tombstone.canonicalPayloadDigestFormatVersion,
+            committedResultDigest: tombstone.committedResultDigest,
+            committedResultDigestFormatVersion: tombstone.committedResultDigestFormatVersion,
+            affectedNotesPayloadData: Data(),
+            authoritativeChildCount: 0,
+            authoritativeChildBytes: 0,
+            authoritativeChildrenDigest: "",
+            postCommitStatePayloadData: Data()
+        )
+    }
+
+    private func operationIdentityRecord(
+        _ model: IncorporatedBatchOperationIdentity
+    ) throws -> SyncConvergenceOperationIdentityRecord {
+        SyncConvergenceOperationIdentityRecord(
+            batchID: model.batchID,
+            noteID: model.noteID,
+            operationIndex: model.operationIndex,
+            operationIdentity: try OperationIdentityPayload.decodePayloadData(model.operationIdentityPayloadData)
+        )
+    }
+
+    private func noteEffectRecord(_ model: IncorporatedBatchNoteEffect) throws -> SyncConvergenceNoteEffectRecord {
+        SyncConvergenceNoteEffectRecord(
+            batchID: model.batchID,
+            noteID: model.noteID,
+            preBodyHash: model.preBodyHash,
+            postBodyHash: model.postBodyHash,
+            preTitleKey: try model.preTitleKeyPayloadData.map(CanonicalReplayKeyPayload.decodeEvidenceData),
+            postTitleKey: try model.postTitleKeyPayloadData.map(CanonicalReplayKeyPayload.decodeEvidenceData)
+        )
+    }
+
+    private func resultEvidenceRecord(_ model: IncorporatedBatchResultEvidence) throws -> SyncConvergenceResultEvidenceRecord {
+        SyncConvergenceResultEvidenceRecord(
+            evidence: try SyncConvergenceStableEncoding.decode(
+                SyncConvergenceResultEvidence.self,
+                from: model.resultEvidencePayloadData
+            )
+        )
+    }
+
+    private func retainedRecord(_ model: RetainedBodyOperation) throws -> SyncConvergenceRetainedOperationRecord {
+        guard let kind = SyncConvergencePlannedBodyOperation.Kind(rawValue: model.operationKindRaw) else {
+            throw SyncConvergenceTransactionFailure.corruptHistory(noteID: model.noteID)
+        }
+        return SyncConvergenceRetainedOperationRecord(
+            noteID: model.noteID,
+            batchID: model.batchID,
+            originDeviceID: model.originDeviceID,
+            operationIndex: model.operationIndex,
+            operationKind: kind,
+            utf16Offset: model.utf16Offset,
+            utf16Length: model.utf16Length,
+            text: model.text,
+            expectedText: model.expectedText,
+            baseContentHash: model.baseContentHash,
+            resultContentHash: model.resultContentHash,
+            canonicalReplayKey: try CanonicalReplayKeyPayload.decodeEvidenceData(model.canonicalReplayKeyPayloadData),
+            modifiedAt: model.modifiedAt
+        )
+    }
+
+    private func fetch<Model: PersistentModel>(
+        _ type: Model.Type,
+        _ predicate: Predicate<Model>
+    ) throws -> [Model] {
+        try context.fetch(FetchDescriptor<Model>(predicate: predicate))
+    }
+
+    private func fetchOne<Model: PersistentModel>(
+        _ type: Model.Type,
+        _ predicate: Predicate<Model>
+    ) throws -> Model? {
+        var descriptor = FetchDescriptor<Model>(predicate: predicate)
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+}
