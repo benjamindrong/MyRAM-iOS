@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 struct SyncConvergencePlanner {
@@ -6,8 +7,16 @@ struct SyncConvergencePlanner {
     }
 
     func plan(input: SyncConvergencePlanningInput) -> SyncConvergencePlanningOutcome {
-        let digest = SyncConvergenceCanonicalBatchDigest.digest(for: input.incomingBatch)
-        if let duplicateOutcome = classifyDuplicate(input: input, digest: digest) {
+        let currentDigest: String
+        do {
+            currentDigest = try SyncConvergenceCanonicalBatchDigest.digest(
+                for: input.incomingBatch,
+                formatVersion: SyncConvergenceCanonicalBatchDigest.supportedFormatVersion
+            )
+        } catch {
+            return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
+        }
+        if let duplicateOutcome = classifyDuplicate(input: input) {
             return duplicateOutcome
         }
 
@@ -22,6 +31,15 @@ struct SyncConvergencePlanner {
         var retainedAdditions: [SyncConvergencePlannedBodyOperation] = []
         var snapshotAdditions: [SyncConvergenceSnapshotAddition] = []
         var routings: [UUID: SyncConvergencePresentationRouting] = [:]
+        var processedBodyNoteIDs: Set<UUID> = []
+        let incomingAffectedNoteIDs = Set(input.incomingBatch.changes.compactMap(\.noteID))
+        let eligibleQueuedBatches = SyncConvergenceEvidenceSelector().selectEligibleQueuedBatches(
+            input.queuedBatches,
+            blockedNoteIDs: incomingAffectedNoteIDs
+        )
+        let plannerVisibleQueuedBatches = eligibleQueuedBatches + input.queuedBatches.filter {
+            !$0.batch.affectedNoteIDs.isDisjoint(with: incomingAffectedNoteIDs)
+        }
 
         for (operationIndex, change) in input.incomingBatch.changes.enumerated() {
             switch change {
@@ -77,19 +95,23 @@ struct SyncConvergencePlanner {
                 )
 
             case .noteTitleChanged(let titleChange):
-                guard let current = noteStates[titleChange.noteID] else {
-                    return .deferred(.unreconstructableBase(
-                        noteID: titleChange.noteID,
-                        batchID: input.incomingBatch.id,
-                        baseContentHash: ""
-                    ))
-                }
                 let candidateIdentity = operationIdentity(
                     for: change,
                     in: input.incomingBatch,
                     operationIndex: operationIndex,
                     kind: "title"
                 )
+                guard let current = noteStates[titleChange.noteID] else {
+                    let effect = unknownTitleNoopEffect(
+                        change: titleChange,
+                        identity: candidateIdentity,
+                        batchID: input.incomingBatch.id
+                    )
+                    notePlans[titleChange.noteID, default: PartialNotePlan(noteID: titleChange.noteID)].titleEffect = effect
+                    operationIdentities.append(candidateIdentity)
+                    resultEvidence.append(effect.resultEvidence)
+                    continue
+                }
                 let titleResult = SyncTitleWinnerPlanner().plan(
                     noteID: titleChange.noteID,
                     priorTitle: current.title,
@@ -121,23 +143,31 @@ struct SyncConvergencePlanner {
                 guard let noteID = change.noteID else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
                 }
-                guard let current = noteStates[noteID] else {
-                    return .deferred(.unreconstructableBase(noteID: noteID, batchID: input.incomingBatch.id, baseContentHash: ""))
+                guard !processedBodyNoteIDs.contains(noteID) else {
+                    continue
                 }
-                let bodyResult = planBodyChange(
-                    change,
-                    operationIndex: operationIndex,
-                    current: current,
-                    input: input
+                processedBodyNoteIDs.insert(noteID)
+                let indexedChanges = input.incomingBatch.changes.enumerated()
+                    .filter { _, candidate in
+                        candidate.noteID == noteID && candidate.isBodyTextOperation
+                    }
+                    .map { (operationIndex: $0.offset, change: $0.element) }
+                let bodyResult = planBodyChanges(
+                    indexedChanges,
+                    noteID: noteID,
+                    current: noteStates[noteID],
+                    input: input,
+                    eligibleQueuedBatches: plannerVisibleQueuedBatches
                 )
                 switch bodyResult {
                 case .success(let planned):
+                    let current = noteStates[noteID]
                     noteStates[noteID] = SyncConvergenceProjectedNote(
-                        noteID: current.noteID,
-                        folderID: current.folderID,
-                        title: current.title,
+                        noteID: noteID,
+                        folderID: current?.folderID,
+                        title: current?.title ?? "",
                         body: planned.finalBody,
-                        createdAt: current.createdAt,
+                        createdAt: current?.createdAt ?? input.incomingBatch.createdAt,
                         modifiedAt: change.modifiedAtForReplayOrdering
                     )
                     notePlans[noteID, default: PartialNotePlan(noteID: noteID)].bodyEffect = planned.effect
@@ -162,14 +192,14 @@ struct SyncConvergencePlanner {
             currentStates: input.historyStates,
             retainedOperationAdditions: retainedAdditions,
             snapshotAdditions: snapshotAdditions,
-            fullIncorporationEvidenceBytes: resultEvidence.reduce(0) { $0 + $1.estimatedByteCount }
+            fullIncorporationEvidenceBytes: resultEvidence.reduce(0) { $0 + $1.canonicalEncodedByteCount }
         )
         switch historyResult {
         case .success(let historyPlan):
             let plan = SyncConvergenceBatchPlan(
                 batchID: input.incomingBatch.id,
                 originDeviceID: input.incomingBatch.originDeviceID,
-                canonicalPayloadDigest: digest,
+                canonicalPayloadDigest: currentDigest,
                 canonicalPayloadDigestFormatVersion: SyncConvergenceCanonicalBatchDigest.supportedFormatVersion,
                 affectedNotePlans: notePlans.values
                     .map { $0.finalPlan() }
@@ -188,8 +218,7 @@ struct SyncConvergencePlanner {
     }
 
     private func classifyDuplicate(
-        input: SyncConvergencePlanningInput,
-        digest: String
+        input: SyncConvergencePlanningInput
     ) -> SyncConvergencePlanningOutcome? {
         let records = (input.incorporatedBatches + input.incorporatedTombstones)
             .filter { $0.batchID == input.incomingBatch.id }
@@ -210,7 +239,22 @@ struct SyncConvergencePlanner {
                     formatVersion: record.canonicalPayloadDigestFormatVersion
                 ))
             }
-            guard record.canonicalPayloadDigest == digest else {
+            let incomingDigest: String
+            do {
+                incomingDigest = try SyncConvergenceCanonicalBatchDigest.digest(
+                    for: input.incomingBatch,
+                    formatVersion: record.canonicalPayloadDigestFormatVersion
+                )
+            } catch SyncConvergenceCanonicalBatchDigest.Error.unsupportedFormatVersion(let version) {
+                return .failedBeforeCommit(.unsupportedDigestFormat(
+                    noteID: record.noteID,
+                    batchID: record.batchID,
+                    formatVersion: version
+                ))
+            } catch {
+                return .failedBeforeCommit(.invalidMergePlan(noteID: record.noteID))
+            }
+            guard record.canonicalPayloadDigest == incomingDigest else {
                 return .failedBeforeCommit(.inconsistentIncorporationState(noteID: record.noteID))
             }
             cleanupPlan = cleanupPlan.merging(record.cleanupPlan)
@@ -244,11 +288,232 @@ struct SyncConvergencePlanner {
             )
         )
     }
+
+    private func unknownTitleNoopEffect(
+        change: SyncBatchNoteTitleChangedChange,
+        identity: OperationIdentityPayload,
+        batchID: UUID
+    ) -> SyncConvergenceTitleEffect {
+        let evidence = SyncConvergenceResultEvidence(
+            batchID: batchID,
+            noteID: change.noteID,
+            kind: .title,
+            preHash: nil,
+            postHash: nil,
+            canonicalReplayKey: identity.canonicalReplayKey
+        )
+        return SyncConvergenceTitleEffect(
+            priorTitle: "",
+            priorWinningKey: nil,
+            candidateTitle: change.title,
+            candidateOperationIdentity: identity,
+            candidateCanonicalKey: identity.canonicalReplayKey,
+            verdict: .ignoreOlder,
+            resultingTitle: "",
+            resultingWinningKey: identity.canonicalReplayKey,
+            resultEvidence: evidence
+        )
+    }
+
+    private func planBodyChanges(
+        _ indexedChanges: [(operationIndex: Int, change: SyncBatchChange)],
+        noteID: UUID,
+        current: SyncConvergenceProjectedNote?,
+        input: SyncConvergencePlanningInput,
+        eligibleQueuedBatches: [SyncConvergenceQueuedBatch]
+    ) -> BodyPlanningResult {
+        guard !indexedChanges.isEmpty else {
+            return .failed(.invalidMergePlan(noteID: noteID))
+        }
+        var workingNote: SyncConvergenceProjectedNote
+        if let current {
+            workingNote = current
+        } else if indexedChanges.allSatisfy({ $0.change.baseContentHash == nil }) {
+            return unknownLegacyBodyNoop(
+                indexedChanges,
+                noteID: noteID,
+                batchID: input.incomingBatch.id,
+                input: input
+            )
+        } else {
+            let declaredHash = indexedChanges.compactMap { $0.change.baseContentHash }.first ?? ""
+            return .deferred(.unreconstructableBase(
+                noteID: noteID,
+                batchID: input.incomingBatch.id,
+                baseContentHash: declaredHash
+            ))
+        }
+
+        let initialBody = workingNote.body
+        let initialHash = SyncBatchContentHash.sha256Hex(for: initialBody)
+        var operationIdentities: [OperationIdentityPayload] = []
+        var retainedAdditions: [SyncConvergencePlannedBodyOperation] = []
+        var snapshotAdditions: [SyncConvergenceSnapshotAddition] = []
+        var orderedReconstructedIdentities: [OperationIdentityPayload] = []
+        var reconstructedBaseBody: String?
+        var reconstructedBaseHash: String?
+        var reconstructedPreMergeBody: String?
+        var reconstructedPreMergeHash: String?
+        var sawReconstructed = false
+        var sawLegacy = false
+
+        for indexedChange in indexedChanges {
+            let result = planBodyChange(
+                indexedChange.change,
+                operationIndex: indexedChange.operationIndex,
+                current: workingNote,
+                input: input,
+                eligibleQueuedBatches: eligibleQueuedBatches
+            )
+            switch result {
+            case .success(let planned):
+                workingNote = SyncConvergenceProjectedNote(
+                    noteID: workingNote.noteID,
+                    folderID: workingNote.folderID,
+                    title: workingNote.title,
+                    body: planned.finalBody,
+                    createdAt: workingNote.createdAt,
+                    modifiedAt: indexedChange.change.modifiedAtForReplayOrdering
+                )
+                operationIdentities.append(contentsOf: planned.operationIdentities)
+                retainedAdditions.append(contentsOf: planned.retainedAdditions)
+                snapshotAdditions.append(contentsOf: planned.snapshotAdditions)
+                if case .reconstructedConflict(let bodyPlan) = planned.effect {
+                    sawReconstructed = true
+                    reconstructedBaseBody = reconstructedBaseBody ?? bodyPlan.reconstructedBaseBody
+                    reconstructedBaseHash = reconstructedBaseHash ?? bodyPlan.reconstructedBaseHash
+                    reconstructedPreMergeBody = reconstructedPreMergeBody ?? bodyPlan.projectedPreMergeCurrentBody
+                    reconstructedPreMergeHash = reconstructedPreMergeHash ?? bodyPlan.projectedPreMergeCurrentHash
+                    orderedReconstructedIdentities.append(contentsOf: bodyPlan.orderedOperationIdentities)
+                }
+                if case .legacyPositional = planned.effect {
+                    sawLegacy = true
+                }
+            case .deferred(let reason):
+                return .deferred(reason)
+            case .failed(let failure):
+                return .failed(failure)
+            }
+        }
+
+        let finalHash = SyncBatchContentHash.sha256Hex(for: workingNote.body)
+        let evidence = SyncConvergenceResultEvidence(
+            batchID: input.incomingBatch.id,
+            noteID: noteID,
+            kind: .body,
+            preHash: initialHash,
+            postHash: finalHash,
+            canonicalReplayKey: operationIdentities.last?.canonicalReplayKey
+        )
+        let uniqueIdentities = operationIdentities.uniquedByIdentityKey()
+        let routing: SyncConvergencePresentationRouting = sawReconstructed ? .wholeNoteFallback : .incremental
+        let effect: SyncConvergenceBodyEffect
+        if sawReconstructed {
+            effect = .reconstructedConflict(ReconstructedConflictBodyPlan(
+                noteID: noteID,
+                reconstructedBaseBody: reconstructedBaseBody ?? initialBody,
+                reconstructedBaseHash: reconstructedBaseHash ?? initialHash,
+                projectedPreMergeCurrentBody: reconstructedPreMergeBody ?? initialBody,
+                projectedPreMergeCurrentHash: reconstructedPreMergeHash ?? initialHash,
+                orderedOperationIdentities: (orderedReconstructedIdentities + uniqueIdentities).uniquedByIdentityKey(),
+                finalBody: workingNote.body,
+                finalBodyHash: finalHash,
+                retainedOperationAdditions: retainedAdditions,
+                snapshotAdditions: snapshotAdditions,
+                resultEvidence: evidence,
+                presentationRouting: .wholeNoteFallback
+            ))
+        } else if sawLegacy {
+            effect = .legacyPositional(LegacyBodyPlan(
+                noteID: noteID,
+                initialBody: initialBody,
+                operations: retainedAdditions,
+                finalBody: workingNote.body,
+                finalBodyHash: finalHash,
+                resultEvidence: evidence
+            ))
+        } else {
+            effect = .matchingBaseIncremental(MatchingBaseBodyPlan(
+                noteID: noteID,
+                initialBody: initialBody,
+                initialBodyHash: initialHash,
+                operations: retainedAdditions,
+                finalBody: workingNote.body,
+                finalBodyHash: finalHash,
+                resultEvidence: evidence
+            ))
+        }
+
+        return .success(PlannedBodyResult(
+            effect: effect,
+            finalBody: workingNote.body,
+            operationIdentities: uniqueIdentities,
+            resultEvidence: evidence,
+            retainedAdditions: retainedAdditions,
+            snapshotAdditions: snapshotAdditions,
+            routing: routing
+        ))
+    }
+
+    private func unknownLegacyBodyNoop(
+        _ indexedChanges: [(operationIndex: Int, change: SyncBatchChange)],
+        noteID: UUID,
+        batchID: UUID,
+        input: SyncConvergencePlanningInput
+    ) -> BodyPlanningResult {
+        let emptyHash = SyncBatchContentHash.sha256Hex(for: "")
+        let operations = indexedChanges.map { indexedChange in
+            let identity = operationIdentity(
+                for: indexedChange.change,
+                in: input.incomingBatch,
+                operationIndex: indexedChange.operationIndex,
+                kind: indexedChange.change.operationKind
+            )
+            return SyncConvergencePlannedBodyOperation(
+                noteID: noteID,
+                kind: indexedChange.change.operationKind == "delete" ? .delete : .insert,
+                utf16Offset: indexedChange.change.utf16OffsetForPlanning,
+                utf16Length: indexedChange.change.utf16LengthForPlanning,
+                text: indexedChange.change.textForPlanning,
+                expectedText: indexedChange.change.expectedTextForPlanning,
+                baseContentHash: nil,
+                resultContentHash: emptyHash,
+                operationIdentity: identity
+            )
+        }
+        let identities = operations.map(\.operationIdentity)
+        let evidence = SyncConvergenceResultEvidence(
+            batchID: batchID,
+            noteID: noteID,
+            kind: .body,
+            preHash: emptyHash,
+            postHash: emptyHash,
+            canonicalReplayKey: identities.last?.canonicalReplayKey
+        )
+        return .success(PlannedBodyResult(
+            effect: .legacyPositional(LegacyBodyPlan(
+                noteID: noteID,
+                initialBody: "",
+                operations: operations,
+                finalBody: "",
+                finalBodyHash: emptyHash,
+                resultEvidence: evidence
+            )),
+            finalBody: "",
+            operationIdentities: identities,
+            resultEvidence: evidence,
+            retainedAdditions: operations,
+            snapshotAdditions: [],
+            routing: .none
+        ))
+    }
+
     private func planBodyChange(
         _ change: SyncBatchChange,
         operationIndex: Int,
         current: SyncConvergenceProjectedNote,
-        input: SyncConvergencePlanningInput
+        input: SyncConvergencePlanningInput,
+        eligibleQueuedBatches: [SyncConvergenceQueuedBatch] = []
     ) -> BodyPlanningResult {
         let replayEngine = SyncOperationReplayEngine()
         let identity = operationIdentity(for: change, in: input.incomingBatch, operationIndex: operationIndex, kind: change.operationKind)
@@ -274,9 +539,13 @@ struct SyncConvergencePlanner {
         switch reconstruction {
         case .exactSnapshot(let base), .reconstructed(let base):
             let currentOperation = SyncConvergenceBodyOperation(change: change, identity: identity)
+            let queuedOperations = queuedBodyOperations(
+                from: eligibleQueuedBatches,
+                noteID: current.noteID
+            )
             let union = SyncOperationUnionBuilder().build(
                 retained: input.retainedLocalOperations + input.retainedRemoteOperations,
-                current: [currentOperation],
+                current: queuedOperations + [currentOperation],
                 noteID: current.noteID,
                 excludingIdentityKeys: base.consumedOperationIdentityKeys
             )
@@ -302,6 +571,28 @@ struct SyncConvergencePlanner {
         }
     }
 
+    private func queuedBodyOperations(
+        from queuedBatches: [SyncConvergenceQueuedBatch],
+        noteID: UUID
+    ) -> [SyncConvergenceBodyOperation] {
+        queuedBatches.flatMap { queuedBatch in
+            queuedBatch.batch.changes.enumerated().compactMap { operationIndex, change in
+                guard change.noteID == noteID, change.isBodyTextOperation else {
+                    return nil
+                }
+                return SyncConvergenceBodyOperation(
+                    change: change,
+                    identity: operationIdentity(
+                        for: change,
+                        in: queuedBatch.batch,
+                        operationIndex: operationIndex,
+                        kind: change.operationKind
+                    )
+                )
+            }
+        }
+    }
+
     private func operationIdentity(
         for change: SyncBatchChange,
         in batch: SyncBatch,
@@ -324,119 +615,219 @@ struct SyncConvergencePlanner {
 enum SyncConvergenceCanonicalBatchDigest {
     static let supportedFormatVersion = 1
 
-    static func digest(for batch: SyncBatch) -> String {
-        let payload = CanonicalPayload(batch: batch)
-        let data = (try? SyncConvergenceStableEncoding.encode(payload)) ?? Data()
-        return SyncBatchContentHash.sha256Hex(for: String(decoding: data, as: UTF8.self))
+    enum Error: Swift.Error, Equatable {
+        case unsupportedFormatVersion(Int)
+        case invalidPayload(String)
     }
 
-    private struct CanonicalPayload: Encodable {
-        let id: String
-        let originDeviceID: String
-        let createdAtBitPattern: UInt64
-        let batchSequence: UInt64?
-        let changes: [CanonicalChange]
+    static func digest(for batch: SyncBatch, formatVersion: Int = supportedFormatVersion) throws -> String {
+        let bytes = try canonicalBytes(for: batch, formatVersion: formatVersion)
+        let digest = SHA256.hash(data: bytes)
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
 
-        init(batch: SyncBatch) {
-            self.id = batch.id.uuidString.lowercased()
-            self.originDeviceID = batch.originDeviceID.uuidString.lowercased()
-            self.createdAtBitPattern = SyncConvergenceDateBits.bitPattern(for: batch.createdAt)
-            self.batchSequence = batch.batchSequence
-            self.changes = batch.changes.enumerated().map { CanonicalChange(index: $0.offset, change: $0.element) }
+    static func canonicalBytes(for batch: SyncBatch, formatVersion: Int = supportedFormatVersion) throws -> Data {
+        guard formatVersion == supportedFormatVersion else {
+            throw Error.unsupportedFormatVersion(formatVersion)
         }
+        var encoder = CanonicalPayloadDigestFormatV1()
+        try encoder.appendBatch(batch)
+        return encoder.data
+    }
+}
+
+private struct CanonicalPayloadDigestFormatV1 {
+    private enum Domain {
+        static let batch: UInt32 = 0x4d595231
+        static let absent: UInt8 = 0x00
+        static let present: UInt8 = 0x01
+        static let legacyOrder: UInt32 = 0x00000001
+        static let sequencedOrder: UInt32 = 0x00000002
+        static let creation: UInt32 = 0x00000001
+        static let title: UInt32 = 0x00000002
+        static let insert: UInt32 = 0x00000003
+        static let delete: UInt32 = 0x00000004
+        static let reconciliation: UInt32 = 0x00000005
     }
 
-    private struct CanonicalChange: Encodable {
-        let index: Int
-        let kind: String
-        let noteID: String
-        let title: String?
-        let body: String?
-        let folderID: String?
-        let utf16Offset: Int?
-        let utf16Length: Int?
-        let text: String?
-        let expectedText: String?
-        let baseContentHash: String?
-        let replacementContentHash: String?
-        let modifiedAtBitPattern: UInt64
-        let createdAtBitPattern: UInt64?
+    private(set) var data = Data()
 
-        init(index: Int, change: SyncBatchChange) {
-            self.index = index
+    mutating func appendBatch(_ batch: SyncBatch) throws {
+        appendUInt32(Domain.batch)
+        appendUInt32(UInt32(SyncConvergenceCanonicalBatchDigest.supportedFormatVersion))
+        try appendUUID(batch.id)
+        try appendUUID(batch.originDeviceID)
+        appendUInt64(SyncConvergenceDateBits.bitPattern(for: batch.createdAt))
+        appendOptionalUInt64(batch.batchSequence)
+        appendUInt64(UInt64(batch.changes.count))
+        for (index, change) in batch.changes.enumerated() {
+            appendUInt64(UInt64(index))
             switch change {
             case .noteCreated(let created):
-                kind = "noteCreated"
-                noteID = created.noteID.uuidString.lowercased()
-                title = created.title
-                body = created.body
-                folderID = created.folderID?.uuidString.lowercased()
-                utf16Offset = nil
-                utf16Length = nil
-                text = nil
-                expectedText = nil
-                baseContentHash = nil
-                replacementContentHash = nil
-                modifiedAtBitPattern = SyncConvergenceDateBits.bitPattern(for: created.modifiedAt)
-                createdAtBitPattern = SyncConvergenceDateBits.bitPattern(for: created.createdAt)
+                appendUInt32(Domain.creation)
+                try appendUUID(created.noteID)
+                appendString(created.title)
+                appendString(created.body)
+                try appendOptionalUUID(created.folderID)
+                appendUInt64(SyncConvergenceDateBits.bitPattern(for: created.createdAt))
+                appendUInt64(SyncConvergenceDateBits.bitPattern(for: created.modifiedAt))
             case .noteTitleChanged(let titleChange):
-                kind = "noteTitleChanged"
-                noteID = titleChange.noteID.uuidString.lowercased()
-                title = titleChange.title
-                body = nil
-                folderID = nil
-                utf16Offset = nil
-                utf16Length = nil
-                text = nil
-                expectedText = nil
-                baseContentHash = nil
-                replacementContentHash = nil
-                modifiedAtBitPattern = SyncConvergenceDateBits.bitPattern(for: titleChange.modifiedAt)
-                createdAtBitPattern = nil
+                appendUInt32(Domain.title)
+                try appendUUID(titleChange.noteID)
+                appendString(titleChange.title)
+                appendUInt64(SyncConvergenceDateBits.bitPattern(for: titleChange.modifiedAt))
             case .noteBodyTextInserted(let insert):
-                kind = "noteBodyTextInserted"
-                noteID = insert.noteID.uuidString.lowercased()
-                title = nil
-                body = nil
-                folderID = nil
-                utf16Offset = insert.utf16Offset
-                utf16Length = nil
-                text = insert.text
-                expectedText = nil
-                baseContentHash = insert.baseContentHash
-                replacementContentHash = nil
-                modifiedAtBitPattern = SyncConvergenceDateBits.bitPattern(for: insert.modifiedAt)
-                createdAtBitPattern = nil
+                appendUInt32(Domain.insert)
+                try appendUUID(insert.noteID)
+                try appendInt(insert.utf16Offset, field: "utf16Offset")
+                appendString(insert.text)
+                appendOptionalString(insert.baseContentHash)
+                appendUInt64(SyncConvergenceDateBits.bitPattern(for: insert.modifiedAt))
             case .noteBodyTextDeleted(let delete):
-                kind = "noteBodyTextDeleted"
-                noteID = delete.noteID.uuidString.lowercased()
-                title = nil
-                body = nil
-                folderID = nil
-                utf16Offset = delete.utf16Offset
-                utf16Length = delete.utf16Length
-                text = nil
-                expectedText = delete.expectedText
-                baseContentHash = delete.baseContentHash
-                replacementContentHash = nil
-                modifiedAtBitPattern = SyncConvergenceDateBits.bitPattern(for: delete.modifiedAt)
-                createdAtBitPattern = nil
+                appendUInt32(Domain.delete)
+                try appendUUID(delete.noteID)
+                try appendInt(delete.utf16Offset, field: "utf16Offset")
+                try appendInt(delete.utf16Length, field: "utf16Length")
+                appendOptionalString(delete.expectedText)
+                appendOptionalString(delete.baseContentHash)
+                appendUInt64(SyncConvergenceDateBits.bitPattern(for: delete.modifiedAt))
             case .noteBodyReconciled(let reconciliation):
-                kind = "noteBodyReconciled"
-                noteID = reconciliation.noteID.uuidString.lowercased()
-                title = nil
-                body = reconciliation.replacementBody
-                folderID = nil
-                utf16Offset = nil
-                utf16Length = nil
-                text = nil
-                expectedText = nil
-                baseContentHash = nil
-                replacementContentHash = reconciliation.replacementContentHash
-                modifiedAtBitPattern = SyncConvergenceDateBits.bitPattern(for: reconciliation.modifiedAt)
-                createdAtBitPattern = nil
+                appendUInt32(Domain.reconciliation)
+                try appendUUID(reconciliation.noteID)
+                appendString(reconciliation.replacementBody)
+                appendString(reconciliation.replacementContentHash)
+                appendUInt64(SyncConvergenceDateBits.bitPattern(for: reconciliation.modifiedAt))
             }
         }
+    }
+
+    mutating func appendOperationIdentity(_ identity: OperationIdentityPayload) throws {
+        guard identity.version == OperationIdentityPayload.supportedVersion else {
+            throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload("operationIdentity.version")
+        }
+        appendString(identity.operationKind)
+        try appendUUIDString(identity.batchIDLowercase, field: "batchIDLowercase")
+        try appendUUIDString(identity.originDeviceIDLowercase, field: "originDeviceIDLowercase")
+        try appendInt(identity.operationIndex, field: "operationIndex")
+        try appendReplayKey(identity.canonicalReplayKey)
+    }
+
+    mutating func appendReplayKey(_ payload: CanonicalReplayKeyPayload) throws {
+        try payload.validate()
+        appendUInt32(UInt32(payload.version))
+        appendUInt64(payload.modifiedAtBitPattern)
+        try appendUUIDString(payload.originDeviceIDLowercase, field: "originDeviceIDLowercase")
+        switch payload.batchOrderKind {
+        case .legacy:
+            appendUInt32(Domain.legacyOrder)
+            appendUInt64(payload.legacyCreatedAtBitPattern ?? 0)
+        case .sequenced:
+            appendUInt32(Domain.sequencedOrder)
+            appendUInt64(payload.sequence ?? 0)
+        }
+        try appendUUIDString(payload.batchIDLowercase, field: "batchIDLowercase")
+        try appendInt(payload.operationIndex, field: "operationIndex")
+    }
+
+    mutating func appendResultEvidence(_ evidence: SyncConvergenceResultEvidence) throws {
+        appendString(evidence.kind.rawValue)
+        try appendUUID(evidence.batchID)
+        try appendUUID(evidence.noteID)
+        appendOptionalString(evidence.preHash)
+        appendOptionalString(evidence.postHash)
+        if let canonicalReplayKey = evidence.canonicalReplayKey {
+            appendUInt8(Domain.present)
+            try appendReplayKey(canonicalReplayKey)
+        } else {
+            appendUInt8(Domain.absent)
+        }
+    }
+
+    mutating func appendPlannedOperation(_ operation: SyncConvergencePlannedBodyOperation) throws {
+        appendString(operation.kind.rawValue)
+        try appendUUID(operation.noteID)
+        try appendInt(operation.utf16Offset, field: "utf16Offset")
+        try appendOptionalInt(operation.utf16Length)
+        appendOptionalString(operation.text)
+        appendOptionalString(operation.expectedText)
+        appendOptionalString(operation.baseContentHash)
+        appendString(operation.resultContentHash)
+        try appendOperationIdentity(operation.operationIdentity)
+    }
+
+    private mutating func appendOptionalUUID(_ uuid: UUID?) throws {
+        if let uuid {
+            appendUInt8(Domain.present)
+            try appendUUID(uuid)
+        } else {
+            appendUInt8(Domain.absent)
+        }
+    }
+
+    private mutating func appendOptionalString(_ value: String?) {
+        if let value {
+            appendUInt8(Domain.present)
+            appendString(value)
+        } else {
+            appendUInt8(Domain.absent)
+        }
+    }
+
+    private mutating func appendOptionalInt(_ value: Int?) throws {
+        if let value {
+            appendUInt8(Domain.present)
+            try appendInt(value, field: "optionalInt")
+        } else {
+            appendUInt8(Domain.absent)
+        }
+    }
+
+    private mutating func appendOptionalUInt64(_ value: UInt64?) {
+        if let value {
+            appendUInt8(Domain.present)
+            appendUInt64(value)
+        } else {
+            appendUInt8(Domain.absent)
+        }
+    }
+
+    private mutating func appendString(_ value: String) {
+        let bytes = Data(value.utf8)
+        appendUInt64(UInt64(bytes.count))
+        data.append(bytes)
+    }
+
+    private mutating func appendUUID(_ uuid: UUID) throws {
+        try appendUUIDString(uuid.uuidString.lowercased(), field: "uuid")
+    }
+
+    private mutating func appendUUIDString(_ value: String, field: String) throws {
+        guard let uuid = UUID(uuidString: value) else {
+            throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload(field)
+        }
+        var uuidValue = uuid.uuid
+        withUnsafeBytes(of: &uuidValue) { data.append(contentsOf: $0) }
+    }
+
+    private mutating func appendInt(_ value: Int, field: String) throws {
+        guard value >= 0 else {
+            throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload(field)
+        }
+        appendUInt64(UInt64(value))
+    }
+
+    private mutating func appendUInt8(_ value: UInt8) {
+        data.append(value)
+    }
+
+    private mutating func appendUInt32(_ value: UInt32) {
+        var bigEndian = value.bigEndian
+        withUnsafeBytes(of: &bigEndian) { data.append(contentsOf: $0) }
+    }
+
+    private mutating func appendUInt64(_ value: UInt64) {
+        var bigEndian = value.bigEndian
+        withUnsafeBytes(of: &bigEndian) { data.append(contentsOf: $0) }
     }
 }
 
@@ -473,7 +864,7 @@ private struct SyncOperationReplayEngine {
         current: SyncConvergenceProjectedNote,
         batchID: UUID
     ) -> BodyPlanningResult {
-        replaySingle(change, identity: identity, body: current.body, noteID: current.noteID, authoritative: false).map { replay in
+        replaySingle(change, identity: identity, body: current.body, noteID: current.noteID, mode: .legacyPositional).map { replay in
             let finalHash = replay.resultEvidence.postHash ?? SyncBatchContentHash.sha256Hex(for: replay.finalBody)
             let operation = replay.retainedAdditions[0]
             let evidence = SyncConvergenceResultEvidence(
@@ -509,7 +900,45 @@ private struct SyncOperationReplayEngine {
         current: SyncConvergenceProjectedNote,
         batchID: UUID
     ) -> BodyPlanningResult {
-        replaySingle(change, identity: identity, body: current.body, noteID: current.noteID, authoritative: false).map { replay in
+        replaySingle(change, identity: identity, body: current.body, noteID: current.noteID, mode: .legacyPositional).map { replay in
+            let initialHash = SyncBatchContentHash.sha256Hex(for: current.body)
+            let finalHash = replay.resultEvidence.postHash ?? SyncBatchContentHash.sha256Hex(for: replay.finalBody)
+            let operation = replay.retainedAdditions[0]
+            let evidence = SyncConvergenceResultEvidence(
+                batchID: batchID,
+                noteID: current.noteID,
+                kind: .body,
+                preHash: initialHash,
+                postHash: finalHash,
+                canonicalReplayKey: identity.canonicalReplayKey
+            )
+            return PlannedBodyResult(
+                effect: .matchingBaseIncremental(MatchingBaseBodyPlan(
+                    noteID: current.noteID,
+                    initialBody: current.body,
+                    initialBodyHash: initialHash,
+                    operations: [operation],
+                    finalBody: replay.finalBody,
+                    finalBodyHash: finalHash,
+                    resultEvidence: evidence
+                )),
+                finalBody: replay.finalBody,
+                operationIdentities: [identity],
+                resultEvidence: evidence,
+                retainedAdditions: [operation],
+                snapshotAdditions: [],
+                routing: .incremental
+            )
+        }
+    }
+
+    func planDeclaredChainStep(
+        _ change: SyncBatchChange,
+        identity: OperationIdentityPayload,
+        current: SyncConvergenceProjectedNote,
+        batchID: UUID
+    ) -> BodyPlanningResult {
+        replaySingle(change, identity: identity, body: current.body, noteID: current.noteID, mode: .reconstructingDeclaredChain).map { replay in
             let initialHash = SyncBatchContentHash.sha256Hex(for: current.body)
             let finalHash = replay.resultEvidence.postHash ?? SyncBatchContentHash.sha256Hex(for: replay.finalBody)
             let operation = replay.retainedAdditions[0]
@@ -555,7 +984,7 @@ private struct SyncOperationReplayEngine {
                 identity: operation.identity,
                 body: body,
                 noteID: projectedCurrent.noteID,
-                authoritative: true
+                mode: .replayingConflictUnion
             ) {
             case .success(let replay):
                 body = replay.finalBody
@@ -614,11 +1043,11 @@ private struct SyncOperationReplayEngine {
         identity: OperationIdentityPayload,
         body: String,
         noteID: UUID,
-        authoritative: Bool
+        mode: SyncOperationReplayMode
     ) -> BodyPlanningResult {
         switch change {
         case .noteBodyTextInserted(let insert):
-            if authoritative, let baseContentHash = insert.baseContentHash,
+            if mode == .reconstructingDeclaredChain, let baseContentHash = insert.baseContentHash,
                baseContentHash != SyncBatchContentHash.sha256Hex(for: body) {
                 return .failed(.corruptHistory(noteID: noteID))
             }
@@ -656,7 +1085,7 @@ private struct SyncOperationReplayEngine {
                 )
             ))
         case .noteBodyTextDeleted(let delete):
-            if authoritative, let baseContentHash = delete.baseContentHash,
+            if mode == .reconstructingDeclaredChain, let baseContentHash = delete.baseContentHash,
                baseContentHash != SyncBatchContentHash.sha256Hex(for: body) {
                 return .failed(.corruptHistory(noteID: noteID))
             }
@@ -676,7 +1105,7 @@ private struct SyncOperationReplayEngine {
             }
             guard let range = body.syncBatchSafeUTF16Range(location: delete.utf16Offset, length: delete.utf16Length),
                   let swiftRange = Range(range, in: body) else {
-                if authoritative {
+                if mode == .reconstructingDeclaredChain {
                     return .failed(.corruptHistory(noteID: noteID))
                 }
                 let hash = SyncBatchContentHash.sha256Hex(for: body)
@@ -694,7 +1123,7 @@ private struct SyncOperationReplayEngine {
             }
             let actual = String(body[swiftRange])
             if let expectedText = delete.expectedText, expectedText != actual {
-                if authoritative {
+                if mode == .reconstructingDeclaredChain {
                     return .failed(.corruptHistory(noteID: noteID))
                 }
                 let hash = SyncBatchContentHash.sha256Hex(for: body)
@@ -736,6 +1165,12 @@ private struct SyncOperationReplayEngine {
     }
 }
 
+private enum SyncOperationReplayMode: Equatable {
+    case legacyPositional
+    case reconstructingDeclaredChain
+    case replayingConflictUnion
+}
+
 private struct SyncBaseReconstructor {
     func reconstruct(
         noteID: UUID,
@@ -759,9 +1194,16 @@ private struct SyncBaseReconstructor {
             var body = snapshot.body
             var generation = snapshot.generation
             var consumedOperationIdentityKeys: Set<String> = []
-            let chain = retainedOperations
+            let chainResult = sortRetainedOperations(retainedOperations
                 .filter { $0.noteID == noteID }
-                .sorted(by: compareRetainedOperations)
+            )
+            let chain: [SyncConvergenceRetainedOperation]
+            switch chainResult {
+            case .success(let sorted):
+                chain = sorted
+            case .failure(let failure):
+                return .failed(failure)
+            }
             for retained in chain {
                 guard retained.baseContentHash == SyncBatchContentHash.sha256Hex(for: body) else {
                     continue
@@ -774,7 +1216,7 @@ private struct SyncBaseReconstructor {
                     operationKind: retained.operationKind.rawValue,
                     canonicalReplayKey: retained.canonicalReplayKey
                 )
-                switch replayEngine.planMatchingBase(
+                switch replayEngine.planDeclaredChainStep(
                     change,
                     identity: identity,
                     current: SyncConvergenceProjectedNote(
@@ -814,17 +1256,23 @@ private struct SyncBaseReconstructor {
         return .unavailable
     }
 
-    private func compareRetainedOperations(
-        _ lhs: SyncConvergenceRetainedOperation,
-        _ rhs: SyncConvergenceRetainedOperation
-    ) -> Bool {
+    private func sortRetainedOperations(
+        _ operations: [SyncConvergenceRetainedOperation]
+    ) -> RetainedOperationSortResult {
         do {
-            return try ValidatedCanonicalReplayKey(lhs.canonicalReplayKey) <
-                ValidatedCanonicalReplayKey(rhs.canonicalReplayKey)
+            let validated = try operations.map { operation in
+                (operation, try ValidatedCanonicalReplayKey(operation.canonicalReplayKey))
+            }
+            return .success(validated.sorted { $0.1 < $1.1 }.map(\.0))
         } catch {
-            return lhs.operationIndex < rhs.operationIndex
+            return .failure(.corruptHistory(noteID: operations.first?.noteID))
         }
     }
+}
+
+private enum RetainedOperationSortResult {
+    case success([SyncConvergenceRetainedOperation])
+    case failure(SyncConvergenceTransactionFailure)
 }
 
 enum SyncBaseReconstructionResult: Equatable {
@@ -866,14 +1314,14 @@ private struct SyncOperationUnionBuilder {
             }
             operations[key] = operation
         }
-        return .success(operations.values.sorted { lhs, rhs in
-            do {
-                return try ValidatedCanonicalReplayKey(lhs.identity.canonicalReplayKey) <
-                    ValidatedCanonicalReplayKey(rhs.identity.canonicalReplayKey)
-            } catch {
-                return lhs.identity.operationIndex < rhs.identity.operationIndex
+        do {
+            let validated = try operations.values.map { operation in
+                (operation, try ValidatedCanonicalReplayKey(operation.identity.canonicalReplayKey))
             }
-        })
+            return .success(validated.sorted { $0.1 < $1.1 }.map(\.0))
+        } catch {
+            return .failure(.corruptHistory(noteID: noteID))
+        }
     }
 }
 
@@ -1011,8 +1459,11 @@ private struct SyncConvergenceHistoryPolicy {
             let projectedSnapshotCount = current.snapshotCount + addedSnapshots.count
             let projectedOperationCount = current.retainedOperationCount + addedOperations.count
             let projectedSnapshotBytes = current.snapshotBytes + addedSnapshots.reduce(0) { $0 + $1.body.utf8.count }
-            let projectedOperationBytes = current.retainedOperationBytes + addedOperations.reduce(0) { $0 + $1.estimatedByteCount }
+            let projectedOperationBytes = current.retainedOperationBytes + addedOperations.reduce(0) { $0 + $1.canonicalEncodedByteCount }
             let projectedFullEvidenceBytes = current.fullIncorporationEvidenceBytes + fullIncorporationEvidenceBytes
+            let addsBoundedEvidence = !addedSnapshots.isEmpty ||
+                !addedOperations.isEmpty ||
+                fullIncorporationEvidenceBytes > 0
 
             if projectedSnapshotCount > Limits.hardSnapshots ||
                 projectedOperationCount > Limits.hardRetainedOperations ||
@@ -1037,6 +1488,9 @@ private struct SyncConvergenceHistoryPolicy {
                 current.reconciliationEvidenceBytes > Limits.softEvidenceBytes ||
                 current.completedReconciliationEpisodeCount > Limits.softCompletedEpisodes {
                 pressureNotes.insert(noteID)
+                if addsBoundedEvidence {
+                    return .deferred(.historyPressure(noteID: noteID, blockingBatchID: nil))
+                }
             }
         }
 
@@ -1053,12 +1507,19 @@ private struct SyncConvergencePlanValidator {
         guard !plan.batchID.uuidString.isEmpty,
               !plan.originDeviceID.uuidString.isEmpty,
               plan.canonicalPayloadDigest.count == 64,
+              plan.canonicalPayloadDigest.allSatisfy({ $0.isHexDigit && !$0.isUppercase }),
               plan.canonicalPayloadDigestFormatVersion == SyncConvergenceCanonicalBatchDigest.supportedFormatVersion else {
             return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
         }
 
         var seenIdentities: Set<String> = []
         for identity in plan.incorporationEvidence.operationIdentities {
+            do {
+                try identity.validate()
+                _ = try ValidatedCanonicalReplayKey(identity.canonicalReplayKey)
+            } catch {
+                return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
+            }
             let key = "\(identity.batchIDLowercase)|\(identity.operationIndex)"
             guard !seenIdentities.contains(key) else {
                 return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
@@ -1066,14 +1527,59 @@ private struct SyncConvergencePlanValidator {
             seenIdentities.insert(key)
         }
 
+        var resultEvidenceKeys: Set<String> = []
+        for evidence in plan.incorporationEvidence.resultEvidence {
+            let key = "\(evidence.batchID.uuidString.lowercased())|\(evidence.noteID.uuidString.lowercased())|\(evidence.kind.rawValue)"
+            guard !resultEvidenceKeys.contains(key) else {
+                return .failedBeforeCommit(.invalidMergePlan(noteID: evidence.noteID))
+            }
+            resultEvidenceKeys.insert(key)
+            if let canonicalReplayKey = evidence.canonicalReplayKey {
+                do {
+                    _ = try ValidatedCanonicalReplayKey(canonicalReplayKey)
+                } catch {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: evidence.noteID))
+                }
+            }
+        }
+
         for notePlan in plan.affectedNotePlans {
-            if case .matchingBaseIncremental(let bodyPlan) = notePlan.bodyEffect,
-               bodyPlan.finalBodyHash != SyncBatchContentHash.sha256Hex(for: bodyPlan.finalBody) {
+            guard notePlan.creationEffect != nil || notePlan.bodyEffect != nil || notePlan.titleEffect != nil else {
                 return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
             }
-            if case .reconstructedConflict(let bodyPlan) = notePlan.bodyEffect,
-               bodyPlan.reconstructedBaseHash != SyncBatchContentHash.sha256Hex(for: bodyPlan.reconstructedBaseBody) {
-                return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+            switch notePlan.bodyEffect {
+            case .matchingBaseIncremental(let bodyPlan):
+                guard bodyPlan.noteID == notePlan.noteID,
+                      bodyPlan.initialBodyHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.initialBody),
+                      bodyPlan.finalBodyHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.finalBody),
+                      bodyPlan.resultEvidence.kind == .body else {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+            case .reconstructedConflict(let bodyPlan):
+                guard bodyPlan.noteID == notePlan.noteID,
+                      bodyPlan.reconstructedBaseHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.reconstructedBaseBody),
+                      bodyPlan.projectedPreMergeCurrentHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.projectedPreMergeCurrentBody),
+                      bodyPlan.finalBodyHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.finalBody),
+                      bodyPlan.presentationRouting == .wholeNoteFallback,
+                      bodyPlan.resultEvidence.kind == .body else {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+            case .legacyPositional(let bodyPlan):
+                guard bodyPlan.noteID == notePlan.noteID,
+                      bodyPlan.finalBodyHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.finalBody),
+                      bodyPlan.resultEvidence.kind == .body else {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+            case nil:
+                break
+            }
+            if let titleEffect = notePlan.titleEffect {
+                do {
+                    _ = try ValidatedCanonicalReplayKey(titleEffect.candidateCanonicalKey)
+                    _ = try ValidatedCanonicalReplayKey(titleEffect.resultingWinningKey)
+                } catch {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
             }
         }
         return nil
@@ -1290,6 +1796,53 @@ private extension SyncBatchChange {
             return "reconciliation"
         }
     }
+
+    var isBodyTextOperation: Bool {
+        switch self {
+        case .noteBodyTextInserted, .noteBodyTextDeleted:
+            return true
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+            return false
+        }
+    }
+
+    var utf16OffsetForPlanning: Int {
+        switch self {
+        case .noteBodyTextInserted(let change):
+            return change.utf16Offset
+        case .noteBodyTextDeleted(let change):
+            return change.utf16Offset
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+            return 0
+        }
+    }
+
+    var utf16LengthForPlanning: Int? {
+        switch self {
+        case .noteBodyTextDeleted(let change):
+            return change.utf16Length
+        case .noteCreated, .noteTitleChanged, .noteBodyTextInserted, .noteBodyReconciled:
+            return nil
+        }
+    }
+
+    var textForPlanning: String? {
+        switch self {
+        case .noteBodyTextInserted(let change):
+            return change.text
+        case .noteCreated, .noteTitleChanged, .noteBodyTextDeleted, .noteBodyReconciled:
+            return nil
+        }
+    }
+
+    var expectedTextForPlanning: String? {
+        switch self {
+        case .noteBodyTextDeleted(let change):
+            return change.expectedText
+        case .noteCreated, .noteTitleChanged, .noteBodyTextInserted, .noteBodyReconciled:
+            return nil
+        }
+    }
 }
 
 private extension Array where Element == SyncBatchChange {
@@ -1304,14 +1857,38 @@ private extension Array where Element == SyncBatchChange {
 }
 
 private extension SyncConvergenceResultEvidence {
-    var estimatedByteCount: Int {
-        kind.rawValue.utf8.count + (preHash?.utf8.count ?? 0) + (postHash?.utf8.count ?? 0) + 64
+    var canonicalEncodedByteCount: Int {
+        var encoder = CanonicalPayloadDigestFormatV1()
+        do {
+            try encoder.appendResultEvidence(self)
+            return encoder.data.count
+        } catch {
+            return 0
+        }
     }
 }
 
 private extension SyncConvergencePlannedBodyOperation {
-    var estimatedByteCount: Int {
-        (text?.utf8.count ?? 0) + (expectedText?.utf8.count ?? 0) + (baseContentHash?.utf8.count ?? 0) + 64
+    var canonicalEncodedByteCount: Int {
+        var encoder = CanonicalPayloadDigestFormatV1()
+        do {
+            try encoder.appendPlannedOperation(self)
+            return encoder.data.count
+        } catch {
+            return 0
+        }
+    }
+}
+
+private extension Array where Element == OperationIdentityPayload {
+    func uniquedByIdentityKey() -> [OperationIdentityPayload] {
+        var seen: Set<String> = []
+        return filter { identity in
+            let key = "\(identity.batchIDLowercase)|\(identity.operationIndex)"
+            guard !seen.contains(key) else { return false }
+            seen.insert(key)
+            return true
+        }
     }
 }
 
