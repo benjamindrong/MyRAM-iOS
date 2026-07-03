@@ -968,15 +968,36 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         let committedAtOrdering = try CommittedAtOrderingPayload.decodeEvidenceData(rootProjection.committedAtOrderingPayloadData)
         XCTAssertEqual(committedAtOrdering.batchIDLowercase, fixture.batch.id.uuidString.lowercased())
         XCTAssertEqual(committedAtOrdering.committedAtBitPattern, SyncConvergenceDateBits.bitPattern(for: fixture.committedAt))
+        let expectedAffectedNotesPayload = ExpectedAffectedNotesPayloadV1(
+            version: 1,
+            noteIDsLowercase: [
+                fixture.noteID.uuidString.lowercased()
+            ].sorted()
+        )
+        let expectedAffectedNotesPayloadData = try SyncConvergenceStableEncoding.encode(
+            expectedAffectedNotesPayload
+        )
+        XCTAssertEqual(root.affectedNotesPayloadData, expectedAffectedNotesPayloadData)
         let affectedNotes = try decodedAffectedNotes(root.affectedNotesPayloadData)
-        XCTAssertEqual(affectedNotes.version, 1)
-        XCTAssertEqual(affectedNotes.noteIDs, [fixture.noteID.uuidString.lowercased()])
+        XCTAssertEqual(affectedNotes.version, expectedAffectedNotesPayload.version)
+        XCTAssertEqual(affectedNotes.noteIDs, expectedAffectedNotesPayload.noteIDsLowercase)
+
         let expectedPostCommit = SyncConvergencePostCommitState(
             queueCleanupPending: true,
             legacyCleanupPending: fixture.plan.cleanupPlan.retryLegacyCleanup,
             presentationRefreshPending: true
         )
-        XCTAssertEqual(try SyncConvergenceStableEncoding.decode(SyncConvergencePostCommitState.self, from: root.postCommitStatePayloadData), expectedPostCommit)
+        let expectedPostCommitPayloadData = try SyncConvergenceStableEncoding.encode(
+            expectedPostCommit
+        )
+        XCTAssertEqual(root.postCommitStatePayloadData, expectedPostCommitPayloadData)
+        XCTAssertEqual(
+            try SyncConvergenceStableEncoding.decode(
+                SyncConvergencePostCommitState.self,
+                from: root.postCommitStatePayloadData
+            ),
+            expectedPostCommit
+        )
 
         let operationIdentities = try context2.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>())
         let noteEffects = try context2.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>())
@@ -2088,6 +2109,16 @@ private struct DecodedAffectedNotes: Equatable {
     let noteIDs: [String]
 }
 
+private struct ExpectedAffectedNotesPayloadV1: Codable, Equatable {
+    let version: Int
+    let noteIDsLowercase: [String]
+
+    enum CodingKeys: String, CodingKey {
+        case version = "v"
+        case noteIDsLowercase = "n"
+    }
+}
+
 private func uuid(_ value: String) -> UUID {
     UUID(uuidString: value)!
 }
@@ -2355,7 +2386,24 @@ private func assertPersistedNoteEffects(
     XCTAssertEqual(row.postBodyHash, expected.postBodyHash, file: file, line: line)
     XCTAssertEqual(row.preTitleKeyPayloadData, try expected.preTitleKey?.encodedEvidenceData(), file: file, line: line)
     XCTAssertEqual(row.postTitleKeyPayloadData, try expected.postTitleKey?.encodedEvidenceData(), file: file, line: line)
-    XCTAssertTrue(SyncConvergenceNoteEffectKindMembership.validate(row.testEffectKinds, expected: ["body", "title"]), file: file, line: line)
+
+    let expectedKinds = notePlan.testExpectedEffectKinds
+    let expectedCanonicalBytes = try canonicalNoteEffectBytes(
+        batchID: expected.batchID,
+        noteID: expected.noteID,
+        kinds: expectedKinds
+    )
+    XCTAssertEqual(
+        try row.testCanonicalChildBytes,
+        expectedCanonicalBytes,
+        file: file,
+        line: line
+    )
+    XCTAssertTrue(
+        SyncConvergenceNoteEffectKindMembership.validate(row.testEffectKinds, expected: Set(expectedKinds)),
+        file: file,
+        line: line
+    )
 }
 
 private func assertPersistedResultEvidence(
@@ -2557,6 +2605,14 @@ private extension SyncConvergenceNotePlan {
             preTitleKey: titleEffect?.priorWinningKey,
             postTitleKey: titleEffect?.resultingWinningKey
         )
+    }
+
+    var testExpectedEffectKinds: [String] {
+        [
+            bodyEffect == nil ? nil : "body",
+            titleEffect == nil ? nil : "title",
+            creationEffect == nil ? nil : "creation"
+        ].compactMap { $0 }
     }
 }
 
