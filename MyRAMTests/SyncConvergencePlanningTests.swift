@@ -613,6 +613,15 @@ final class SyncConvergencePlanningTests: XCTestCase {
 
         let bytes = try SyncConvergenceCanonicalBatchDigest.canonicalBytes(for: first)
         XCTAssertFalse(bytes.isEmpty)
+        XCTAssertEqual(bytes.count, 173)
+        XCTAssertEqual(
+            bytes.hexString,
+            "4d5952310000000100000000000000000000000000132311000000000000000000000000001324113ff00000000000000000000000000000020000000000000000000000030000000000000000000000000013221100000000000000000000000000000001410040000000000000000000000000000001000000030000000000000000000000000013221100000000000000010000000000000001420100000000000000004008000000000000"
+        )
+        XCTAssertEqual(
+            try SyncConvergenceCanonicalBatchDigest.digest(for: first),
+            "f3bae6ee01c99de711aa9bfea7dcbb78ec337011716630c6bd52a6086479ba05"
+        )
         XCTAssertEqual(try SyncConvergenceCanonicalBatchDigest.digest(for: first), try SyncConvergenceCanonicalBatchDigest.digest(for: first))
         XCTAssertNotEqual(try SyncConvergenceCanonicalBatchDigest.digest(for: first), try SyncConvergenceCanonicalBatchDigest.digest(for: reordered))
     }
@@ -751,6 +760,211 @@ final class SyncConvergencePlanningTests: XCTestCase {
         XCTAssertEqual(bodyPlan.finalBody.filter { $0 == "y" }.count, 1)
     }
 
+    func testLaterQueuedSameNoteSuccessorIsBlockedFromEvidenceSelection() {
+        let noteID = uuid("00000000-0000-0000-0000-00000013222D")
+        let candidate = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-00000013232D"),
+            originDeviceID: uuid("00000000-0000-0000-0000-00000013242D"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 0,
+                    text: "x",
+                    modifiedAt: date(2),
+                    baseContentHash: nil
+                ))
+            ]
+        )
+        let earlier = SyncConvergenceQueuedBatch(batch: candidate, queuePosition: 1)
+        let successor = SyncConvergenceQueuedBatch(
+            batch: SyncBatch(
+                id: uuid("00000000-0000-0000-0000-00000013252E"),
+                originDeviceID: uuid("00000000-0000-0000-0000-00000013262E"),
+                createdAt: date(1),
+                changes: [
+                    .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: 1,
+                        text: "y",
+                        modifiedAt: date(3),
+                        baseContentHash: nil
+                    ))
+                ]
+            ),
+            queuePosition: 2
+        )
+
+        let selection = SyncConvergenceEvidenceSelector().selectQueuedBatches(
+            for: candidate,
+            queuedBatches: [successor, earlier]
+        )
+
+        XCTAssertTrue(selection.eligibleEvidenceBatches.isEmpty)
+        XCTAssertEqual(selection.blockedBatches.map(\.batch.id), [successor.batch.id])
+        XCTAssertEqual(selection.blockedNoteIDs, [noteID])
+    }
+
+    func testSameBatchChainedOperationsSurviveReconstructedConflict() {
+        let noteID = uuid("00000000-0000-0000-0000-00000013222E")
+        let base = "AB"
+        let baseHash = SyncBatchContentHash.sha256Hex(for: base)
+        let senderAfterFirst = "AxB"
+        let retained = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-00000013252F"),
+            originDeviceID: uuid("00000000-0000-0000-0000-00000013262F"),
+            operationIndex: 0,
+            offset: 1,
+            text: "y",
+            modifiedAt: date(2),
+            baseBody: base,
+            resultBody: "AyB"
+        )
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-00000013232E"),
+            originDeviceID: uuid("00000000-0000-0000-0000-00000013242E"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "x",
+                    modifiedAt: date(3),
+                    baseContentHash: baseHash
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 2,
+                    text: "q",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: senderAfterFirst)
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: "AyB")],
+            retainedSnapshots: [SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: baseHash, body: base, generation: 1)],
+            retainedLocalOperations: [retained]
+        ))
+
+        guard case .planned(let plan) = outcome,
+              case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected chained same-batch operations to plan in one union, got \(outcome)")
+        }
+        XCTAssertEqual(bodyPlan.finalBody.filter { ["x", "y", "q"].contains($0) }.count, 3)
+        XCTAssertEqual(plan.incorporationEvidence.resultEvidence.filter { $0.kind == .body && $0.noteID == noteID }.count, 1)
+    }
+
+    func testTwoRetainedConcurrentCandidatesDoNotCorruptMergedReplay() {
+        let noteID = uuid("00000000-0000-0000-0000-00000013222B")
+        let base = "AB"
+        let baseHash = SyncBatchContentHash.sha256Hex(for: base)
+        let firstRetained = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-00000013252B"),
+            originDeviceID: uuid("00000000-0000-0000-0000-00000013262B"),
+            operationIndex: 0,
+            offset: 1,
+            text: "x",
+            modifiedAt: date(2),
+            baseBody: base,
+            resultBody: "AxB"
+        )
+        let secondRetained = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-00000013252C"),
+            originDeviceID: uuid("00000000-0000-0000-0000-00000013262C"),
+            operationIndex: 0,
+            offset: 1,
+            text: "y",
+            modifiedAt: date(3),
+            baseBody: base,
+            resultBody: "AyB"
+        )
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-00000013232B"),
+            originDeviceID: uuid("00000000-0000-0000-0000-00000013242B"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "z",
+                    modifiedAt: date(4),
+                    baseContentHash: baseHash
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: "AxyB")],
+            retainedSnapshots: [SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: baseHash, body: base, generation: 1)],
+            retainedLocalOperations: [firstRetained, secondRetained]
+        ))
+
+        guard case .planned(let plan) = outcome,
+              case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected retained concurrent candidates to merge, got \(outcome)")
+        }
+        XCTAssertEqual(bodyPlan.finalBody.filter { ["x", "y", "z"].contains($0) }.count, 3)
+    }
+
+    func testNilBaseRetainedOperationWithResultHashReconstructsChain() {
+        let noteID = uuid("00000000-0000-0000-0000-00000013222C")
+        let snapshotBody = "A"
+        let targetBody = "AB"
+        let targetHash = SyncBatchContentHash.sha256Hex(for: targetBody)
+        let retained = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-00000013252D"),
+            originDeviceID: uuid("00000000-0000-0000-0000-00000013262D"),
+            operationIndex: 0,
+            offset: 1,
+            text: "B",
+            modifiedAt: date(2),
+            baseBody: snapshotBody,
+            resultBody: targetBody
+        ).withoutBaseHash()
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-00000013232C"),
+            originDeviceID: uuid("00000000-0000-0000-0000-00000013242C"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 2,
+                    text: "C",
+                    modifiedAt: date(3),
+                    baseContentHash: targetHash
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: "AX")],
+            retainedSnapshots: [
+                SyncConvergenceRetainedSnapshot(
+                    noteID: noteID,
+                    contentHash: SyncBatchContentHash.sha256Hex(for: snapshotBody),
+                    body: snapshotBody,
+                    generation: 1
+                )
+            ],
+            retainedRemoteOperations: [retained]
+        ))
+
+        guard case .planned(let plan) = outcome,
+              case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected nil-base retained reconstruction, got \(outcome)")
+        }
+        XCTAssertEqual(bodyPlan.reconstructedBaseHash, targetHash)
+    }
+
     func testMalformedRetainedReplayKeyFailsAsCorruptHistoryWithoutFallbackOrdering() {
         let noteID = uuid("00000000-0000-0000-0000-000000132214")
         let base = "A"
@@ -864,11 +1078,15 @@ final class SyncConvergencePlanningTests: XCTestCase {
             return XCTFail("Expected compatibility no-op plan, got \(outcome)")
         }
         XCTAssertEqual(plan.affectedNotePlans.count, 2)
-        XCTAssertEqual(plan.affectedNotePlans.first { $0.noteID == titleNote }?.titleEffect?.verdict, .ignoreOlder)
-        guard case .legacyPositional(let bodyPlan) = plan.affectedNotePlans.first(where: { $0.noteID == bodyNote })?.bodyEffect else {
+        let titleEffect = plan.affectedNotePlans.first { $0.noteID == titleNote }?.titleEffect
+        XCTAssertEqual(titleEffect?.verdict, .compatibilityNoopMissingNote)
+        XCTAssertNil(titleEffect?.resultingWinningKey)
+        guard case .compatibilityNoopMissingNote(let bodyPlan) = plan.affectedNotePlans.first(where: { $0.noteID == bodyNote })?.bodyEffect else {
             return XCTFail("Expected unknown legacy body no-op")
         }
-        XCTAssertEqual(bodyPlan.finalBody, "")
+        XCTAssertEqual(bodyPlan.operationIdentities.count, 1)
+        XCTAssertTrue(plan.historyPlan.retainedOperationAdditions.isEmpty)
+        XCTAssertTrue(plan.historyPlan.snapshotAdditions.isEmpty)
     }
 
     func testUnknownHashedBodyDefersWithRealDeclaredHash() {
@@ -1079,4 +1297,29 @@ private func uuid(_ value: String) -> UUID {
 
 private func date(_ value: TimeInterval) -> Date {
     Date(timeIntervalSinceReferenceDate: value)
+}
+
+private extension SyncConvergenceRetainedOperation {
+    func withoutBaseHash() -> SyncConvergenceRetainedOperation {
+        SyncConvergenceRetainedOperation(
+            noteID: noteID,
+            batchID: batchID,
+            originDeviceID: originDeviceID,
+            operationIndex: operationIndex,
+            operationKind: operationKind,
+            utf16Offset: utf16Offset,
+            utf16Length: utf16Length,
+            text: text,
+            expectedText: expectedText,
+            baseContentHash: nil,
+            resultContentHash: resultContentHash,
+            canonicalReplayKey: canonicalReplayKey
+        )
+    }
+}
+
+private extension Data {
+    var hexString: String {
+        map { String(format: "%02x", $0) }.joined()
+    }
 }

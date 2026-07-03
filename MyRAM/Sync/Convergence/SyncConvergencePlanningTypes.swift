@@ -87,6 +87,7 @@ enum SyncConvergenceBodyEffect: Equatable {
     case matchingBaseIncremental(MatchingBaseBodyPlan)
     case reconstructedConflict(ReconstructedConflictBodyPlan)
     case legacyPositional(LegacyBodyPlan)
+    case compatibilityNoopMissingNote(MissingNoteBodyNoopPlan)
 }
 
 struct MatchingBaseBodyPlan: Equatable {
@@ -123,6 +124,12 @@ struct LegacyBodyPlan: Equatable {
     let resultEvidence: SyncConvergenceResultEvidence
 }
 
+struct MissingNoteBodyNoopPlan: Equatable {
+    let noteID: UUID
+    let operationIdentities: [OperationIdentityPayload]
+    let resultEvidence: SyncConvergenceResultEvidence
+}
+
 struct SyncConvergenceTitleEffect: Equatable {
     let priorTitle: String
     let priorWinningKey: CanonicalReplayKeyPayload?
@@ -131,7 +138,7 @@ struct SyncConvergenceTitleEffect: Equatable {
     let candidateCanonicalKey: CanonicalReplayKeyPayload
     let verdict: SyncConvergenceTitleVerdict
     let resultingTitle: String
-    let resultingWinningKey: CanonicalReplayKeyPayload
+    let resultingWinningKey: CanonicalReplayKeyPayload?
     let resultEvidence: SyncConvergenceResultEvidence
 }
 
@@ -139,6 +146,7 @@ enum SyncConvergenceTitleVerdict: Equatable {
     case apply
     case ignoreOlder
     case idempotent
+    case compatibilityNoopMissingNote
 }
 
 struct SyncConvergenceIncorporationPlan: Equatable {
@@ -235,6 +243,14 @@ struct SyncConvergenceRetainedOperation: Equatable {
 struct SyncConvergenceQueuedBatch: Equatable {
     let batch: SyncBatch
     let queuePosition: Int
+}
+
+struct SyncConvergenceQueueSelection: Equatable {
+    let candidateBatch: SyncConvergenceQueuedBatch
+    let eligibleEvidenceBatches: [SyncConvergenceQueuedBatch]
+    let eligibleDisjointBatches: [SyncConvergenceQueuedBatch]
+    let blockedBatches: [SyncConvergenceQueuedBatch]
+    let blockedNoteIDs: Set<UUID>
 }
 
 struct SyncConvergenceTitleWinnerProjection: Equatable {
