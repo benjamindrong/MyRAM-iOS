@@ -612,12 +612,13 @@ enum SyncConvergenceDeferredReason: Equatable {
     case historyPressure(noteID: UUID, blockingBatchID: UUID?)
 }
 
-enum SyncConvergenceTransactionFailure: Equatable {
+enum SyncConvergenceTransactionFailure: Error, Equatable {
     case swiftDataFetch
     case swiftDataSave
     case corruptHistory(noteID: UUID?)
     case invalidMergePlan(noteID: UUID?)
     case inconsistentIncorporationState(noteID: UUID?)
+    case staleAuthoritativeState(noteID: UUID?)
     case unsupportedDigestFormat(noteID: UUID?, batchID: UUID, formatVersion: Int)
     case unexpected
 }
@@ -645,6 +646,8 @@ enum SyncConvergenceDrainFailureMapping {
             return .invalidMergePlan
         case .inconsistentIncorporationState:
             return .inconsistentIncorporationState
+        case .staleAuthoritativeState:
+            return .staleAuthoritativeState
         case .unsupportedDigestFormat:
             return .unsupportedDigestFormat
         case .unexpected:
