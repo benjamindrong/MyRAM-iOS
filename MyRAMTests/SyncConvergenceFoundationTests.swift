@@ -116,19 +116,70 @@ final class SyncConvergenceFoundationTests: XCTestCase {
             replayKey: SyncBatchReplayKey(batch: secondBatch, change: secondBatch.changes[0], operationIndex: 0)
         )
 
-        let firstRoundTrip = try SyncConvergenceStableEncoding.decode(
-            CanonicalReplayKeyPayload.self,
-            from: SyncConvergenceStableEncoding.encode(first)
-        )
-        let secondRoundTrip = try SyncConvergenceStableEncoding.decode(
-            CanonicalReplayKeyPayload.self,
-            from: SyncConvergenceStableEncoding.encode(second)
-        )
+        let firstRoundTrip = try CanonicalReplayKeyPayload.decodeEvidenceData(first.encodedEvidenceData())
+        let secondRoundTrip = try CanonicalReplayKeyPayload.decodeEvidenceData(second.encodedEvidenceData())
 
-        XCTAssertLessThan(first, second)
-        XCTAssertLessThan(firstRoundTrip, secondRoundTrip)
+        XCTAssertLessThan(try ValidatedCanonicalReplayKey(first), try ValidatedCanonicalReplayKey(second))
+        XCTAssertLessThan(
+            try ValidatedCanonicalReplayKey(firstRoundTrip),
+            try ValidatedCanonicalReplayKey(secondRoundTrip)
+        )
         XCTAssertEqual(firstRoundTrip, first)
         XCTAssertEqual(secondRoundTrip, second)
+    }
+
+    func testCanonicalReplayKeyPayloadValidationRejectsMalformedEvidence() throws {
+        let validLegacy = validReplayPayload(batchOrderKind: .legacy)
+        let validSequenced = validReplayPayload(
+            batchOrderKind: .sequenced,
+            legacyCreatedAtBitPattern: nil,
+            sequence: 1
+        )
+
+        XCTAssertNoThrow(try validLegacy.encodedEvidenceData())
+        XCTAssertNoThrow(try validSequenced.encodedEvidenceData())
+        XCTAssertThrowsError(try validReplayPayload(version: 99).encodedEvidenceData())
+        XCTAssertThrowsError(
+            try validReplayPayload(
+                batchOrderKind: .legacy,
+                legacyCreatedAtBitPattern: nil
+            ).encodedEvidenceData()
+        )
+        XCTAssertThrowsError(
+            try validReplayPayload(
+                batchOrderKind: .legacy,
+                sequence: 1
+            ).encodedEvidenceData()
+        )
+        XCTAssertThrowsError(
+            try validReplayPayload(
+                batchOrderKind: .sequenced,
+                legacyCreatedAtBitPattern: nil,
+                sequence: nil
+            ).encodedEvidenceData()
+        )
+        XCTAssertThrowsError(
+            try validReplayPayload(
+                batchOrderKind: .sequenced,
+                legacyCreatedAtBitPattern: SyncConvergenceDateBits.bitPattern(for: Date(timeIntervalSinceReferenceDate: 1)),
+                sequence: 1
+            ).encodedEvidenceData()
+        )
+        XCTAssertThrowsError(try validReplayPayload(originDeviceIDLowercase: "not-a-uuid").encodedEvidenceData())
+        XCTAssertThrowsError(
+            try validReplayPayload(
+                originDeviceIDLowercase: "abcdefab-cdef-abcd-efab-abcdefabcdef".uppercased()
+            ).encodedEvidenceData()
+        )
+        XCTAssertThrowsError(try validReplayPayload(batchIDLowercase: "not-a-uuid").encodedEvidenceData())
+        XCTAssertThrowsError(
+            try validReplayPayload(
+                batchIDLowercase: "abcdefab-cdef-abcd-efab-abcdefabcdef".uppercased()
+            ).encodedEvidenceData()
+        )
+        XCTAssertThrowsError(try validReplayPayload(operationIndex: -1).encodedEvidenceData())
+        XCTAssertThrowsError(try CanonicalReplayKeyPayload.decodeEvidenceData(Data([0xde, 0xad, 0xbe, 0xef])))
+        XCTAssertThrowsError(try ValidatedCanonicalReplayKey(validReplayPayload(operationIndex: -1)))
     }
 
     func testCanonicalReplayKeyPayloadLegacyCreatedAtMatchesRuntimeOrderingForNegativeDates() throws {
@@ -163,8 +214,10 @@ final class SyncConvergenceFoundationTests: XCTestCase {
                 CanonicalReplayKeyPayload(replayKey: runtimeKeys[1]),
                 CanonicalReplayKeyPayload(replayKey: runtimeKeys[0])
             ]
-                .map { try SyncConvergenceStableEncoding.decode(CanonicalReplayKeyPayload.self, from: SyncConvergenceStableEncoding.encode($0)) }
+                .map { try CanonicalReplayKeyPayload.decodeEvidenceData($0.encodedEvidenceData()) }
+                .map { try ValidatedCanonicalReplayKey($0) }
                 .sorted()
+                .map(\.payload)
 
             XCTAssertEqual(persistedKeys, runtimeKeys.map(CanonicalReplayKeyPayload.init(replayKey:)))
         }
@@ -197,7 +250,10 @@ final class SyncConvergenceFoundationTests: XCTestCase {
 
         XCTAssertNotEqual(first.modifiedAtBitPattern, second.modifiedAtBitPattern)
         XCTAssertNotEqual(first.legacyCreatedAtBitPattern, second.legacyCreatedAtBitPattern)
-        XCTAssertEqual([second, first].sorted(), [first, second])
+        XCTAssertEqual(
+            try [ValidatedCanonicalReplayKey(second), ValidatedCanonicalReplayKey(first)].sorted().map(\.payload),
+            [first, second]
+        )
     }
 
     func testUnsupportedDigestFormatMapsToDedicatedDrainFailure() {
@@ -340,6 +396,44 @@ final class SyncConvergenceFoundationTests: XCTestCase {
         )
     }
 
+    func testTombstonePostInitializationValidationRejectsCorruption() throws {
+        let tombstone = try makeValidTombstone()
+
+        tombstone.testOnlySetCanonicalPayloadDigest(String(repeating: "a", count: 65))
+        XCTAssertFalse(tombstone.isWithinFixedSizeLimit)
+        XCTAssertThrowsError(try SyncConvergencePersistenceValidation.validate(tombstone))
+
+        let invalidCharacterTombstone = try makeValidTombstone()
+        invalidCharacterTombstone.testOnlySetCanonicalPayloadDigest(String(repeating: "z", count: 64))
+        XCTAssertFalse(invalidCharacterTombstone.isWithinFixedSizeLimit)
+        XCTAssertThrowsError(try SyncConvergencePersistenceValidation.validate(invalidCharacterTombstone))
+
+        let mismatchedOrderingTombstone = try makeValidTombstone()
+        mismatchedOrderingTombstone.testOnlySetCommittedAtOrderingPayloadData(
+            try CommittedAtOrderingPayload(
+                batchID: UUID(uuidString: "00000000-0000-0000-0000-000000132499")!,
+                committedAt: Date(timeIntervalSinceReferenceDate: 1_234.567_890_1)
+            ).encodedEvidenceData()
+        )
+        XCTAssertThrowsError(try SyncConvergencePersistenceValidation.validate(mismatchedOrderingTombstone))
+
+        let unsupportedFormatTombstone = try makeValidTombstone()
+        unsupportedFormatTombstone.testOnlySetTombstoneFormatVersion(2)
+        XCTAssertFalse(unsupportedFormatTombstone.isWithinFixedSizeLimit)
+        XCTAssertThrowsError(try SyncConvergencePersistenceValidation.validate(unsupportedFormatTombstone))
+    }
+
+    func testTombstoneSizeChecksUseFullPersistenceValidation() throws {
+        let tombstone = try makeValidTombstone()
+
+        XCTAssertTrue(tombstone.isWithinFixedSizeLimit)
+        XCTAssertNoThrow(try IncorporatedBatchTombstone.validateEncodedPayloadSize(Data(repeating: 0x01, count: 512)))
+        XCTAssertThrowsError(try IncorporatedBatchTombstone.validateEncodedPayloadSize(Data(repeating: 0x01, count: 513)))
+
+        tombstone.testOnlySetCommittedAtOrderingPayloadData(Data([0xde, 0xad, 0xbe, 0xef]))
+        XCTAssertFalse(tombstone.isWithinFixedSizeLimit)
+    }
+
     func testTombstoneAndFullRecordUseSameCommittedAtOrderingPayloadType() throws {
         let batchID = UUID(uuidString: "00000000-0000-0000-0000-000000132401")!
         let committedAt = Date(timeIntervalSinceReferenceDate: 1_234.567_890_1)
@@ -372,27 +466,28 @@ final class SyncConvergenceFoundationTests: XCTestCase {
         let batchID = UUID(uuidString: "00000000-0000-0000-0000-000000132602")!
         let originDeviceID = UUID(uuidString: "00000000-0000-0000-0000-000000132603")!
         let date = Date(timeIntervalSinceReferenceDate: 123.456_789)
-        let replayPayload = try SyncConvergenceStableEncoding.encode(
-            CanonicalReplayKeyPayload(
-                replayKey: SyncBatchReplayKey(
-                    batch: makeOrderingBatch(
-                        id: batchID,
-                        originDeviceID: originDeviceID,
-                        createdAt: date,
-                        modifiedAt: date,
-                        noteID: noteID
-                    ),
-                    change: makeOrderingBatch(
-                        id: batchID,
-                        originDeviceID: originDeviceID,
-                        createdAt: date,
-                        modifiedAt: date,
-                        noteID: noteID
-                    ).changes[0],
-                    operationIndex: 0
-                )
+        let replayBatch = makeOrderingBatch(
+            id: batchID,
+            originDeviceID: originDeviceID,
+            createdAt: date,
+            modifiedAt: date,
+            noteID: noteID
+        )
+        let replayKeyPayload = CanonicalReplayKeyPayload(
+            replayKey: SyncBatchReplayKey(
+                batch: replayBatch,
+                change: replayBatch.changes[0],
+                operationIndex: 0
             )
         )
+        let replayPayload = try replayKeyPayload.encodedEvidenceData()
+        let operationIdentityPayload = try OperationIdentityPayload(
+            batchID: batchID,
+            originDeviceID: originDeviceID,
+            operationIndex: 0,
+            operationKind: "insert",
+            canonicalReplayKey: replayKeyPayload
+        ).encodedPayloadData()
         let retained = RetainedBodyOperation(
             noteID: noteID,
             batchID: batchID,
@@ -426,8 +521,15 @@ final class SyncConvergenceFoundationTests: XCTestCase {
             noteID: noteID,
             title: "Title",
             canonicalReplayKeyPayloadData: replayPayload,
-            operationIdentityPayloadData: Data(),
+            operationIdentityPayloadData: operationIdentityPayload,
             updatedAt: date
+        )
+        let operationIdentity = IncorporatedBatchOperationIdentity(
+            batchID: batchID,
+            noteID: noteID,
+            operationIndex: 0,
+            operationIdentityPayloadData: operationIdentityPayload,
+            canonicalReplayKeyPayloadData: replayPayload
         )
         let diagnostic = ConvergenceNoteDiagnosticState(noteID: noteID, statusRaw: "blocked", createdAt: date, updatedAt: date)
         let episode = ReconciliationEpisode(noteID: noteID, generation: 1, stateRaw: "complete", completedAt: date)
@@ -438,7 +540,38 @@ final class SyncConvergenceFoundationTests: XCTestCase {
         XCTAssertNoThrow(try diagnostic.validateDateAuthority())
         XCTAssertNoThrow(try episode.validateDateAuthority())
 
-        retained.modifiedAt = Date(timeIntervalSinceReferenceDate: 999)
+        XCTAssertNoThrow(try SyncConvergencePersistenceValidation.validate(retained))
+        XCTAssertNoThrow(try SyncConvergencePersistenceValidation.validate(batch))
+        XCTAssertNoThrow(try SyncConvergencePersistenceValidation.validate(winner))
+        XCTAssertNoThrow(try SyncConvergencePersistenceValidation.validate(operationIdentity))
+        XCTAssertNoThrow(try SyncConvergencePersistenceValidation.validate(diagnostic))
+        XCTAssertNoThrow(try SyncConvergencePersistenceValidation.validate(episode))
+
+        let malformedIdentityWinner = NoteTitleWinner(
+            noteID: noteID,
+            title: "Title",
+            canonicalReplayKeyPayloadData: replayPayload,
+            operationIdentityPayloadData: Data([0xde, 0xad, 0xbe, 0xef]),
+            updatedAt: date
+        )
+        XCTAssertThrowsError(try SyncConvergencePersistenceValidation.validate(malformedIdentityWinner))
+
+        let synchronizedDate = Date(timeIntervalSinceReferenceDate: 456)
+        retained.setModifiedAt(synchronizedDate)
+        batch.setCreatedAt(synchronizedDate)
+        batch.setCommittedAt(synchronizedDate)
+        winner.setUpdatedAt(synchronizedDate)
+        diagnostic.setCreatedAt(synchronizedDate)
+        diagnostic.setUpdatedAt(synchronizedDate)
+        episode.setCompletedAt(synchronizedDate)
+
+        XCTAssertNoThrow(try retained.validateDateAuthority())
+        XCTAssertNoThrow(try batch.validateDateAuthority())
+        XCTAssertNoThrow(try winner.validateDateAuthority())
+        XCTAssertNoThrow(try diagnostic.validateDateAuthority())
+        XCTAssertNoThrow(try episode.validateDateAuthority())
+
+        retained.testOnlySetModifiedAtWithoutUpdatingBits(Date(timeIntervalSinceReferenceDate: 999))
         XCTAssertThrowsError(try retained.validateDateAuthority())
         let authoritativeRetainedBits = retained.modifiedAtBitPattern
         retained.rebuildConvenienceDatesFromAuthoritativeBits()
@@ -446,12 +579,12 @@ final class SyncConvergenceFoundationTests: XCTestCase {
         XCTAssertEqual(retained.modifiedAt, SyncConvergenceDateBits.date(from: authoritativeRetainedBits))
         XCTAssertNoThrow(try retained.validateDateAuthority())
 
-        batch.createdAt = Date(timeIntervalSinceReferenceDate: 999)
-        batch.committedAt = Date(timeIntervalSinceReferenceDate: 999)
-        winner.updatedAt = Date(timeIntervalSinceReferenceDate: 999)
-        diagnostic.createdAt = Date(timeIntervalSinceReferenceDate: 999)
-        diagnostic.updatedAt = Date(timeIntervalSinceReferenceDate: 999)
-        episode.completedAt = Date(timeIntervalSinceReferenceDate: 999)
+        batch.testOnlySetCreatedAtWithoutUpdatingBits(Date(timeIntervalSinceReferenceDate: 999))
+        batch.testOnlySetCommittedAtWithoutUpdatingBits(Date(timeIntervalSinceReferenceDate: 999))
+        winner.testOnlySetUpdatedAtWithoutUpdatingBits(Date(timeIntervalSinceReferenceDate: 999))
+        diagnostic.testOnlySetCreatedAtWithoutUpdatingBits(Date(timeIntervalSinceReferenceDate: 999))
+        diagnostic.testOnlySetUpdatedAtWithoutUpdatingBits(Date(timeIntervalSinceReferenceDate: 999))
+        episode.testOnlySetCompletedAtWithoutUpdatingBits(Date(timeIntervalSinceReferenceDate: 999))
 
         XCTAssertThrowsError(try batch.validateDateAuthority())
         XCTAssertThrowsError(try winner.validateDateAuthority())
@@ -475,6 +608,11 @@ final class SyncConvergenceFoundationTests: XCTestCase {
         XCTAssertEqual(diagnostic.createdAtBitPattern, diagnosticCreatedBits)
         XCTAssertEqual(diagnostic.updatedAtBitPattern, diagnosticUpdatedBits)
         XCTAssertEqual(episode.completedAtBitPattern, episodeCompletedBits)
+
+        episode.setCompletedAt(nil)
+        XCTAssertNoThrow(try episode.validateDateAuthority())
+        episode.testOnlySetCompletedAtWithoutUpdatingBits(Date(timeIntervalSinceReferenceDate: 999))
+        XCTAssertThrowsError(try SyncConvergencePersistenceValidation.validate(episode))
     }
 
     @MainActor
@@ -574,7 +712,7 @@ final class SyncConvergenceFoundationTests: XCTestCase {
             committedAt: committedAt
         ).encodedEvidenceData()
 
-        return try IncorporatedBatchTombstone(
+        return try IncorporatedBatchTombstone.makeValidated(
             batchID: batchID,
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000132402")!,
             canonicalPayloadDigest: canonicalPayloadDigest,
@@ -584,6 +722,31 @@ final class SyncConvergenceFoundationTests: XCTestCase {
             committedResultDigestFormatVersion: 1,
             committedAtOrderingPayloadData: payloadData,
             tombstoneFormatVersion: tombstoneFormatVersion
+        )
+    }
+
+    private func validReplayPayload(
+        version: Int = CanonicalReplayKeyPayload.supportedVersion,
+        originDeviceIDLowercase: String = "00000000-0000-0000-0000-000000132701",
+        batchOrderKind: CanonicalReplayKeyPayload.BatchOrderKind = .legacy,
+        legacyCreatedAtBitPattern: UInt64? = SyncConvergenceDateBits.bitPattern(
+            for: Date(timeIntervalSinceReferenceDate: -1)
+        ),
+        sequence: UInt64? = nil,
+        batchIDLowercase: String = "00000000-0000-0000-0000-000000132702",
+        operationIndex: Int = 0
+    ) -> CanonicalReplayKeyPayload {
+        CanonicalReplayKeyPayload(
+            version: version,
+            modifiedAtBitPattern: SyncConvergenceDateBits.bitPattern(
+                for: Date(timeIntervalSinceReferenceDate: 2)
+            ),
+            originDeviceIDLowercase: originDeviceIDLowercase,
+            batchOrderKind: batchOrderKind,
+            legacyCreatedAtBitPattern: legacyCreatedAtBitPattern,
+            sequence: sequence,
+            batchIDLowercase: batchIDLowercase,
+            operationIndex: operationIndex
         )
     }
 }

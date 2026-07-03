@@ -47,8 +47,8 @@ final class RetainedBodyOperation {
     var baseContentHash: String?
     var resultContentHash: String?
     // The bit pattern is authoritative for ordering; Date is retained for display and query convenience.
-    var modifiedAt: Date
-    var modifiedAtBitPattern: UInt64
+    private(set) var modifiedAt: Date
+    private(set) var modifiedAtBitPattern: UInt64
     var canonicalReplayKeyPayloadData: Data
     var sourceRaw: String
     var payloadUTF8ByteCount: Int
@@ -101,6 +101,17 @@ final class RetainedBodyOperation {
     func rebuildConvenienceDatesFromAuthoritativeBits() {
         modifiedAt = SyncConvergenceDateBits.date(from: modifiedAtBitPattern)
     }
+
+    func setModifiedAt(_ date: Date) {
+        modifiedAt = date
+        modifiedAtBitPattern = SyncConvergenceDateBits.bitPattern(for: date)
+    }
+
+    #if DEBUG
+    func testOnlySetModifiedAtWithoutUpdatingBits(_ date: Date) {
+        modifiedAt = date
+    }
+    #endif
 }
 
 @Model
@@ -110,12 +121,12 @@ final class IncorporatedSyncBatch {
     var batchID: UUID
     var originDeviceID: UUID
     // Bit-pattern fields are authoritative for ordering and contradiction checks; Dates are convenience mirrors.
-    var createdAt: Date
-    var createdAtBitPattern: UInt64
+    private(set) var createdAt: Date
+    private(set) var createdAtBitPattern: UInt64
     var batchSequence: UInt64?
     var schemaVersion: Int
-    var committedAt: Date
-    var committedAtBitPattern: UInt64
+    private(set) var committedAt: Date
+    private(set) var committedAtBitPattern: UInt64
     var canonicalPayloadDigest: String
     var canonicalPayloadDigestFormatVersion: Int
     var committedResultDigest: String
@@ -182,6 +193,26 @@ final class IncorporatedSyncBatch {
         createdAt = SyncConvergenceDateBits.date(from: createdAtBitPattern)
         committedAt = SyncConvergenceDateBits.date(from: committedAtBitPattern)
     }
+
+    func setCreatedAt(_ date: Date) {
+        createdAt = date
+        createdAtBitPattern = SyncConvergenceDateBits.bitPattern(for: date)
+    }
+
+    func setCommittedAt(_ date: Date) {
+        committedAt = date
+        committedAtBitPattern = SyncConvergenceDateBits.bitPattern(for: date)
+    }
+
+    #if DEBUG
+    func testOnlySetCreatedAtWithoutUpdatingBits(_ date: Date) {
+        createdAt = date
+    }
+
+    func testOnlySetCommittedAtWithoutUpdatingBits(_ date: Date) {
+        committedAt = date
+    }
+    #endif
 }
 
 @Model
@@ -189,17 +220,17 @@ final class IncorporatedBatchTombstone {
     static let maximumEncodedByteCount = 512
     static let supportedTombstoneFormatVersion = CanonicalIncorporatedBatchTombstonePayloadV1.tombstoneFormatVersion
 
-    @Attribute(.unique) var tombstoneKey: String
-    var id: UUID
-    var batchID: UUID
-    var originDeviceID: UUID
-    var canonicalPayloadDigest: String
-    var canonicalPayloadDigestFormatVersion: Int
-    var schemaVersion: Int
-    var committedResultDigest: String
-    var committedResultDigestFormatVersion: Int
-    var committedAtOrderingPayloadData: Data
-    var tombstoneFormatVersion: Int
+    @Attribute(.unique) private(set) var tombstoneKey: String
+    private(set) var id: UUID
+    private(set) var batchID: UUID
+    private(set) var originDeviceID: UUID
+    private(set) var canonicalPayloadDigest: String
+    private(set) var canonicalPayloadDigestFormatVersion: Int
+    private(set) var schemaVersion: Int
+    private(set) var committedResultDigest: String
+    private(set) var committedResultDigestFormatVersion: Int
+    private(set) var committedAtOrderingPayloadData: Data
+    private(set) var tombstoneFormatVersion: Int
 
     init(
         id: UUID = UUID(),
@@ -227,8 +258,34 @@ final class IncorporatedBatchTombstone {
         try validateForPersistence()
     }
 
+    static func makeValidated(
+        id: UUID = UUID(),
+        batchID: UUID,
+        originDeviceID: UUID,
+        canonicalPayloadDigest: String,
+        canonicalPayloadDigestFormatVersion: Int,
+        schemaVersion: Int,
+        committedResultDigest: String,
+        committedResultDigestFormatVersion: Int,
+        committedAtOrderingPayloadData: Data,
+        tombstoneFormatVersion: Int = 1
+    ) throws -> IncorporatedBatchTombstone {
+        try IncorporatedBatchTombstone(
+            id: id,
+            batchID: batchID,
+            originDeviceID: originDeviceID,
+            canonicalPayloadDigest: canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
+            schemaVersion: schemaVersion,
+            committedResultDigest: committedResultDigest,
+            committedResultDigestFormatVersion: committedResultDigestFormatVersion,
+            committedAtOrderingPayloadData: committedAtOrderingPayloadData,
+            tombstoneFormatVersion: tombstoneFormatVersion
+        )
+    }
+
     var isWithinFixedSizeLimit: Bool {
-        (try? canonicalEncodedPayloadBytes().count) != nil
+        (try? validateForPersistence()) != nil
     }
 
     func canonicalTombstonePayloadV1() throws -> CanonicalIncorporatedBatchTombstonePayloadV1 {
@@ -269,6 +326,20 @@ final class IncorporatedBatchTombstone {
             )
         }
     }
+
+    #if DEBUG
+    func testOnlySetCanonicalPayloadDigest(_ digest: String) {
+        canonicalPayloadDigest = digest
+    }
+
+    func testOnlySetCommittedAtOrderingPayloadData(_ data: Data) {
+        committedAtOrderingPayloadData = data
+    }
+
+    func testOnlySetTombstoneFormatVersion(_ version: Int) {
+        tombstoneFormatVersion = version
+    }
+    #endif
 }
 
 @Model
@@ -427,8 +498,8 @@ final class NoteTitleWinner {
     var canonicalReplayKeyPayloadData: Data
     var operationIdentityPayloadData: Data
     // updatedAtBitPattern is the authoritative update identity; updatedAt is a convenience mirror.
-    var updatedAt: Date
-    var updatedAtBitPattern: UInt64
+    private(set) var updatedAt: Date
+    private(set) var updatedAtBitPattern: UInt64
 
     init(
         id: UUID = UUID(),
@@ -459,6 +530,17 @@ final class NoteTitleWinner {
     func rebuildConvenienceDatesFromAuthoritativeBits() {
         updatedAt = SyncConvergenceDateBits.date(from: updatedAtBitPattern)
     }
+
+    func setUpdatedAt(_ date: Date) {
+        updatedAt = date
+        updatedAtBitPattern = SyncConvergenceDateBits.bitPattern(for: date)
+    }
+
+    #if DEBUG
+    func testOnlySetUpdatedAtWithoutUpdatingBits(_ date: Date) {
+        updatedAt = date
+    }
+    #endif
 }
 
 @Model
@@ -507,10 +589,10 @@ final class ConvergenceNoteDiagnosticState {
     var blockingReferenceCount: Int
     var diagnosticEvidencePayloadData: Data
     // Bit patterns are authoritative for duplicate and contradiction checks; Dates are convenience mirrors.
-    var createdAt: Date
-    var createdAtBitPattern: UInt64
-    var updatedAt: Date
-    var updatedAtBitPattern: UInt64
+    private(set) var createdAt: Date
+    private(set) var createdAtBitPattern: UInt64
+    private(set) var updatedAt: Date
+    private(set) var updatedAtBitPattern: UInt64
 
     init(
         id: UUID = UUID(),
@@ -550,6 +632,26 @@ final class ConvergenceNoteDiagnosticState {
         createdAt = SyncConvergenceDateBits.date(from: createdAtBitPattern)
         updatedAt = SyncConvergenceDateBits.date(from: updatedAtBitPattern)
     }
+
+    func setCreatedAt(_ date: Date) {
+        createdAt = date
+        createdAtBitPattern = SyncConvergenceDateBits.bitPattern(for: date)
+    }
+
+    func setUpdatedAt(_ date: Date) {
+        updatedAt = date
+        updatedAtBitPattern = SyncConvergenceDateBits.bitPattern(for: date)
+    }
+
+    #if DEBUG
+    func testOnlySetCreatedAtWithoutUpdatingBits(_ date: Date) {
+        createdAt = date
+    }
+
+    func testOnlySetUpdatedAtWithoutUpdatingBits(_ date: Date) {
+        updatedAt = date
+    }
+    #endif
 }
 
 @Model
@@ -600,8 +702,8 @@ final class ReconciliationEpisode {
     var didEmitLocalCandidate: Bool
     var freshAgreedHash: String?
     // completedAtBitPattern is authoritative when present; completedAt is a convenience mirror.
-    var completedAt: Date?
-    var completedAtBitPattern: UInt64?
+    private(set) var completedAt: Date?
+    private(set) var completedAtBitPattern: UInt64?
 
     init(
         id: UUID = UUID(),
@@ -635,6 +737,74 @@ final class ReconciliationEpisode {
 
     func rebuildConvenienceDatesFromAuthoritativeBits() {
         completedAt = completedAtBitPattern.map(SyncConvergenceDateBits.date(from:))
+    }
+
+    func setCompletedAt(_ date: Date?) {
+        completedAt = date
+        completedAtBitPattern = date.map { SyncConvergenceDateBits.bitPattern(for: $0) }
+    }
+
+    #if DEBUG
+    func testOnlySetCompletedAtWithoutUpdatingBits(_ date: Date?) {
+        completedAt = date
+    }
+    #endif
+}
+
+enum SyncConvergencePersistenceValidation {
+    static func validate(_ operation: RetainedBodyOperation) throws {
+        try operation.validateDateAuthority()
+        _ = try CanonicalReplayKeyPayload.decodeEvidenceData(operation.canonicalReplayKeyPayloadData)
+    }
+
+    static func validate(_ batch: IncorporatedSyncBatch) throws {
+        try batch.validateDateAuthority()
+    }
+
+    static func validate(_ tombstone: IncorporatedBatchTombstone) throws {
+        try tombstone.validateForPersistence()
+    }
+
+    static func validate(_ operationIdentity: IncorporatedBatchOperationIdentity) throws {
+        let canonicalReplayKey = try CanonicalReplayKeyPayload.decodeEvidenceData(
+            operationIdentity.canonicalReplayKeyPayloadData
+        )
+        let operationIdentityPayload = try OperationIdentityPayload.decodePayloadData(
+            operationIdentity.operationIdentityPayloadData
+        )
+        guard operationIdentityPayload.canonicalReplayKey == canonicalReplayKey else {
+            throw SyncConvergenceValidationError.modelPayloadDisagreement(field: "canonicalReplayKey")
+        }
+    }
+
+    static func validate(_ noteEffect: IncorporatedBatchNoteEffect) throws {
+        if let preTitleKeyPayloadData = noteEffect.preTitleKeyPayloadData {
+            _ = try CanonicalReplayKeyPayload.decodeEvidenceData(preTitleKeyPayloadData)
+        }
+        if let postTitleKeyPayloadData = noteEffect.postTitleKeyPayloadData {
+            _ = try CanonicalReplayKeyPayload.decodeEvidenceData(postTitleKeyPayloadData)
+        }
+    }
+
+    static func validate(_ titleWinner: NoteTitleWinner) throws {
+        try titleWinner.validateDateAuthority()
+        let canonicalReplayKey = try CanonicalReplayKeyPayload.decodeEvidenceData(
+            titleWinner.canonicalReplayKeyPayloadData
+        )
+        let operationIdentityPayload = try OperationIdentityPayload.decodePayloadData(
+            titleWinner.operationIdentityPayloadData
+        )
+        guard operationIdentityPayload.canonicalReplayKey == canonicalReplayKey else {
+            throw SyncConvergenceValidationError.modelPayloadDisagreement(field: "canonicalReplayKey")
+        }
+    }
+
+    static func validate(_ diagnosticState: ConvergenceNoteDiagnosticState) throws {
+        try diagnosticState.validateDateAuthority()
+    }
+
+    static func validate(_ episode: ReconciliationEpisode) throws {
+        try episode.validateDateAuthority()
     }
 }
 

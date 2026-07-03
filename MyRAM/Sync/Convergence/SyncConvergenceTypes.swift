@@ -134,7 +134,9 @@ enum SyncConvergenceDateBits {
     }
 }
 
-struct CanonicalReplayKeyPayload: Codable, Equatable, Comparable, Sendable {
+struct CanonicalReplayKeyPayload: Codable, Equatable, Sendable {
+    static let supportedVersion = 1
+
     enum BatchOrderKind: String, Codable, Sendable {
         case legacy
         case sequenced
@@ -161,11 +163,11 @@ struct CanonicalReplayKeyPayload: Codable, Equatable, Comparable, Sendable {
     ) {
         self.version = version
         self.modifiedAtBitPattern = modifiedAtBitPattern
-        self.originDeviceIDLowercase = originDeviceIDLowercase.lowercased()
+        self.originDeviceIDLowercase = originDeviceIDLowercase
         self.batchOrderKind = batchOrderKind
         self.legacyCreatedAtBitPattern = legacyCreatedAtBitPattern
         self.sequence = sequence
-        self.batchIDLowercase = batchIDLowercase.lowercased()
+        self.batchIDLowercase = batchIDLowercase
         self.operationIndex = operationIndex
     }
 
@@ -186,63 +188,125 @@ struct CanonicalReplayKeyPayload: Codable, Equatable, Comparable, Sendable {
 
         self.init(
             modifiedAtBitPattern: SyncConvergenceDateBits.bitPattern(for: replayKey.modifiedAt),
-            originDeviceIDLowercase: replayKey.originDeviceID.uuidString,
+            originDeviceIDLowercase: replayKey.originDeviceID.uuidString.lowercased(),
             batchOrderKind: orderKind,
             legacyCreatedAtBitPattern: legacyCreatedAt,
             sequence: sequence,
-            batchIDLowercase: replayKey.stableBatchID.uuidString,
+            batchIDLowercase: replayKey.stableBatchID.uuidString.lowercased(),
             operationIndex: replayKey.operationIndex
         )
-    }
-
-    static func < (lhs: CanonicalReplayKeyPayload, rhs: CanonicalReplayKeyPayload) -> Bool {
-        if lhs.modifiedAt != rhs.modifiedAt { return lhs.modifiedAt < rhs.modifiedAt }
-        if lhs.originDeviceIDLowercase != rhs.originDeviceIDLowercase {
-            return lhs.originDeviceIDLowercase < rhs.originDeviceIDLowercase
-        }
-        if lhs.batchOrderSortKey != rhs.batchOrderSortKey {
-            return lhs.batchOrderSortKey < rhs.batchOrderSortKey
-        }
-        if lhs.batchIDLowercase != rhs.batchIDLowercase {
-            return lhs.batchIDLowercase < rhs.batchIDLowercase
-        }
-        return lhs.operationIndex < rhs.operationIndex
     }
 
     var modifiedAt: Date {
         SyncConvergenceDateBits.date(from: modifiedAtBitPattern)
     }
 
-    private var batchOrderSortKey: BatchOrderSortKey {
+    func encodedEvidenceData() throws -> Data {
+        try validate()
+        return try SyncConvergenceStableEncoding.encode(self)
+    }
+
+    static func decodeEvidenceData(_ data: Data) throws -> Self {
+        let payload: Self
+        do {
+            payload = try SyncConvergenceStableEncoding.decode(Self.self, from: data)
+        } catch {
+            throw SyncConvergenceValidationError.replayKeyDecodeFailed
+        }
+        try payload.validate()
+        return payload
+    }
+
+    func validate() throws {
+        guard version == Self.supportedVersion else {
+            throw SyncConvergenceValidationError.unsupportedEvidenceVersion(field: "canonicalReplayKey", version: version)
+        }
+        try SyncConvergenceContractValidation.validateCanonicalLowercaseUUID(
+            originDeviceIDLowercase,
+            field: "originDeviceIDLowercase"
+        )
+        try SyncConvergenceContractValidation.validateCanonicalLowercaseUUID(
+            batchIDLowercase,
+            field: "batchIDLowercase"
+        )
+        guard operationIndex >= 0 else {
+            throw SyncConvergenceValidationError.invalidReplayKeyShape(field: "operationIndex")
+        }
         switch batchOrderKind {
         case .legacy:
-            BatchOrderSortKey(
-                kind: 0,
-                legacyCreatedAt: legacyCreatedAtBitPattern.map(SyncConvergenceDateBits.date(from:)),
-                sequence: nil,
-                batchID: batchIDLowercase
+            guard legacyCreatedAtBitPattern != nil else {
+                throw SyncConvergenceValidationError.invalidReplayKeyShape(field: "legacyCreatedAtBitPattern")
+            }
+            guard sequence == nil else {
+                throw SyncConvergenceValidationError.invalidReplayKeyShape(field: "sequence")
+            }
+        case .sequenced:
+            guard legacyCreatedAtBitPattern == nil else {
+                throw SyncConvergenceValidationError.invalidReplayKeyShape(field: "legacyCreatedAtBitPattern")
+            }
+            guard sequence != nil else {
+                throw SyncConvergenceValidationError.invalidReplayKeyShape(field: "sequence")
+            }
+        }
+    }
+}
+
+struct ValidatedCanonicalReplayKey: Comparable, Sendable {
+    let payload: CanonicalReplayKeyPayload
+    private let batchOrderSortKey: BatchOrderSortKey
+
+    init(_ payload: CanonicalReplayKeyPayload) throws {
+        try payload.validate()
+        self.payload = payload
+        switch payload.batchOrderKind {
+        case .legacy:
+            guard let legacyCreatedAtBitPattern = payload.legacyCreatedAtBitPattern else {
+                throw SyncConvergenceValidationError.invalidReplayKeyShape(field: "legacyCreatedAtBitPattern")
+            }
+            self.batchOrderSortKey = .legacy(
+                createdAt: SyncConvergenceDateBits.date(from: legacyCreatedAtBitPattern),
+                batchIDLowercase: payload.batchIDLowercase
             )
         case .sequenced:
-            BatchOrderSortKey(kind: 1, legacyCreatedAt: nil, sequence: sequence, batchID: nil)
+            guard let sequence = payload.sequence else {
+                throw SyncConvergenceValidationError.invalidReplayKeyShape(field: "sequence")
+            }
+            self.batchOrderSortKey = .sequenced(sequence)
         }
     }
 
-    private struct BatchOrderSortKey: Comparable {
-        let kind: Int
-        let legacyCreatedAt: Date?
-        let sequence: UInt64?
-        let batchID: String?
+    static func < (lhs: Self, rhs: Self) -> Bool {
+        if lhs.payload.modifiedAt != rhs.payload.modifiedAt {
+            return lhs.payload.modifiedAt < rhs.payload.modifiedAt
+        }
+        if lhs.payload.originDeviceIDLowercase != rhs.payload.originDeviceIDLowercase {
+            return lhs.payload.originDeviceIDLowercase < rhs.payload.originDeviceIDLowercase
+        }
+        if lhs.batchOrderSortKey != rhs.batchOrderSortKey {
+            return lhs.batchOrderSortKey < rhs.batchOrderSortKey
+        }
+        if lhs.payload.batchIDLowercase != rhs.payload.batchIDLowercase {
+            return lhs.payload.batchIDLowercase < rhs.payload.batchIDLowercase
+        }
+        return lhs.payload.operationIndex < rhs.payload.operationIndex
+    }
 
-        static func < (lhs: BatchOrderSortKey, rhs: BatchOrderSortKey) -> Bool {
-            if lhs.kind != rhs.kind { return lhs.kind < rhs.kind }
-            if lhs.legacyCreatedAt != rhs.legacyCreatedAt {
-                let fallback = Date(timeIntervalSinceReferenceDate: 0)
-                return (lhs.legacyCreatedAt ?? fallback) < (rhs.legacyCreatedAt ?? fallback)
+    private enum BatchOrderSortKey: Comparable, Sendable {
+        case legacy(createdAt: Date, batchIDLowercase: String)
+        case sequenced(UInt64)
+
+        static func < (lhs: Self, rhs: Self) -> Bool {
+            switch (lhs, rhs) {
+            case (.legacy(let lhsCreatedAt, let lhsBatchID), .legacy(let rhsCreatedAt, let rhsBatchID)):
+                if lhsCreatedAt != rhsCreatedAt { return lhsCreatedAt < rhsCreatedAt }
+                return lhsBatchID < rhsBatchID
+            case (.legacy, .sequenced):
+                return true
+            case (.sequenced, .legacy):
+                return false
+            case (.sequenced(let lhsSequence), .sequenced(let rhsSequence)):
+                return lhsSequence < rhsSequence
             }
-            if lhs.sequence != rhs.sequence {
-                return (lhs.sequence ?? 0) < (rhs.sequence ?? 0)
-            }
-            return (lhs.batchID ?? "") < (rhs.batchID ?? "")
         }
     }
 }
@@ -264,6 +328,8 @@ enum SyncConvergenceValidationError: Error, Equatable {
     case unsupportedEvidenceVersion(field: String, version: Int)
     case unsupportedTombstoneFormat(version: Int)
     case malformedDigest(field: String, value: String)
+    case replayKeyDecodeFailed
+    case invalidReplayKeyShape(field: String)
     case committedAtOrderingDecodeFailed
     case modelPayloadDisagreement(field: String)
     case dateAuthorityMismatch(field: String)
@@ -460,6 +526,8 @@ enum SyncConvergenceDateAuthority {
 }
 
 struct OperationIdentityPayload: Codable, Equatable, Sendable {
+    static let supportedVersion = 1
+
     let version: Int
     let batchIDLowercase: String
     let originDeviceIDLowercase: String
@@ -468,7 +536,7 @@ struct OperationIdentityPayload: Codable, Equatable, Sendable {
     let canonicalReplayKey: CanonicalReplayKeyPayload
 
     init(
-        version: Int = 1,
+        version: Int = Self.supportedVersion,
         batchID: UUID,
         originDeviceID: UUID,
         operationIndex: Int,
@@ -481,6 +549,35 @@ struct OperationIdentityPayload: Codable, Equatable, Sendable {
         self.operationIndex = operationIndex
         self.operationKind = operationKind
         self.canonicalReplayKey = canonicalReplayKey
+    }
+
+    func encodedPayloadData() throws -> Data {
+        try validate()
+        return try SyncConvergenceStableEncoding.encode(self)
+    }
+
+    static func decodePayloadData(_ data: Data) throws -> Self {
+        let payload = try SyncConvergenceStableEncoding.decode(Self.self, from: data)
+        try payload.validate()
+        return payload
+    }
+
+    func validate() throws {
+        guard version == Self.supportedVersion else {
+            throw SyncConvergenceValidationError.unsupportedEvidenceVersion(field: "operationIdentity", version: version)
+        }
+        try SyncConvergenceContractValidation.validateCanonicalLowercaseUUID(
+            batchIDLowercase,
+            field: "batchIDLowercase"
+        )
+        try SyncConvergenceContractValidation.validateCanonicalLowercaseUUID(
+            originDeviceIDLowercase,
+            field: "originDeviceIDLowercase"
+        )
+        guard operationIndex >= 0 else {
+            throw SyncConvergenceValidationError.invalidReplayKeyShape(field: "operationIndex")
+        }
+        try canonicalReplayKey.validate()
     }
 }
 
