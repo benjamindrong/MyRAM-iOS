@@ -666,7 +666,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             presentationPlan: plan.presentationPlan
         )
         let swappedValidatedInput = ValidatedSyncConvergenceIncorporationInput(
-            validatedPlanToken: SyncConvergenceValidatedPlanToken(),
+            validatedPlanToken: SyncConvergenceValidatedPlanToken.unvalidatedForTesting(),
             plan: swappedPlan,
             sourceBatch: validatedInput.sourceBatch,
             sourceSchemaVersion: validatedInput.sourceSchemaVersion,

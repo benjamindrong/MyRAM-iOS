@@ -2,11 +2,18 @@ import CryptoKit
 import Foundation
 
 struct SyncConvergenceValidatedPlanToken: Equatable {
-    // Not `fileprivate`: regression coverage must be able to construct malformed
-    // validated plans directly (see the swapped-note test) to exercise incorporation-time
-    // defenses that planner-level `validate()` would otherwise reject before this point.
-    // This is still an internal-only construction; no external/network caller can forge one.
-    init() {}
+    fileprivate init() {}
+
+    #if DEBUG
+    /// Test-support only: mints an unchecked token so regression tests can construct
+    /// malformed validated plans directly, exercising incorporation-time defenses that
+    /// planner-level `validate()` would otherwise reject before this point. Gated to
+    /// DEBUG so this bypass can never ship in a release build; production code must
+    /// still go through `SyncConvergencePlanner.plan()` to obtain a token.
+    static func unvalidatedForTesting() -> SyncConvergenceValidatedPlanToken {
+        SyncConvergenceValidatedPlanToken()
+    }
+    #endif
 }
 
 struct SyncConvergencePlanner {
