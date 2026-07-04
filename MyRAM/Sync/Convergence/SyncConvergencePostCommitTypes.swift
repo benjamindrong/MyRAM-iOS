@@ -228,16 +228,18 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
             for operation in incrementalOperations {
                 try operation.validate(noteID: noteID)
             }
-            for (previous, current) in zip(incrementalOperations, incrementalOperations.dropFirst()) {
-                if let baseContentHash = current.baseContentHash,
-                   baseContentHash != previous.resultContentHash {
+            if !incrementalOperations.isEmpty,
+               let expectedPreBodyHash {
+                guard let firstBaseHash = incrementalOperations.first?.baseContentHash,
+                      expectedPreBodyHash == firstBaseHash else {
                     throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
                 }
             }
-            if let expectedPreBodyHash,
-               let firstBaseHash = incrementalOperations.first?.baseContentHash,
-               expectedPreBodyHash != firstBaseHash {
-                throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+            for (previous, current) in zip(incrementalOperations, incrementalOperations.dropFirst()) {
+                guard let baseContentHash = current.baseContentHash,
+                      baseContentHash == previous.resultContentHash else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+                }
             }
             if let finalResultHash = incrementalOperations.last?.resultContentHash,
                finalResultHash != committedPostBodyHash {
