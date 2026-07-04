@@ -8,6 +8,7 @@ build/
 *.moved-aside
 *.swp
 *.DS_Store
+Implementation Docs/
 
 # Swift Package Manager
 .build/

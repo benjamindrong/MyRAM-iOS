@@ -804,6 +804,100 @@ final class SyncConvergencePlanningTests: XCTestCase {
         XCTAssertEqual(plan.incorporationEvidence.resultEvidence.filter { $0.kind == .body && $0.noteID == noteID }.count, 1)
     }
 
+    func testAllRetainedBodyOperationsRouteNone() {
+        let noteID = uuid("00000000-0000-0000-0000-0000001322F0")
+        let baseBody = "A"
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-0000001323F0"),
+            originDeviceID: uuid("00000000-0000-0000-0000-0000001324F0"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(2),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: baseBody)
+                ))
+            ]
+        )
+        let retained = retainedInsert(
+            noteID: noteID,
+            batchID: batch.id,
+            originDeviceID: batch.originDeviceID,
+            operationIndex: 0,
+            offset: 1,
+            text: "B",
+            modifiedAt: date(2),
+            baseBody: baseBody,
+            resultBody: "AB"
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [projectedNote(noteID: noteID, body: "AB")],
+            retainedRemoteOperations: [retained]
+        ))
+
+        guard case .planned(let validatedInput) = outcome,
+              case .matchingBaseIncremental(let bodyPlan) = validatedInput.plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected all-retained body plan, got \(outcome)")
+        }
+        XCTAssertEqual(validatedInput.plan.presentationPlan.noteRoutings[noteID], SyncConvergencePresentationRouting.none)
+        XCTAssertTrue(bodyPlan.operations.isEmpty)
+        XCTAssertEqual(bodyPlan.finalBodyHash, SyncBatchContentHash.sha256Hex(for: "AB"))
+    }
+
+    func testMixedRetainedAndExecutableBodyOperationsRouteIncrementalWithOnlyNewWork() {
+        let noteID = uuid("00000000-0000-0000-0000-0000001322F1")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-0000001323F1"),
+            originDeviceID: uuid("00000000-0000-0000-0000-0000001324F1"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(2),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 2,
+                    text: "C",
+                    modifiedAt: date(3),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB")
+                ))
+            ]
+        )
+        let retained = retainedInsert(
+            noteID: noteID,
+            batchID: batch.id,
+            originDeviceID: batch.originDeviceID,
+            operationIndex: 0,
+            offset: 1,
+            text: "B",
+            modifiedAt: date(2),
+            baseBody: "A",
+            resultBody: "AB"
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [projectedNote(noteID: noteID, body: "AB")],
+            retainedRemoteOperations: [retained]
+        ))
+
+        guard case .planned(let validatedInput) = outcome,
+              case .matchingBaseIncremental(let bodyPlan) = validatedInput.plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected mixed body plan, got \(outcome)")
+        }
+        XCTAssertEqual(validatedInput.plan.presentationPlan.noteRoutings[noteID], .incremental)
+        XCTAssertEqual(bodyPlan.operations.map(\.operationIdentity.operationIndex), [1])
+        XCTAssertEqual(bodyPlan.finalBody, "ABC")
+    }
+
     func testConcurrentSameBaseOperationsConvergeInsteadOfCorruptingHistory() {
         let noteID = uuid("00000000-0000-0000-0000-000000132213")
         let base = "AB"

@@ -135,6 +135,7 @@ final class IncorporatedSyncBatch {
     var authoritativeChildCount: Int
     var authoritativeChildBytes: Int
     var authoritativeChildrenDigest: String
+    var postCommitWorkPayloadData: Data?
     var postCommitStatePayloadData: Data
 
     init(
@@ -153,6 +154,7 @@ final class IncorporatedSyncBatch {
         authoritativeChildCount: Int,
         authoritativeChildBytes: Int,
         authoritativeChildrenDigest: String,
+        postCommitWorkPayloadData: Data? = nil,
         postCommitStatePayloadData: Data
     ) {
         self.batchKey = SyncConvergenceKey.incorporatedBatch(batchID: batchID)
@@ -173,6 +175,7 @@ final class IncorporatedSyncBatch {
         self.authoritativeChildCount = authoritativeChildCount
         self.authoritativeChildBytes = authoritativeChildBytes
         self.authoritativeChildrenDigest = authoritativeChildrenDigest
+        self.postCommitWorkPayloadData = postCommitWorkPayloadData
         self.postCommitStatePayloadData = postCommitStatePayloadData
     }
 

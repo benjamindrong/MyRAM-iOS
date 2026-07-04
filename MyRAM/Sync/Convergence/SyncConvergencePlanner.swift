@@ -3,6 +3,17 @@ import Foundation
 
 struct SyncConvergenceValidatedPlanToken: Equatable {
     fileprivate init() {}
+
+    #if DEBUG
+    /// Test-support only: mints an unchecked token so regression tests can construct
+    /// malformed validated plans directly, exercising incorporation-time defenses that
+    /// planner-level `validate()` would otherwise reject before this point. Gated to
+    /// DEBUG so this bypass can never ship in a release build; production code must
+    /// still go through `SyncConvergencePlanner.plan()` to obtain a token.
+    static func unvalidatedForTesting() -> SyncConvergenceValidatedPlanToken {
+        SyncConvergenceValidatedPlanToken()
+    }
+    #endif
 }
 
 struct SyncConvergencePlanner {
@@ -461,7 +472,7 @@ struct SyncConvergencePlanner {
             postHash: finalHash,
             canonicalReplayKey: operationIdentities.last?.canonicalReplayKey
         )
-        let routing: SyncConvergencePresentationRouting = .incremental
+        let routing: SyncConvergencePresentationRouting = retainedAdditions.isEmpty ? .none : .incremental
         let effect: SyncConvergenceBodyEffect
         if sawLegacy {
             effect = .legacyPositional(LegacyBodyPlan(
@@ -1959,6 +1970,24 @@ struct SyncConvergencePlanValidator {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
                 expectedResultEvidence.append(creationEffect.resultEvidence)
+                // A same-batch `.create` has no persisted note before incorporation, so
+                // any body effect in this same plan must build on the projected creation
+                // body; an idempotent creation's prior batches may have moved the body
+                // further via retained history, so this agreement check is `.create`-only.
+                if creationEffect.verdict == .create {
+                    switch notePlan.bodyEffect {
+                    case .matchingBaseIncremental(let bodyPlan):
+                        guard bodyPlan.initialBodyHash == creationEffect.initialBodyHash else {
+                            return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                        }
+                    case .legacyPositional(let bodyPlan):
+                        guard SyncBatchContentHash.sha256Hex(for: bodyPlan.initialBody) == creationEffect.initialBodyHash else {
+                            return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                        }
+                    case .reconstructedConflict, .compatibilityNoopMissingNote, nil:
+                        break
+                    }
+                }
             }
             switch notePlan.bodyEffect {
             case .matchingBaseIncremental(let bodyPlan):
@@ -1970,7 +1999,7 @@ struct SyncConvergencePlanValidator {
                       bodyPlan.resultEvidence.batchID == plan.batchID,
                       bodyPlan.resultEvidence.preHash == bodyPlan.initialBodyHash,
                       bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
-                      routing == .incremental,
+                      routing == (bodyPlan.operations.isEmpty ? SyncConvergencePresentationRouting.none : .incremental),
                       bodyPlan.operations.allSatisfy({ $0.noteID == notePlan.noteID }),
                       bodyPlan.operations.allSatisfy({ plannedIdentityKeys.contains($0.operationIdentity.planIdentityKey) }) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
@@ -2108,6 +2137,21 @@ struct SyncConvergencePlanValidator {
 extension OperationIdentityPayload {
     var planIdentityKey: String {
         "\(batchIDLowercase)|\(operationIndex)"
+    }
+
+    /// Identities that belong to the source batch must resolve note ownership from
+    /// the source batch itself. A malformed plan must never be allowed to justify
+    /// its own (possibly swapped) identity placement via plan-derived lookup.
+    func noteID(from input: ValidatedSyncConvergenceIncorporationInput) -> UUID? {
+        if batchIDLowercase == input.sourceBatchID.uuidString.lowercased() {
+            guard input.sourceBatch.changes.indices.contains(operationIndex),
+                  input.sourceBatch.changes[operationIndex].operationKind == operationKind
+            else {
+                return nil
+            }
+            return input.sourceBatch.changes[operationIndex].noteID
+        }
+        return canonicalReplayKey.noteIDFromKnownPlan(input.plan)
     }
 }
 
@@ -2636,27 +2680,47 @@ struct SyncConvergenceIncorporationExecutor {
                     }
                 }
             }
-            try verifyBodyPrecondition(notePlan.bodyEffect, current: current)
+            try verifyBodyPrecondition(
+                notePlan.bodyEffect,
+                current: current,
+                creationEffect: notePlan.creationEffect
+            )
             try verifyTitlePrecondition(notePlan.titleEffect, current: current, transaction: transaction)
         }
     }
 
     private func verifyBodyPrecondition(
         _ effect: SyncConvergenceBodyEffect?,
-        current: SyncConvergenceMutableNoteRecord?
+        current: SyncConvergenceMutableNoteRecord?,
+        creationEffect: SyncConvergenceCreationEffect?
     ) throws {
         guard let effect else { return }
         switch effect {
         case .matchingBaseIncremental(let plan):
-            guard SyncBatchContentHash.sha256Hex(for: current?.body ?? "") == plan.initialBodyHash else {
+            let currentBody = try requiredAuthoritativePreBody(
+                current: current,
+                creationEffect: creationEffect,
+                noteID: plan.noteID
+            )
+            guard SyncBatchContentHash.sha256Hex(for: currentBody) == plan.initialBodyHash else {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
             }
         case .reconstructedConflict(let plan):
-            guard SyncBatchContentHash.sha256Hex(for: current?.body ?? "") == plan.projectedPreMergeCurrentHash else {
+            let currentBody = try requiredAuthoritativePreBody(
+                current: current,
+                creationEffect: creationEffect,
+                noteID: plan.noteID
+            )
+            guard SyncBatchContentHash.sha256Hex(for: currentBody) == plan.projectedPreMergeCurrentHash else {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
             }
         case .legacyPositional(let plan):
-            guard current?.body == plan.initialBody else {
+            let currentBody = try requiredAuthoritativePreBody(
+                current: current,
+                creationEffect: creationEffect,
+                noteID: plan.noteID
+            )
+            guard currentBody == plan.initialBody else {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
             }
         case .compatibilityNoopMissingNote(let plan):
@@ -2664,6 +2728,25 @@ struct SyncConvergenceIncorporationExecutor {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
             }
         }
+    }
+
+    /// A same-batch `.create` plus body-operation plan validates body preconditions
+    /// against the projected creation body because no persisted note exists before
+    /// the atomic incorporation save. This exception is limited to `.create`; an
+    /// idempotent creation still requires the authoritative note to exist and match,
+    /// so a genuinely missing note fails closed instead of silently defaulting to "".
+    private func requiredAuthoritativePreBody(
+        current: SyncConvergenceMutableNoteRecord?,
+        creationEffect: SyncConvergenceCreationEffect?,
+        noteID: UUID
+    ) throws -> String {
+        if let current {
+            return current.body
+        }
+        guard let creationEffect, creationEffect.verdict == .create else {
+            throw ExecutorFailure(.staleAuthoritativeState(noteID: noteID))
+        }
+        return creationEffect.body
     }
 
     private func verifyTitlePrecondition(
@@ -2883,7 +2966,7 @@ struct SyncConvergenceIncorporationExecutor {
                 .sorted(by: Self.identityOrder)
                 .map { identity in
                     guard let batchID = UUID(uuidString: identity.batchIDLowercase),
-                          let noteID = identity.canonicalReplayKey.noteIDFromKnownPlan(input.plan)
+                          let noteID = identity.noteID(from: input)
                     else {
                         throw ExecutorFailure(.invalidMergePlan(noteID: nil))
                     }
@@ -2935,6 +3018,15 @@ struct SyncConvergenceIncorporationExecutor {
                 legacyCleanupPending: input.plan.cleanupPlan.retryLegacyCleanup,
                 presentationRefreshPending: input.plan.presentationPlan.noteRoutings.values.contains { $0 != .none }
             )
+            let postCommitWorkPayload: SyncConvergencePostCommitWorkPayloadV1
+            do {
+                postCommitWorkPayload = try Self.makePostCommitWorkPayload(input: input)
+            } catch let error as PostCommitPayloadConstructionError {
+                throw ExecutorFailure(error.transactionFailure)
+            }
+            guard postCommitWorkPayload.derivedInitialState() == postCommitState else {
+                throw ExecutorFailure(.invalidMergePlan(noteID: nil))
+            }
             let committedResultDigest = try CanonicalCommittedResultDigestPayloadV1.digest(
                 plan: input.plan,
                 sourceBatch: input.sourceBatch
@@ -2958,6 +3050,7 @@ struct SyncConvergenceIncorporationExecutor {
                 authoritativeChildCount: childProjection.count,
                 authoritativeChildBytes: childBytes,
                 authoritativeChildrenDigest: childrenDigest,
+                postCommitWorkPayloadData: try postCommitWorkPayload.encodedPayloadData(),
                 postCommitStatePayloadData: try postCommitState.encodedPayloadData()
             )
         }
@@ -2996,6 +3089,90 @@ struct SyncConvergenceIncorporationExecutor {
                 noteEffects: expectedNoteEffects.sorted { $0.noteID.uuidString < $1.noteID.uuidString },
                 resultEvidence: children.resultEvidence.sorted(by: { resultEvidenceOrder($0.evidence, $1.evidence) })
             )
+        }
+
+        static func makePostCommitWorkPayload(
+            input: ValidatedSyncConvergenceIncorporationInput
+        ) throws -> SyncConvergencePostCommitWorkPayloadV1 {
+            var notePlansByID: [UUID: SyncConvergenceNotePlan] = [:]
+            for notePlan in input.plan.affectedNotePlans {
+                guard notePlansByID[notePlan.noteID] == nil else {
+                    throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: notePlan.noteID)
+                }
+                notePlansByID[notePlan.noteID] = notePlan
+            }
+
+            let identityAuthority = try makeOperationIdentityAuthority(input: input)
+            let expectedRoutedNoteIDs = Set(
+                input.plan.presentationPlan.noteRoutings
+                    .filter { $0.value != .none }
+                    .map(\.key)
+            )
+            let entries = try expectedRoutedNoteIDs
+                .sorted { $0.uuidString < $1.uuidString }
+                .map { noteID -> SyncConvergencePostCommitWorkPayloadV1.PresentationEntry in
+                guard let routing = input.plan.presentationPlan.noteRoutings[noteID],
+                      routing != .none,
+                      let routingPayload = SyncConvergencePostCommitPresentationRoutingPayload(routing),
+                      let notePlan = notePlansByID[noteID] else {
+                    throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+                }
+                let operations = try notePlan.incrementalPostCommitOperations(
+                    for: routing,
+                    identityAuthority: identityAuthority
+                )
+                return SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: noteID,
+                    routing: routingPayload,
+                    expectedPreBodyHash: try notePlan.expectedPreBodyHash(for: routing),
+                    committedPostBodyHash: try notePlan.requiredFinalBodyHash(),
+                    incrementalOperations: operations
+                )
+            }
+            guard Set(entries.map(\.noteID)) == expectedRoutedNoteIDs,
+                  entries.count == expectedRoutedNoteIDs.count else {
+                throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: nil)
+            }
+            return SyncConvergencePostCommitWorkPayloadV1(
+                queueCleanupBatchIDs: input.plan.cleanupPlan.batchIDs,
+                legacyCleanupRequired: input.plan.cleanupPlan.retryLegacyCleanup,
+                presentationEntries: entries
+            )
+        }
+
+        private static func makeOperationIdentityAuthority(
+            input: ValidatedSyncConvergenceIncorporationInput
+        ) throws -> [String: PostCommitOperationIdentityAuthority] {
+            var authorityByKey: [String: PostCommitOperationIdentityAuthority] = [:]
+            for identity in input.plan.incorporationEvidence.operationIdentities {
+                do {
+                    try identity.validate()
+                    guard identity.batchIDLowercase == identity.canonicalReplayKey.batchIDLowercase,
+                          identity.originDeviceIDLowercase == identity.canonicalReplayKey.originDeviceIDLowercase,
+                          identity.operationIndex == identity.canonicalReplayKey.operationIndex else {
+                        throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: nil)
+                    }
+                } catch let error as PostCommitPayloadConstructionError {
+                    throw error
+                } catch {
+                    throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: nil)
+                }
+                // Note ownership must be independently resolved here rather than trusted
+                // from the surrounding plan; this is what prevents a malformed plan from
+                // committing a same-kind operation identity under the wrong note.
+                guard let authoritativeNoteID = identity.noteID(from: input) else {
+                    throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: nil)
+                }
+                let key = identity.planIdentityKey
+                guard authorityByKey[key] == nil else {
+                    throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: authoritativeNoteID)
+                }
+                authorityByKey[key] = PostCommitOperationIdentityAuthority(
+                    identity: identity,
+                    noteID: authoritativeNoteID
+                )
+            }
+            return authorityByKey
         }
 
         private static func makeChildProjection(
@@ -3284,6 +3461,17 @@ private extension SyncConvergenceNotePlan {
     }
 }
 
+private enum PostCommitPayloadConstructionError: Error {
+    case invalidMergePlan(noteID: UUID?)
+
+    var transactionFailure: SyncConvergenceTransactionFailure {
+        switch self {
+        case .invalidMergePlan(let noteID):
+            return .invalidMergePlan(noteID: noteID)
+        }
+    }
+}
+
 private extension SyncConvergenceBodyEffect? {
     var hashes: (pre: String?, post: String?)? {
         switch self {
@@ -3346,6 +3534,27 @@ private extension SyncConvergenceTitleEffect {
 }
 
 private extension SyncConvergencePlannedBodyOperation {
+    func postCommitOperationPayload() throws -> SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload {
+        guard let payloadKind = SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload.Kind(
+            rawValue: kind.rawValue
+        ) else {
+            throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+        }
+
+        return SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload(
+            noteID: noteID,
+            operationIndex: operationIdentity.operationIndex,
+            kind: payloadKind,
+            utf16Offset: utf16Offset,
+            utf16Length: utf16Length,
+            text: text,
+            expectedText: expectedText,
+            baseContentHash: baseContentHash,
+            resultContentHash: resultContentHash,
+            operationIdentity: operationIdentity
+        )
+    }
+
     var retainedOperationRecord: SyncConvergenceRetainedOperationRecord {
         SyncConvergenceRetainedOperationRecord(
             noteID: noteID,
@@ -3363,6 +3572,87 @@ private extension SyncConvergencePlannedBodyOperation {
             modifiedAt: operationIdentity.canonicalReplayKey.modifiedAt
         )
     }
+}
+
+private extension SyncConvergenceNotePlan {
+    func requiredFinalBodyHash() throws -> String {
+        switch bodyEffect {
+        case .matchingBaseIncremental(let plan):
+            return plan.finalBodyHash
+        case .reconstructedConflict(let plan):
+            return plan.finalBodyHash
+        case .legacyPositional(let plan):
+            return plan.finalBodyHash
+        case .compatibilityNoopMissingNote:
+            throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+        case nil:
+            guard let creationEffect else {
+                throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+            }
+            return creationEffect.initialBodyHash
+        }
+    }
+
+    func expectedPreBodyHash(for routing: SyncConvergencePresentationRouting) throws -> String? {
+        switch routing {
+        case .none:
+            return nil
+        case .incremental:
+            switch bodyEffect {
+            case .matchingBaseIncremental(let plan):
+                return plan.initialBodyHash
+            case .legacyPositional(let plan):
+                return SyncBatchContentHash.sha256Hex(for: plan.initialBody)
+            default:
+                throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+            }
+        case .wholeNoteFallback:
+            switch bodyEffect {
+            case .reconstructedConflict(let plan):
+                return plan.projectedPreMergeCurrentHash
+            default:
+                throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+            }
+        }
+    }
+
+    func incrementalPostCommitOperations(
+        for routing: SyncConvergencePresentationRouting,
+        identityAuthority: [String: PostCommitOperationIdentityAuthority]
+    ) throws -> [SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload] {
+        guard routing == .incremental else { return [] }
+        let operations: [SyncConvergencePlannedBodyOperation]
+        switch bodyEffect {
+        case .matchingBaseIncremental(let plan):
+            operations = plan.operations
+        case .legacyPositional(let plan):
+            operations = plan.operations
+        default:
+            throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+        }
+        guard !operations.isEmpty,
+              operations.allSatisfy({ $0.noteID == noteID }) else {
+            throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+        }
+        return try operations
+            .sorted { $0.operationIdentity.operationIndex < $1.operationIdentity.operationIndex }
+            .map { operation in
+                let key = operation.operationIdentity.planIdentityKey
+                guard let authority = identityAuthority[key],
+                      authority.identity == operation.operationIdentity,
+                      authority.noteID == noteID else {
+                    throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+                }
+                return try operation.postCommitOperationPayload()
+            }
+    }
+}
+
+/// Authoritative note ownership for a source batch/index, resolved independently
+/// of the surrounding plan so a swapped-identity plan cannot self-justify.
+private struct PostCommitOperationIdentityAuthority {
+    let identity: OperationIdentityPayload
+    let noteID: UUID
 }
 
 private extension CanonicalReplayKeyPayload {
@@ -3413,6 +3703,7 @@ private extension SyncConvergenceIncorporatedBatchRecord {
             authoritativeChildCount: authoritativeChildCount,
             authoritativeChildBytes: authoritativeChildBytes,
             authoritativeChildrenDigest: authoritativeChildrenDigest,
+            postCommitWorkPayloadData: postCommitWorkPayloadData,
             postCommitStatePayloadData: postCommitStatePayloadData
         )
     }
@@ -3425,23 +3716,6 @@ private extension SyncConvergencePostCommitState {
 
     static func decodePayloadData(_ data: Data) throws -> Self {
         try SyncConvergenceStableEncoding.decode(Self.self, from: data)
-    }
-}
-
-private extension SyncConvergenceCleanupPlan {
-    func gated(by state: SyncConvergencePostCommitState) -> SyncConvergenceCleanupPlan {
-        SyncConvergenceCleanupPlan(
-            batchIDs: state.queueCleanupPending ? batchIDs : [],
-            retryQueueCleanup: state.queueCleanupPending && retryQueueCleanup,
-            retryLegacyCleanup: state.legacyCleanupPending && retryLegacyCleanup,
-            retryPresentationRefresh: state.presentationRefreshPending && retryPresentationRefresh
-        )
-    }
-}
-
-private extension SyncConvergencePresentationPlan {
-    func gated(by state: SyncConvergencePostCommitState) -> SyncConvergencePresentationPlan {
-        state.presentationRefreshPending ? self : SyncConvergencePresentationPlan(noteRoutings: [:])
     }
 }
 
