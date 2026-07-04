@@ -3534,7 +3534,9 @@ private extension SyncConvergenceTitleEffect {
 }
 
 private extension SyncConvergencePlannedBodyOperation {
-    func postCommitOperationPayload() throws -> SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload {
+    func postCommitOperationPayload(
+        baseContentHashOverride: String? = nil
+    ) throws -> SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload {
         guard let payloadKind = SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload.Kind(
             rawValue: kind.rawValue
         ) else {
@@ -3549,7 +3551,7 @@ private extension SyncConvergencePlannedBodyOperation {
             utf16Length: utf16Length,
             text: text,
             expectedText: expectedText,
-            baseContentHash: baseContentHash,
+            baseContentHash: baseContentHash ?? baseContentHashOverride,
             resultContentHash: resultContentHash,
             operationIdentity: operationIdentity
         )
@@ -3634,16 +3636,18 @@ private extension SyncConvergenceNotePlan {
               operations.allSatisfy({ $0.noteID == noteID }) else {
             throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
         }
-        return try operations
-            .sorted { $0.operationIdentity.operationIndex < $1.operationIdentity.operationIndex }
-            .map { operation in
+        let sortedOperations = operations.sorted { $0.operationIdentity.operationIndex < $1.operationIdentity.operationIndex }
+        return try sortedOperations.enumerated().map { index, operation in
                 let key = operation.operationIdentity.planIdentityKey
                 guard let authority = identityAuthority[key],
                       authority.identity == operation.operationIdentity,
                       authority.noteID == noteID else {
                     throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
                 }
-                return try operation.postCommitOperationPayload()
+                // Legacy positional operations predate per-operation base hashes;
+                // persist the deterministic chain required by post-commit replay.
+                let baseHash = index == 0 ? try expectedPreBodyHash(for: routing) : sortedOperations[index - 1].resultContentHash
+                return try operation.postCommitOperationPayload(baseContentHashOverride: baseHash)
             }
     }
 }
