@@ -156,8 +156,12 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         )
         let work = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(root.postCommitWorkPayloadData!)
         XCTAssertFalse(state.presentationRefreshPending)
+        XCTAssertFalse(state.legacyCleanupPending)
         XCTAssertTrue(work.presentationEntries.isEmpty)
         XCTAssertEqual(work.derivedInitialState(), state)
+        let reencodedWork = try work.encodedPayloadData()
+        XCTAssertEqual(reencodedWork, root.postCommitWorkPayloadData)
+        XCTAssertEqual(sha256Hex(reencodedWork), "7441711fd109820ef330485c1e431b8f75b2c1d99037855189ed213b16d7e50b")
     }
 
     func testCreatePlusBodyUsesFinalBodyHashForPresentationWork() throws {

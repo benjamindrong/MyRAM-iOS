@@ -4,6 +4,13 @@
 
 MYR-133 is the completion checkpoint for the settled MYR-132 PR 2d post-commit cleanup and presentation contract. This pass preserves the production architecture and adds focused verification for executor state coverage, final-CAS retry behavior, retained immutable work payloads, payload validation, and stable work-payload encoding.
 
+The corrective slice after commit `6b1017e` fixes two defects found in that verification evidence:
+
+- The representative golden encoded invalid incremental offsets. The golden now replays insert `"B"` at UTF-16 offset `1` and insert `"C"` at UTF-16 offset `2`, proving the decoded operations produce `"ABC"` and match the committed post-body hash.
+- The payload validator previously skipped hash-chain comparisons when an incremental operation omitted a base hash. Incremental entries now fail closed when the first base hash is missing while an expected pre-hash exists, or when any later operation omits the previous-result base hash.
+
+The production fix is validation-only. It does not change the persistence format or executor behavior. Malformed payloads that previously skipped chain validation are now rejected.
+
 No live drain/controller integration was added. No per-domain CAS boundary was introduced. No production visibility was broadened for tests.
 
 ## Phase 1 Inventory
@@ -70,19 +77,23 @@ Target membership decision:
 
 | Requirement | Code/Test Location | Verification |
 |---|---|---|
-| Preserve settled PR 2d production architecture | No production file changes | Focused post-commit suites passed |
+| Preserve settled PR 2d production architecture | Narrow validation-only production change in `MyRAM/Sync/Convergence/SyncConvergencePostCommitTypes.swift` | Focused post-commit suites passed |
 | Fake CAS preserves immutable work bytes | `MyRAMTests/SyncConvergencePostCommitTests.swift` `testFakeStoreCASPreservesImmutableWorkPayloadAfterPartialClear`, `FakePostCommitStore.currentWorkPayloadData` | iOS/macOS post-commit suites |
-| Eight pending-state executor matrix with legacy adapter | `testEightPendingStateMatrixWithLegacyAdapterPinsSingleCASEffects` | iOS/macOS post-commit suites |
+| Eight pending-state executor matrix with legacy adapter | `testEightPendingStateMatrixWithLegacyAdapterPinsSingleCASEffects` | Pins queue -> legacy -> presentation order, exact adapter work, one CAS for changed states, and no CAS for complete roots |
 | Legacy pending with nil adapter remains pending | `testEightPendingStateMatrixWithoutLegacyAdapterLeavesLegacyPending`, `testLegacyTrueWithoutAdapterRemainsPending` | iOS/macOS post-commit suites |
-| Single final CAS failure leaves original domains retryable | `testFinalCASFailureLeavesAllOriginallyPendingFlagsRetryable` | iOS/macOS post-commit suites |
+| Final CAS failure leaves original domains retryable, then fresh-store retry converges | `testFinalCASFailureThenFreshStoreRetryRerunsIdempotentWorkAndCompletes` | Re-runs queue, legacy, and presentation work from persisted all-pending state |
 | Completed roots remain no-op | `testCompletedPostCommitStateDoesNotCallAdaptersOrWrite` | iOS/macOS post-commit suites |
 | Caller-regenerated plans do not suppress persisted work | `testCallerPlansCannotSuppressPersistedQueueOrPresentationWork` | iOS/macOS post-commit suites |
 | Presentation requests use authoritative committed state and deterministic order | `testPresentationRequestsUseAuthoritativeCommittedStateInDeterministicOrder` | iOS/macOS post-commit suites |
 | Missing work payload fails before adapters | `testPrePayloadPendingRootFailsClosedBeforeAdapters` | iOS/macOS post-commit suites |
 | Payload rejects malformed nested operation identity | `testPostCommitPayloadRejectsMalformedOperationIdentity` | iOS/macOS post-commit suites |
 | Payload rejects hash-chain discontinuity | `testPostCommitPayloadRejectsOperationHashChainMismatch` | iOS/macOS post-commit suites |
+| Payload rejects missing first base hash when expected pre-hash exists | `testPostCommitPayloadRejectsMissingFirstBaseHashWhenExpectedPreHashExists` | iOS/macOS post-commit suites |
+| Payload rejects missing intermediate base hash | `testPostCommitPayloadRejectsMissingIntermediateBaseHash` | iOS/macOS post-commit suites |
+| Payload allows absent expected pre-state with absent first base hash | `testPostCommitPayloadAllowsMissingExpectedPreHashAndMissingFirstBaseHash` | iOS/macOS post-commit suites |
 | Payload rejects contradictory presentation entries | `testPostCommitPayloadValidationMatrixRejectsContradictoryPresentationEntries` | iOS/macOS post-commit suites |
-| Stable representative work-payload golden | `testRepresentativeWorkPayloadGoldenDigestPinsStableEncoding` | Golden SHA-256 `84537b46126b0a68e0c9920e02c1666d14ba90f2c48b15b83910d888bf60ac67` |
+| Executable replay-verified representative work-payload golden | `testRepresentativeWorkPayloadGoldenDigestPinsStableEncoding` | Golden SHA-256 `9cd2489d7c1338e54c0db95eabf20e5a98c8fefc872e4b02665ce3a678e1e3e5` |
+| Deterministic all-idempotent payload digest | `testAllIdempotentRetainedBodyDeliveryPersistsWithoutPresentationWork` | Golden SHA-256 `7441711fd109820ef330485c1e431b8f75b2c1d99037855189ed213b16d7e50b` |
 | Partial and full clear reload from fresh SwiftData contexts | `testSwiftDataStoreReloadsAfterPartialAndFullClearWithRetainedWorkPayload` | iOS/macOS post-commit suites |
 | Tombstone cleanup ignores regenerated caller-plan content | `testTombstoneCleanupRemovesOnlyVerifiedSourceBatchID` | iOS/macOS post-commit suites |
 
@@ -128,13 +139,19 @@ Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePlanningTests -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests -only-testing:MyRAMTests/SyncConvergenceFoundationTests -only-testing:MyRAMTests/SyncBatchPayloadCompatibilityTests -only-testing:MyRAMTests/SyncBatchUnsentQueueTests
 ```
 
-Exit code: 0. Executed 177 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Exit code: 0. Executed 180 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePlanningTests -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests -only-testing:MyRAMMacTests/SyncBatchUnsentQueueTests
 ```
 
-Exit code: 0. Executed 136 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Exit code: 0. Executed 139 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePostCommitTests -only-testing:MyRAMTests/SyncConvergenceIncorporationTests/testAllIdempotentRetainedBodyDeliveryPersistsWithoutPresentationWork
+```
+
+Exit code: 0. Executed 26 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
 
 ```bash
 git diff --check
@@ -150,6 +167,7 @@ The attached MYR-133 proposal is broader than this initial implementation pass. 
 - Full routed-note construction negative matrix at incorporation boundary.
 - Full operation identity construction-time and authoritative-row corruption matrix.
 - Per-field stale-CAS matrix against SwiftData roots.
-- Full failure and crash-window matrix beyond final-CAS failure.
+- Remaining Phase 7 and Phase 9 load, save, reload, adapter-failure, and crash-window coverage beyond the fresh-store final-CAS retry added here.
 - Final-head evidence from an approved commit.
 - Inherited PR 2d review-thread disposition.
+- Complete ticket-wide requirement mapping.

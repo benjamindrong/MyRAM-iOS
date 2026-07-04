@@ -256,9 +256,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             let name: String
             let state: SyncConvergencePostCommitState
             let expectedOutcome: SyncConvergencePostCommitOutcome
-            let expectedQueueCalls: Int
-            let expectedLegacyCalls: Int
-            let expectedPresentationCalls: Int
+            let expectedEvents: [PostCommitInvocationEvent]
             let expectedPersistedState: SyncConvergencePostCommitState?
         }
 
@@ -267,72 +265,60 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 name: "none pending",
                 state: .none,
                 expectedOutcome: .complete,
-                expectedQueueCalls: 0,
-                expectedLegacyCalls: 0,
-                expectedPresentationCalls: 0,
+                expectedEvents: [],
                 expectedPersistedState: nil
             ),
             Case(
                 name: "queue only",
                 state: SyncConvergencePostCommitState(queueCleanupPending: true, legacyCleanupPending: false, presentationRefreshPending: false),
                 expectedOutcome: .complete,
-                expectedQueueCalls: 1,
-                expectedLegacyCalls: 0,
-                expectedPresentationCalls: 0,
+                expectedEvents: [.queueCleanup([TestIDs.batch, TestIDs.extraBatch])],
                 expectedPersistedState: SyncConvergencePostCommitState.none
             ),
             Case(
                 name: "legacy only",
                 state: SyncConvergencePostCommitState(queueCleanupPending: false, legacyCleanupPending: true, presentationRefreshPending: false),
                 expectedOutcome: .complete,
-                expectedQueueCalls: 0,
-                expectedLegacyCalls: 1,
-                expectedPresentationCalls: 0,
+                expectedEvents: [.legacyCleanup(batchID: TestIDs.batch)],
                 expectedPersistedState: SyncConvergencePostCommitState.none
             ),
             Case(
                 name: "presentation only",
                 state: SyncConvergencePostCommitState(queueCleanupPending: false, legacyCleanupPending: false, presentationRefreshPending: true),
                 expectedOutcome: .complete,
-                expectedQueueCalls: 0,
-                expectedLegacyCalls: 0,
-                expectedPresentationCalls: 1,
+                expectedEvents: [.presentation(noteID: TestIDs.noteA)],
                 expectedPersistedState: SyncConvergencePostCommitState.none
             ),
             Case(
                 name: "queue legacy",
                 state: SyncConvergencePostCommitState(queueCleanupPending: true, legacyCleanupPending: true, presentationRefreshPending: false),
                 expectedOutcome: .complete,
-                expectedQueueCalls: 1,
-                expectedLegacyCalls: 1,
-                expectedPresentationCalls: 0,
+                expectedEvents: [.queueCleanup([TestIDs.batch, TestIDs.extraBatch]), .legacyCleanup(batchID: TestIDs.batch)],
                 expectedPersistedState: SyncConvergencePostCommitState.none
             ),
             Case(
                 name: "queue presentation",
                 state: SyncConvergencePostCommitState(queueCleanupPending: true, legacyCleanupPending: false, presentationRefreshPending: true),
                 expectedOutcome: .complete,
-                expectedQueueCalls: 1,
-                expectedLegacyCalls: 0,
-                expectedPresentationCalls: 1,
+                expectedEvents: [.queueCleanup([TestIDs.batch, TestIDs.extraBatch]), .presentation(noteID: TestIDs.noteA)],
                 expectedPersistedState: SyncConvergencePostCommitState.none
             ),
             Case(
                 name: "legacy presentation",
                 state: SyncConvergencePostCommitState(queueCleanupPending: false, legacyCleanupPending: true, presentationRefreshPending: true),
                 expectedOutcome: .complete,
-                expectedQueueCalls: 0,
-                expectedLegacyCalls: 1,
-                expectedPresentationCalls: 1,
+                expectedEvents: [.legacyCleanup(batchID: TestIDs.batch), .presentation(noteID: TestIDs.noteA)],
                 expectedPersistedState: SyncConvergencePostCommitState.none
             ),
             Case(
                 name: "all pending",
                 state: SyncConvergencePostCommitState(queueCleanupPending: true, legacyCleanupPending: true, presentationRefreshPending: true),
                 expectedOutcome: .complete,
-                expectedQueueCalls: 1,
-                expectedLegacyCalls: 1,
-                expectedPresentationCalls: 1,
+                expectedEvents: [
+                    .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
+                    .legacyCleanup(batchID: TestIDs.batch),
+                    .presentation(noteID: TestIDs.noteA)
+                ],
                 expectedPersistedState: SyncConvergencePostCommitState.none
             )
         ]
@@ -340,9 +326,10 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         for testCase in cases {
             let identity = testIdentity()
             let store = FakePostCommitStore(state: .fullRoot(fullRootState(identity: identity, state: testCase.state)))
-            let queue = FakeQueueCleanupAdapter()
-            let legacy = FakeLegacyCleanupAdapter(result: .verifiedComplete)
-            let presentation = FakePresentationAdapter(result: .verifiedComplete)
+            let recorder = PostCommitInvocationRecorder()
+            let queue = FakeQueueCleanupAdapter(recorder: recorder)
+            let legacy = FakeLegacyCleanupAdapter(result: .verifiedComplete, recorder: recorder)
+            let presentation = FakePresentationAdapter(result: .verifiedComplete, recorder: recorder)
             let executor = SyncConvergencePostCommitExecutor(
                 store: store,
                 queueCleanupAdapter: queue,
@@ -353,11 +340,13 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             let outcome = await executor.execute(request(identity: identity, state: testCase.state))
 
             XCTAssertEqual(outcome, testCase.expectedOutcome, testCase.name)
-            XCTAssertEqual(queue.removals.count, testCase.expectedQueueCalls, testCase.name)
-            XCTAssertEqual(legacy.callCount, testCase.expectedLegacyCalls, testCase.name)
-            XCTAssertEqual(presentation.requests.count, testCase.expectedPresentationCalls, testCase.name)
+            XCTAssertEqual(recorder.events, testCase.expectedEvents, testCase.name)
+            XCTAssertEqual(queue.removals, testCase.state.queueCleanupPending ? [[TestIDs.batch, TestIDs.extraBatch]] : [], testCase.name)
+            XCTAssertEqual(legacy.requests.map(\.sourceBatchID), testCase.state.legacyCleanupPending ? [TestIDs.batch] : [], testCase.name)
+            XCTAssertEqual(presentation.requests.map(\.noteID), testCase.state.presentationRefreshPending ? [TestIDs.noteA] : [], testCase.name)
             XCTAssertEqual(store.persistedState, testCase.expectedPersistedState, testCase.name)
             XCTAssertEqual(store.currentWorkPayloadData, store.originalWorkPayloadData, testCase.name)
+            XCTAssertEqual(store.writeCount, testCase.expectedPersistedState == nil ? 0 : 1, testCase.name)
         }
     }
 
@@ -384,8 +373,9 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         for (state, expectedPersistedState) in states {
             let identity = testIdentity()
             let store = FakePostCommitStore(state: .fullRoot(fullRootState(identity: identity, state: state)))
-            let queue = FakeQueueCleanupAdapter()
-            let presentation = FakePresentationAdapter(result: .verifiedComplete)
+            let recorder = PostCommitInvocationRecorder()
+            let queue = FakeQueueCleanupAdapter(recorder: recorder)
+            let presentation = FakePresentationAdapter(result: .verifiedComplete, recorder: recorder)
             let executor = SyncConvergencePostCommitExecutor(
                 store: store,
                 queueCleanupAdapter: queue,
@@ -395,12 +385,21 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             let outcome = await executor.execute(request(identity: identity, state: state))
 
             XCTAssertEqual(outcome, .pending([.legacyCleanup]))
+            var expectedEvents: [PostCommitInvocationEvent] = []
+            if state.queueCleanupPending {
+                expectedEvents.append(.queueCleanup([TestIDs.batch, TestIDs.extraBatch]))
+            }
+            if state.presentationRefreshPending {
+                expectedEvents.append(.presentation(noteID: TestIDs.noteA))
+            }
+            XCTAssertEqual(recorder.events, expectedEvents)
             XCTAssertEqual(store.persistedState, expectedPersistedState)
             XCTAssertEqual(store.currentWorkPayloadData, store.originalWorkPayloadData)
+            XCTAssertEqual(store.writeCount, expectedPersistedState == nil ? 0 : 1)
         }
     }
 
-    func testFinalCASFailureLeavesAllOriginallyPendingFlagsRetryable() async {
+    func testFinalCASFailureThenFreshStoreRetryRerunsIdempotentWorkAndCompletes() async {
         let identity = testIdentity()
         let state = SyncConvergencePostCommitState(
             queueCleanupPending: true,
@@ -409,9 +408,10 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         )
         let store = FakePostCommitStore(state: .fullRoot(fullRootState(identity: identity, state: state)))
         store.shouldFailCAS = true
-        let queue = FakeQueueCleanupAdapter()
-        let legacy = FakeLegacyCleanupAdapter(result: .verifiedComplete)
-        let presentation = FakePresentationAdapter(result: .verifiedComplete)
+        let recorder = PostCommitInvocationRecorder()
+        let queue = FakeQueueCleanupAdapter(recorder: recorder)
+        let legacy = FakeLegacyCleanupAdapter(result: .verifiedComplete, recorder: recorder)
+        let presentation = FakePresentationAdapter(result: .verifiedComplete, recorder: recorder)
         let executor = SyncConvergencePostCommitExecutor(
             store: store,
             queueCleanupAdapter: queue,
@@ -422,11 +422,42 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         let outcome = await executor.execute(request(identity: identity, state: state))
 
         XCTAssertEqual(outcome, .pending([.queueCleanup, .legacyCleanup, .presentationRefresh, .postCommitStatePersistence]))
-        XCTAssertEqual(queue.removals.count, 1)
-        XCTAssertEqual(legacy.callCount, 1)
-        XCTAssertEqual(presentation.requests.count, 1)
+        XCTAssertEqual(recorder.events, [
+            .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
+            .legacyCleanup(batchID: TestIDs.batch),
+            .presentation(noteID: TestIDs.noteA)
+        ])
         XCTAssertEqual(store.persistedState, nil)
         XCTAssertEqual(store.currentPostCommitState, state)
+        XCTAssertEqual(store.currentWorkPayloadData, store.originalWorkPayloadData)
+
+        guard case .fullRoot(let persistedRoot) = store.state else {
+            return XCTFail("Expected failed-CAS store to retain full root")
+        }
+        let retryStore = FakePostCommitStore(state: .fullRoot(persistedRoot))
+        let retryRecorder = PostCommitInvocationRecorder()
+        let retryQueue = FakeQueueCleanupAdapter(recorder: retryRecorder)
+        let retryLegacy = FakeLegacyCleanupAdapter(result: .verifiedComplete, recorder: retryRecorder)
+        let retryPresentation = FakePresentationAdapter(result: .verifiedComplete, recorder: retryRecorder)
+        let retryExecutor = SyncConvergencePostCommitExecutor(
+            store: retryStore,
+            queueCleanupAdapter: retryQueue,
+            legacyCleanupAdapter: retryLegacy,
+            presentationAdapter: retryPresentation
+        )
+
+        let retryOutcome = await retryExecutor.execute(request(identity: identity, state: state))
+
+        XCTAssertEqual(retryOutcome, .complete)
+        XCTAssertEqual(retryRecorder.events, [
+            .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
+            .legacyCleanup(batchID: TestIDs.batch),
+            .presentation(noteID: TestIDs.noteA)
+        ])
+        XCTAssertEqual(retryStore.persistedState, Optional(SyncConvergencePostCommitState.none))
+        XCTAssertEqual(retryStore.currentPostCommitState, Optional(SyncConvergencePostCommitState.none))
+        XCTAssertEqual(retryStore.writeCount, 1)
+        XCTAssertEqual(retryStore.currentWorkPayloadData, retryStore.originalWorkPayloadData)
     }
 
     func testPresentationRequestsUseAuthoritativeCommittedStateInDeterministicOrder() async {
@@ -656,6 +687,97 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertThrowsError(try payload.encodedPayloadData())
     }
 
+    func testPostCommitPayloadRejectsMissingFirstBaseHashWhenExpectedPreHashExists() {
+        let expectedPreHash = SyncBatchContentHash.sha256Hex(for: "A")
+        let postHash = SyncBatchContentHash.sha256Hex(for: "AB")
+        let operation = incrementalOperation(
+            noteID: TestIDs.noteA,
+            operationIndex: 0,
+            utf16Offset: 1,
+            text: "B",
+            baseHash: nil,
+            resultHash: postHash
+        )
+        let payload = SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: [],
+            legacyCleanupRequired: false,
+            presentationEntries: [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: TestIDs.noteA,
+                    routing: .incremental,
+                    expectedPreBodyHash: expectedPreHash,
+                    committedPostBodyHash: postHash,
+                    incrementalOperations: [operation]
+                )
+            ]
+        )
+
+        XCTAssertThrowsError(try payload.encodedPayloadData())
+    }
+
+    func testPostCommitPayloadRejectsMissingIntermediateBaseHash() {
+        let firstHash = SyncBatchContentHash.sha256Hex(for: "AB")
+        let finalHash = SyncBatchContentHash.sha256Hex(for: "ABC")
+        let first = incrementalOperation(
+            noteID: TestIDs.noteA,
+            operationIndex: 0,
+            utf16Offset: 1,
+            text: "B",
+            baseHash: SyncBatchContentHash.sha256Hex(for: "A"),
+            resultHash: firstHash
+        )
+        let second = incrementalOperation(
+            noteID: TestIDs.noteA,
+            operationIndex: 1,
+            utf16Offset: 2,
+            text: "C",
+            baseHash: nil,
+            resultHash: finalHash
+        )
+        let payload = SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: [],
+            legacyCleanupRequired: false,
+            presentationEntries: [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: TestIDs.noteA,
+                    routing: .incremental,
+                    expectedPreBodyHash: SyncBatchContentHash.sha256Hex(for: "A"),
+                    committedPostBodyHash: finalHash,
+                    incrementalOperations: [first, second]
+                )
+            ]
+        )
+
+        XCTAssertThrowsError(try payload.encodedPayloadData())
+    }
+
+    func testPostCommitPayloadAllowsMissingExpectedPreHashAndMissingFirstBaseHash() {
+        let postHash = SyncBatchContentHash.sha256Hex(for: "AB")
+        let operation = incrementalOperation(
+            noteID: TestIDs.noteA,
+            operationIndex: 0,
+            utf16Offset: 1,
+            text: "B",
+            baseHash: nil,
+            resultHash: postHash
+        )
+        let payload = SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: [],
+            legacyCleanupRequired: false,
+            presentationEntries: [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: TestIDs.noteA,
+                    routing: .incremental,
+                    expectedPreBodyHash: nil,
+                    committedPostBodyHash: postHash,
+                    incrementalOperations: [operation]
+                )
+            ]
+        )
+
+        XCTAssertNoThrow(try payload.encodedPayloadData())
+    }
+
     func testPostCommitPayloadValidationMatrixRejectsContradictoryPresentationEntries() {
         let postHash = SyncBatchContentHash.sha256Hex(for: "post")
         let base = incrementalOperation(noteID: TestIDs.noteA, resultHash: postHash)
@@ -756,6 +878,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                         incrementalOperation(
                             noteID: TestIDs.noteA,
                             operationIndex: 0,
+                            utf16Offset: 1,
                             text: "B",
                             baseHash: SyncBatchContentHash.sha256Hex(for: "A"),
                             resultHash: SyncBatchContentHash.sha256Hex(for: "AB")
@@ -763,6 +886,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                         incrementalOperation(
                             noteID: TestIDs.noteA,
                             operationIndex: 1,
+                            utf16Offset: 2,
                             text: "C",
                             baseHash: SyncBatchContentHash.sha256Hex(for: "AB"),
                             resultHash: SyncBatchContentHash.sha256Hex(for: "ABC")
@@ -773,13 +897,37 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         )
 
         let data = try payload.encodedPayloadData()
-        XCTAssertEqual(sha256Hex(data), "84537b46126b0a68e0c9920e02c1666d14ba90f2c48b15b83910d888bf60ac67")
+        XCTAssertEqual(sha256Hex(data), "9cd2489d7c1338e54c0db95eabf20e5a98c8fefc872e4b02665ce3a678e1e3e5")
         let decoded = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(data)
         XCTAssertEqual(decoded.queueCleanupBatchIDs, [TestIDs.batch, TestIDs.extraBatch])
         XCTAssertEqual(decoded.presentationEntries.map(\.noteID), [TestIDs.noteA, TestIDs.noteB])
-        XCTAssertEqual(decoded.presentationEntries[0].incrementalOperations.map(\.operationIndex), [0, 1])
-        XCTAssertEqual(decoded.presentationEntries[1].routing, .wholeNoteFallback)
-        XCTAssertEqual(decoded.presentationEntries[1].incrementalOperations, [])
+        let incrementalEntry = decoded.presentationEntries[0]
+        let fallbackEntry = decoded.presentationEntries[1]
+        XCTAssertEqual(incrementalEntry.routing, .incremental)
+        XCTAssertEqual(incrementalEntry.expectedPreBodyHash, SyncBatchContentHash.sha256Hex(for: "A"))
+        XCTAssertEqual(incrementalEntry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: "ABC"))
+        XCTAssertEqual(incrementalEntry.incrementalOperations.map(\.operationIndex), [0, 1])
+        XCTAssertEqual(incrementalEntry.incrementalOperations.map(\.utf16Offset), [1, 2])
+        XCTAssertEqual(incrementalEntry.incrementalOperations.map(\.text), ["B", "C"])
+        XCTAssertEqual(incrementalEntry.incrementalOperations.map(\.baseContentHash), [
+            SyncBatchContentHash.sha256Hex(for: "A"),
+            SyncBatchContentHash.sha256Hex(for: "AB")
+        ])
+        XCTAssertEqual(incrementalEntry.incrementalOperations.map(\.resultContentHash), [
+            SyncBatchContentHash.sha256Hex(for: "AB"),
+            SyncBatchContentHash.sha256Hex(for: "ABC")
+        ])
+        XCTAssertEqual(incrementalEntry.incrementalOperations.map(\.operationIdentity.operationIndex), [0, 1])
+        XCTAssertEqual(incrementalEntry.incrementalOperations.map(\.operationIdentity.canonicalReplayKey.operationIndex), [0, 1])
+        var replayedBody = "A"
+        for operation in incrementalEntry.incrementalOperations {
+            let index = String.Index(utf16Offset: operation.utf16Offset, in: replayedBody)
+            replayedBody.insert(contentsOf: operation.text ?? "", at: index)
+        }
+        XCTAssertEqual(replayedBody, "ABC")
+        XCTAssertEqual(SyncBatchContentHash.sha256Hex(for: replayedBody), incrementalEntry.committedPostBodyHash)
+        XCTAssertEqual(fallbackEntry.routing, .wholeNoteFallback)
+        XCTAssertEqual(fallbackEntry.incrementalOperations, [])
     }
 
     func testBodyHashCapabilityRemainsDisabled() {
@@ -882,8 +1030,9 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         incrementalOperation(
             noteID: noteID,
             operationIndex: 0,
+            utf16Offset: 0,
             text: "x",
-            baseHash: nil,
+            baseHash: SyncBatchContentHash.sha256Hex(for: "pre"),
             resultHash: resultHash
         )
     }
@@ -891,6 +1040,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
     private func incrementalOperation(
         noteID: UUID,
         operationIndex: Int,
+        utf16Offset: Int,
         text: String,
         baseHash: String?,
         resultHash: String
@@ -899,7 +1049,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             noteID: noteID,
             operationIndex: operationIndex,
             kind: .insert,
-            utf16Offset: 0,
+            utf16Offset: utf16Offset,
             utf16Length: nil,
             text: text,
             expectedText: nil,
@@ -981,6 +1131,27 @@ private enum TestIDs {
     static let device = UUID(uuidString: "00000000-0000-0000-0000-000000000103")!
     static let noteA = UUID(uuidString: "00000000-0000-0000-0000-000000000201")!
     static let noteB = UUID(uuidString: "00000000-0000-0000-0000-000000000202")!
+}
+
+private enum PostCommitInvocationEvent: Equatable {
+    case queueCleanup([UUID])
+    case legacyCleanup(batchID: UUID)
+    case presentation(noteID: UUID)
+}
+
+private final class PostCommitInvocationRecorder {
+    private let lock = NSLock()
+    private var recordedEvents: [PostCommitInvocationEvent] = []
+
+    var events: [PostCommitInvocationEvent] {
+        lock.withLock { recordedEvents }
+    }
+
+    func record(_ event: PostCommitInvocationEvent) {
+        lock.withLock {
+            recordedEvents.append(event)
+        }
+    }
 }
 
 private final class FakePostCommitStore: SyncConvergencePostCommitStateStore {
@@ -1125,12 +1296,18 @@ private final class FakeQueueCleanupAdapter: SyncConvergenceQueueCleanupAdapter 
     var removals: [Set<SyncBatchID>] = []
     var remaining: Set<SyncBatchID> = []
     var shouldThrowOnRemove = false
+    private let recorder: PostCommitInvocationRecorder?
+
+    init(recorder: PostCommitInvocationRecorder? = nil) {
+        self.recorder = recorder
+    }
 
     func removeBatches(withIDs ids: Set<SyncBatchID>) throws {
         if shouldThrowOnRemove {
             throw FileBackedSyncBatchQueue.QueueError.persistenceFailed
         }
         removals.append(ids)
+        recorder?.record(.queueCleanup(ids.sorted { $0.uuidString < $1.uuidString }))
         remaining.subtract(ids)
     }
 
@@ -1141,16 +1318,23 @@ private final class FakeQueueCleanupAdapter: SyncConvergenceQueueCleanupAdapter 
 
 private final class FakeLegacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapter {
     let result: SyncConvergencePostCommitAdapterResult
-    var callCount = 0
+    var requests: [SyncConvergencePostCommitRequest] = []
+    private let recorder: PostCommitInvocationRecorder?
 
-    init(result: SyncConvergencePostCommitAdapterResult) {
+    var callCount: Int {
+        requests.count
+    }
+
+    init(result: SyncConvergencePostCommitAdapterResult, recorder: PostCommitInvocationRecorder? = nil) {
         self.result = result
+        self.recorder = recorder
     }
 
     func performLegacyCleanup(
         for request: SyncConvergencePostCommitRequest
     ) async -> SyncConvergencePostCommitAdapterResult {
-        callCount += 1
+        requests.append(request)
+        recorder?.record(.legacyCleanup(batchID: request.sourceBatchID))
         return result
     }
 }
@@ -1158,15 +1342,18 @@ private final class FakeLegacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapte
 private final class FakePresentationAdapter: SyncConvergencePresentationAdapter {
     let result: SyncConvergencePostCommitAdapterResult
     var requests: [SyncConvergencePresentationRequest] = []
+    private let recorder: PostCommitInvocationRecorder?
 
-    init(result: SyncConvergencePostCommitAdapterResult) {
+    init(result: SyncConvergencePostCommitAdapterResult, recorder: PostCommitInvocationRecorder? = nil) {
         self.result = result
+        self.recorder = recorder
     }
 
     func refreshPresentation(
         for request: SyncConvergencePresentationRequest
     ) async -> SyncConvergencePostCommitAdapterResult {
         requests.append(request)
+        recorder?.record(.presentation(noteID: request.noteID))
         return result
     }
 }
