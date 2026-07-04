@@ -79,12 +79,12 @@ Target membership decision:
 |---|---|---|
 | Preserve settled PR 2d production architecture | Narrow validation-only production change in `MyRAM/Sync/Convergence/SyncConvergencePostCommitTypes.swift` | Focused post-commit suites passed |
 | Fake CAS preserves immutable work bytes | `MyRAMTests/SyncConvergencePostCommitTests.swift` `testFakeStoreCASPreservesImmutableWorkPayloadAfterPartialClear`, `FakePostCommitStore.currentWorkPayloadData` | iOS/macOS post-commit suites |
-| Eight pending-state executor matrix with legacy adapter | `testEightPendingStateMatrixWithLegacyAdapterPinsSingleCASEffects` | Pins queue -> legacy -> presentation order, exact adapter work, one CAS for changed states, and no CAS for complete roots |
+| Eight pending-state executor matrix with legacy adapter | `testEightPendingStateMatrixWithLegacyAdapterPinsSingleCASEffects` | Pins queue -> legacy -> presentation order, exact queue and legacy work, full presentation request equality, one CAS for changed states, and no CAS for complete roots |
 | Legacy pending with nil adapter remains pending | `testEightPendingStateMatrixWithoutLegacyAdapterLeavesLegacyPending`, `testLegacyTrueWithoutAdapterRemainsPending` | iOS/macOS post-commit suites |
-| Final CAS failure leaves original domains retryable, then fresh-store retry converges | `testFinalCASFailureThenFreshStoreRetryRerunsIdempotentWorkAndCompletes` | Re-runs queue, legacy, and presentation work from persisted all-pending state |
+| Final CAS failure leaves original domains retryable, then fresh-store retry converges | `testFinalCASFailureThenFreshStoreRetryRerunsIdempotentWorkAndCompletes` | Reconstructs retry state and work by decoding persisted root payload bytes, then re-runs queue, legacy, and presentation work from persisted all-pending state |
 | Completed roots remain no-op | `testCompletedPostCommitStateDoesNotCallAdaptersOrWrite` | iOS/macOS post-commit suites |
 | Caller-regenerated plans do not suppress persisted work | `testCallerPlansCannotSuppressPersistedQueueOrPresentationWork` | iOS/macOS post-commit suites |
-| Presentation requests use authoritative committed state and deterministic order | `testPresentationRequestsUseAuthoritativeCommittedStateInDeterministicOrder` | iOS/macOS post-commit suites |
+| Presentation requests use authoritative committed state and deterministic order | `testPresentationRequestsUseAuthoritativeCommittedStateInDeterministicOrder` | Pins complete incremental and whole-note-fallback requests in deterministic note order |
 | Missing work payload fails before adapters | `testPrePayloadPendingRootFailsClosedBeforeAdapters` | iOS/macOS post-commit suites |
 | Payload rejects malformed nested operation identity | `testPostCommitPayloadRejectsMalformedOperationIdentity` | iOS/macOS post-commit suites |
 | Payload rejects hash-chain discontinuity | `testPostCommitPayloadRejectsOperationHashChainMismatch` | iOS/macOS post-commit suites |
@@ -152,12 +152,6 @@ xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Sim
 ```
 
 Exit code: 0. Executed 26 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
-
-```bash
-git diff --check
-```
-
-Exit code: 0.
 
 ## Remaining MYR-133 Coverage Not Completed In This Pass
 
