@@ -65,7 +65,7 @@ struct SyncConvergencePresentationRequest: Equatable, Sendable {
     let incorporationIdentity: SyncConvergencePersistedIncorporationIdentity
     let noteID: UUID
     let routing: SyncConvergencePresentationRouting
-    let expectedPreBodyHash: String
+    let expectedPreBodyHash: String?
     let committedPostBodyHash: String
     let incrementalOperations: [SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload]
     let committedNote: SyncConvergenceMutableNoteRecord
@@ -165,12 +165,24 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
         return payload
     }
 
-    func derivedState() -> SyncConvergencePostCommitState {
+    func derivedInitialState() -> SyncConvergencePostCommitState {
         SyncConvergencePostCommitState(
             queueCleanupPending: !queueCleanupBatchIDs.isEmpty,
             legacyCleanupPending: legacyCleanupRequired,
             presentationRefreshPending: !presentationEntries.isEmpty
         )
+    }
+
+    func validateCurrentState(_ state: SyncConvergencePostCommitState) throws {
+        if state.queueCleanupPending && queueCleanupBatchIDs.isEmpty {
+            throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+        }
+        if state.legacyCleanupPending && !legacyCleanupRequired {
+            throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+        }
+        if state.presentationRefreshPending && presentationEntries.isEmpty {
+            throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+        }
     }
 
     func validate() throws {
@@ -192,25 +204,81 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
     struct PresentationEntry: Codable, Equatable, Sendable {
         let noteID: UUID
         let routing: SyncConvergencePostCommitPresentationRoutingPayload
-        let expectedPreBodyHash: String
+        let expectedPreBodyHash: String?
         let committedPostBodyHash: String
         let incrementalOperations: [IncrementalOperationPayload]
 
         func validate() throws {
+            try expectedPreBodyHash.map(validateBodyHash)
+            try validateBodyHash(committedPostBodyHash)
             switch routing {
             case .incremental:
-                break
+                guard !incrementalOperations.isEmpty else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+                }
             case .wholeNoteFallback:
                 guard incrementalOperations.isEmpty else {
                     throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
                 }
             }
+            let operationIndices = incrementalOperations.map(\.operationIndex)
+            guard operationIndices == Set(operationIndices).sorted() else {
+                throw SyncConvergencePostCommitWorkPayloadError.duplicateOperationIndices
+            }
+            for operation in incrementalOperations {
+                try operation.validate(noteID: noteID)
+            }
+            if let finalResultHash = incrementalOperations.last?.resultContentHash,
+               finalResultHash != committedPostBodyHash {
+                throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+            }
         }
     }
 
     struct IncrementalOperationPayload: Codable, Equatable, Sendable {
+        enum Kind: String, Codable, Equatable, Sendable {
+            case insert
+            case delete
+        }
+
+        let noteID: UUID
         let operationIndex: Int
+        let kind: Kind
+        let utf16Offset: Int
+        let utf16Length: Int?
+        let text: String?
+        let expectedText: String?
+        let baseContentHash: String?
+        let resultContentHash: String
         let operationIdentity: OperationIdentityPayload
+
+        func validate(noteID entryNoteID: UUID) throws {
+            guard noteID == entryNoteID,
+                  operationIndex >= 0,
+                  operationIdentity.operationIndex == operationIndex else {
+                throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+            }
+            try baseContentHash.map(validateBodyHash)
+            try validateBodyHash(resultContentHash)
+            switch kind {
+            case .insert:
+                guard operationIdentity.operationKind == Kind.insert.rawValue,
+                      utf16Offset >= 0,
+                      utf16Length == nil,
+                      text != nil,
+                      expectedText == nil else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+                }
+            case .delete:
+                guard operationIdentity.operationKind == Kind.delete.rawValue,
+                      utf16Offset >= 0,
+                      (utf16Length ?? -1) >= 0,
+                      text == nil,
+                      expectedText != nil else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+                }
+            }
+        }
     }
 }
 
@@ -243,7 +311,16 @@ enum SyncConvergencePostCommitWorkPayloadError: Error, Equatable {
     case unsupportedVersion
     case duplicateCleanupIDs
     case duplicatePresentationNoteIDs
+    case duplicateOperationIndices
+    case contradictoryState
     case contradictoryPresentationEntry
+}
+
+private func validateBodyHash(_ value: String) throws {
+    guard value.count == 64,
+          value.allSatisfy({ ("0"..."9").contains($0) || ("a"..."f").contains($0) }) else {
+        throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+    }
 }
 
 private extension Set where Element == UUID {

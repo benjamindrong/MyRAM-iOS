@@ -71,6 +71,7 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
             throw SyncConvergencePostCommitFailure.inconsistentIncorporationIdentity(batchID: identity.batchID)
         }
 
+        let originalWorkPayloadData = root.postCommitWorkPayloadData
         let encodedState = try SyncConvergenceStableEncoding.encode(newState)
         root.postCommitStatePayloadData = encodedState
         do {
@@ -82,7 +83,27 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
 
         guard let reloaded = try loadRoot(batchID: identity.batchID),
               reloaded.matches(identity),
-              reloaded.postCommitStatePayloadData == encodedState
+              reloaded.postCommitStatePayloadData == encodedState,
+              reloaded.postCommitWorkPayloadData == originalWorkPayloadData,
+              reloaded == SyncConvergenceIncorporatedRootProjection(
+                batchID: currentSnapshot?.batchID ?? expectedRoot.root.batchID,
+                originDeviceID: expectedRoot.root.originDeviceID,
+                createdAt: expectedRoot.root.createdAt,
+                batchSequence: expectedRoot.root.batchSequence,
+                schemaVersion: expectedRoot.root.schemaVersion,
+                committedAt: expectedRoot.root.committedAt,
+                canonicalPayloadDigest: expectedRoot.root.canonicalPayloadDigest,
+                canonicalPayloadDigestFormatVersion: expectedRoot.root.canonicalPayloadDigestFormatVersion,
+                committedResultDigest: expectedRoot.root.committedResultDigest,
+                committedResultDigestFormatVersion: expectedRoot.root.committedResultDigestFormatVersion,
+                committedAtOrderingPayloadData: expectedRoot.root.committedAtOrderingPayloadData,
+                affectedNotesPayloadData: expectedRoot.root.affectedNotesPayloadData,
+                authoritativeChildCount: expectedRoot.root.authoritativeChildCount,
+                authoritativeChildBytes: expectedRoot.root.authoritativeChildBytes,
+                authoritativeChildrenDigest: expectedRoot.root.authoritativeChildrenDigest,
+                postCommitWorkPayloadData: originalWorkPayloadData,
+                postCommitStatePayloadData: encodedState
+              )
         else {
             throw SyncConvergencePostCommitFailure.persistence
         }
@@ -105,12 +126,12 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
         }
         do {
             let payload = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(data)
-            guard payload.derivedState() == state else {
-                throw SyncConvergencePostCommitFailure.contradictoryPostCommitWorkPayload(batchID: root.batchID)
-            }
+            try payload.validateCurrentState(state)
             return payload
         } catch let failure as SyncConvergencePostCommitFailure {
             throw failure
+        } catch SyncConvergencePostCommitWorkPayloadError.contradictoryState {
+            throw SyncConvergencePostCommitFailure.contradictoryPostCommitWorkPayload(batchID: root.batchID)
         } catch {
             throw SyncConvergencePostCommitFailure.malformedPostCommitWorkPayload(batchID: root.batchID)
         }

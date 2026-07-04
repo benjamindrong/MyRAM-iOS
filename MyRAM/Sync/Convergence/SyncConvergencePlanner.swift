@@ -2935,7 +2935,10 @@ struct SyncConvergenceIncorporationExecutor {
                 legacyCleanupPending: input.plan.cleanupPlan.retryLegacyCleanup,
                 presentationRefreshPending: input.plan.presentationPlan.noteRoutings.values.contains { $0 != .none }
             )
-            let postCommitWorkPayload = Self.makePostCommitWorkPayload(input: input)
+            let postCommitWorkPayload = try Self.makePostCommitWorkPayload(input: input)
+            guard postCommitWorkPayload.derivedInitialState() == postCommitState else {
+                throw ExecutorFailure(.invalidMergePlan(noteID: nil))
+            }
             let committedResultDigest = try CanonicalCommittedResultDigestPayloadV1.digest(
                 plan: input.plan,
                 sourceBatch: input.sourceBatch
@@ -3002,19 +3005,18 @@ struct SyncConvergenceIncorporationExecutor {
 
         static func makePostCommitWorkPayload(
             input: ValidatedSyncConvergenceIncorporationInput
-        ) -> SyncConvergencePostCommitWorkPayloadV1 {
-            let effectsByNote = Dictionary(uniqueKeysWithValues: input.plan.affectedNotePlans.map {
-                ($0.noteID, $0.noteEffectRecord(batchID: input.sourceBatchID))
-            })
-            let entries = input.plan.presentationPlan.noteRoutings.compactMap { noteID, routing -> SyncConvergencePostCommitWorkPayloadV1.PresentationEntry? in
+        ) throws -> SyncConvergencePostCommitWorkPayloadV1 {
+            let notePlansByID = Dictionary(uniqueKeysWithValues: input.plan.affectedNotePlans.map { ($0.noteID, $0) })
+            let entries = try input.plan.presentationPlan.noteRoutings.compactMap { noteID, routing -> SyncConvergencePostCommitWorkPayloadV1.PresentationEntry? in
                 guard let routingPayload = SyncConvergencePostCommitPresentationRoutingPayload(routing),
-                      let effect = effectsByNote[noteID] else { return nil }
+                      let notePlan = notePlansByID[noteID] else { return nil }
+                let effect = notePlan.noteEffectRecord(batchID: input.sourceBatchID)
                 return SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
                     noteID: noteID,
                     routing: routingPayload,
-                    expectedPreBodyHash: effect.preBodyHash ?? "",
-                    committedPostBodyHash: effect.postBodyHash ?? "",
-                    incrementalOperations: []
+                    expectedPreBodyHash: effect.preBodyHash,
+                    committedPostBodyHash: try notePlan.requiredFinalBodyHash(),
+                    incrementalOperations: try notePlan.incrementalPostCommitOperations(for: routing)
                 )
             }
             return SyncConvergencePostCommitWorkPayloadV1(
@@ -3310,6 +3312,10 @@ private extension SyncConvergenceNotePlan {
     }
 }
 
+private enum PostCommitPayloadConstructionError: Error {
+    case invalidMergePlan(noteID: UUID?)
+}
+
 private extension SyncConvergenceBodyEffect? {
     var hashes: (pre: String?, post: String?)? {
         switch self {
@@ -3372,6 +3378,21 @@ private extension SyncConvergenceTitleEffect {
 }
 
 private extension SyncConvergencePlannedBodyOperation {
+    var postCommitOperationPayload: SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload {
+        SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload(
+            noteID: noteID,
+            operationIndex: operationIdentity.operationIndex,
+            kind: SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload.Kind(rawValue: kind.rawValue)!,
+            utf16Offset: utf16Offset,
+            utf16Length: utf16Length,
+            text: text,
+            expectedText: expectedText,
+            baseContentHash: baseContentHash,
+            resultContentHash: resultContentHash,
+            operationIdentity: operationIdentity
+        )
+    }
+
     var retainedOperationRecord: SyncConvergenceRetainedOperationRecord {
         SyncConvergenceRetainedOperationRecord(
             noteID: noteID,
@@ -3388,6 +3409,46 @@ private extension SyncConvergencePlannedBodyOperation {
             canonicalReplayKey: operationIdentity.canonicalReplayKey,
             modifiedAt: operationIdentity.canonicalReplayKey.modifiedAt
         )
+    }
+}
+
+private extension SyncConvergenceNotePlan {
+    func requiredFinalBodyHash() throws -> String {
+        if let creationEffect {
+            return creationEffect.initialBodyHash
+        }
+        switch bodyEffect {
+        case .matchingBaseIncremental(let plan):
+            return plan.finalBodyHash
+        case .reconstructedConflict(let plan):
+            return plan.finalBodyHash
+        case .legacyPositional(let plan):
+            return plan.finalBodyHash
+        case .compatibilityNoopMissingNote, nil:
+            throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+        }
+    }
+
+    func incrementalPostCommitOperations(
+        for routing: SyncConvergencePresentationRouting
+    ) throws -> [SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload] {
+        guard routing == .incremental else { return [] }
+        let operations: [SyncConvergencePlannedBodyOperation]
+        switch bodyEffect {
+        case .matchingBaseIncremental(let plan):
+            operations = plan.operations
+        case .legacyPositional(let plan):
+            operations = plan.operations
+        default:
+            throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+        }
+        guard !operations.isEmpty,
+              operations.allSatisfy({ $0.noteID == noteID }) else {
+            throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+        }
+        return operations
+            .sorted { $0.operationIdentity.operationIndex < $1.operationIdentity.operationIndex }
+            .map(\.postCommitOperationPayload)
     }
 }
 
