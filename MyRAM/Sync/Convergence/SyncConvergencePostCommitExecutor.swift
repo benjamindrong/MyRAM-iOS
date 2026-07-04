@@ -63,13 +63,14 @@ actor SyncConvergencePostCommitExecutor {
         guard originalState != .none else {
             return .complete
         }
+        guard let workPayload = loaded.postCommitWorkPayload else {
+            return .failedBeforeWork(.missingPostCommitWorkPayload(batchID: request.sourceBatchID))
+        }
 
-        let effectiveCleanupPlan = request.cleanupPlan.gated(by: originalState)
-        let effectivePresentationPlan = request.presentationPlan.gated(by: originalState)
         var completed: Set<SyncConvergencePostCommitPendingWork> = []
 
         if originalState.queueCleanupPending {
-            if (try? performQueueCleanup(batchIDs: effectiveCleanupPlan.batchIDs)) == true {
+            if (try? performQueueCleanup(batchIDs: Set(workPayload.queueCleanupBatchIDs))) == true {
                 completed.insert(.queueCleanup)
             }
         }
@@ -86,7 +87,7 @@ actor SyncConvergencePostCommitExecutor {
         if originalState.presentationRefreshPending {
             if await performPresentationRefresh(
                 request,
-                plan: effectivePresentationPlan
+                entries: workPayload.presentationEntries
             ) == .verifiedComplete {
                 completed.insert(.presentationRefresh)
             }
@@ -104,7 +105,7 @@ actor SyncConvergencePostCommitExecutor {
 
         do {
             let persisted = try store.compareAndSetPostCommitState(
-                identity: request.persistedIncorporationIdentity,
+                expectedRoot: SyncConvergencePostCommitRootSnapshot(root: loaded.root),
                 expectedPayloadData: loaded.postCommitStatePayloadData,
                 newState: updatedState
             )
@@ -119,9 +120,6 @@ actor SyncConvergencePostCommitExecutor {
     private func executeTombstone(_ request: SyncConvergencePostCommitRequest) -> SyncConvergencePostCommitOutcome {
         guard request.sourceBatchID == request.persistedIncorporationIdentity.batchID else {
             return .failedBeforeWork(.inconsistentIncorporationIdentity(batchID: request.sourceBatchID))
-        }
-        guard request.cleanupPlan.retryQueueCleanup else {
-            return .complete
         }
         guard (try? performQueueCleanup(batchIDs: [request.sourceBatchID])) == true else {
             return .pending([.queueCleanup])
@@ -142,20 +140,21 @@ actor SyncConvergencePostCommitExecutor {
 
     private func performPresentationRefresh(
         _ request: SyncConvergencePostCommitRequest,
-        plan: SyncConvergencePresentationPlan
+        entries: [SyncConvergencePostCommitWorkPayloadV1.PresentationEntry]
     ) async -> SyncConvergencePostCommitAdapterResult {
-        for noteID in plan.noteRoutings.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
-            guard let routing = plan.noteRoutings[noteID], routing != .none else {
-                continue
-            }
+        guard !entries.isEmpty else { return .failed }
+        for entry in entries.sorted(by: { $0.noteID.uuidString < $1.noteID.uuidString }) {
             do {
-                guard let note = try store.loadCommittedNote(id: noteID) else {
+                guard let note = try store.loadCommittedNote(id: entry.noteID) else {
                     return .failed
                 }
                 let presentationRequest = SyncConvergencePresentationRequest(
                     incorporationIdentity: request.persistedIncorporationIdentity,
-                    noteID: noteID,
-                    routing: routing,
+                    noteID: entry.noteID,
+                    routing: entry.routing.routing,
+                    expectedPreBodyHash: entry.expectedPreBodyHash,
+                    committedPostBodyHash: entry.committedPostBodyHash,
+                    incrementalOperations: entry.incrementalOperations,
                     committedNote: note,
                     committedBodyHash: SyncBatchContentHash.sha256Hex(for: note.body),
                     committedTitle: note.title

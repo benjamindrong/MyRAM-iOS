@@ -47,6 +47,9 @@ enum SyncConvergencePostCommitFailure: Error, Equatable, Sendable {
     case missingAuthoritativeIncorporation(batchID: UUID)
     case inconsistentIncorporationIdentity(batchID: UUID)
     case malformedPostCommitState(batchID: UUID)
+    case missingPostCommitWorkPayload(batchID: UUID)
+    case malformedPostCommitWorkPayload(batchID: UUID)
+    case contradictoryPostCommitWorkPayload(batchID: UUID)
     case missingLegacyCleanupAdapter(batchID: UUID)
     case persistence
     case unexpected
@@ -62,6 +65,9 @@ struct SyncConvergencePresentationRequest: Equatable, Sendable {
     let incorporationIdentity: SyncConvergencePersistedIncorporationIdentity
     let noteID: UUID
     let routing: SyncConvergencePresentationRouting
+    let expectedPreBodyHash: String
+    let committedPostBodyHash: String
+    let incrementalOperations: [SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload]
     let committedNote: SyncConvergenceMutableNoteRecord
     let committedBodyHash: String
     let committedTitle: String
@@ -78,6 +84,8 @@ struct SyncConvergencePostCommitFullRootState: Equatable {
     let root: SyncConvergenceIncorporatedRootProjection
     let postCommitState: SyncConvergencePostCommitState
     let postCommitStatePayloadData: Data
+    let postCommitWorkPayload: SyncConvergencePostCommitWorkPayloadV1?
+    let postCommitWorkPayloadData: Data?
 }
 
 protocol SyncConvergencePostCommitStateStore {
@@ -88,7 +96,7 @@ protocol SyncConvergencePostCommitStateStore {
     func loadCommittedNote(id: UUID) throws -> SyncConvergenceMutableNoteRecord?
 
     func compareAndSetPostCommitState(
-        identity: SyncConvergencePersistedIncorporationIdentity,
+        expectedRoot: SyncConvergencePostCommitRootSnapshot,
         expectedPayloadData: Data,
         newState: SyncConvergencePostCommitState
     ) throws -> SyncConvergencePostCommitFullRootState
@@ -120,5 +128,126 @@ extension SyncConvergencePostCommitState {
             work.insert(.presentationRefresh)
         }
         return work
+    }
+}
+
+struct SyncConvergencePostCommitRootSnapshot: Equatable, Sendable {
+    let root: SyncConvergenceIncorporatedRootProjection
+}
+
+struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
+    static let supportedFormatVersion = 1
+
+    let formatVersion: Int
+    let queueCleanupBatchIDs: [UUID]
+    let legacyCleanupRequired: Bool
+    let presentationEntries: [PresentationEntry]
+
+    init(
+        queueCleanupBatchIDs: Set<UUID>,
+        legacyCleanupRequired: Bool,
+        presentationEntries: [PresentationEntry]
+    ) {
+        self.formatVersion = Self.supportedFormatVersion
+        self.queueCleanupBatchIDs = queueCleanupBatchIDs.sortedByUUIDString()
+        self.legacyCleanupRequired = legacyCleanupRequired
+        self.presentationEntries = presentationEntries.sorted { $0.noteID.uuidString < $1.noteID.uuidString }
+    }
+
+    func encodedPayloadData() throws -> Data {
+        try validate()
+        return try SyncConvergenceStableEncoding.encode(self)
+    }
+
+    static func decodePayloadData(_ data: Data) throws -> Self {
+        let payload = try SyncConvergenceStableEncoding.decode(Self.self, from: data)
+        try payload.validate()
+        return payload
+    }
+
+    func derivedState() -> SyncConvergencePostCommitState {
+        SyncConvergencePostCommitState(
+            queueCleanupPending: !queueCleanupBatchIDs.isEmpty,
+            legacyCleanupPending: legacyCleanupRequired,
+            presentationRefreshPending: !presentationEntries.isEmpty
+        )
+    }
+
+    func validate() throws {
+        guard formatVersion == Self.supportedFormatVersion else {
+            throw SyncConvergencePostCommitWorkPayloadError.unsupportedVersion
+        }
+        guard queueCleanupBatchIDs == Set(queueCleanupBatchIDs).sortedByUUIDString() else {
+            throw SyncConvergencePostCommitWorkPayloadError.duplicateCleanupIDs
+        }
+        let noteIDs = presentationEntries.map(\.noteID)
+        guard noteIDs == Set(noteIDs).sortedByUUIDString() else {
+            throw SyncConvergencePostCommitWorkPayloadError.duplicatePresentationNoteIDs
+        }
+        for entry in presentationEntries {
+            try entry.validate()
+        }
+    }
+
+    struct PresentationEntry: Codable, Equatable, Sendable {
+        let noteID: UUID
+        let routing: SyncConvergencePostCommitPresentationRoutingPayload
+        let expectedPreBodyHash: String
+        let committedPostBodyHash: String
+        let incrementalOperations: [IncrementalOperationPayload]
+
+        func validate() throws {
+            switch routing {
+            case .incremental:
+                break
+            case .wholeNoteFallback:
+                guard incrementalOperations.isEmpty else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+                }
+            }
+        }
+    }
+
+    struct IncrementalOperationPayload: Codable, Equatable, Sendable {
+        let operationIndex: Int
+        let operationIdentity: OperationIdentityPayload
+    }
+}
+
+enum SyncConvergencePostCommitPresentationRoutingPayload: String, Codable, Equatable, Sendable {
+    case incremental
+    case wholeNoteFallback
+
+    var routing: SyncConvergencePresentationRouting {
+        switch self {
+        case .incremental:
+            return .incremental
+        case .wholeNoteFallback:
+            return .wholeNoteFallback
+        }
+    }
+
+    init?(_ routing: SyncConvergencePresentationRouting) {
+        switch routing {
+        case .incremental:
+            self = .incremental
+        case .wholeNoteFallback:
+            self = .wholeNoteFallback
+        case .none:
+            return nil
+        }
+    }
+}
+
+enum SyncConvergencePostCommitWorkPayloadError: Error, Equatable {
+    case unsupportedVersion
+    case duplicateCleanupIDs
+    case duplicatePresentationNoteIDs
+    case contradictoryPresentationEntry
+}
+
+private extension Set where Element == UUID {
+    func sortedByUUIDString() -> [UUID] {
+        sorted { $0.uuidString < $1.uuidString }
     }
 }

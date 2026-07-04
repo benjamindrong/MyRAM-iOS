@@ -400,6 +400,7 @@ struct SyncConvergenceIncorporatedRootProjection: Equatable {
     let authoritativeChildCount: Int
     let authoritativeChildBytes: Int
     let authoritativeChildrenDigest: String
+    let postCommitWorkPayloadData: Data?
     let postCommitStatePayloadData: Data
 }
 
@@ -450,6 +451,7 @@ struct SyncConvergenceIncorporatedBatchRecord: Equatable {
     let authoritativeChildCount: Int
     let authoritativeChildBytes: Int
     let authoritativeChildrenDigest: String
+    let postCommitWorkPayloadData: Data?
     let postCommitStatePayloadData: Data
 }
 

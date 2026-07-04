@@ -1825,6 +1825,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             authoritativeChildCount: record.authoritativeChildCount,
             authoritativeChildBytes: record.authoritativeChildBytes,
             authoritativeChildrenDigest: record.authoritativeChildrenDigest,
+            postCommitWorkPayloadData: record.postCommitWorkPayloadData,
             postCommitStatePayloadData: record.postCommitStatePayloadData
         )
         try throwIfConfigured(.incorporatedRoot)
@@ -1942,6 +1943,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             authoritativeChildCount: root.authoritativeChildCount,
             authoritativeChildBytes: root.authoritativeChildBytes,
             authoritativeChildrenDigest: root.authoritativeChildrenDigest,
+            postCommitWorkPayloadData: root.postCommitWorkPayloadData,
             postCommitStatePayloadData: payloadData
         )
     }

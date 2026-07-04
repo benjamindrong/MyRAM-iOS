@@ -59,7 +59,10 @@ final class FileBackedSyncBatchQueue {
     }
 
     func removeAll(withIDs ids: Set<SyncBatchID>) {
-        try? removeBatches(withIDs: ids)
+        let didChange = queue.removeAll(withIDs: ids)
+        if didChange {
+            persistQueue()
+        }
     }
 
     func removeBatches(withIDs ids: Set<SyncBatchID>) throws {

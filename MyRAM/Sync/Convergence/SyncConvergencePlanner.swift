@@ -2935,6 +2935,7 @@ struct SyncConvergenceIncorporationExecutor {
                 legacyCleanupPending: input.plan.cleanupPlan.retryLegacyCleanup,
                 presentationRefreshPending: input.plan.presentationPlan.noteRoutings.values.contains { $0 != .none }
             )
+            let postCommitWorkPayload = Self.makePostCommitWorkPayload(input: input)
             let committedResultDigest = try CanonicalCommittedResultDigestPayloadV1.digest(
                 plan: input.plan,
                 sourceBatch: input.sourceBatch
@@ -2958,6 +2959,7 @@ struct SyncConvergenceIncorporationExecutor {
                 authoritativeChildCount: childProjection.count,
                 authoritativeChildBytes: childBytes,
                 authoritativeChildrenDigest: childrenDigest,
+                postCommitWorkPayloadData: try postCommitWorkPayload.encodedPayloadData(),
                 postCommitStatePayloadData: try postCommitState.encodedPayloadData()
             )
         }
@@ -2995,6 +2997,30 @@ struct SyncConvergenceIncorporationExecutor {
                 operationIdentities: children.operationIdentities.sorted { $0.operationIndex < $1.operationIndex },
                 noteEffects: expectedNoteEffects.sorted { $0.noteID.uuidString < $1.noteID.uuidString },
                 resultEvidence: children.resultEvidence.sorted(by: { resultEvidenceOrder($0.evidence, $1.evidence) })
+            )
+        }
+
+        static func makePostCommitWorkPayload(
+            input: ValidatedSyncConvergenceIncorporationInput
+        ) -> SyncConvergencePostCommitWorkPayloadV1 {
+            let effectsByNote = Dictionary(uniqueKeysWithValues: input.plan.affectedNotePlans.map {
+                ($0.noteID, $0.noteEffectRecord(batchID: input.sourceBatchID))
+            })
+            let entries = input.plan.presentationPlan.noteRoutings.compactMap { noteID, routing -> SyncConvergencePostCommitWorkPayloadV1.PresentationEntry? in
+                guard let routingPayload = SyncConvergencePostCommitPresentationRoutingPayload(routing),
+                      let effect = effectsByNote[noteID] else { return nil }
+                return SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: noteID,
+                    routing: routingPayload,
+                    expectedPreBodyHash: effect.preBodyHash ?? "",
+                    committedPostBodyHash: effect.postBodyHash ?? "",
+                    incrementalOperations: []
+                )
+            }
+            return SyncConvergencePostCommitWorkPayloadV1(
+                queueCleanupBatchIDs: input.plan.cleanupPlan.batchIDs,
+                legacyCleanupRequired: input.plan.cleanupPlan.retryLegacyCleanup,
+                presentationEntries: entries
             )
         }
 
@@ -3413,6 +3439,7 @@ private extension SyncConvergenceIncorporatedBatchRecord {
             authoritativeChildCount: authoritativeChildCount,
             authoritativeChildBytes: authoritativeChildBytes,
             authoritativeChildrenDigest: authoritativeChildrenDigest,
+            postCommitWorkPayloadData: postCommitWorkPayloadData,
             postCommitStatePayloadData: postCommitStatePayloadData
         )
     }

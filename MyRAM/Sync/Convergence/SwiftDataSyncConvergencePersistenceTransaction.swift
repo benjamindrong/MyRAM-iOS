@@ -108,6 +108,7 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
             authoritativeChildCount: record.authoritativeChildCount,
             authoritativeChildBytes: record.authoritativeChildBytes,
             authoritativeChildrenDigest: record.authoritativeChildrenDigest,
+            postCommitWorkPayloadData: record.postCommitWorkPayloadData,
             postCommitStatePayloadData: record.postCommitStatePayloadData
         ))
     }
@@ -238,6 +239,7 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
             authoritativeChildCount: root.authoritativeChildCount,
             authoritativeChildBytes: root.authoritativeChildBytes,
             authoritativeChildrenDigest: root.authoritativeChildrenDigest,
+            postCommitWorkPayloadData: root.postCommitWorkPayloadData,
             postCommitStatePayloadData: root.postCommitStatePayloadData
         )
     }

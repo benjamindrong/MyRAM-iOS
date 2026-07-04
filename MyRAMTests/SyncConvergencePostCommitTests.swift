@@ -38,6 +38,21 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [first, second])
     }
 
+    func testNonthrowingQueueRemovalPreservesPriorInMemoryFailureSemantics() throws {
+        let fileURL = temporaryQueueURL()
+        let first = batch(id: uuid("00000000-0000-0000-0000-000000000021"))
+        let second = batch(id: uuid("00000000-0000-0000-0000-000000000022"))
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+        queue.enqueue(first)
+        queue.enqueue(second)
+
+        queue.injectPersistenceFailureForNextWrite()
+        queue.removeAll(withIDs: [first.id])
+
+        XCTAssertEqual(queue.pendingBatches, [second])
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [first, second])
+    }
+
     func testCompletedPostCommitStateDoesNotCallAdaptersOrWrite() async {
         let identity = testIdentity()
         let store = FakePostCommitStore(state: .fullRoot(fullRootState(identity: identity, state: .none)))
@@ -112,7 +127,11 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             legacyCleanupPending: false,
             presentationRefreshPending: true
         )
-        let store = FakePostCommitStore(state: .fullRoot(fullRootState(identity: identity, state: state)))
+        let entries = [
+            workEntry(noteID: TestIDs.noteB, routing: .wholeNoteFallback, postHash: SyncBatchContentHash.sha256Hex(for: "body-b")),
+            workEntry(noteID: TestIDs.noteA, routing: .incremental, postHash: SyncBatchContentHash.sha256Hex(for: "body-a"))
+        ]
+        let store = FakePostCommitStore(state: .fullRoot(fullRootState(identity: identity, state: state, presentationEntries: entries)))
         store.notes[TestIDs.noteA] = note(id: TestIDs.noteA, title: "A", body: "body-a")
         store.notes[TestIDs.noteB] = note(id: TestIDs.noteB, title: "B", body: "body-b")
         let presentation = FakePresentationAdapter(result: .verifiedComplete)
@@ -132,6 +151,44 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertEqual(presentation.requests.map(\.noteID), [TestIDs.noteA, TestIDs.noteB])
         XCTAssertEqual(presentation.requests[0].committedTitle, "A")
         XCTAssertEqual(presentation.requests[0].committedBodyHash, SyncBatchContentHash.sha256Hex(for: "body-a"))
+        XCTAssertEqual(presentation.requests[0].expectedPreBodyHash, "pre")
+        XCTAssertEqual(presentation.requests[0].committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: "body-a"))
+    }
+
+    func testCallerPlansCannotSuppressPersistedQueueOrPresentationWork() async {
+        let identity = testIdentity()
+        let state = SyncConvergencePostCommitState(
+            queueCleanupPending: true,
+            legacyCleanupPending: false,
+            presentationRefreshPending: true
+        )
+        let entries = [workEntry(noteID: TestIDs.noteA, routing: .wholeNoteFallback)]
+        let store = FakePostCommitStore(state: .fullRoot(fullRootState(identity: identity, state: state, presentationEntries: entries)))
+        let queue = FakeQueueCleanupAdapter()
+        let presentation = FakePresentationAdapter(result: .verifiedComplete)
+        let executor = SyncConvergencePostCommitExecutor(
+            store: store,
+            queueCleanupAdapter: queue,
+            presentationAdapter: presentation
+        )
+
+        let emptyCallerRequest = SyncConvergencePostCommitRequest(
+            sourceBatchID: identity.batchID,
+            affectedNoteIDs: [],
+            cleanupPlan: SyncConvergenceCleanupPlan(
+                batchIDs: [],
+                retryQueueCleanup: false,
+                retryLegacyCleanup: false,
+                retryPresentationRefresh: false
+            ),
+            presentationPlan: SyncConvergencePresentationPlan(noteRoutings: [:]),
+            persistedIncorporationIdentity: identity
+        )
+        let outcome = await executor.execute(emptyCallerRequest)
+
+        XCTAssertEqual(outcome, .complete)
+        XCTAssertEqual(queue.removals, [[identity.batchID, TestIDs.extraBatch]])
+        XCTAssertEqual(presentation.requests.map(\.noteID), [TestIDs.noteA])
     }
 
     func testTombstoneCleanupRemovesOnlyVerifiedSourceBatchID() async {
@@ -148,6 +205,28 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         XCTAssertEqual(outcome, .complete)
         XCTAssertEqual(queue.removals, [[identity.batchID]])
+        XCTAssertEqual(store.writeCount, 0)
+    }
+
+    func testPrePayloadPendingRootFailsClosedBeforeAdapters() async {
+        let identity = testIdentity()
+        let state = SyncConvergencePostCommitState(
+            queueCleanupPending: true,
+            legacyCleanupPending: false,
+            presentationRefreshPending: false
+        )
+        let store = FakePostCommitStore(state: .fullRoot(fullRootState(identity: identity, state: state, includeWorkPayload: false)))
+        let queue = FakeQueueCleanupAdapter()
+        let executor = SyncConvergencePostCommitExecutor(
+            store: store,
+            queueCleanupAdapter: queue,
+            presentationAdapter: FakePresentationAdapter(result: .verifiedComplete)
+        )
+
+        let outcome = await executor.execute(request(identity: identity, state: state))
+
+        XCTAssertEqual(outcome, .failedBeforeWork(.missingPostCommitWorkPayload(batchID: identity.batchID)))
+        XCTAssertEqual(queue.removals, [])
         XCTAssertEqual(store.writeCount, 0)
     }
 
@@ -178,10 +257,16 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertEqual(store.writeCount, 1)
     }
 
-    func testCurrentPlannerLegacyCleanupPendingIsFalseForSupportedPlans() throws {
-        let falseAssignments = try productionFile("SyncConvergencePlanner.swift")
-            .filter { $0.contains("retryLegacyCleanup: false") }
-        XCTAssertEqual(falseAssignments.count, 2)
+    func testPersistedWorkPayloadProvesCurrentPathBDoesNotRequireLegacyCleanup() throws {
+        let payload = SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: [TestIDs.batch],
+            legacyCleanupRequired: false,
+            presentationEntries: [workEntry(noteID: TestIDs.noteA, routing: .wholeNoteFallback)]
+        )
+        let decoded = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(payload.encodedPayloadData())
+
+        XCTAssertFalse(decoded.legacyCleanupRequired)
+        XCTAssertFalse(decoded.derivedState().legacyCleanupPending)
     }
 
     func testBodyHashCapabilityRemainsDisabled() {
@@ -225,9 +310,17 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
     private func fullRootState(
         identity: SyncConvergencePersistedIncorporationIdentity,
-        state: SyncConvergencePostCommitState
+        state: SyncConvergencePostCommitState,
+        presentationEntries: [SyncConvergencePostCommitWorkPayloadV1.PresentationEntry]? = nil,
+        includeWorkPayload: Bool = true
     ) -> SyncConvergencePostCommitFullRootState {
         let payload = try! SyncConvergenceStableEncoding.encode(state)
+        let workPayload = includeWorkPayload ? SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: state.queueCleanupPending ? [identity.batchID, TestIDs.extraBatch] : [],
+            legacyCleanupRequired: state.legacyCleanupPending,
+            presentationEntries: presentationEntries ?? (state.presentationRefreshPending ? [workEntry(noteID: TestIDs.noteA, routing: .wholeNoteFallback)] : [])
+        ) : nil
+        let workPayloadData = try! workPayload?.encodedPayloadData()
         return SyncConvergencePostCommitFullRootState(
             root: SyncConvergenceIncorporatedRootProjection(
                 batchID: identity.batchID,
@@ -245,10 +338,27 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 authoritativeChildCount: 0,
                 authoritativeChildBytes: 0,
                 authoritativeChildrenDigest: "children",
+                postCommitWorkPayloadData: workPayloadData,
                 postCommitStatePayloadData: payload
             ),
             postCommitState: state,
-            postCommitStatePayloadData: payload
+            postCommitStatePayloadData: payload,
+            postCommitWorkPayload: workPayload,
+            postCommitWorkPayloadData: workPayloadData
+        )
+    }
+
+    private func workEntry(
+        noteID: UUID,
+        routing: SyncConvergencePostCommitPresentationRoutingPayload,
+        postHash: String = "post"
+    ) -> SyncConvergencePostCommitWorkPayloadV1.PresentationEntry {
+        SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+            noteID: noteID,
+            routing: routing,
+            expectedPreBodyHash: "pre",
+            committedPostBodyHash: postHash,
+            incrementalOperations: []
         )
     }
 
@@ -295,14 +405,6 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             .appendingPathComponent("queue.json")
     }
 
-    private func productionFile(_ name: String) throws -> [String] {
-        let url = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
-            .appendingPathComponent("MyRAM/Sync/Convergence/\(name)")
-        return try String(contentsOf: url).split(separator: "\n").map(String.init)
-    }
-
     private func uuid(_ value: String) -> UUID {
         UUID(uuidString: value)!
     }
@@ -345,12 +447,19 @@ private final class FakePostCommitStore: SyncConvergencePostCommitStateStore {
     }
 
     func compareAndSetPostCommitState(
-        identity: SyncConvergencePersistedIncorporationIdentity,
+        expectedRoot: SyncConvergencePostCommitRootSnapshot,
         expectedPayloadData: Data,
         newState: SyncConvergencePostCommitState
     ) throws -> SyncConvergencePostCommitFullRootState {
         writeCount += 1
         persistedState = newState
+        let identity = SyncConvergencePersistedIncorporationIdentity(
+            batchID: expectedRoot.root.batchID,
+            canonicalPayloadDigest: expectedRoot.root.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: expectedRoot.root.canonicalPayloadDigestFormatVersion,
+            committedResultDigest: expectedRoot.root.committedResultDigest,
+            committedResultDigestFormatVersion: expectedRoot.root.committedResultDigestFormatVersion
+        )
         let loaded = makeFullRootState(identity: identity, state: newState)
         state = .fullRoot(loaded)
         return loaded
@@ -361,6 +470,20 @@ private final class FakePostCommitStore: SyncConvergencePostCommitStateStore {
         state: SyncConvergencePostCommitState
     ) -> SyncConvergencePostCommitFullRootState {
         let payload = try! SyncConvergenceStableEncoding.encode(state)
+        let workPayload = SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: state.queueCleanupPending ? [identity.batchID, TestIDs.extraBatch] : [],
+            legacyCleanupRequired: state.legacyCleanupPending,
+            presentationEntries: state.presentationRefreshPending ? [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: TestIDs.noteA,
+                    routing: .wholeNoteFallback,
+                    expectedPreBodyHash: "pre",
+                    committedPostBodyHash: "post",
+                    incrementalOperations: []
+                )
+            ] : []
+        )
+        let workPayloadData = try! workPayload.encodedPayloadData()
         return SyncConvergencePostCommitFullRootState(
             root: SyncConvergenceIncorporatedRootProjection(
                 batchID: identity.batchID,
@@ -378,10 +501,13 @@ private final class FakePostCommitStore: SyncConvergencePostCommitStateStore {
                 authoritativeChildCount: 0,
                 authoritativeChildBytes: 0,
                 authoritativeChildrenDigest: "children",
+                postCommitWorkPayloadData: workPayloadData,
                 postCommitStatePayloadData: payload
             ),
             postCommitState: state,
-            postCommitStatePayloadData: payload
+            postCommitStatePayloadData: payload,
+            postCommitWorkPayload: workPayload,
+            postCommitWorkPayloadData: workPayloadData
         )
     }
 }

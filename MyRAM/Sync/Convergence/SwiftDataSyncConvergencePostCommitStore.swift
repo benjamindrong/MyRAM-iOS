@@ -18,12 +18,18 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
                     SyncConvergencePostCommitState.self,
                     from: root.postCommitStatePayloadData
                 )
+                let workPayload = try decodeWorkPayload(root: root, state: state)
                 return .fullRoot(SyncConvergencePostCommitFullRootState(
                     root: root,
                     postCommitState: state,
-                    postCommitStatePayloadData: root.postCommitStatePayloadData
+                    postCommitStatePayloadData: root.postCommitStatePayloadData,
+                    postCommitWorkPayload: workPayload,
+                    postCommitWorkPayloadData: root.postCommitWorkPayloadData
                 ))
             } catch {
+                if let failure = error as? SyncConvergencePostCommitFailure {
+                    throw failure
+                }
                 throw SyncConvergencePostCommitFailure.malformedPostCommitState(batchID: identity.batchID)
             }
         }
@@ -49,15 +55,19 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
     }
 
     func compareAndSetPostCommitState(
-        identity: SyncConvergencePersistedIncorporationIdentity,
+        expectedRoot: SyncConvergencePostCommitRootSnapshot,
         expectedPayloadData: Data,
         newState: SyncConvergencePostCommitState
     ) throws -> SyncConvergencePostCommitFullRootState {
+        let identity = expectedRoot.root.persistedIdentity
         let batchID = identity.batchID
         guard let root = try fetchOne(IncorporatedSyncBatch.self, #Predicate { $0.batchID == batchID }) else {
             throw SyncConvergencePostCommitFailure.missingAuthoritativeIncorporation(batchID: identity.batchID)
         }
-        guard root.matches(identity), root.postCommitStatePayloadData == expectedPayloadData else {
+        let currentSnapshot = try loadRoot(batchID: batchID)
+        guard currentSnapshot == expectedRoot.root,
+              root.matches(identity),
+              root.postCommitStatePayloadData == expectedPayloadData else {
             throw SyncConvergencePostCommitFailure.inconsistentIncorporationIdentity(batchID: identity.batchID)
         }
 
@@ -79,8 +89,31 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
         return SyncConvergencePostCommitFullRootState(
             root: reloaded,
             postCommitState: newState,
-            postCommitStatePayloadData: encodedState
+            postCommitStatePayloadData: encodedState,
+            postCommitWorkPayload: try reloaded.postCommitWorkPayloadData.map(SyncConvergencePostCommitWorkPayloadV1.decodePayloadData),
+            postCommitWorkPayloadData: reloaded.postCommitWorkPayloadData
         )
+    }
+
+    private func decodeWorkPayload(
+        root: SyncConvergenceIncorporatedRootProjection,
+        state: SyncConvergencePostCommitState
+    ) throws -> SyncConvergencePostCommitWorkPayloadV1? {
+        guard let data = root.postCommitWorkPayloadData else {
+            if state == .none { return nil }
+            throw SyncConvergencePostCommitFailure.missingPostCommitWorkPayload(batchID: root.batchID)
+        }
+        do {
+            let payload = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(data)
+            guard payload.derivedState() == state else {
+                throw SyncConvergencePostCommitFailure.contradictoryPostCommitWorkPayload(batchID: root.batchID)
+            }
+            return payload
+        } catch let failure as SyncConvergencePostCommitFailure {
+            throw failure
+        } catch {
+            throw SyncConvergencePostCommitFailure.malformedPostCommitWorkPayload(batchID: root.batchID)
+        }
     }
 
     private func loadRoot(batchID: UUID) throws -> SyncConvergenceIncorporatedRootProjection? {
@@ -103,6 +136,7 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
                 authoritativeChildCount: root.authoritativeChildCount,
                 authoritativeChildBytes: root.authoritativeChildBytes,
                 authoritativeChildrenDigest: root.authoritativeChildrenDigest,
+                postCommitWorkPayloadData: root.postCommitWorkPayloadData,
                 postCommitStatePayloadData: root.postCommitStatePayloadData
             )
         }
@@ -159,5 +193,17 @@ private extension SyncConvergenceIncorporatedTombstoneProjection {
         canonicalPayloadDigestFormatVersion == identity.canonicalPayloadDigestFormatVersion &&
         committedResultDigest == identity.committedResultDigest &&
         committedResultDigestFormatVersion == identity.committedResultDigestFormatVersion
+    }
+}
+
+private extension SyncConvergenceIncorporatedRootProjection {
+    var persistedIdentity: SyncConvergencePersistedIncorporationIdentity {
+        SyncConvergencePersistedIncorporationIdentity(
+            batchID: batchID,
+            canonicalPayloadDigest: canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
+            committedResultDigest: committedResultDigest,
+            committedResultDigestFormatVersion: committedResultDigestFormatVersion
+        )
     }
 }
