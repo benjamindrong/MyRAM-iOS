@@ -212,6 +212,487 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertNotEqual(entry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: creationBody))
     }
 
+    func testCreatePlusDeleteUsesFinalBodyHashForPresentationWork() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000132c90")
+        let creationBody = "ABC"
+        let finalBody = "AC"
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132c91"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132c92"),
+            createdAt: date(3),
+            batchSequence: 81,
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Created",
+                    body: creationBody,
+                    folderID: nil,
+                    createdAt: date(1),
+                    modifiedAt: date(2)
+                )),
+                .noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    utf16Length: 1,
+                    expectedText: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: creationBody)
+                ))
+            ]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(incomingBatch: batch))
+        guard case .planned(let validatedInput) = outcome else {
+            return XCTFail("Expected create-plus-delete plan, got \(outcome)")
+        }
+
+        let transaction = InMemoryConvergenceTransaction(notes: [:])
+        let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: validatedInput,
+            transaction: transaction,
+            committedAt: date(5)
+        )
+
+        guard case .incorporated = incorporation,
+              let root = transaction.roots[batch.id] else {
+            return XCTFail("Expected create-plus-delete incorporation, got \(incorporation)")
+        }
+        let work = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(root.postCommitWorkPayloadData!)
+        let entry = try XCTUnwrap(work.presentationEntries.first)
+        let finalHash = SyncBatchContentHash.sha256Hex(for: finalBody)
+        XCTAssertEqual(transaction.notes[noteID]?.body, finalBody)
+        XCTAssertEqual(entry.committedPostBodyHash, finalHash)
+        XCTAssertEqual(entry.incrementalOperations.last?.resultContentHash, finalHash)
+        XCTAssertEqual(entry.expectedPreBodyHash, SyncBatchContentHash.sha256Hex(for: creationBody))
+    }
+
+    func testCreatePlusBodyRollsBackEntirelyOnStagedFailure() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000132ca0")
+        let creationBody = "A"
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132ca1"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132ca2"),
+            createdAt: date(3),
+            batchSequence: 82,
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Created",
+                    body: creationBody,
+                    folderID: nil,
+                    createdAt: date(1),
+                    modifiedAt: date(2)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: creationBody)
+                ))
+            ]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(incomingBatch: batch))
+        guard case .planned(let validatedInput) = outcome else {
+            return XCTFail("Expected create-plus-body plan, got \(outcome)")
+        }
+
+        let transaction = InMemoryConvergenceTransaction(notes: [:])
+        transaction.failAfterUpdateNote = true
+
+        let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: validatedInput,
+            transaction: transaction,
+            committedAt: date(5)
+        )
+
+        XCTAssertEqual(incorporation, .failedAndRolledBack(.swiftDataSave))
+        XCTAssertNil(transaction.notes[noteID])
+        XCTAssertNil(transaction.roots[batch.id])
+        XCTAssertTrue(transaction.rollbackCalled)
+        XCTAssertFalse(transaction.saveCalled)
+        XCTAssertEqual(transaction.operationIdentityInsertCount, 0)
+        XCTAssertEqual(transaction.noteEffectInsertCount, 0)
+        XCTAssertEqual(transaction.resultEvidenceInsertCount, 0)
+    }
+
+    func testDeletedIdempotentCreationNoteFailsStaleAndIsNotRecreated() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000132cb0")
+        let origin = uuid("00000000-0000-0000-0000-000000132cb1")
+        let batchID = uuid("00000000-0000-0000-0000-000000132cb2")
+        let creationBody = "A"
+        let batch = SyncBatch(
+            id: batchID,
+            originDeviceID: origin,
+            createdAt: date(3),
+            batchSequence: 83,
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Created",
+                    body: creationBody,
+                    folderID: nil,
+                    createdAt: date(1),
+                    modifiedAt: date(2)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: creationBody)
+                ))
+            ]
+        )
+        // The creation is already reflected in `currentNotes`, so the planner
+        // classifies it `.idempotent`; the body operation still plans as a fresh
+        // incremental effect building on the already-created content.
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [SyncConvergenceProjectedNote(
+                noteID: noteID,
+                folderID: nil,
+                title: "Created",
+                body: creationBody,
+                createdAt: date(1),
+                modifiedAt: date(2)
+            )]
+        ))
+        guard case .planned(let validatedInput) = outcome else {
+            return XCTFail("Expected idempotent-creation-plus-body plan, got \(outcome)")
+        }
+        guard let notePlan = validatedInput.plan.affectedNotePlans.first(where: { $0.noteID == noteID }),
+              notePlan.creationEffect?.verdict == .idempotent else {
+            return XCTFail("Expected idempotent creation effect in plan")
+        }
+
+        // The note was deleted after planning but before incorporation.
+        let transaction = InMemoryConvergenceTransaction(notes: [:])
+        let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: validatedInput,
+            transaction: transaction,
+            committedAt: date(5)
+        )
+
+        XCTAssertEqual(incorporation, .failedBeforeCommit(.staleAuthoritativeState(noteID: noteID)))
+        XCTAssertNil(transaction.notes[noteID])
+        assertNoPreflightMutation(transaction, "deleted idempotent-creation note")
+    }
+
+    func testMalformedCreationBodyPreStateFailsBeforeCommit() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000132cc0")
+        let creationBody = "A"
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132cc1"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132cc2"),
+            createdAt: date(3),
+            batchSequence: 84,
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Created",
+                    body: creationBody,
+                    folderID: nil,
+                    createdAt: date(1),
+                    modifiedAt: date(2)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: creationBody)
+                ))
+            ]
+        )
+        let planningInput = SyncConvergencePlanningInput(incomingBatch: batch)
+        let outcome = SyncConvergencePlanner().plan(input: planningInput)
+        guard case .planned(let validatedInput) = outcome else {
+            return XCTFail("Expected create-plus-body plan, got \(outcome)")
+        }
+        let plan = validatedInput.plan
+        guard let noteIndex = plan.affectedNotePlans.firstIndex(where: { $0.noteID == noteID }),
+              case .matchingBaseIncremental(let bodyPlan) = plan.affectedNotePlans[noteIndex].bodyEffect else {
+            return XCTFail("Expected matching-base body effect")
+        }
+
+        // Disagree with the creation body while staying internally consistent
+        // everywhere else (initialBodyHash still hashes initialBody, and the
+        // result-evidence preHash is updated to match), so only the dedicated
+        // creation/body agreement check can reject this — not any of the
+        // pre-existing internal hash-consistency checks.
+        let disagreeingInitialBody = "Z"
+        let disagreeingInitialBodyHash = SyncBatchContentHash.sha256Hex(for: disagreeingInitialBody)
+        let malformedResultEvidence = SyncConvergenceResultEvidence(
+            batchID: bodyPlan.resultEvidence.batchID,
+            noteID: bodyPlan.resultEvidence.noteID,
+            kind: bodyPlan.resultEvidence.kind,
+            preHash: disagreeingInitialBodyHash,
+            postHash: bodyPlan.resultEvidence.postHash,
+            canonicalReplayKey: bodyPlan.resultEvidence.canonicalReplayKey
+        )
+        let malformedBodyPlan = MatchingBaseBodyPlan(
+            noteID: bodyPlan.noteID,
+            initialBody: disagreeingInitialBody,
+            initialBodyHash: disagreeingInitialBodyHash,
+            operations: bodyPlan.operations,
+            finalBody: bodyPlan.finalBody,
+            finalBodyHash: bodyPlan.finalBodyHash,
+            resultEvidence: malformedResultEvidence
+        )
+        var malformedNotePlans = plan.affectedNotePlans
+        malformedNotePlans[noteIndex] = SyncConvergenceNotePlan(
+            noteID: noteID,
+            creationEffect: plan.affectedNotePlans[noteIndex].creationEffect,
+            bodyEffect: .matchingBaseIncremental(malformedBodyPlan),
+            titleEffect: plan.affectedNotePlans[noteIndex].titleEffect
+        )
+        let malformedResultEvidenceList = plan.incorporationEvidence.resultEvidence.map { evidence in
+            evidence.kind == .body && evidence.noteID == noteID ? malformedResultEvidence : evidence
+        }
+        let malformedPlan = SyncConvergenceBatchPlan(
+            batchID: plan.batchID,
+            originDeviceID: plan.originDeviceID,
+            canonicalPayloadDigest: plan.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: plan.canonicalPayloadDigestFormatVersion,
+            affectedNotePlans: malformedNotePlans,
+            incorporationEvidence: SyncConvergenceIncorporationPlan(
+                operationIdentities: plan.incorporationEvidence.operationIdentities,
+                resultEvidence: malformedResultEvidenceList
+            ),
+            historyPlan: plan.historyPlan,
+            cleanupPlan: plan.cleanupPlan,
+            presentationPlan: plan.presentationPlan
+        )
+
+        // Recomputed for the malformed (but internally re-consistent) evidence so the
+        // trailing whole-plan byte-count recompute cannot be what rejects this plan —
+        // only the dedicated creation/body agreement check should fire.
+        let malformedProjectedBytes = try SyncConvergenceProjectedIncorporationEvidence(
+            batch: batch,
+            affectedNoteIDs: Set(malformedPlan.affectedNotePlans.map(\.noteID)),
+            operationIdentities: malformedPlan.incorporationEvidence.operationIdentities,
+            resultEvidence: malformedPlan.incorporationEvidence.resultEvidence
+        ).canonicalEncodedByteCount()
+
+        let queueSelection = SyncConvergenceEvidenceSelector().selectQueuedBatches(for: batch, queuedBatches: [])
+        let result = SyncConvergencePlanValidator().validate(
+            malformedPlan,
+            input: planningInput,
+            queueSelection: queueSelection,
+            projectedFullIncorporationEvidenceBytes: malformedProjectedBytes
+        )
+
+        XCTAssertEqual(result, .failedBeforeCommit(.invalidMergePlan(noteID: noteID)))
+    }
+
+    func testSwappedOperationIdentityAcrossNotesFailsBeforeCommit() throws {
+        let fixture = try makeTwoNoteSwappableFixture()
+
+        let malformedOutcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.swappedValidatedInput,
+            transaction: fixture.transaction,
+            committedAt: fixture.committedAt
+        )
+
+        let expectedFailingNoteID = [fixture.noteA, fixture.noteB]
+            .sorted { $0.uuidString < $1.uuidString }
+            .first!
+        XCTAssertEqual(malformedOutcome, .failedBeforeCommit(.invalidMergePlan(noteID: expectedFailingNoteID)))
+        XCTAssertEqual(fixture.transaction.notes[fixture.noteA]?.body, "A")
+        XCTAssertEqual(fixture.transaction.notes[fixture.noteB]?.body, "X")
+        assertNoPreflightMutation(fixture.transaction, "swapped operation identity")
+    }
+
+    func testTwoNoteExactOwnershipIncorporatesSuccessfully() throws {
+        let fixture = try makeTwoNoteSwappableFixture()
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: fixture.transaction,
+            committedAt: fixture.committedAt
+        )
+
+        guard case .incorporated = outcome else {
+            return XCTFail("Expected exact-ownership two-note incorporation, got \(outcome)")
+        }
+        XCTAssertEqual(fixture.transaction.notes[fixture.noteA]?.body, "AB")
+        XCTAssertEqual(fixture.transaction.notes[fixture.noteB]?.body, "XY")
+        let root = try XCTUnwrap(fixture.transaction.roots[fixture.batchID])
+        let work = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(root.postCommitWorkPayloadData!)
+        XCTAssertEqual(Set(work.presentationEntries.map(\.noteID)), [fixture.noteA, fixture.noteB])
+    }
+
+    private struct TwoNoteSwappableFixture {
+        let noteA: UUID
+        let noteB: UUID
+        let batchID: UUID
+        let committedAt: Date
+        let validatedInput: ValidatedSyncConvergenceIncorporationInput
+        let swappedValidatedInput: ValidatedSyncConvergenceIncorporationInput
+        let transaction: InMemoryConvergenceTransaction
+    }
+
+    /// Builds a two-note batch that plans cleanly, then constructs a malformed
+    /// sibling plan with the two notes' same-kind body operation identities
+    /// swapped while leaving the global incorporation identity set intact —
+    /// the exact shape a poison-pill plan would need to pass every prior check.
+    private func makeTwoNoteSwappableFixture() throws -> TwoNoteSwappableFixture {
+        let noteA = uuid("00000000-0000-0000-0000-000000132e01")
+        let noteB = uuid("00000000-0000-0000-0000-000000132e02")
+        let origin = uuid("00000000-0000-0000-0000-000000132e03")
+        let batchID = uuid("00000000-0000-0000-0000-000000132e04")
+        let batch = SyncBatch(
+            id: batchID,
+            originDeviceID: origin,
+            createdAt: date(3),
+            batchSequence: 90,
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteA,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteB,
+                    utf16Offset: 1,
+                    text: "Y",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "X")
+                ))
+            ]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [
+                SyncConvergenceProjectedNote(
+                    noteID: noteA, folderID: nil, title: "Title A", body: "A",
+                    createdAt: date(1), modifiedAt: date(2)
+                ),
+                SyncConvergenceProjectedNote(
+                    noteID: noteB, folderID: nil, title: "Title B", body: "X",
+                    createdAt: date(1), modifiedAt: date(2)
+                )
+            ]
+        ))
+        guard case .planned(let validatedInput) = outcome else {
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        let plan = validatedInput.plan
+
+        func matchingBasePlan(for noteID: UUID) throws -> (index: Int, plan: MatchingBaseBodyPlan) {
+            guard let index = plan.affectedNotePlans.firstIndex(where: { $0.noteID == noteID }),
+                  case .matchingBaseIncremental(let bodyPlan) = plan.affectedNotePlans[index].bodyEffect,
+                  bodyPlan.operations.count == 1 else {
+                throw TestFixtureError.unexpectedPlanningOutcome
+            }
+            return (index, bodyPlan)
+        }
+
+        let (indexA, bodyPlanA) = try matchingBasePlan(for: noteA)
+        let (indexB, bodyPlanB) = try matchingBasePlan(for: noteB)
+        let originalOperationA = bodyPlanA.operations[0]
+        let originalOperationB = bodyPlanB.operations[0]
+
+        let swappedOperationA = SyncConvergencePlannedBodyOperation(
+            noteID: originalOperationA.noteID,
+            kind: originalOperationA.kind,
+            utf16Offset: originalOperationA.utf16Offset,
+            utf16Length: originalOperationA.utf16Length,
+            text: originalOperationA.text,
+            expectedText: originalOperationA.expectedText,
+            baseContentHash: originalOperationA.baseContentHash,
+            resultContentHash: originalOperationA.resultContentHash,
+            operationIdentity: originalOperationB.operationIdentity
+        )
+        let swappedOperationB = SyncConvergencePlannedBodyOperation(
+            noteID: originalOperationB.noteID,
+            kind: originalOperationB.kind,
+            utf16Offset: originalOperationB.utf16Offset,
+            utf16Length: originalOperationB.utf16Length,
+            text: originalOperationB.text,
+            expectedText: originalOperationB.expectedText,
+            baseContentHash: originalOperationB.baseContentHash,
+            resultContentHash: originalOperationB.resultContentHash,
+            operationIdentity: originalOperationA.operationIdentity
+        )
+
+        var swappedNotePlans = plan.affectedNotePlans
+        swappedNotePlans[indexA] = SyncConvergenceNotePlan(
+            noteID: noteA,
+            creationEffect: plan.affectedNotePlans[indexA].creationEffect,
+            bodyEffect: .matchingBaseIncremental(MatchingBaseBodyPlan(
+                noteID: bodyPlanA.noteID,
+                initialBody: bodyPlanA.initialBody,
+                initialBodyHash: bodyPlanA.initialBodyHash,
+                operations: [swappedOperationA],
+                finalBody: bodyPlanA.finalBody,
+                finalBodyHash: bodyPlanA.finalBodyHash,
+                resultEvidence: bodyPlanA.resultEvidence
+            )),
+            titleEffect: plan.affectedNotePlans[indexA].titleEffect
+        )
+        swappedNotePlans[indexB] = SyncConvergenceNotePlan(
+            noteID: noteB,
+            creationEffect: plan.affectedNotePlans[indexB].creationEffect,
+            bodyEffect: .matchingBaseIncremental(MatchingBaseBodyPlan(
+                noteID: bodyPlanB.noteID,
+                initialBody: bodyPlanB.initialBody,
+                initialBodyHash: bodyPlanB.initialBodyHash,
+                operations: [swappedOperationB],
+                finalBody: bodyPlanB.finalBody,
+                finalBodyHash: bodyPlanB.finalBodyHash,
+                resultEvidence: bodyPlanB.resultEvidence
+            )),
+            titleEffect: plan.affectedNotePlans[indexB].titleEffect
+        )
+
+        let swappedHistoryPlan = SyncConvergenceHistoryPlan(
+            retainedOperationAdditions: [swappedOperationA, swappedOperationB],
+            snapshotAdditions: plan.historyPlan.snapshotAdditions,
+            pressureNotes: plan.historyPlan.pressureNotes
+        )
+
+        let swappedPlan = SyncConvergenceBatchPlan(
+            batchID: plan.batchID,
+            originDeviceID: plan.originDeviceID,
+            canonicalPayloadDigest: plan.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: plan.canonicalPayloadDigestFormatVersion,
+            affectedNotePlans: swappedNotePlans,
+            incorporationEvidence: plan.incorporationEvidence,
+            historyPlan: swappedHistoryPlan,
+            cleanupPlan: plan.cleanupPlan,
+            presentationPlan: plan.presentationPlan
+        )
+        let swappedValidatedInput = ValidatedSyncConvergenceIncorporationInput(
+            validatedPlanToken: SyncConvergenceValidatedPlanToken(),
+            plan: swappedPlan,
+            sourceBatch: validatedInput.sourceBatch,
+            sourceSchemaVersion: validatedInput.sourceSchemaVersion,
+            projectedFullIncorporationEvidenceBytes: validatedInput.projectedFullIncorporationEvidenceBytes
+        )
+
+        let transaction = InMemoryConvergenceTransaction(notes: [
+            noteA: SyncConvergenceMutableNoteRecord(
+                noteID: noteA, folderID: nil, title: "Title A", body: "A", createdAt: date(1), modifiedAt: date(2)
+            ),
+            noteB: SyncConvergenceMutableNoteRecord(
+                noteID: noteB, folderID: nil, title: "Title B", body: "X", createdAt: date(1), modifiedAt: date(2)
+            )
+        ])
+
+        return TwoNoteSwappableFixture(
+            noteA: noteA,
+            noteB: noteB,
+            batchID: batchID,
+            committedAt: date(5),
+            validatedInput: validatedInput,
+            swappedValidatedInput: swappedValidatedInput,
+            transaction: transaction
+        )
+    }
+
     func testExecutorRejectsStaleBodyBeforeMutation() throws {
         let fixture = try makeFixture()
         let staleNote = SyncConvergenceMutableNoteRecord(

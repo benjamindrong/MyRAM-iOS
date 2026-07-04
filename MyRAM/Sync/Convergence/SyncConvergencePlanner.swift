@@ -2,7 +2,11 @@ import CryptoKit
 import Foundation
 
 struct SyncConvergenceValidatedPlanToken: Equatable {
-    fileprivate init() {}
+    // Not `fileprivate`: regression coverage must be able to construct malformed
+    // validated plans directly (see the swapped-note test) to exercise incorporation-time
+    // defenses that planner-level `validate()` would otherwise reject before this point.
+    // This is still an internal-only construction; no external/network caller can forge one.
+    init() {}
 }
 
 struct SyncConvergencePlanner {
@@ -1959,6 +1963,24 @@ struct SyncConvergencePlanValidator {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
                 expectedResultEvidence.append(creationEffect.resultEvidence)
+                // A same-batch `.create` has no persisted note before incorporation, so
+                // any body effect in this same plan must build on the projected creation
+                // body; an idempotent creation's prior batches may have moved the body
+                // further via retained history, so this agreement check is `.create`-only.
+                if creationEffect.verdict == .create {
+                    switch notePlan.bodyEffect {
+                    case .matchingBaseIncremental(let bodyPlan):
+                        guard bodyPlan.initialBodyHash == creationEffect.initialBodyHash else {
+                            return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                        }
+                    case .legacyPositional(let bodyPlan):
+                        guard SyncBatchContentHash.sha256Hex(for: bodyPlan.initialBody) == creationEffect.initialBodyHash else {
+                            return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                        }
+                    case .reconstructedConflict, .compatibilityNoopMissingNote, nil:
+                        break
+                    }
+                }
             }
             switch notePlan.bodyEffect {
             case .matchingBaseIncremental(let bodyPlan):
@@ -2110,15 +2132,19 @@ extension OperationIdentityPayload {
         "\(batchIDLowercase)|\(operationIndex)"
     }
 
+    /// Identities that belong to the source batch must resolve note ownership from
+    /// the source batch itself. A malformed plan must never be allowed to justify
+    /// its own (possibly swapped) identity placement via plan-derived lookup.
     func noteID(from input: ValidatedSyncConvergenceIncorporationInput) -> UUID? {
-        if let noteID = canonicalReplayKey.noteIDFromKnownPlan(input.plan) {
-            return noteID
+        if batchIDLowercase == input.sourceBatchID.uuidString.lowercased() {
+            guard input.sourceBatch.changes.indices.contains(operationIndex),
+                  input.sourceBatch.changes[operationIndex].operationKind == operationKind
+            else {
+                return nil
+            }
+            return input.sourceBatch.changes[operationIndex].noteID
         }
-        guard batchIDLowercase == input.sourceBatchID.uuidString.lowercased(),
-              input.sourceBatch.changes.indices.contains(operationIndex) else {
-            return nil
-        }
-        return input.sourceBatch.changes[operationIndex].noteID
+        return canonicalReplayKey.noteIDFromKnownPlan(input.plan)
     }
 }
 
@@ -2662,17 +2688,31 @@ struct SyncConvergenceIncorporationExecutor {
         creationEffect: SyncConvergenceCreationEffect?
     ) throws {
         guard let effect else { return }
-        let currentBody = current?.body ?? creationEffect?.body ?? ""
         switch effect {
         case .matchingBaseIncremental(let plan):
+            let currentBody = try requiredAuthoritativePreBody(
+                current: current,
+                creationEffect: creationEffect,
+                noteID: plan.noteID
+            )
             guard SyncBatchContentHash.sha256Hex(for: currentBody) == plan.initialBodyHash else {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
             }
         case .reconstructedConflict(let plan):
+            let currentBody = try requiredAuthoritativePreBody(
+                current: current,
+                creationEffect: creationEffect,
+                noteID: plan.noteID
+            )
             guard SyncBatchContentHash.sha256Hex(for: currentBody) == plan.projectedPreMergeCurrentHash else {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
             }
         case .legacyPositional(let plan):
+            let currentBody = try requiredAuthoritativePreBody(
+                current: current,
+                creationEffect: creationEffect,
+                noteID: plan.noteID
+            )
             guard currentBody == plan.initialBody else {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
             }
@@ -2681,6 +2721,25 @@ struct SyncConvergenceIncorporationExecutor {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
             }
         }
+    }
+
+    /// A same-batch `.create` plus body-operation plan validates body preconditions
+    /// against the projected creation body because no persisted note exists before
+    /// the atomic incorporation save. This exception is limited to `.create`; an
+    /// idempotent creation still requires the authoritative note to exist and match,
+    /// so a genuinely missing note fails closed instead of silently defaulting to "".
+    private func requiredAuthoritativePreBody(
+        current: SyncConvergenceMutableNoteRecord?,
+        creationEffect: SyncConvergenceCreationEffect?,
+        noteID: UUID
+    ) throws -> String {
+        if let current {
+            return current.body
+        }
+        guard let creationEffect, creationEffect.verdict == .create else {
+            throw ExecutorFailure(.staleAuthoritativeState(noteID: noteID))
+        }
+        return creationEffect.body
     }
 
     private func verifyTitlePrecondition(
@@ -3076,8 +3135,8 @@ struct SyncConvergenceIncorporationExecutor {
 
         private static func makeOperationIdentityAuthority(
             input: ValidatedSyncConvergenceIncorporationInput
-        ) throws -> [String: OperationIdentityPayload] {
-            var identitiesByKey: [String: OperationIdentityPayload] = [:]
+        ) throws -> [String: PostCommitOperationIdentityAuthority] {
+            var authorityByKey: [String: PostCommitOperationIdentityAuthority] = [:]
             for identity in input.plan.incorporationEvidence.operationIdentities {
                 do {
                     try identity.validate()
@@ -3091,13 +3150,22 @@ struct SyncConvergenceIncorporationExecutor {
                 } catch {
                     throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: nil)
                 }
-                let key = "\(identity.batchIDLowercase)|\(identity.operationIndex)"
-                guard identitiesByKey[key] == nil else {
+                // Note ownership must be independently resolved here rather than trusted
+                // from the surrounding plan; this is what prevents a malformed plan from
+                // committing a same-kind operation identity under the wrong note.
+                guard let authoritativeNoteID = identity.noteID(from: input) else {
                     throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: nil)
                 }
-                identitiesByKey[key] = identity
+                let key = identity.planIdentityKey
+                guard authorityByKey[key] == nil else {
+                    throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: authoritativeNoteID)
+                }
+                authorityByKey[key] = PostCommitOperationIdentityAuthority(
+                    identity: identity,
+                    noteID: authoritativeNoteID
+                )
             }
-            return identitiesByKey
+            return authorityByKey
         }
 
         private static func makeChildProjection(
@@ -3543,7 +3611,7 @@ private extension SyncConvergenceNotePlan {
 
     func incrementalPostCommitOperations(
         for routing: SyncConvergencePresentationRouting,
-        identityAuthority: [String: OperationIdentityPayload]
+        identityAuthority: [String: PostCommitOperationIdentityAuthority]
     ) throws -> [SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload] {
         guard routing == .incremental else { return [] }
         let operations: [SyncConvergencePlannedBodyOperation]
@@ -3562,14 +3630,22 @@ private extension SyncConvergenceNotePlan {
         return try operations
             .sorted { $0.operationIdentity.operationIndex < $1.operationIdentity.operationIndex }
             .map { operation in
-                let key = "\(operation.operationIdentity.batchIDLowercase)|\(operation.operationIdentity.operationIndex)"
-                guard let authoritativeIdentity = identityAuthority[key],
-                      authoritativeIdentity == operation.operationIdentity else {
+                let key = operation.operationIdentity.planIdentityKey
+                guard let authority = identityAuthority[key],
+                      authority.identity == operation.operationIdentity,
+                      authority.noteID == noteID else {
                     throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
                 }
                 return try operation.postCommitOperationPayload()
             }
     }
+}
+
+/// Authoritative note ownership for a source batch/index, resolved independently
+/// of the surrounding plan so a swapped-identity plan cannot self-justify.
+private struct PostCommitOperationIdentityAuthority {
+    let identity: OperationIdentityPayload
+    let noteID: UUID
 }
 
 private extension CanonicalReplayKeyPayload {
