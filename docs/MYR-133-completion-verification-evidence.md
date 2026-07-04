@@ -11,6 +11,10 @@ The corrective slice after commit `6b1017e` fixes two defects found in that veri
 
 The production fix is validation-only. It does not change the persistence format or executor behavior. Malformed payloads that previously skipped chain validation are now rejected.
 
+MYR-134 completed the planner and routed-note construction verification slice. It added real planner-to-incorporation coverage for every supported finalized planner shape, exact persisted routed-note work construction, `.none` route filtering, malformed route/effect rejection, and deterministic note-entry and operation ordering.
+
+MYR-134 also found one settled-contract defect in legacy positional post-commit work construction: legacy body operations can predate per-operation base hashes, but persisted incremental presentation work requires a replayable base/result hash chain. The fix is limited to private post-commit payload construction, where missing operation base hashes are derived from the entry pre-body hash and preceding operation result hash.
+
 No live drain/controller integration was added. No per-domain CAS boundary was introduced. No production visibility was broadened for tests.
 
 ## Phase 1 Inventory
@@ -96,6 +100,13 @@ Target membership decision:
 | Deterministic all-idempotent payload digest | `testAllIdempotentRetainedBodyDeliveryPersistsWithoutPresentationWork` | Golden SHA-256 `7441711fd109820ef330485c1e431b8f75b2c1d99037855189ed213b16d7e50b` |
 | Partial and full clear reload from fresh SwiftData contexts | `testSwiftDataStoreReloadsAfterPartialAndFullClearWithRetainedWorkPayload` | iOS/macOS post-commit suites |
 | Tombstone cleanup ignores regenerated caller-plan content | `testTombstoneCleanupRemovesOnlyVerifiedSourceBatchID` | iOS/macOS post-commit suites |
+| Real planner Path B disabled across supported finalized shapes | `MyRAMTests/SyncConvergenceIncorporationTests.swift` `testMYR134RealPlannerShapeMatrixPersistsExpectedRoutedWork`, `planIncorporateAndDecode` | Asserts `.planned`, `cleanupPlan.retryLegacyCleanup == false`, persisted `legacyCleanupPending == false`, work `legacyCleanupRequired == false`, and `work.derivedInitialState() == state` for matching-base incremental, all-idempotent, mixed idempotent/executable, legacy positional, creation-only create/idempotent, creation-plus-body create/idempotent, title-only, reconstructed conflict, compatibility body no-op, and compatibility title no-op |
+| Zero/one/multiple routed-note cardinality | `testMYR134RealPlannerShapeMatrixPersistsExpectedRoutedWork`, `testMYR134MixedRoutingsPersistOnlyNonNoneEntriesInDeterministicOrder` | Zero-entry title/creation/no-op cases, one-entry matching-base incremental case, and mixed multi-note fixture |
+| Mixed `.none`/incremental/fallback exact persisted set | `testMYR134MixedRoutingsPersistOnlyNonNoneEntriesInDeterministicOrder` | Work contains only incremental and fallback notes, excludes `.none`, and stores entries in UUID order |
+| Missing and duplicate note-plan rejection | `testMYR134MalformedRoutedNoteConstructionFailsBeforeCommitWithoutMutation` | Mutates valid real planner output, uses DEBUG test token only, asserts `.failedBeforeCommit(.invalidMergePlan(noteID: ...))`, and proves no preflight mutation |
+| Route/effect contradiction rejection | `testMYR134MalformedRoutedNoteConstructionFailsBeforeCommitWithoutMutation` | Covers incremental route with no executable operations, fallback route with incremental effect, incremental route for reconstructed conflict, and extraneous routing for title-only note |
+| Incremental-without-executable-work normalization/rejection proof | `testMYR134RealPlannerShapeMatrixPersistsExpectedRoutedWork`, `testMYR134MalformedRoutedNoteConstructionFailsBeforeCommitWithoutMutation` | Real all-idempotent planner output normalizes to `.none`; malformed incremental route with empty operations is rejected before commit |
+| Deterministic note-entry and operation order | `testMYR134MixedRoutingsPersistOnlyNonNoneEntriesInDeterministicOrder`, `testMYR134RepeatedPlanningAndIncorporationProducesIdenticalWorkPayload` | Affected note plans and presentation entries are UUID ordered; incremental operations preserve ascending source indexes; repeated construction produces identical work bytes |
 
 ## Commands Run
 
@@ -199,12 +210,68 @@ git diff --check
 
 Commit SHA: `036f38e8d4ef57777076698907c229bcbda81280`. Exit code: 0.
 
+## MYR-134 Verification
+
+Verified implementation SHA: `a81f1a29d64cbb368d8a6974ef0d1c0ea881f8de`
+
+Chosen iOS simulator: `iPhone 16 Pro`
+
+```bash
+xcrun simctl list devices available
+```
+
+Exit code: 0. Selected `iPhone 16 Pro` from available iOS 26.5 simulators.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePlanningTests -only-testing:MyRAMTests/SyncConvergenceIncorporationTests
+```
+
+Commit SHA: `a81f1a29d64cbb368d8a6974ef0d1c0ea881f8de`. Exit code: 0. Executed 95 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePlanningTests -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests
+```
+
+Commit SHA: `a81f1a29d64cbb368d8a6974ef0d1c0ea881f8de`. Exit code: 0. Executed 95 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePostCommitTests
+```
+
+Commit SHA: `a81f1a29d64cbb368d8a6974ef0d1c0ea881f8de`. Exit code: 0. Executed 25 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests
+```
+
+Commit SHA: `a81f1a29d64cbb368d8a6974ef0d1c0ea881f8de`. Exit code: 0. Executed 25 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' build
+```
+
+Commit SHA: `a81f1a29d64cbb368d8a6974ef0d1c0ea881f8de`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build
+```
+
+Commit SHA: `a81f1a29d64cbb368d8a6974ef0d1c0ea881f8de`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+```bash
+git diff --check
+```
+
+Commit SHA: `a81f1a29d64cbb368d8a6974ef0d1c0ea881f8de`. Exit code: 0.
+
+MYR-134 is complete.
+MYR-133 remains incomplete.
+MYR-135 is the next blocked slice.
+
 ## Remaining MYR-133 Coverage Not Completed In This Pass
 
 The attached MYR-133 proposal is broader than this initial implementation pass. These items still need additional work before claiming full ticket completion:
 
-- Real behavioral Path B proof for every PR 2 planner shape.
-- Full routed-note construction negative matrix at incorporation boundary.
 - Full operation identity construction-time and authoritative-row corruption matrix.
 - Per-field stale-CAS matrix against SwiftData roots.
 - Remaining Phase 7 and Phase 9 load, save, reload, adapter-failure, and crash-window coverage beyond the fresh-store final-CAS retry added here.
