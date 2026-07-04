@@ -349,12 +349,12 @@ Keep **MYR-133** as the umbrella ticket.
 
 Create linked implementation tasks for:
 
-1. **MYR-133A — Complete planner and routed-note construction verification**
-2. **MYR-133B — Complete operation identity validation matrix**
-3. **MYR-133C — Complete immutable-root stale-CAS matrix**
-4. **MYR-133D — Add configurable post-commit failure-injection coverage**
-5. **MYR-133E — Complete post-commit crash and relaunch verification**
-6. **MYR-133F — Produce final MYR-133 completion and release evidence**
+MYR-134 — planner and routed-note construction
+MYR-135 — operation identity matrix
+MYR-136 — immutable-root stale-CAS matrix
+MYR-137 — failure-injection coverage
+MYR-138 — crash and relaunch verification
+MYR-139 — final completion evidence
 
 Use the project’s next available issue numbers rather than literal letter suffixes if Jira does not support them.
 
