@@ -228,6 +228,17 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
             for operation in incrementalOperations {
                 try operation.validate(noteID: noteID)
             }
+            for (previous, current) in zip(incrementalOperations, incrementalOperations.dropFirst()) {
+                if let baseContentHash = current.baseContentHash,
+                   baseContentHash != previous.resultContentHash {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+                }
+            }
+            if let expectedPreBodyHash,
+               let firstBaseHash = incrementalOperations.first?.baseContentHash,
+               expectedPreBodyHash != firstBaseHash {
+                throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+            }
             if let finalResultHash = incrementalOperations.last?.resultContentHash,
                finalResultHash != committedPostBodyHash {
                 throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
@@ -253,9 +264,18 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
         let operationIdentity: OperationIdentityPayload
 
         func validate(noteID entryNoteID: UUID) throws {
+            do {
+                try operationIdentity.validate()
+            } catch {
+                throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+            }
             guard noteID == entryNoteID,
                   operationIndex >= 0,
-                  operationIdentity.operationIndex == operationIndex else {
+                  operationIdentity.operationIndex == operationIndex,
+                  operationIdentity.batchIDLowercase == operationIdentity.canonicalReplayKey.batchIDLowercase,
+                  operationIdentity.originDeviceIDLowercase == operationIdentity.canonicalReplayKey.originDeviceIDLowercase,
+                  operationIdentity.operationIndex == operationIdentity.canonicalReplayKey.operationIndex,
+                  operationIdentity.operationKind == kind.rawValue else {
                 throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
             }
             try baseContentHash.map(validateBodyHash)

@@ -387,16 +387,94 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertEqual(store.writeCount, 1)
     }
 
-    func testPersistedWorkPayloadProvesCurrentPathBDoesNotRequireLegacyCleanup() throws {
-        let payload = SyncConvergencePostCommitWorkPayloadV1(
-            queueCleanupBatchIDs: [TestIDs.batch],
-            legacyCleanupRequired: false,
-            presentationEntries: [workEntry(noteID: TestIDs.noteA, routing: .wholeNoteFallback)]
+    func testPostCommitPayloadRejectsMalformedOperationIdentity() {
+        let postHash = SyncBatchContentHash.sha256Hex(for: "post")
+        let operation = incrementalOperation(noteID: TestIDs.noteA, resultHash: postHash)
+        let malformedIdentity = OperationIdentityPayload(
+            version: OperationIdentityPayload.supportedVersion + 1,
+            batchID: TestIDs.batch,
+            originDeviceID: TestIDs.device,
+            operationIndex: operation.operationIndex,
+            operationKind: operation.kind.rawValue,
+            canonicalReplayKey: operation.operationIdentity.canonicalReplayKey
         )
-        let decoded = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(payload.encodedPayloadData())
+        let payload = SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: [],
+            legacyCleanupRequired: false,
+            presentationEntries: [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: TestIDs.noteA,
+                    routing: .incremental,
+                    expectedPreBodyHash: nil,
+                    committedPostBodyHash: postHash,
+                    incrementalOperations: [
+                        SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload(
+                            noteID: operation.noteID,
+                            operationIndex: operation.operationIndex,
+                            kind: operation.kind,
+                            utf16Offset: operation.utf16Offset,
+                            utf16Length: operation.utf16Length,
+                            text: operation.text,
+                            expectedText: operation.expectedText,
+                            baseContentHash: operation.baseContentHash,
+                            resultContentHash: operation.resultContentHash,
+                            operationIdentity: malformedIdentity
+                        )
+                    ]
+                )
+            ]
+        )
 
-        XCTAssertFalse(decoded.legacyCleanupRequired)
-        XCTAssertFalse(decoded.derivedInitialState().legacyCleanupPending)
+        XCTAssertThrowsError(try payload.encodedPayloadData())
+    }
+
+    func testPostCommitPayloadRejectsOperationHashChainMismatch() {
+        let firstHash = SyncBatchContentHash.sha256Hex(for: "first")
+        let finalHash = SyncBatchContentHash.sha256Hex(for: "final")
+        let wrongBaseHash = SyncBatchContentHash.sha256Hex(for: "wrong")
+        let first = incrementalOperation(noteID: TestIDs.noteA, resultHash: firstHash)
+        let secondIdentity = OperationIdentityPayload(
+            batchID: TestIDs.batch,
+            originDeviceID: TestIDs.device,
+            operationIndex: 1,
+            operationKind: "insert",
+            canonicalReplayKey: CanonicalReplayKeyPayload(
+                modifiedAtBitPattern: SyncConvergenceDateBits.bitPattern(for: Date(timeIntervalSince1970: 4)),
+                originDeviceIDLowercase: TestIDs.device.uuidString.lowercased(),
+                batchOrderKind: .legacy,
+                legacyCreatedAtBitPattern: SyncConvergenceDateBits.bitPattern(for: Date(timeIntervalSince1970: 1)),
+                sequence: nil,
+                batchIDLowercase: TestIDs.batch.uuidString.lowercased(),
+                operationIndex: 1
+            )
+        )
+        let second = SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload(
+            noteID: TestIDs.noteA,
+            operationIndex: 1,
+            kind: .insert,
+            utf16Offset: 1,
+            utf16Length: nil,
+            text: "y",
+            expectedText: nil,
+            baseContentHash: wrongBaseHash,
+            resultContentHash: finalHash,
+            operationIdentity: secondIdentity
+        )
+        let payload = SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: [],
+            legacyCleanupRequired: false,
+            presentationEntries: [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: TestIDs.noteA,
+                    routing: .incremental,
+                    expectedPreBodyHash: nil,
+                    committedPostBodyHash: finalHash,
+                    incrementalOperations: [first, second]
+                )
+            ]
+        )
+
+        XCTAssertThrowsError(try payload.encodedPayloadData())
     }
 
     func testBodyHashCapabilityRemainsDisabled() {

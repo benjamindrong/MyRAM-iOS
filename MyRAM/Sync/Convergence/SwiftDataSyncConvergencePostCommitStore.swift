@@ -127,6 +127,7 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
         do {
             let payload = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(data)
             try payload.validateCurrentState(state)
+            try validateWorkPayload(payload, againstAuthoritativeRowsFor: root.batchID)
             return payload
         } catch let failure as SyncConvergencePostCommitFailure {
             throw failure
@@ -160,6 +161,55 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
                 postCommitWorkPayloadData: root.postCommitWorkPayloadData,
                 postCommitStatePayloadData: root.postCommitStatePayloadData
             )
+        }
+    }
+
+    private func validateWorkPayload(
+        _ payload: SyncConvergencePostCommitWorkPayloadV1,
+        againstAuthoritativeRowsFor batchID: UUID
+    ) throws {
+        for entry in payload.presentationEntries {
+            for operation in entry.incrementalOperations {
+                try validateWorkOperation(
+                    operation,
+                    entryNoteID: entry.noteID,
+                    rootBatchID: batchID
+                )
+            }
+        }
+    }
+
+    private func validateWorkOperation(
+        _ operation: SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload,
+        entryNoteID: UUID,
+        rootBatchID: UUID
+    ) throws {
+        let operationIndex = operation.operationIndex
+        let identityKey = SyncConvergenceKey.batchOperationIdentity(
+            batchID: rootBatchID,
+            operationIndex: operationIndex
+        )
+        guard let row = try fetchOne(
+            IncorporatedBatchOperationIdentity.self,
+            #Predicate { $0.identityKey == identityKey }
+        ) else {
+            throw SyncConvergencePostCommitFailure.malformedPostCommitWorkPayload(batchID: rootBatchID)
+        }
+        guard row.batchID == rootBatchID,
+              row.noteID == entryNoteID,
+              row.operationIndex == operationIndex,
+              row.payloadUTF8ByteCount == row.operationIdentityPayloadData.count + row.canonicalReplayKeyPayloadData.count else {
+            throw SyncConvergencePostCommitFailure.malformedPostCommitWorkPayload(batchID: rootBatchID)
+        }
+        let authoritativeReplayKey = try CanonicalReplayKeyPayload.decodeEvidenceData(row.canonicalReplayKeyPayloadData)
+        let authoritativeIdentity = try OperationIdentityPayload.decodePayloadData(row.operationIdentityPayloadData)
+        guard authoritativeIdentity.canonicalReplayKey == authoritativeReplayKey,
+              authoritativeReplayKey.batchIDLowercase == rootBatchID.uuidString.lowercased(),
+              authoritativeReplayKey.batchIDLowercase == authoritativeIdentity.batchIDLowercase,
+              authoritativeReplayKey.originDeviceIDLowercase == authoritativeIdentity.originDeviceIDLowercase,
+              authoritativeReplayKey.operationIndex == authoritativeIdentity.operationIndex,
+              authoritativeIdentity == operation.operationIdentity else {
+            throw SyncConvergencePostCommitFailure.malformedPostCommitWorkPayload(batchID: rootBatchID)
         }
     }
 

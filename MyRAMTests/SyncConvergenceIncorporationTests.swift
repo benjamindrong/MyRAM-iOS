@@ -82,6 +82,136 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertTrue(postCommit.presentationRefreshPending)
     }
 
+    func testAllIdempotentRetainedBodyDeliveryPersistsWithoutPresentationWork() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000132c70")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132c71"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132c72"),
+            createdAt: date(3),
+            batchSequence: 70,
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                ))
+            ]
+        )
+        let retained = SyncConvergenceRetainedOperation(
+            noteID: noteID,
+            batchID: batch.id,
+            originDeviceID: batch.originDeviceID,
+            operationIndex: 0,
+            operationKind: .insert,
+            utf16Offset: 1,
+            utf16Length: nil,
+            text: "B",
+            expectedText: nil,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "A"),
+            resultContentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+            canonicalReplayKey: CanonicalReplayKeyPayload(
+                replayKey: SyncBatchReplayKey(batch: batch, change: batch.changes[0], operationIndex: 0)
+            )
+        )
+        let initialNote = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "Title",
+            body: "AB",
+            createdAt: date(1),
+            modifiedAt: date(2)
+        )
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [SyncConvergenceProjectedNote(
+                noteID: noteID,
+                folderID: nil,
+                title: "Title",
+                body: "AB",
+                createdAt: date(1),
+                modifiedAt: date(2)
+            )],
+            retainedRemoteOperations: [retained]
+        ))
+        guard case .planned(let validatedInput) = outcome else {
+            return XCTFail("Expected all-idempotent plan, got \(outcome)")
+        }
+
+        let transaction = InMemoryConvergenceTransaction(notes: [noteID: initialNote])
+        let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: validatedInput,
+            transaction: transaction,
+            committedAt: date(5)
+        )
+
+        guard case .incorporated = incorporation,
+              let root = transaction.roots[batch.id] else {
+            return XCTFail("Expected all-idempotent incorporation, got \(incorporation)")
+        }
+        let state = try SyncConvergenceStableEncoding.decode(
+            SyncConvergencePostCommitState.self,
+            from: root.postCommitStatePayloadData
+        )
+        let work = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(root.postCommitWorkPayloadData!)
+        XCTAssertFalse(state.presentationRefreshPending)
+        XCTAssertTrue(work.presentationEntries.isEmpty)
+        XCTAssertEqual(work.derivedInitialState(), state)
+    }
+
+    func testCreatePlusBodyUsesFinalBodyHashForPresentationWork() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000132c80")
+        let creationBody = "A"
+        let finalBody = "AB"
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132c81"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132c82"),
+            createdAt: date(3),
+            batchSequence: 80,
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Created",
+                    body: creationBody,
+                    folderID: nil,
+                    createdAt: date(1),
+                    modifiedAt: date(2)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: creationBody)
+                ))
+            ]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(incomingBatch: batch))
+        guard case .planned(let validatedInput) = outcome else {
+            return XCTFail("Expected create-plus-body plan, got \(outcome)")
+        }
+
+        let transaction = InMemoryConvergenceTransaction(notes: [:])
+        let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: validatedInput,
+            transaction: transaction,
+            committedAt: date(5)
+        )
+
+        guard case .incorporated = incorporation,
+              let root = transaction.roots[batch.id] else {
+            return XCTFail("Expected create-plus-body incorporation, got \(incorporation)")
+        }
+        let work = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(root.postCommitWorkPayloadData!)
+        let entry = try XCTUnwrap(work.presentationEntries.first)
+        let finalHash = SyncBatchContentHash.sha256Hex(for: finalBody)
+        XCTAssertEqual(transaction.notes[noteID]?.body, finalBody)
+        XCTAssertEqual(entry.committedPostBodyHash, finalHash)
+        XCTAssertEqual(entry.incrementalOperations.last?.resultContentHash, finalHash)
+        XCTAssertNotEqual(entry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: creationBody))
+    }
+
     func testExecutorRejectsStaleBodyBeforeMutation() throws {
         let fixture = try makeFixture()
         let staleNote = SyncConvergenceMutableNoteRecord(
