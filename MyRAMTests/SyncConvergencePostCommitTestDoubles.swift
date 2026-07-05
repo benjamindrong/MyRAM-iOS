@@ -525,6 +525,20 @@ func fullRootState(
     )
 }
 
+func replacingMutablePostCommitState(
+    in loaded: SyncConvergencePostCommitFullRootState,
+    with state: SyncConvergencePostCommitState
+) throws -> SyncConvergencePostCommitFullRootState {
+    let payload = try SyncConvergenceStableEncoding.encode(state)
+    return SyncConvergencePostCommitFullRootState(
+        root: copyRootProjection(loaded.root, postCommitStatePayloadData: payload),
+        postCommitState: state,
+        postCommitStatePayloadData: payload,
+        postCommitWorkPayload: loaded.postCommitWorkPayload,
+        postCommitWorkPayloadData: loaded.postCommitWorkPayloadData
+    )
+}
+
 func workEntry(
     noteID: UUID,
     routing: SyncConvergencePostCommitPresentationRoutingPayload,

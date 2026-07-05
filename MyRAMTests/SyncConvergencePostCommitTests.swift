@@ -764,7 +764,18 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             legacyCleanupPending: false,
             presentationRefreshPending: true
         )
-        let advancedRoot = fullRootState(identity: identity, state: advancedState)
+        let advancedRoot = try replacingMutablePostCommitState(in: originalRoot, with: advancedState)
+        let originalRequest = request(identity: identity, state: originalState)
+        XCTAssertNotEqual(advancedRoot.postCommitStatePayloadData, originalRoot.postCommitStatePayloadData)
+        XCTAssertEqual(advancedRoot.postCommitWorkPayload, originalRoot.postCommitWorkPayload)
+        XCTAssertEqual(advancedRoot.postCommitWorkPayloadData, originalRoot.postCommitWorkPayloadData)
+        XCTAssertEqual(
+            advancedRoot.root,
+            copyRootProjection(
+                originalRoot.root,
+                postCommitStatePayloadData: advancedRoot.postCommitStatePayloadData
+            )
+        )
         let immutableReplacement = fullRootState(
             identity: SyncConvergencePersistedIncorporationIdentity(
                 batchID: uuid("00000000-0000-0000-0000-000000137901"),
@@ -775,21 +786,24 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             ),
             state: originalState
         )
-        let cases: [(String, FakePostCommitStore.CASBehavior, SyncConvergencePostCommitLoadedState)] = [
+        let cases: [(String, FakePostCommitStore.CASBehavior, SyncConvergencePostCommitLoadedState, Data?)] = [
             (
                 "state-save persistence failure before fake-store mutation",
                 .failPersistence,
-                .fullRoot(originalRoot)
+                .fullRoot(originalRoot),
+                originalRoot.postCommitWorkPayloadData
             ),
             (
                 "stale mutable state with queue and legacy already cleared",
                 .replaceCurrentBeforeCompare(advancedRoot),
-                .fullRoot(advancedRoot)
+                .fullRoot(advancedRoot),
+                originalRoot.postCommitWorkPayloadData
             ),
             (
                 "immutable-root mismatch replacement",
                 .replaceCurrentBeforeCompare(immutableReplacement),
-                .fullRoot(immutableReplacement)
+                .fullRoot(immutableReplacement),
+                immutableReplacement.postCommitWorkPayloadData
             )
         ]
 
@@ -806,7 +820,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 presentationAdapter: presentation
             )
 
-            let outcome = await executor.execute(request(identity: identity, state: originalState))
+            let outcome = await executor.execute(originalRequest)
 
             XCTAssertEqual(
                 outcome,
@@ -819,12 +833,11 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             XCTAssertEqual(store.casAttemptCount, 1, testCase.0)
             XCTAssertEqual(store.attemptedNewStates, [.none], testCase.0)
             XCTAssertEqual(store.state, testCase.2, testCase.0)
-            XCTAssertEqual(store.currentWorkPayloadData, {
-                if case .fullRoot(let root) = testCase.2 {
-                    return root.postCommitWorkPayloadData
-                }
-                return nil
-            }(), testCase.0)
+            XCTAssertEqual(store.currentWorkPayloadData, testCase.3, testCase.0)
+            if testCase.0 == "stale mutable state with queue and legacy already cleared" {
+                XCTAssertEqual(store.currentWorkPayloadData, originalRoot.postCommitWorkPayloadData, testCase.0)
+                XCTAssertEqual(store.currentPostCommitState, advancedState, testCase.0)
+            }
         }
 
         let retryStore = FakePostCommitStore(state: .fullRoot(advancedRoot))
@@ -839,12 +852,16 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             presentationAdapter: retryPresentation
         )
 
-        let retryOutcome = await retryExecutor.execute(request(identity: identity, state: advancedState))
+        let retryOutcome = await retryExecutor.execute(originalRequest)
 
         XCTAssertEqual(retryOutcome, .complete)
         XCTAssertEqual(retryRecorder.events, [.presentation(noteID: TestIDs.noteA)])
+        XCTAssertEqual(retryQueue.removalAttempts, 0)
+        XCTAssertEqual(retryLegacy.callCount, 0)
+        XCTAssertEqual(retryStore.casAttemptCount, 1)
+        XCTAssertEqual(retryStore.attemptedNewStates, [.none])
         XCTAssertEqual(retryStore.currentPostCommitState, SyncConvergencePostCommitState.none)
-        XCTAssertEqual(retryStore.currentWorkPayloadData, advancedRoot.postCommitWorkPayloadData)
+        XCTAssertEqual(retryStore.currentWorkPayloadData, originalRoot.postCommitWorkPayloadData)
     }
 
     func testMYR137PartialCompletionSurvivesFreshSwiftDataContextAndRetryRunsOnlyRemainingDomain() async throws {
