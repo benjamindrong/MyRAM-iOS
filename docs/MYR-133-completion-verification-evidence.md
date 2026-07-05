@@ -651,18 +651,6 @@ Exit code: 0. Selected `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)` fr
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePostCommitTests
 ```
 
-Immediately after changing the shared fake CAS success path. Exit code: 0. Executed 48 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
-
-```bash
-xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests
-```
-
-Immediately after changing the shared fake CAS success path. Exit code: 0. Executed 48 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
-
-```bash
-xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePostCommitTests
-```
-
 Final MYR-138 iOS verification at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Executed 48 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
 
 ```bash
