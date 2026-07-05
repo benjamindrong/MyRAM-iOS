@@ -268,13 +268,73 @@ Commit SHA: `6ff9bc0f55257a3a4cbf2b70cd4f79e52aa72e25`. Exit code: 0.
 
 MYR-134 is complete.
 MYR-133 remains incomplete.
-MYR-135 is the next blocked slice.
+
+## MYR-135 Verification
+
+Verified implementation SHA: pending final commit.
+
+MYR-135 completes the operation-identity validation matrix for construction-time authority, post-commit payload validation, persisted SwiftData identity-row validation, and operation hash-chain validation.
+
+The MYR-135 implementation preserves the existing construction authority and payload contract while adding source-batch exactness checks, nested replay-key linkage, multiplicity-aware persisted identity-row lookup, and exact persisted-row payload comparison before any post-commit external work runs.
+
+MYR-135 focused requirement coverage:
+
+- Valid source-batch identity persists and builds exact work identity: `MyRAMTests/SyncConvergenceIncorporationTests.swift` `testMYR135ValidSourceIdentityPersistsAndBuildsExactWorkIdentity`
+- Legitimate non-source reconstructed-conflict identity remains accepted: `testMYR135ReconstructedConflictAcceptsLegitimateNonSourceIdentities`
+- Construction malformed identity matrix fails before commit without mutation: `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation`
+- Payload identity matrix rejects malformed operation, replay-key, note, and kind shapes: `MyRAMTests/SyncConvergencePostCommitTests.swift` `testMYR135PostCommitPayloadIdentityValidationMatrix`
+- Operation hash-chain matrix rejects pre-hash, intermediate, and final-result discontinuities: `testMYR135OperationHashChainValidationMatrix`
+- Valid persisted authoritative identity row loads and reaches presentation: `testMYR135ValidPersistedIdentityRowLoadsAndReachesPresentation`
+- Persisted row corruption fails before queue, legacy, presentation, or CAS work: `testMYR135PersistedIdentityRowCorruptionFailsBeforeAdapters`
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergenceIncorporationTests/testMYR135ValidSourceIdentityPersistsAndBuildsExactWorkIdentity -only-testing:MyRAMTests/SyncConvergenceIncorporationTests/testMYR135ReconstructedConflictAcceptsLegitimateNonSourceIdentities -only-testing:MyRAMTests/SyncConvergenceIncorporationTests/testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation -only-testing:MyRAMTests/SyncConvergencePostCommitTests/testMYR135PostCommitPayloadIdentityValidationMatrix -only-testing:MyRAMTests/SyncConvergencePostCommitTests/testMYR135OperationHashChainValidationMatrix -only-testing:MyRAMTests/SyncConvergencePostCommitTests/testMYR135ValidPersistedIdentityRowLoadsAndReachesPresentation -only-testing:MyRAMTests/SyncConvergencePostCommitTests/testMYR135PersistedIdentityRowCorruptionFailsBeforeAdapters
+```
+
+Exit code: 0. Executed 7 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests
+```
+
+Exit code: 0. Executed 74 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests
+```
+
+Exit code: 0. Executed 74 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' build
+```
+
+Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build
+```
+
+Exit code: 65. First attempt failed because it ran concurrently with the iOS build and Xcode reported `build.db` was locked.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build
+```
+
+Exit code: 0. Sequential rerun final result: `** BUILD SUCCEEDED **`.
+
+```bash
+git diff --check
+```
+
+Exit code: 0.
+
+MYR-135 implementation is complete pending final commit evidence.
 
 ## Remaining MYR-133 Coverage Not Completed In This Pass
 
 The attached MYR-133 proposal is broader than this initial implementation pass. These items still need additional work before claiming full ticket completion:
 
-- Full operation identity construction-time and authoritative-row corruption matrix.
 - Per-field stale-CAS matrix against SwiftData roots.
 - Remaining Phase 7 and Phase 9 load, save, reload, adapter-failure, and crash-window coverage beyond the fresh-store final-CAS retry added here.
 - Final-head evidence from an approved commit.
