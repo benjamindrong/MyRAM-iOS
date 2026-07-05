@@ -732,7 +732,6 @@ private let lock = NSLock()
 private var removedQueueBatchIDs: Set<SyncBatchID> = []
 private var completedLegacyBatchIDs: Set<UUID> = []
 private var completedPresentationKeys: Set<DurablePresentationEffectKey> = []
-private var invocationCountsByDomain: [String: Int] = [:]
 private var physicalEffectCountsByDomain: [String: Int] = [:]
 
 func seedQueueRemoval(_ batchIDs: Set<SyncBatchID>) {
@@ -769,18 +768,6 @@ func seedPresentationCompletion(
             ] = 1
         }
     }
-}
-
-func recordQueueInvocation() {
-    incrementInvocation("queue")
-}
-
-func recordLegacyInvocation() {
-    incrementInvocation("legacy")
-}
-
-func recordPresentationInvocation() {
-    incrementInvocation("presentation")
 }
 
 func applyQueueRemoval(_ batchIDs: Set<SyncBatchID>) {
@@ -825,12 +812,6 @@ func completePresentation(
     }
 }
 
-func invocationCount(domain: String) -> Int {
-    lock.withLock {
-        invocationCountsByDomain[domain, default: 0]
-    }
-}
-
 func queuePhysicalEffectCount(batchID: SyncBatchID) -> Int {
     physicalEffectCount("queue:\(batchID.uuidString)")
 }
@@ -845,12 +826,6 @@ func presentationPhysicalEffectCount(
     committedPostBodyHash: String
 ) -> Int {
     physicalEffectCount("presentation:\(incorporationBatchID.uuidString):\(noteID.uuidString):\(committedPostBodyHash)")
-}
-
-private func incrementInvocation(_ domain: String) {
-    lock.withLock {
-        invocationCountsByDomain[domain, default: 0] += 1
-    }
 }
 
 private func physicalEffectCount(_ key: String) -> Int {
@@ -1180,7 +1155,6 @@ init(
 }
 
 func removeBatches(withIDs ids: Set<SyncBatchID>) throws {
-    ledger.recordQueueInvocation()
     removals.append(ids)
     recorder?.record(.queueCleanup(ids.sorted { $0.uuidString < $1.uuidString }))
     ledger.applyQueueRemoval(ids)
@@ -1250,7 +1224,6 @@ init(
 func performLegacyCleanup(
     for request: SyncConvergencePostCommitRequest
 ) async -> SyncConvergencePostCommitAdapterResult {
-    ledger.recordLegacyInvocation()
     requests.append(request)
     recorder?.record(.legacyCleanup(batchID: request.sourceBatchID))
     ledger.completeLegacy(batchID: request.sourceBatchID)
@@ -1321,7 +1294,6 @@ init(
 func refreshPresentation(
     for request: SyncConvergencePresentationRequest
 ) async -> SyncConvergencePostCommitAdapterResult {
-    ledger.recordPresentationInvocation()
     requests.append(request)
     recorder?.record(.presentation(noteID: request.noteID))
     // The durable idempotency key is the immutable work-entry hash, not the recomputed body hash.
