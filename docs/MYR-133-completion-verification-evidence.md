@@ -450,7 +450,7 @@ MYR-133 remains incomplete.
 
 ## MYR-137 Verification
 
-Verified implementation SHA: pending final MYR-137 commit.
+Verified implementation SHA: `a3c2b85`.
 
 Chosen iOS simulator: `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)`.
 
