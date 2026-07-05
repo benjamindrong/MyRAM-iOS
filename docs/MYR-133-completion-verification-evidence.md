@@ -271,63 +271,97 @@ MYR-133 remains incomplete.
 
 ## MYR-135 Verification
 
-Verified implementation SHA: `7f1ca4b`
+Verified implementation SHA: `96ed5fd`
 
 MYR-135 completes the operation-identity validation matrix for construction-time authority, post-commit payload validation, persisted SwiftData identity-row validation, and operation hash-chain validation.
 
-The MYR-135 implementation preserves the existing construction authority and payload contract while adding source-batch exactness checks, nested replay-key linkage, multiplicity-aware persisted identity-row lookup, and exact persisted-row payload comparison before any post-commit external work runs.
+This remediation is test-only except for Xcode test-target membership for the shared test helper. Production code remains unchanged from the original MYR-135 implementation.
 
-MYR-135 focused requirement coverage:
+### MYR-135 Requirement Matrix
 
-- Valid source-batch identity persists and builds exact work identity: `MyRAMTests/SyncConvergenceIncorporationTests.swift` `testMYR135ValidSourceIdentityPersistsAndBuildsExactWorkIdentity`
-- Legitimate non-source reconstructed-conflict identity remains accepted: `testMYR135ReconstructedConflictAcceptsLegitimateNonSourceIdentities`
-- Construction malformed identity matrix fails before commit without mutation: `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation`
-- Payload identity matrix rejects malformed operation, replay-key, note, and kind shapes: `MyRAMTests/SyncConvergencePostCommitTests.swift` `testMYR135PostCommitPayloadIdentityValidationMatrix`
-- Operation hash-chain matrix rejects pre-hash, intermediate, and final-result discontinuities: `testMYR135OperationHashChainValidationMatrix`
-- Valid persisted authoritative identity row loads and reaches presentation: `testMYR135ValidPersistedIdentityRowLoadsAndReachesPresentation`
-- Persisted row corruption fails before queue, legacy, presentation, or CAS work: `testMYR135PersistedIdentityRowCorruptionFailsBeforeAdapters`
+| Requirement | Code/Test Location | Verification |
+|---|---|---|
+| Valid source-batch identity is accepted, persisted, and used to build exact work identity | `MyRAMTests/SyncConvergenceIncorporationTests.swift` `testMYR135ValidSourceIdentityPersistsAndBuildsExactWorkIdentity` | Focused iOS/macOS incorporation and post-commit suites |
+| Legitimate non-source reconstructed-conflict identity remains accepted | `testMYR135ReconstructedConflictAcceptsLegitimateNonSourceIdentities` | Proves source-only pinning does not reject retained non-source evidence |
+| Missing authoritative identity fails before commit without mutation | `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation` case `missing authoritative identity` | Asserts `.failedBeforeCommit(.invalidMergePlan(...))` and `assertNoPreflightMutation` |
+| Duplicate authoritative identity fails before commit without mutation | `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation` case `duplicate batch index identity` | Same construction matrix and zero-mutation assertion |
+| Wrong source batch ID fails before commit without mutation | `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation` case `wrong outer batch ID` | Mutates outer and nested batch IDs |
+| Wrong source origin fails before commit without mutation | `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation` case `wrong source origin` | Source-batch exactness rejection |
+| Negative operation index fails closed | Construction helper `assertMalformedIdentityFailsDuringProjectedEvidenceRecompute` case `negative outer operation index`; payload matrix case `negative operation index` | Construction path preserves original projected byte count and returns `.failedBeforeCommit(.unexpected)`; payload path rejects malformed work payload |
+| Out-of-range source operation index fails before commit without mutation | `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation` case `out-of-range source operation index` | Source index bounds rejection |
+| Wrong operation kind fails closed | Construction case `wrong source operation kind`; payload case `work operation kind mismatch` | Construction and payload validators both reject kind mismatch |
+| Wrong note ID fails closed | `testSwappedOperationIdentityAcrossNotesFailsBeforeCommit`; payload case `wrong note ID` | Swapped same-kind identities fail before commit and work payload rejects note mismatch |
+| Same-kind swapped two-note identities fail before commit | `testSwappedOperationIdentityAcrossNotesFailsBeforeCommit` | Asserts swapped identities validate structurally but belong to the other note |
+| Replay-key batch mismatch fails closed | Construction case `replay key batch mismatch`; payload case `identity replay key batch mismatch` | Nested replay-key linkage coverage |
+| Replay-key origin mismatch fails closed | Construction case `replay key origin mismatch`; payload case `identity replay key origin mismatch` | Nested replay-key linkage coverage |
+| Replay-key operation-index mismatch fails closed | Construction case `replay key operation index mismatch`; payload case `identity replay key index mismatch` | Nested replay-key linkage coverage |
+| Resolvable replay-key note mismatch fails before commit | `testSwappedOperationIdentityAcrossNotesFailsBeforeCommit` helper `noteIDResolvingReplayKey` | Proves each swapped replay key resolves to the other note before rejection |
+| Malformed UUID strings fail closed | Construction helper case `malformed outer batch UUID string`; payload cases `malformed outer batch UUID string`, `malformed outer origin UUID string`, `malformed nested replay-key UUID string` | Raw Codable fixtures bypass constructors and validate decoder/validator boundaries |
+| Noncanonical uppercase UUID strings fail closed | Construction case `uppercase outer source origin`; payload cases `uppercase outer batch UUID string`, `uppercase outer origin UUID string`, `uppercase nested replay-key UUID string` | Raw Codable fixtures reject uppercase UUID string evidence |
+| Plan to persisted child to work payload identity ownership is exact | `testTwoNoteExactOwnershipIncorporatesSuccessfully` | Proves each note's planned identity equals its persisted identity row and work payload identity, and is not attached to the other note |
+| Post-commit payload rejects malformed operation identity matrix | `MyRAMTests/SyncConvergencePostCommitTests.swift` `testMYR135PostCommitPayloadIdentityValidationMatrix` | Covers note, index, kind, UUID, and replay-key linkage payload rows |
+| Operation hash-chain matrix fails closed | `testMYR135OperationHashChainValidationMatrix` | Covers first operation base hash, later operation base hash, and final operation result hash mismatches |
+| Valid persisted authoritative identity row loads and reaches presentation | `testMYR135ValidPersistedIdentityRowLoadsAndReachesPresentation` | Uses real SwiftData rows and a tracking legacy adapter, then reaches presentation |
+| Persisted row corruption fails before queue, legacy, presentation, or CAS work | `testMYR135PersistedIdentityRowCorruptionFailsBeforeAdapters` | Covers wrong note ID, wrong batch ID, wrong operation index, wrong kind, wrong identity bytes, substituted identity bytes, wrong replay-key bytes, missing row, duplicate rows, noncanonical key, and wrong byte count; asserts queue removals, legacy calls, presentation requests, and root snapshot remain unchanged |
+| Shared test helpers are consolidated | `MyRAMTests/SyncConvergenceIdentityTestSupport.swift` | Replaces duplicate `OperationIdentityPayload.replacingForTest` and `CanonicalReplayKeyPayload.replacingForTest` helpers in incorporation/post-commit tests |
+| MYR-136 immutable-root CAS field matrix remains excluded | No MYR-136 production or test changes in this PR | Scope boundary preserved |
+| MYR-133 remains incomplete | `Remaining MYR-133 Coverage Not Completed In This Pass` | This PR does not claim full MYR-133 completion |
+
+### Commands Run
+
+```bash
+xcrun simctl list devices available
+```
+
+Exit code: 0. Selected `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)` from available iOS 26.5 simulators.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergenceIncorporationTests/testMYR135ValidSourceIdentityPersistsAndBuildsExactWorkIdentity -only-testing:MyRAMTests/SyncConvergenceIncorporationTests/testMYR135ReconstructedConflictAcceptsLegitimateNonSourceIdentities -only-testing:MyRAMTests/SyncConvergenceIncorporationTests/testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation -only-testing:MyRAMTests/SyncConvergencePostCommitTests/testMYR135PostCommitPayloadIdentityValidationMatrix -only-testing:MyRAMTests/SyncConvergencePostCommitTests/testMYR135OperationHashChainValidationMatrix -only-testing:MyRAMTests/SyncConvergencePostCommitTests/testMYR135ValidPersistedIdentityRowLoadsAndReachesPresentation -only-testing:MyRAMTests/SyncConvergencePostCommitTests/testMYR135PersistedIdentityRowCorruptionFailsBeforeAdapters
 ```
 
-Exit code: 0. Executed 7 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Exit code: 0 before commit. Executed 7 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests
 ```
 
-Exit code: 0. Executed 74 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Commit SHA: `96ed5fd`. Exit code: 0. Focused iOS incorporation/post-commit suites passed.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests
 ```
 
-Exit code: 0. Executed 74 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Commit SHA: `96ed5fd`. Exit code: 0. Focused macOS incorporation/post-commit suites passed.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePlanningTests -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests -only-testing:MyRAMTests/SyncConvergenceFoundationTests -only-testing:MyRAMTests/SyncBatchPayloadCompatibilityTests -only-testing:MyRAMTests/SyncBatchUnsentQueueTests
+```
+
+Commit SHA: `96ed5fd`. Exit code: 0. Adjacent iOS convergence suites passed.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePlanningTests -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests -only-testing:MyRAMMacTests/SyncBatchUnsentQueueTests
+```
+
+Commit SHA: `96ed5fd`. Exit code: 0. Adjacent macOS convergence suites passed.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' build
 ```
 
-Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+Commit SHA: `96ed5fd`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build
 ```
 
-Exit code: 65. First attempt failed because it ran concurrently with the iOS build and Xcode reported `build.db` was locked.
-
-```bash
-xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build
-```
-
-Exit code: 0. Sequential rerun final result: `** BUILD SUCCEEDED **`.
+Commit SHA: `96ed5fd`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
 
 ```bash
 git diff --check
 ```
 
-Exit code: 0.
+Commit SHA: `96ed5fd`. Exit code: 0.
 
 MYR-135 implementation is complete.
 
