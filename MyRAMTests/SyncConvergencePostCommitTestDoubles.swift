@@ -397,6 +397,22 @@ func makeMYR136Fixture(
     return MYR136Fixture(base: base, loaded: loaded, rootModelID: rootModel.id)
 }
 
+func makeMYR137Fixture(
+    file: StaticString = #filePath,
+    line: UInt = #line
+) throws -> MYR136Fixture {
+    let fixture = try makeMYR136Fixture(file: file, line: line)
+    let expectedSourceBatchID = postCommitUUID("00000000-0000-0000-0000-000000135702")
+    XCTAssertEqual(
+        fixture.request.sourceBatchID,
+        expectedSourceBatchID,
+        "MYR-137 failure fixtures must track the wrapped MYR-135 source batch",
+        file: file,
+        line: line
+    )
+    return fixture
+}
+
 func myr136StateB() -> SyncConvergencePostCommitState {
     SyncConvergencePostCommitState(
         queueCleanupPending: true,
@@ -692,11 +708,41 @@ func record(_ event: PostCommitInvocationEvent) {
 }
 
 final class FakePostCommitStore: SyncConvergencePostCommitStateStore {
+enum LoadBehavior {
+    case current
+    case returnState(SyncConvergencePostCommitLoadedState)
+    case fail(SyncConvergencePostCommitFailure)
+    case failUnexpectedly
+}
+
+enum CASBehavior {
+    case succeed
+    case failPersistence
+    case replaceCurrentBeforeCompare(SyncConvergencePostCommitFullRootState)
+}
+
+enum CommittedNoteLoadBehavior {
+    case currentNotes
+    case returnMissing
+    case fail
+}
+
+struct UnexpectedLoadError: Error {}
+struct CommittedNoteLoadError: Error {}
+
 var state: SyncConvergencePostCommitLoadedState
 var notes: [UUID: SyncConvergenceMutableNoteRecord] = [:]
 var persistedState: SyncConvergencePostCommitState?
 var writeCount = 0
-var shouldFailCAS = false
+var loadBehavior: LoadBehavior = .current
+var casBehavior: CASBehavior = .succeed
+var committedNoteLoadBehavior: CommittedNoteLoadBehavior = .currentNotes
+var loadCallCount = 0
+var committedNoteLoadRequests: [UUID] = []
+var casAttemptCount = 0
+var expectedRootRequests: [SyncConvergencePostCommitRootSnapshot] = []
+var expectedPayloadDataRequests: [Data] = []
+var attemptedNewStates: [SyncConvergencePostCommitState] = []
 let originalWorkPayloadData: Data?
 
 init(state: SyncConvergencePostCommitLoadedState) {
@@ -744,11 +790,29 @@ convenience init(
 func loadState(
     matching identity: SyncConvergencePersistedIncorporationIdentity
 ) throws -> SyncConvergencePostCommitLoadedState {
-    state
+    loadCallCount += 1
+    switch loadBehavior {
+    case .current:
+        return state
+    case .returnState(let loaded):
+        return loaded
+    case .fail(let failure):
+        throw failure
+    case .failUnexpectedly:
+        throw UnexpectedLoadError()
+    }
 }
 
 func loadCommittedNote(id: UUID) throws -> SyncConvergenceMutableNoteRecord? {
-    notes[id]
+    committedNoteLoadRequests.append(id)
+    switch committedNoteLoadBehavior {
+    case .currentNotes:
+        return notes[id]
+    case .returnMissing:
+        return nil
+    case .fail:
+        throw CommittedNoteLoadError()
+    }
 }
 
 func compareAndSetPostCommitState(
@@ -757,8 +821,17 @@ func compareAndSetPostCommitState(
     newState: SyncConvergencePostCommitState
 ) throws -> SyncConvergencePostCommitFullRootState {
     writeCount += 1
-    if shouldFailCAS {
+    casAttemptCount += 1
+    expectedRootRequests.append(expectedRoot)
+    expectedPayloadDataRequests.append(expectedPayloadData)
+    attemptedNewStates.append(newState)
+    switch casBehavior {
+    case .succeed:
+        break
+    case .failPersistence:
         throw SyncConvergencePostCommitFailure.persistence
+    case .replaceCurrentBeforeCompare(let replacement):
+        state = .fullRoot(replacement)
     }
     guard case .fullRoot(let current) = state,
           current.root == expectedRoot.root,
@@ -882,9 +955,19 @@ func replacingForTest(
 }
 
 final class FakeQueueCleanupAdapter: SyncConvergenceQueueCleanupAdapter {
+enum Behavior {
+    case verifiedComplete
+    case failBeforeRemoval
+    case incompleteRemoval(remaining: Set<SyncBatchID>)
+    case failVerificationAfterRemoval
+}
+
 var removals: [Set<SyncBatchID>] = []
 var remaining: Set<SyncBatchID> = []
-var shouldThrowOnRemove = false
+var behavior: Behavior = .verifiedComplete
+var removalAttempts = 0
+var verificationChecks: [SyncBatchID] = []
+var externalRemovalEffectOccurred = false
 let recorder: PostCommitInvocationRecorder?
 
 init(recorder: PostCommitInvocationRecorder? = nil) {
@@ -892,22 +975,39 @@ init(recorder: PostCommitInvocationRecorder? = nil) {
 }
 
 func removeBatches(withIDs ids: Set<SyncBatchID>) throws {
-    if shouldThrowOnRemove {
+    removalAttempts += 1
+    if case .failBeforeRemoval = behavior {
         throw FileBackedSyncBatchQueue.QueueError.persistenceFailed
     }
     removals.append(ids)
     recorder?.record(.queueCleanup(ids.sorted { $0.uuidString < $1.uuidString }))
-    remaining.subtract(ids)
+    externalRemovalEffectOccurred = true
+    switch behavior {
+    case .verifiedComplete, .failVerificationAfterRemoval, .failBeforeRemoval:
+        remaining.subtract(ids)
+    case .incompleteRemoval(let stillPresent):
+        remaining = stillPresent
+    }
 }
 
 func containsBatch(withID id: SyncBatchID) throws -> Bool {
-    remaining.contains(id)
+    verificationChecks.append(id)
+    if case .failVerificationAfterRemoval = behavior {
+        throw FileBackedSyncBatchQueue.QueueError.persistenceFailed
+    }
+    return remaining.contains(id)
 }
 }
 
 final class FakeLegacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapter {
-let result: SyncConvergencePostCommitAdapterResult
+struct Step {
+    let result: SyncConvergencePostCommitAdapterResult
+    let externalEffectOccurred: Bool
+}
+
+var script: [Step]
 var requests: [SyncConvergencePostCommitRequest] = []
+var externalEffectCount = 0
 let recorder: PostCommitInvocationRecorder?
 
 var callCount: Int {
@@ -915,7 +1015,12 @@ var callCount: Int {
 }
 
 init(result: SyncConvergencePostCommitAdapterResult, recorder: PostCommitInvocationRecorder? = nil) {
-    self.result = result
+    self.script = [Step(result: result, externalEffectOccurred: result == .verifiedComplete)]
+    self.recorder = recorder
+}
+
+init(script: [Step], recorder: PostCommitInvocationRecorder? = nil) {
+    self.script = script
     self.recorder = recorder
 }
 
@@ -924,17 +1029,38 @@ func performLegacyCleanup(
 ) async -> SyncConvergencePostCommitAdapterResult {
     requests.append(request)
     recorder?.record(.legacyCleanup(batchID: request.sourceBatchID))
-    return result
+    let step = script.isEmpty ? Step(result: .verifiedComplete, externalEffectOccurred: true) : script.removeFirst()
+    if step.externalEffectOccurred {
+        externalEffectCount += 1
+    }
+    return step.result
 }
 }
 
 final class FakePresentationAdapter: SyncConvergencePresentationAdapter {
-let result: SyncConvergencePostCommitAdapterResult
+struct Step {
+    let result: SyncConvergencePostCommitAdapterResult
+    let externalEffectOccurred: Bool
+}
+
+var defaultResult: SyncConvergencePostCommitAdapterResult
+var scriptByNoteID: [UUID: [Step]] = [:]
 var requests: [SyncConvergencePresentationRequest] = []
+var externalEffectNoteIDs: [UUID] = []
 let recorder: PostCommitInvocationRecorder?
 
 init(result: SyncConvergencePostCommitAdapterResult, recorder: PostCommitInvocationRecorder? = nil) {
-    self.result = result
+    self.defaultResult = result
+    self.recorder = recorder
+}
+
+init(
+    result: SyncConvergencePostCommitAdapterResult = .verifiedComplete,
+    scriptByNoteID: [UUID: [Step]],
+    recorder: PostCommitInvocationRecorder? = nil
+) {
+    self.defaultResult = result
+    self.scriptByNoteID = scriptByNoteID
     self.recorder = recorder
 }
 
@@ -943,7 +1069,18 @@ func refreshPresentation(
 ) async -> SyncConvergencePostCommitAdapterResult {
     requests.append(request)
     recorder?.record(.presentation(noteID: request.noteID))
-    return result
+    if var script = scriptByNoteID[request.noteID], !script.isEmpty {
+        let step = script.removeFirst()
+        scriptByNoteID[request.noteID] = script
+        if step.externalEffectOccurred {
+            externalEffectNoteIDs.append(request.noteID)
+        }
+        return step.result
+    }
+    if defaultResult == .verifiedComplete {
+        externalEffectNoteIDs.append(request.noteID)
+    }
+    return defaultResult
 }
 }
 
