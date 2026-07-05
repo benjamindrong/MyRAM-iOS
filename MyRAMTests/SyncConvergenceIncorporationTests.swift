@@ -491,6 +491,28 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
 
     func testSwappedOperationIdentityAcrossNotesFailsBeforeCommit() throws {
         let fixture = try makeTwoNoteSwappableFixture()
+        let plan = fixture.validatedInput.plan
+        let swappedPlan = fixture.swappedValidatedInput.plan
+        let originalIdentityA = try operationIdentity(for: fixture.noteA, in: plan)
+        let originalIdentityB = try operationIdentity(for: fixture.noteB, in: plan)
+        let swappedIdentityA = try operationIdentity(for: fixture.noteA, in: swappedPlan)
+        let swappedIdentityB = try operationIdentity(for: fixture.noteB, in: swappedPlan)
+
+        XCTAssertNoThrow(try swappedIdentityA.validate())
+        XCTAssertNoThrow(try swappedIdentityB.validate())
+        XCTAssertEqual(swappedIdentityA.operationKind, swappedIdentityB.operationKind)
+        XCTAssertEqual(swappedIdentityA, originalIdentityB)
+        XCTAssertEqual(swappedIdentityB, originalIdentityA)
+        XCTAssertEqual(
+            try noteIDResolvingReplayKey(swappedIdentityA.canonicalReplayKey, in: plan),
+            fixture.noteB
+        )
+        XCTAssertEqual(
+            try noteIDResolvingReplayKey(swappedIdentityB.canonicalReplayKey, in: plan),
+            fixture.noteA
+        )
+        XCTAssertNotEqual(try noteIDResolvingReplayKey(swappedIdentityA.canonicalReplayKey, in: plan), fixture.noteA)
+        XCTAssertNotEqual(try noteIDResolvingReplayKey(swappedIdentityB.canonicalReplayKey, in: plan), fixture.noteB)
 
         let malformedOutcome = SyncConvergenceIncorporationExecutor().incorporate(
             input: fixture.swappedValidatedInput,
@@ -524,6 +546,49 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         let root = try XCTUnwrap(fixture.transaction.roots[fixture.batchID])
         let work = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(root.postCommitWorkPayloadData!)
         XCTAssertEqual(Set(work.presentationEntries.map(\.noteID)), [fixture.noteA, fixture.noteB])
+
+        let persistedIdentities = fixture.transaction.children[fixture.batchID]?.operationIdentities ?? []
+        for noteID in [fixture.noteA, fixture.noteB] {
+            let plannedIdentity = try operationIdentity(for: noteID, in: fixture.validatedInput.plan)
+            let persistedRow = try XCTUnwrap(persistedIdentities.first { $0.noteID == noteID })
+            let workEntry = try XCTUnwrap(work.presentationEntries.first { $0.noteID == noteID })
+            let workIdentity = try XCTUnwrap(workEntry.incrementalOperations.first?.operationIdentity)
+
+            XCTAssertEqual(persistedRow.noteID, noteID)
+            XCTAssertEqual(persistedRow.operationIdentity, plannedIdentity)
+            XCTAssertEqual(workIdentity, plannedIdentity)
+            XCTAssertEqual(workEntry.noteID, noteID)
+            XCTAssertFalse(persistedIdentities.contains { $0.noteID != noteID && $0.operationIdentity == plannedIdentity })
+            XCTAssertFalse(work.presentationEntries.contains { $0.noteID != noteID && $0.incrementalOperations.contains { $0.operationIdentity == plannedIdentity } })
+        }
+    }
+
+    private func operationIdentity(
+        for noteID: UUID,
+        in plan: SyncConvergenceBatchPlan
+    ) throws -> OperationIdentityPayload {
+        let notePlan = try XCTUnwrap(plan.affectedNotePlans.first { $0.noteID == noteID })
+        guard case .matchingBaseIncremental(let bodyPlan) = notePlan.bodyEffect,
+              let identity = bodyPlan.operations.first?.operationIdentity else {
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        return identity
+    }
+
+    private func noteIDResolvingReplayKey(
+        _ replayKey: CanonicalReplayKeyPayload,
+        in plan: SyncConvergenceBatchPlan
+    ) throws -> UUID {
+        let matches = plan.affectedNotePlans.compactMap { notePlan -> UUID? in
+            guard case .matchingBaseIncremental(let bodyPlan) = notePlan.bodyEffect else {
+                return nil
+            }
+            return bodyPlan.operations.contains { $0.operationIdentity.canonicalReplayKey == replayKey }
+                ? notePlan.noteID
+                : nil
+        }
+        XCTAssertEqual(matches.count, 1)
+        return try XCTUnwrap(matches.first)
     }
 
     // MARK: - MYR-134 Planner and Routed-Note Verification
@@ -1007,6 +1072,13 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             Case(name: "duplicate batch index identity", expectedNoteID: fixture.noteID) { input, identity in
                 input.plan.replacingOperationIdentitiesForTest(input.plan.incorporationEvidence.operationIdentities + [identity])
             },
+            Case(name: "wrong outer batch ID", expectedNoteID: nil) { input, identity in
+                let mutated = identity.replacingForTest(
+                    batchID: differentUUID,
+                    canonicalReplayKey: identity.canonicalReplayKey.replacingForTest(batchID: differentUUID)
+                )
+                return input.plan.replacingOperationIdentityForTest(identity, with: mutated)
+            },
             Case(name: "wrong source origin", expectedNoteID: fixture.noteID) { input, identity in
                 let mutated = identity.replacingForTest(
                     originDeviceID: differentUUID,
@@ -1016,6 +1088,20 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             },
             Case(name: "wrong source operation kind", expectedNoteID: fixture.noteID) { input, identity in
                 let mutated = identity.replacingForTest(operationKind: "delete")
+                return input.plan.replacingOperationIdentityForTest(identity, with: mutated)
+            },
+            Case(name: "out-of-range source operation index", expectedNoteID: nil) { input, identity in
+                let outOfRangeIndex = input.sourceBatch.changes.count
+                let mutated = identity.replacingForTest(
+                    operationIndex: outOfRangeIndex,
+                    canonicalReplayKey: identity.canonicalReplayKey.replacingForTest(operationIndex: outOfRangeIndex)
+                )
+                return input.plan.replacingOperationIdentityForTest(identity, with: mutated)
+            },
+            Case(name: "uppercase outer source origin", expectedNoteID: nil) { input, identity in
+                let mutated = try identity.replacingRawStringsForTest(
+                    originDeviceIDLowercase: identity.originDeviceIDLowercase.uppercased()
+                )
                 return input.plan.replacingOperationIdentityForTest(identity, with: mutated)
             },
             Case(name: "replay key batch mismatch", expectedNoteID: fixture.noteID) { input, identity in
@@ -1038,7 +1124,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             },
             Case(name: "noncanonical source replay key", expectedNoteID: fixture.noteID) { input, identity in
                 let mutated = identity.replacingForTest(
-                    canonicalReplayKey: identity.canonicalReplayKey.replacingForTest(sequence: 135135)
+                    canonicalReplayKey: identity.canonicalReplayKey.replacingForTest(sequence: .replace(135135))
                 )
                 return input.plan.replacingOperationIdentityForTest(identity, with: mutated)
             }
@@ -1061,6 +1147,49 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             )
             assertNoPreflightMutation(transaction, testCase.name)
         }
+
+        let negativeIndexIdentity = sourceIdentity.replacingForTest(
+            operationIndex: -1,
+            canonicalReplayKey: sourceIdentity.canonicalReplayKey.replacingForTest(operationIndex: -1)
+        )
+        try assertMalformedIdentityFailsDuringProjectedEvidenceRecompute(
+            name: "negative outer operation index",
+            validated: validated,
+            fixture: fixture,
+            replacement: negativeIndexIdentity
+        )
+
+        let malformedUUIDIdentity = try sourceIdentity.replacingRawStringsForTest(
+            batchIDLowercase: "not-a-uuid"
+        )
+        try assertMalformedIdentityFailsDuringProjectedEvidenceRecompute(
+            name: "malformed outer batch UUID string",
+            validated: validated,
+            fixture: fixture,
+            replacement: malformedUUIDIdentity
+        )
+    }
+
+    private func assertMalformedIdentityFailsDuringProjectedEvidenceRecompute(
+        name: String,
+        validated: ValidatedSyncConvergenceIncorporationInput,
+        fixture: Fixture,
+        replacement: OperationIdentityPayload
+    ) throws {
+        let malformedPlan = validated.plan.replacingOperationIdentityForTest(
+            try XCTUnwrap(validated.plan.incorporationEvidence.operationIdentities.first),
+            with: replacement
+        )
+        let malformedInput = validated.replacingPlanForTestingWithoutRecomputedEvidenceBytes(malformedPlan)
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.noteID: fixture.initialNote])
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: malformedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        XCTAssertEqual(outcome, .failedBeforeCommit(.unexpected), name)
+        assertNoPreflightMutation(transaction, name)
     }
 
     private struct PlannedIncorporationResult {
@@ -3398,6 +3527,16 @@ private extension ValidatedSyncConvergenceIncorporationInput {
             projectedFullIncorporationEvidenceBytes: projectedBytes
         )
     }
+
+    func replacingPlanForTestingWithoutRecomputedEvidenceBytes(_ plan: SyncConvergenceBatchPlan) -> ValidatedSyncConvergenceIncorporationInput {
+        ValidatedSyncConvergenceIncorporationInput(
+            validatedPlanToken: SyncConvergenceValidatedPlanToken.unvalidatedForTesting(),
+            plan: plan,
+            sourceBatch: sourceBatch,
+            sourceSchemaVersion: sourceSchemaVersion,
+            projectedFullIncorporationEvidenceBytes: projectedFullIncorporationEvidenceBytes
+        )
+    }
 }
 
 private extension SyncConvergenceBatchPlan {
@@ -3492,44 +3631,6 @@ private extension SyncConvergenceBatchPlan {
             titleEffect: notePlan.titleEffect
         )
         return replacingNotePlans(notePlans)
-    }
-}
-
-private extension OperationIdentityPayload {
-    func replacingForTest(
-        batchID: UUID? = nil,
-        originDeviceID: UUID? = nil,
-        operationIndex: Int? = nil,
-        operationKind: String? = nil,
-        canonicalReplayKey: CanonicalReplayKeyPayload? = nil
-    ) -> OperationIdentityPayload {
-        OperationIdentityPayload(
-            batchID: batchID ?? UUID(uuidString: batchIDLowercase)!,
-            originDeviceID: originDeviceID ?? UUID(uuidString: originDeviceIDLowercase)!,
-            operationIndex: operationIndex ?? self.operationIndex,
-            operationKind: operationKind ?? self.operationKind,
-            canonicalReplayKey: canonicalReplayKey ?? self.canonicalReplayKey
-        )
-    }
-}
-
-private extension CanonicalReplayKeyPayload {
-    func replacingForTest(
-        batchID: UUID? = nil,
-        originDeviceID: UUID? = nil,
-        operationIndex: Int? = nil,
-        sequence: UInt64? = nil
-    ) -> CanonicalReplayKeyPayload {
-        CanonicalReplayKeyPayload(
-            version: version,
-            modifiedAtBitPattern: modifiedAtBitPattern,
-            originDeviceIDLowercase: (originDeviceID ?? UUID(uuidString: originDeviceIDLowercase)!).uuidString.lowercased(),
-            batchOrderKind: batchOrderKind,
-            legacyCreatedAtBitPattern: legacyCreatedAtBitPattern,
-            sequence: sequence ?? self.sequence,
-            batchIDLowercase: (batchID ?? UUID(uuidString: batchIDLowercase)!).uuidString.lowercased(),
-            operationIndex: operationIndex ?? self.operationIndex
-        )
     }
 }
 

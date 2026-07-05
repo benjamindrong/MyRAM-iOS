@@ -829,6 +829,38 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 valid.replacingForTest(operationIdentity: valid.operationIdentity.replacingForTest(version: OperationIdentityPayload.supportedVersion + 1))
             ),
             (
+                "malformed outer batch UUID string",
+                valid.replacingForTest(operationIdentity: try valid.operationIdentity.replacingRawStringsForTest(batchIDLowercase: "not-a-uuid"))
+            ),
+            (
+                "malformed outer origin UUID string",
+                valid.replacingForTest(operationIdentity: try valid.operationIdentity.replacingRawStringsForTest(originDeviceIDLowercase: "not-a-uuid"))
+            ),
+            (
+                "uppercase outer batch UUID string",
+                valid.replacingForTest(operationIdentity: try valid.operationIdentity.replacingRawStringsForTest(
+                    batchIDLowercase: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+                ))
+            ),
+            (
+                "uppercase outer origin UUID string",
+                valid.replacingForTest(operationIdentity: try valid.operationIdentity.replacingRawStringsForTest(
+                    originDeviceIDLowercase: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"
+                ))
+            ),
+            (
+                "malformed nested replay-key UUID string",
+                valid.replacingForTest(operationIdentity: try valid.operationIdentity.replacingRawStringsForTest(
+                    canonicalReplayKeyBatchIDLowercase: "not-a-uuid"
+                ))
+            ),
+            (
+                "uppercase nested replay-key UUID string",
+                valid.replacingForTest(operationIdentity: try valid.operationIdentity.replacingRawStringsForTest(
+                    canonicalReplayKeyBatchIDLowercase: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"
+                ))
+            ),
+            (
                 "negative operation index",
                 valid.replacingForTest(operationIndex: -1, operationIdentity: valid.operationIdentity.replacingForTest(operationIndex: -1))
             ),
@@ -944,10 +976,12 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertEqual(try CanonicalReplayKeyPayload.decodeEvidenceData(row.canonicalReplayKeyPayloadData), operation.operationIdentity.canonicalReplayKey)
 
         let queue = FakeQueueCleanupAdapter()
+        let legacy = FakeLegacyCleanupAdapter(result: .verifiedComplete)
         let presentation = FakePresentationAdapter(result: .verifiedComplete)
         let executor = SyncConvergencePostCommitExecutor(
             store: SwiftDataSyncConvergencePostCommitStore(context: ModelContext(fixture.container)),
             queueCleanupAdapter: queue,
+            legacyCleanupAdapter: legacy,
             presentationAdapter: presentation
         )
 
@@ -955,6 +989,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         XCTAssertEqual(outcome, .complete)
         XCTAssertEqual(queue.removals, [Set([fixture.request.sourceBatchID])])
+        XCTAssertEqual(legacy.callCount, 1)
         XCTAssertEqual(presentation.requests.map(\.noteID), [fixture.noteID])
         XCTAssertEqual(presentation.requests.first?.incrementalOperations, [operation])
     }
@@ -1024,17 +1059,21 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             let row = try fixture.authoritativeRow(context: corruptionContext)
             try testCase.corrupt(fixture, corruptionContext, row)
             try corruptionContext.save()
+            let rootSnapshotBeforeExecution = try fixture.rootSnapshot()
 
             let queue = FakeQueueCleanupAdapter()
+            let legacy = FakeLegacyCleanupAdapter(result: .verifiedComplete)
             let presentation = FakePresentationAdapter(result: .verifiedComplete)
             let store = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(fixture.container))
             let executor = SyncConvergencePostCommitExecutor(
                 store: store,
                 queueCleanupAdapter: queue,
+                legacyCleanupAdapter: legacy,
                 presentationAdapter: presentation
             )
 
             let outcome = await executor.execute(fixture.request)
+            let rootSnapshotAfterExecution = try fixture.rootSnapshot()
 
             XCTAssertEqual(
                 outcome,
@@ -1042,7 +1081,9 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 testCase.name
             )
             XCTAssertEqual(queue.removals, [], testCase.name)
+            XCTAssertEqual(legacy.callCount, 0, testCase.name)
             XCTAssertEqual(presentation.requests, [], testCase.name)
+            XCTAssertEqual(rootSnapshotAfterExecution, rootSnapshotBeforeExecution, testCase.name)
             XCTAssertEqual(try fixture.reloadedNoteBody(), "AB", testCase.name)
         }
     }
@@ -1275,6 +1316,33 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 .first?
                 .content
         }
+
+        func rootSnapshot(
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) throws -> MYR135PostCommitRootSnapshot {
+            let batchID = request.sourceBatchID
+            let root = try XCTUnwrap(
+                ModelContext(container)
+                    .fetch(FetchDescriptor<IncorporatedSyncBatch>(predicate: #Predicate { $0.batchID == batchID }))
+                    .first,
+                file: file,
+                line: line
+            )
+            return MYR135PostCommitRootSnapshot(
+                postCommitStatePayloadData: Data(root.postCommitStatePayloadData),
+                postCommitWorkPayloadData: root.postCommitWorkPayloadData.map { Data($0) },
+                committedResultDigest: root.committedResultDigest,
+                committedResultDigestFormatVersion: root.committedResultDigestFormatVersion
+            )
+        }
+    }
+
+    private struct MYR135PostCommitRootSnapshot: Equatable {
+        let postCommitStatePayloadData: Data
+        let postCommitWorkPayloadData: Data?
+        let committedResultDigest: String
+        let committedResultDigestFormatVersion: Int
     }
 
     private func makeMYR135PersistedIdentityFixture() throws -> MYR135PersistedIdentityFixture {
@@ -1330,6 +1398,33 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         guard case .incorporated(let result) = outcome else {
             throw PostCommitTestFixtureError.unexpectedPlanningOutcome
         }
+        let pendingState = SyncConvergencePostCommitState(
+            queueCleanupPending: true,
+            legacyCleanupPending: true,
+            presentationRefreshPending: true
+        )
+        guard case .fullRoot(let initiallyLoaded) = try SwiftDataSyncConvergencePostCommitStore(
+            context: ModelContext(container)
+        ).loadState(matching: result.persistedIncorporationIdentity),
+              let initialWorkPayload = initiallyLoaded.postCommitWorkPayload else {
+            throw PostCommitTestFixtureError.unexpectedPlanningOutcome
+        }
+        let pendingWorkPayload = SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: Set(initialWorkPayload.queueCleanupBatchIDs),
+            legacyCleanupRequired: true,
+            presentationEntries: initialWorkPayload.presentationEntries
+        )
+        let rootContext = ModelContext(container)
+        let rootBatchID = result.batchID
+        guard let root = try rootContext.fetch(FetchDescriptor<IncorporatedSyncBatch>(
+            predicate: #Predicate { $0.batchID == rootBatchID }
+        )).first else {
+            throw PostCommitTestFixtureError.unexpectedPlanningOutcome
+        }
+        root.postCommitStatePayloadData = try SyncConvergenceStableEncoding.encode(pendingState)
+        root.postCommitWorkPayloadData = try pendingWorkPayload.encodedPayloadData()
+        try rootContext.save()
+
         guard case .fullRoot(let loaded) = try SwiftDataSyncConvergencePostCommitStore(
             context: ModelContext(container)
         ).loadState(matching: result.persistedIncorporationIdentity),
@@ -1340,7 +1435,18 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         return MYR135PersistedIdentityFixture(
             container: container,
             noteID: noteID,
-            request: SyncConvergencePostCommitRequest(result: result),
+            request: SyncConvergencePostCommitRequest(
+                sourceBatchID: result.batchID,
+                affectedNoteIDs: result.affectedNoteIDs,
+                cleanupPlan: SyncConvergenceCleanupPlan(
+                    batchIDs: result.cleanupPlan.batchIDs,
+                    retryQueueCleanup: true,
+                    retryLegacyCleanup: true,
+                    retryPresentationRefresh: true
+                ),
+                presentationPlan: result.presentationPlan,
+                persistedIncorporationIdentity: result.persistedIncorporationIdentity
+            ),
             workPayload: workPayload
         )
     }
@@ -1755,45 +1861,6 @@ private extension SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPay
             baseContentHash: baseContentHash ?? self.baseContentHash,
             resultContentHash: resultContentHash ?? self.resultContentHash,
             operationIdentity: operationIdentity ?? self.operationIdentity
-        )
-    }
-}
-
-private extension OperationIdentityPayload {
-    func replacingForTest(
-        version: Int = OperationIdentityPayload.supportedVersion,
-        batchID: UUID? = nil,
-        originDeviceID: UUID? = nil,
-        operationIndex: Int? = nil,
-        operationKind: String? = nil,
-        canonicalReplayKey: CanonicalReplayKeyPayload? = nil
-    ) -> OperationIdentityPayload {
-        OperationIdentityPayload(
-            version: version,
-            batchID: batchID ?? UUID(uuidString: batchIDLowercase)!,
-            originDeviceID: originDeviceID ?? UUID(uuidString: originDeviceIDLowercase)!,
-            operationIndex: operationIndex ?? self.operationIndex,
-            operationKind: operationKind ?? self.operationKind,
-            canonicalReplayKey: canonicalReplayKey ?? self.canonicalReplayKey
-        )
-    }
-}
-
-private extension CanonicalReplayKeyPayload {
-    func replacingForTest(
-        batchID: UUID? = nil,
-        originDeviceID: UUID? = nil,
-        operationIndex: Int? = nil
-    ) -> CanonicalReplayKeyPayload {
-        CanonicalReplayKeyPayload(
-            version: version,
-            modifiedAtBitPattern: modifiedAtBitPattern,
-            originDeviceIDLowercase: (originDeviceID ?? UUID(uuidString: originDeviceIDLowercase)!).uuidString.lowercased(),
-            batchOrderKind: batchOrderKind,
-            legacyCreatedAtBitPattern: legacyCreatedAtBitPattern,
-            sequence: sequence,
-            batchIDLowercase: (batchID ?? UUID(uuidString: batchIDLowercase)!).uuidString.lowercased(),
-            operationIndex: operationIndex ?? self.operationIndex
         )
     }
 }
