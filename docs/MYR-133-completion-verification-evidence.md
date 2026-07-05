@@ -268,13 +268,101 @@ Commit SHA: `6ff9bc0f55257a3a4cbf2b70cd4f79e52aa72e25`. Exit code: 0.
 
 MYR-134 is complete.
 MYR-133 remains incomplete.
-MYR-135 is the next blocked slice.
+
+## MYR-135 Verification
+
+Verified implementation SHA: `83871a48b54377861e460e783c98bafb8fe7a735`
+
+MYR-135 completes the operation-identity validation matrix for construction-time authority, post-commit payload validation, persisted SwiftData identity-row validation, and operation hash-chain validation.
+
+This remediation is test-only except for Xcode test-target membership for the shared test helper. Production code remains unchanged from the original MYR-135 implementation.
+
+### MYR-135 Requirement Matrix
+
+| Requirement | Code/Test Location | Verification |
+|---|---|---|
+| Valid source-batch identity is accepted, persisted, and used to build exact work identity | `MyRAMTests/SyncConvergenceIncorporationTests.swift` `testMYR135ValidSourceIdentityPersistsAndBuildsExactWorkIdentity` | Focused iOS/macOS incorporation and post-commit suites |
+| Legitimate non-source reconstructed-conflict identity remains accepted | `testMYR135ReconstructedConflictAcceptsLegitimateNonSourceIdentities` | Proves source-only pinning does not reject retained non-source evidence |
+| Missing authoritative identity fails before commit without mutation | `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation` case `missing authoritative identity` | Asserts `.failedBeforeCommit(.invalidMergePlan(...))` and `assertNoPreflightMutation` |
+| Duplicate authoritative identity fails before commit without mutation | `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation` case `duplicate batch index identity` | Same construction matrix and zero-mutation assertion |
+| Wrong source batch ID fails before commit without mutation | `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation` case `wrong outer batch ID` | Mutates outer and nested batch IDs |
+| Wrong source origin fails before commit without mutation | `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation` case `wrong source origin` | Source-batch exactness rejection |
+| Negative operation index fails closed | Construction helper `assertMalformedIdentityFailsDuringProjectedEvidenceRecompute` case `negative outer operation index`; payload matrix case `negative operation index` | Construction path preserves original projected byte count and returns `.failedBeforeCommit(.unexpected)`; payload path rejects malformed work payload |
+| Out-of-range source operation index fails before commit without mutation | `testMYR135ConstructionIdentityMatrixFailsBeforeCommitWithoutMutation` case `out-of-range source operation index` | Source index bounds rejection |
+| Wrong operation kind fails closed | Construction case `wrong source operation kind`; payload case `work operation kind mismatch` | Construction and payload validators both reject kind mismatch |
+| Wrong note ID fails closed | Construction-time ownership case `testSwappedOperationIdentityAcrossNotesFailsBeforeCommit`; payload case `operation note entry note mismatch` in `testMYR135PostCommitPayloadIdentityValidationMatrix` | Swapped same-kind identities fail before commit and work payload rejects note-entry mismatch |
+| Same-kind swapped two-note identities fail before commit | `testSwappedOperationIdentityAcrossNotesFailsBeforeCommit` | Asserts swapped identities validate structurally but belong to the other note |
+| Replay-key batch mismatch fails closed | Construction case `replay key batch mismatch`; payload case `identity replay key batch mismatch` | Nested replay-key linkage coverage |
+| Replay-key origin mismatch fails closed | Construction case `replay key origin mismatch`; payload case `identity replay key origin mismatch` | Nested replay-key linkage coverage |
+| Replay-key operation-index mismatch fails closed | Construction case `replay key operation index mismatch`; payload case `identity replay key index mismatch` | Nested replay-key linkage coverage |
+| Resolvable replay-key note mismatch fails before commit | `testSwappedOperationIdentityAcrossNotesFailsBeforeCommit` helper `noteIDResolvingReplayKey` | Proves each swapped replay key resolves to the other note before rejection |
+| Malformed UUID strings fail closed | Construction helper case `malformed outer batch UUID string`; payload cases `malformed outer batch UUID string`, `malformed outer origin UUID string`, `malformed nested replay-key UUID string` | Construction helper case `malformed outer batch UUID string` fails during projected-evidence recomputation and returns `.failedBeforeCommit(.unexpected)` with zero preflight mutation. Payload malformed UUID cases reach payload identity validation. |
+| Noncanonical uppercase UUID strings fail closed | Construction case `uppercase outer source origin`; payload cases `uppercase outer batch UUID string`, `uppercase outer origin UUID string`, `uppercase nested replay-key UUID string` | Construction case `uppercase outer source origin` reaches canonical lowercase validation and returns `.failedBeforeCommit(.invalidMergePlan(noteID: nil))`; payload uppercase cases reject noncanonical UUID strings through `OperationIdentityPayload.validate()` |
+| Plan to persisted child to work payload identity ownership is exact | `testTwoNoteExactOwnershipIncorporatesSuccessfully` | Proves exactly two persisted identity rows, one row per note, exactly two presentation entries, one entry per note, one incremental operation per entry, and each note's planned identity equals its persisted identity row and work payload identity without attaching to the other note |
+| Post-commit payload rejects malformed operation identity matrix | `MyRAMTests/SyncConvergencePostCommitTests.swift` `testMYR135PostCommitPayloadIdentityValidationMatrix` | Covers note, index, kind, UUID, and replay-key linkage payload rows |
+| Operation hash-chain matrix fails closed | `testMYR135OperationHashChainValidationMatrix` | Covers first operation base hash, later operation base hash, and final operation result hash mismatches |
+| Valid persisted authoritative identity row loads and reaches presentation | `testMYR135ValidPersistedIdentityRowLoadsAndReachesPresentation` | Uses real SwiftData rows and a tracking legacy adapter, then reaches presentation |
+| Persisted row corruption fails before queue, legacy, presentation, or CAS work | `testMYR135PersistedIdentityRowCorruptionFailsBeforeAdapters` | Covers wrong note ID, wrong batch ID, wrong operation index, wrong kind, wrong identity bytes, substituted identity bytes, wrong replay-key bytes, missing row, duplicate rows, noncanonical key, and wrong byte count; asserts queue removals, legacy calls, presentation requests, and root snapshot remain unchanged |
+| Shared test helpers are consolidated | `MyRAMTests/SyncConvergenceIdentityTestSupport.swift` | Replaces duplicate `OperationIdentityPayload.replacingForTest` and `CanonicalReplayKeyPayload.replacingForTest` helpers in incorporation/post-commit tests |
+| MYR-136 immutable-root CAS field matrix remains excluded | No MYR-136 production or test changes in this PR | Scope boundary preserved |
+| MYR-133 remains incomplete | `Remaining MYR-133 Coverage Not Completed In This Pass` | This PR does not claim full MYR-133 completion |
+
+### Commands Run
+
+```bash
+xcrun simctl list devices available
+```
+
+Exit code: 0. Selected `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)` from available iOS 26.5 simulators.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests
+```
+
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Executed 74 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests
+```
+
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Executed 74 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePlanningTests -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests -only-testing:MyRAMTests/SyncConvergenceFoundationTests -only-testing:MyRAMTests/SyncBatchPayloadCompatibilityTests -only-testing:MyRAMTests/SyncBatchUnsentQueueTests
+```
+
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Executed 191 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePlanningTests -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests -only-testing:MyRAMMacTests/SyncBatchUnsentQueueTests
+```
+
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Executed 150 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' build
+```
+
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build
+```
+
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+```bash
+git diff --check
+```
+
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0.
+
+MYR-135 implementation is complete.
 
 ## Remaining MYR-133 Coverage Not Completed In This Pass
 
 The attached MYR-133 proposal is broader than this initial implementation pass. These items still need additional work before claiming full ticket completion:
 
-- Full operation identity construction-time and authoritative-row corruption matrix.
 - Per-field stale-CAS matrix against SwiftData roots.
 - Remaining Phase 7 and Phase 9 load, save, reload, adapter-failure, and crash-window coverage beyond the fresh-store final-CAS retry added here.
 - Final-head evidence from an approved commit.

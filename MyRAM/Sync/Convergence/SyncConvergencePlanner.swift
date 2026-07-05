@@ -2144,9 +2144,7 @@ extension OperationIdentityPayload {
     /// its own (possibly swapped) identity placement via plan-derived lookup.
     func noteID(from input: ValidatedSyncConvergenceIncorporationInput) -> UUID? {
         if batchIDLowercase == input.sourceBatchID.uuidString.lowercased() {
-            guard input.sourceBatch.changes.indices.contains(operationIndex),
-                  input.sourceBatch.changes[operationIndex].operationKind == operationKind
-            else {
+            guard input.sourceBatch.changes.indices.contains(operationIndex) else {
                 return nil
             }
             return input.sourceBatch.changes[operationIndex].noteID
@@ -3147,11 +3145,6 @@ struct SyncConvergenceIncorporationExecutor {
             for identity in input.plan.incorporationEvidence.operationIdentities {
                 do {
                     try identity.validate()
-                    guard identity.batchIDLowercase == identity.canonicalReplayKey.batchIDLowercase,
-                          identity.originDeviceIDLowercase == identity.canonicalReplayKey.originDeviceIDLowercase,
-                          identity.operationIndex == identity.canonicalReplayKey.operationIndex else {
-                        throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: nil)
-                    }
                 } catch let error as PostCommitPayloadConstructionError {
                     throw error
                 } catch {
@@ -3163,6 +3156,16 @@ struct SyncConvergenceIncorporationExecutor {
                 guard let authoritativeNoteID = identity.noteID(from: input) else {
                     throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: nil)
                 }
+                guard identity.batchIDLowercase == identity.canonicalReplayKey.batchIDLowercase,
+                      identity.originDeviceIDLowercase == identity.canonicalReplayKey.originDeviceIDLowercase,
+                      identity.operationIndex == identity.canonicalReplayKey.operationIndex else {
+                    throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: authoritativeNoteID)
+                }
+                try validateSourceBatchIdentityIfNeeded(
+                    identity,
+                    authoritativeNoteID: authoritativeNoteID,
+                    input: input
+                )
                 let key = identity.planIdentityKey
                 guard authorityByKey[key] == nil else {
                     throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: authoritativeNoteID)
@@ -3173,6 +3176,34 @@ struct SyncConvergenceIncorporationExecutor {
                 )
             }
             return authorityByKey
+        }
+
+        private static func validateSourceBatchIdentityIfNeeded(
+            _ identity: OperationIdentityPayload,
+            authoritativeNoteID: UUID,
+            input: ValidatedSyncConvergenceIncorporationInput
+        ) throws {
+            guard identity.batchIDLowercase == input.sourceBatchID.uuidString.lowercased() else {
+                return
+            }
+            guard identity.originDeviceIDLowercase == input.sourceOriginDeviceID.uuidString.lowercased(),
+                  input.sourceBatch.changes.indices.contains(identity.operationIndex) else {
+                throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: authoritativeNoteID)
+            }
+
+            let sourceChange = input.sourceBatch.changes[identity.operationIndex]
+            let expectedReplayKey = CanonicalReplayKeyPayload(
+                replayKey: SyncBatchReplayKey(
+                    batch: input.sourceBatch,
+                    change: sourceChange,
+                    operationIndex: identity.operationIndex
+                )
+            )
+            guard sourceChange.operationKind == identity.operationKind,
+                  identity.canonicalReplayKey == expectedReplayKey,
+                  authoritativeNoteID == sourceChange.noteID else {
+                throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: sourceChange.noteID)
+            }
         }
 
         private static func makeChildProjection(
