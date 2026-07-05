@@ -526,6 +526,866 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertEqual(Set(work.presentationEntries.map(\.noteID)), [fixture.noteA, fixture.noteB])
     }
 
+    // MARK: - MYR-134 Planner and Routed-Note Verification
+
+    func testMYR134RealPlannerShapeMatrixPersistsExpectedRoutedWork() throws {
+        let incremental = try makeTwoOperationFixture()
+        let incrementalResult = try planIncorporateAndDecode(
+            input: incremental.planningInputForCurrentNotes(),
+            notes: [incremental.noteID: incremental.initialNote],
+            committedAt: incremental.committedAt,
+            expectedRoutings: [incremental.noteID: .incremental]
+        )
+        let incrementalEntry = try XCTUnwrap(incrementalResult.work.presentationEntries.first)
+        XCTAssertEqual(incrementalResult.work.presentationEntries.map(\.noteID), [incremental.noteID])
+        XCTAssertEqual(incrementalEntry.routing, .incremental)
+        XCTAssertEqual(incrementalEntry.expectedPreBodyHash, SyncBatchContentHash.sha256Hex(for: "A"))
+        XCTAssertEqual(incrementalEntry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: "ABC"))
+        XCTAssertEqual(incrementalEntry.incrementalOperations.map(\.operationIndex), [0, 1])
+        XCTAssertEqual(incrementalEntry.incrementalOperations.map(\.noteID), [incremental.noteID, incremental.noteID])
+        assertHashChain(incrementalEntry)
+
+        let idempotent = try makeAllIdempotentBodyFixture()
+        let idempotentResult = try planIncorporateAndDecode(
+            input: idempotent.input,
+            notes: [idempotent.noteID: idempotent.initialNote],
+            committedAt: idempotent.committedAt,
+            expectedRoutings: [idempotent.noteID: .none]
+        )
+        XCTAssertTrue(idempotentResult.work.presentationEntries.isEmpty)
+        XCTAssertFalse(idempotentResult.state.presentationRefreshPending)
+
+        let mixedExecutable = try makeMixedIdempotentAndExecutableFixture()
+        let mixedExecutableResult = try planIncorporateAndDecode(
+            input: mixedExecutable.input,
+            notes: [mixedExecutable.noteID: mixedExecutable.initialNote],
+            committedAt: mixedExecutable.committedAt,
+            expectedRoutings: [mixedExecutable.noteID: .incremental]
+        )
+        let executableEntry = try XCTUnwrap(mixedExecutableResult.work.presentationEntries.first)
+        XCTAssertEqual(executableEntry.incrementalOperations.map(\.operationIndex), [1])
+        XCTAssertEqual(executableEntry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: "ABC"))
+
+        let legacy = try makeLegacyPositionalFixture()
+        let legacyResult = try planIncorporateAndDecode(
+            input: legacy.input,
+            notes: [legacy.noteID: legacy.initialNote],
+            committedAt: legacy.committedAt,
+            expectedRoutings: [legacy.noteID: .incremental]
+        )
+        let legacyEntry = try XCTUnwrap(legacyResult.work.presentationEntries.first)
+        XCTAssertEqual(legacyEntry.routing, .incremental)
+        XCTAssertEqual(legacyEntry.expectedPreBodyHash, SyncBatchContentHash.sha256Hex(for: "abc"))
+        XCTAssertEqual(legacyEntry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: "bcd"))
+        XCTAssertEqual(legacyEntry.incrementalOperations.map(\.operationIndex), [0, 1])
+        XCTAssertEqual(legacyEntry.incrementalOperations[0].baseContentHash, SyncBatchContentHash.sha256Hex(for: "abc"))
+        XCTAssertEqual(legacyEntry.incrementalOperations[0].resultContentHash, SyncBatchContentHash.sha256Hex(for: "bc"))
+        XCTAssertEqual(legacyEntry.incrementalOperations[1].baseContentHash, SyncBatchContentHash.sha256Hex(for: "bc"))
+        XCTAssertEqual(legacyEntry.incrementalOperations[1].resultContentHash, SyncBatchContentHash.sha256Hex(for: "bcd"))
+        assertHashChain(legacyEntry)
+
+        let creationOnly = try makeCreationOnlyFixture(existing: false)
+        let creationOnlyResult = try planIncorporateAndDecode(
+            input: creationOnly.input,
+            notes: [:],
+            committedAt: creationOnly.committedAt,
+            expectedRoutings: [:]
+        )
+        XCTAssertTrue(creationOnlyResult.work.presentationEntries.isEmpty)
+
+        let creationIdempotent = try makeCreationOnlyFixture(existing: true)
+        let creationIdempotentResult = try planIncorporateAndDecode(
+            input: creationIdempotent.input,
+            notes: [creationIdempotent.noteID: creationIdempotent.initialNote],
+            committedAt: creationIdempotent.committedAt,
+            expectedRoutings: [:]
+        )
+        XCTAssertTrue(creationIdempotentResult.work.presentationEntries.isEmpty)
+
+        let createPlusBody = try makeCreatePlusBodyFixture(existingCreation: false)
+        let createPlusBodyResult = try planIncorporateAndDecode(
+            input: createPlusBody.input,
+            notes: [:],
+            committedAt: createPlusBody.committedAt,
+            expectedRoutings: [createPlusBody.noteID: .incremental]
+        )
+        let createPlusBodyEntry = try XCTUnwrap(createPlusBodyResult.work.presentationEntries.first)
+        XCTAssertEqual(createPlusBodyEntry.expectedPreBodyHash, SyncBatchContentHash.sha256Hex(for: "A"))
+        XCTAssertEqual(createPlusBodyEntry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: "AB"))
+
+        let idempotentCreatePlusBody = try makeCreatePlusBodyFixture(existingCreation: true)
+        let idempotentCreatePlusBodyResult = try planIncorporateAndDecode(
+            input: idempotentCreatePlusBody.input,
+            notes: [idempotentCreatePlusBody.noteID: idempotentCreatePlusBody.initialNote],
+            committedAt: idempotentCreatePlusBody.committedAt,
+            expectedRoutings: [idempotentCreatePlusBody.noteID: .incremental]
+        )
+        let idempotentCreatePlusBodyEntry = try XCTUnwrap(idempotentCreatePlusBodyResult.work.presentationEntries.first)
+        XCTAssertEqual(idempotentCreatePlusBodyEntry.expectedPreBodyHash, SyncBatchContentHash.sha256Hex(for: "A"))
+        XCTAssertEqual(idempotentCreatePlusBodyEntry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: "AB"))
+
+        let titleOnly = try makeTitleOnlyApplyFixture()
+        let titleOnlyResult = try planIncorporateAndDecode(
+            input: titleOnly.input,
+            notes: [titleOnly.noteID: titleOnly.initialNote],
+            committedAt: titleOnly.committedAt,
+            expectedRoutings: [:]
+        )
+        XCTAssertTrue(titleOnlyResult.work.presentationEntries.isEmpty)
+
+        let reconstructed = try makeReconstructedSnapshotFixture()
+        let reconstructedResult = try planIncorporateAndDecode(
+            input: reconstructed.planningInputForCurrentNotes(retainedSnapshots: [
+                SyncConvergenceRetainedSnapshot(
+                    noteID: reconstructed.noteID,
+                    contentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+                    body: "AB",
+                    generation: 1
+                )
+            ]),
+            notes: [reconstructed.noteID: reconstructed.initialNote],
+            committedAt: reconstructed.committedAt,
+            expectedRoutings: [reconstructed.noteID: .wholeNoteFallback]
+        )
+        let fallbackEntry = try XCTUnwrap(reconstructedResult.work.presentationEntries.first)
+        XCTAssertEqual(fallbackEntry.routing, .wholeNoteFallback)
+        XCTAssertTrue(fallbackEntry.incrementalOperations.isEmpty)
+        XCTAssertEqual(fallbackEntry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: "AxB"))
+
+        let missingBody = try makeCompatibilityMissingBodyFixture()
+        let missingBodyResult = try planIncorporateAndDecode(
+            input: missingBody.input,
+            notes: [:],
+            committedAt: missingBody.committedAt,
+            expectedRoutings: [missingBody.noteID: .none]
+        )
+        XCTAssertTrue(missingBodyResult.work.presentationEntries.isEmpty)
+
+        let missingTitle = try makeMissingTitleFixture()
+        let missingTitleResult = try planIncorporateAndDecode(
+            input: missingTitle.validatedInput.planningInputForSourceOnly(),
+            notes: [:],
+            committedAt: missingTitle.committedAt,
+            expectedRoutings: [:]
+        )
+        XCTAssertTrue(missingTitleResult.work.presentationEntries.isEmpty)
+    }
+
+    func testMYR134MixedRoutingsPersistOnlyNonNoneEntriesInDeterministicOrder() throws {
+        let fixture = try makeMYR134MixedRoutingFixture()
+        let result = try planIncorporateAndDecode(
+            input: fixture.input,
+            notes: fixture.initialNotes,
+            committedAt: fixture.committedAt,
+            expectedRoutings: [
+                fixture.noneNote: .none,
+                fixture.incrementalNote: .incremental,
+                fixture.fallbackNote: .wholeNoteFallback
+            ]
+        )
+
+        XCTAssertEqual(
+            result.validatedInput.plan.affectedNotePlans.map(\.noteID),
+            result.validatedInput.plan.affectedNotePlans.map(\.noteID).sortedByUUIDStringForTest()
+        )
+        XCTAssertEqual(
+            result.work.presentationEntries.map(\.noteID),
+            [fixture.incrementalNote, fixture.fallbackNote].sortedByUUIDStringForTest()
+        )
+        XCTAssertFalse(result.work.presentationEntries.map(\.noteID).contains(fixture.noneNote))
+        XCTAssertTrue(result.state.presentationRefreshPending)
+
+        let incrementalEntry = try XCTUnwrap(
+            result.work.presentationEntries.first { $0.noteID == fixture.incrementalNote }
+        )
+        XCTAssertEqual(incrementalEntry.routing, .incremental)
+        XCTAssertEqual(incrementalEntry.incrementalOperations.map(\.operationIndex), [1, 3])
+        XCTAssertEqual(
+            incrementalEntry.incrementalOperations.map(\.operationIdentity.operationIndex),
+            incrementalEntry.incrementalOperations.map(\.operationIndex)
+        )
+        assertHashChain(incrementalEntry)
+
+        let fallbackEntry = try XCTUnwrap(
+            result.work.presentationEntries.first { $0.noteID == fixture.fallbackNote }
+        )
+        XCTAssertEqual(fallbackEntry.routing, .wholeNoteFallback)
+        XCTAssertTrue(fallbackEntry.incrementalOperations.isEmpty)
+    }
+
+    func testMYR134RepeatedPlanningAndIncorporationProducesIdenticalWorkPayload() throws {
+        let fixture = try makeMYR134MixedRoutingFixture()
+        let first = try planIncorporateAndDecode(
+            input: fixture.input,
+            notes: fixture.initialNotes,
+            committedAt: fixture.committedAt,
+            expectedRoutings: [
+                fixture.noneNote: .none,
+                fixture.incrementalNote: .incremental,
+                fixture.fallbackNote: .wholeNoteFallback
+            ]
+        )
+        let second = try planIncorporateAndDecode(
+            input: fixture.input,
+            notes: fixture.initialNotes,
+            committedAt: fixture.committedAt,
+            expectedRoutings: [
+                fixture.noneNote: .none,
+                fixture.incrementalNote: .incremental,
+                fixture.fallbackNote: .wholeNoteFallback
+            ]
+        )
+
+        XCTAssertEqual(first.validatedInput.plan.affectedNotePlans, second.validatedInput.plan.affectedNotePlans)
+        XCTAssertEqual(first.validatedInput.plan.presentationPlan, second.validatedInput.plan.presentationPlan)
+        XCTAssertEqual(try first.work.encodedPayloadData(), try second.work.encodedPayloadData())
+    }
+
+    func testMYR134MalformedRoutedNoteConstructionFailsBeforeCommitWithoutMutation() throws {
+        let mixed = try makeMYR134MixedRoutingFixture()
+        let mixedValidated = try plannedInput(from: mixed.input)
+        let incremental = try makeTwoOperationFixture()
+        let incrementalValidated = try plannedInput(from: incremental.planningInputForCurrentNotes())
+        let reconstructed = try makeReconstructedSnapshotFixture()
+        let reconstructedValidated = try plannedInput(from: reconstructed.planningInputForCurrentNotes(retainedSnapshots: [
+            SyncConvergenceRetainedSnapshot(
+                noteID: reconstructed.noteID,
+                contentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+                body: "AB",
+                generation: 1
+            )
+        ]))
+        let titleOnly = try makeTitleOnlyApplyFixture()
+        let titleOnlyValidated = try plannedInput(from: titleOnly.input)
+
+        let cases: [MalformedPlanCase] = [
+            MalformedPlanCase(
+                name: "missing note plan with routing retained",
+                base: mixedValidated,
+                notes: mixed.initialNotes,
+                committedAt: mixed.committedAt,
+                expectedNoteID: mixed.incrementalNote,
+                mutate: { plan in
+                    plan.replacingNotePlans(plan.affectedNotePlans.filter { $0.noteID != mixed.incrementalNote })
+                }
+            ),
+            MalformedPlanCase(
+                name: "duplicate note plan inserted adjacent",
+                base: mixedValidated,
+                notes: mixed.initialNotes,
+                committedAt: mixed.committedAt,
+                expectedNoteID: mixed.incrementalNote,
+                mutate: { plan in
+                    var notePlans = plan.affectedNotePlans
+                    let index = try XCTUnwrap(notePlans.firstIndex { $0.noteID == mixed.incrementalNote })
+                    notePlans.insert(notePlans[index], at: index + 1)
+                    return plan.replacingNotePlans(notePlans)
+                }
+            ),
+            MalformedPlanCase(
+                name: "incremental route with no executable operations",
+                base: incrementalValidated,
+                notes: [incremental.noteID: incremental.initialNote],
+                committedAt: incremental.committedAt,
+                expectedNoteID: incremental.noteID,
+                mutate: { plan in
+                    try plan.replacingBodyEffect(for: incremental.noteID) { bodyEffect in
+                        guard case .matchingBaseIncremental(let bodyPlan) = bodyEffect else {
+                            throw TestFixtureError.unexpectedPlanningOutcome
+                        }
+                        return .matchingBaseIncremental(MatchingBaseBodyPlan(
+                            noteID: bodyPlan.noteID,
+                            initialBody: bodyPlan.initialBody,
+                            initialBodyHash: bodyPlan.initialBodyHash,
+                            operations: [],
+                            finalBody: bodyPlan.finalBody,
+                            finalBodyHash: bodyPlan.finalBodyHash,
+                            resultEvidence: bodyPlan.resultEvidence
+                        ))
+                    }.replacingHistoryRetainedOperations([])
+                }
+            ),
+            MalformedPlanCase(
+                name: "whole-note fallback route with incremental effect",
+                base: incrementalValidated,
+                notes: [incremental.noteID: incremental.initialNote],
+                committedAt: incremental.committedAt,
+                expectedNoteID: incremental.noteID,
+                mutate: { plan in
+                    plan.replacingRoutings([incremental.noteID: .wholeNoteFallback])
+                }
+            ),
+            MalformedPlanCase(
+                name: "incremental route for reconstructed conflict",
+                base: reconstructedValidated,
+                notes: [reconstructed.noteID: reconstructed.initialNote],
+                committedAt: reconstructed.committedAt,
+                expectedNoteID: reconstructed.noteID,
+                mutate: { plan in
+                    plan.replacingRoutings([reconstructed.noteID: .incremental])
+                }
+            ),
+            MalformedPlanCase(
+                name: "extraneous routing with no body effect",
+                base: titleOnlyValidated,
+                notes: [titleOnly.noteID: titleOnly.initialNote],
+                committedAt: titleOnly.committedAt,
+                expectedNoteID: titleOnly.noteID,
+                mutate: { plan in
+                    plan.replacingRoutings([titleOnly.noteID: .incremental])
+                }
+            )
+        ]
+
+        for testCase in cases {
+            let malformedPlan = try testCase.mutate(testCase.base.plan)
+            let malformedInput = try testCase.base.replacingPlanForTesting(malformedPlan)
+            let transaction = InMemoryConvergenceTransaction(notes: testCase.notes)
+            let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+                input: malformedInput,
+                transaction: transaction,
+                committedAt: testCase.committedAt
+            )
+
+            XCTAssertEqual(
+                outcome,
+                .failedBeforeCommit(.invalidMergePlan(noteID: testCase.expectedNoteID)),
+                testCase.name
+            )
+            assertNoPreflightMutation(transaction, testCase.name)
+        }
+
+        let missingBaseHashPlan = try incrementalValidated.plan.replacingBodyEffect(for: incremental.noteID) { bodyEffect in
+            guard case .matchingBaseIncremental(let bodyPlan) = bodyEffect,
+                  let firstOperation = bodyPlan.operations.first else {
+                throw TestFixtureError.unexpectedPlanningOutcome
+            }
+            let malformedOperation = SyncConvergencePlannedBodyOperation(
+                noteID: firstOperation.noteID,
+                kind: firstOperation.kind,
+                utf16Offset: firstOperation.utf16Offset,
+                utf16Length: firstOperation.utf16Length,
+                text: firstOperation.text,
+                expectedText: firstOperation.expectedText,
+                baseContentHash: nil,
+                resultContentHash: firstOperation.resultContentHash,
+                operationIdentity: firstOperation.operationIdentity
+            )
+            var operations = bodyPlan.operations
+            operations[0] = malformedOperation
+            return .matchingBaseIncremental(MatchingBaseBodyPlan(
+                noteID: bodyPlan.noteID,
+                initialBody: bodyPlan.initialBody,
+                initialBodyHash: bodyPlan.initialBodyHash,
+                operations: operations,
+                finalBody: bodyPlan.finalBody,
+                finalBodyHash: bodyPlan.finalBodyHash,
+                resultEvidence: bodyPlan.resultEvidence
+            ))
+        }.replacingHistoryRetainedOperations([])
+        let missingBaseHashInput = try incrementalValidated.replacingPlanForTesting(missingBaseHashPlan)
+        let missingBaseHashTransaction = InMemoryConvergenceTransaction(notes: [incremental.noteID: incremental.initialNote])
+        let missingBaseHashOutcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: missingBaseHashInput,
+            transaction: missingBaseHashTransaction,
+            committedAt: incremental.committedAt
+        )
+        XCTAssertEqual(missingBaseHashOutcome, .failedBeforeCommit(.unexpected))
+        assertNoPreflightMutation(missingBaseHashTransaction, "matching-base operation missing base hash")
+    }
+
+    private struct PlannedIncorporationResult {
+        let validatedInput: ValidatedSyncConvergenceIncorporationInput
+        let incorporationResult: SyncConvergenceIncorporationResult
+        let state: SyncConvergencePostCommitState
+        let work: SyncConvergencePostCommitWorkPayloadV1
+        let transaction: InMemoryConvergenceTransaction
+    }
+
+    private struct MYR134Fixture {
+        let noteID: UUID
+        let input: SyncConvergencePlanningInput
+        let initialNote: SyncConvergenceMutableNoteRecord
+        let committedAt: Date
+    }
+
+    private struct MYR134MixedRoutingFixture {
+        let noneNote: UUID
+        let incrementalNote: UUID
+        let fallbackNote: UUID
+        let input: SyncConvergencePlanningInput
+        let initialNotes: [UUID: SyncConvergenceMutableNoteRecord]
+        let committedAt: Date
+    }
+
+    private struct MalformedPlanCase {
+        let name: String
+        let base: ValidatedSyncConvergenceIncorporationInput
+        let notes: [UUID: SyncConvergenceMutableNoteRecord]
+        let committedAt: Date
+        let expectedNoteID: UUID?
+        let mutate: (SyncConvergenceBatchPlan) throws -> SyncConvergenceBatchPlan
+    }
+
+    private func planIncorporateAndDecode(
+        input: SyncConvergencePlanningInput,
+        notes: [UUID: SyncConvergenceMutableNoteRecord],
+        committedAt: Date,
+        expectedRoutings: [UUID: SyncConvergencePresentationRouting],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> PlannedIncorporationResult {
+        let validatedInput = try plannedInput(from: input, file: file, line: line)
+        XCTAssertFalse(validatedInput.plan.cleanupPlan.retryLegacyCleanup, file: file, line: line)
+        XCTAssertEqual(validatedInput.plan.presentationPlan.noteRoutings, expectedRoutings, file: file, line: line)
+
+        let transaction = InMemoryConvergenceTransaction(notes: notes)
+        for winner in input.persistedTitleWinners {
+            transaction.titleWinners[winner.noteID] = winner
+        }
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: validatedInput,
+            transaction: transaction,
+            committedAt: committedAt
+        )
+        guard case .incorporated(let incorporationResult) = outcome else {
+            XCTFail(
+                "Expected incorporation for \(input.incomingBatch.id), got \(outcome)",
+                file: file,
+                line: line
+            )
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        let root = try XCTUnwrap(transaction.roots[validatedInput.sourceBatchID], file: file, line: line)
+        let state = try SyncConvergenceStableEncoding.decode(
+            SyncConvergencePostCommitState.self,
+            from: root.postCommitStatePayloadData
+        )
+        let work = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(
+            try XCTUnwrap(root.postCommitWorkPayloadData, file: file, line: line)
+        )
+        XCTAssertFalse(state.legacyCleanupPending, file: file, line: line)
+        XCTAssertFalse(work.legacyCleanupRequired, file: file, line: line)
+        XCTAssertEqual(work.derivedInitialState(), state, file: file, line: line)
+        XCTAssertEqual(
+            work.presentationEntries.map(\.noteID),
+            expectedRoutings.filter { $0.value != .none }.map(\.key).sortedByUUIDStringForTest(),
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(state.presentationRefreshPending, work.presentationEntries.isEmpty == false, file: file, line: line)
+
+        return PlannedIncorporationResult(
+            validatedInput: validatedInput,
+            incorporationResult: incorporationResult,
+            state: state,
+            work: work,
+            transaction: transaction
+        )
+    }
+
+    private func plannedInput(
+        from input: SyncConvergencePlanningInput,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> ValidatedSyncConvergenceIncorporationInput {
+        let outcome = SyncConvergencePlanner().plan(input: input)
+        guard case .planned(let validatedInput) = outcome else {
+            XCTFail("Expected planned outcome, got \(outcome)", file: file, line: line)
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        return validatedInput
+    }
+
+    private func assertHashChain(
+        _ entry: SyncConvergencePostCommitWorkPayloadV1.PresentationEntry,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(entry.incrementalOperations.first?.baseContentHash, entry.expectedPreBodyHash, file: file, line: line)
+        for (previous, current) in zip(entry.incrementalOperations, entry.incrementalOperations.dropFirst()) {
+            XCTAssertEqual(current.baseContentHash, previous.resultContentHash, file: file, line: line)
+        }
+        XCTAssertEqual(entry.incrementalOperations.last?.resultContentHash, entry.committedPostBodyHash, file: file, line: line)
+    }
+
+    private func makeAllIdempotentBodyFixture() throws -> MYR134Fixture {
+        let noteID = uuid("00000000-0000-0000-0000-000000134001")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000134002"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000134003"),
+            createdAt: date(3),
+            batchSequence: 134001,
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                ))
+            ]
+        )
+        let retained = SyncConvergenceRetainedOperation(
+            noteID: noteID,
+            batchID: batch.id,
+            originDeviceID: batch.originDeviceID,
+            operationIndex: 0,
+            operationKind: .insert,
+            utf16Offset: 1,
+            utf16Length: nil,
+            text: "B",
+            expectedText: nil,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "A"),
+            resultContentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+            canonicalReplayKey: CanonicalReplayKeyPayload(
+                replayKey: SyncBatchReplayKey(batch: batch, change: batch.changes[0], operationIndex: 0)
+            )
+        )
+        let initialNote = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "Title",
+            body: "AB",
+            createdAt: date(1),
+            modifiedAt: date(2)
+        )
+        let input = SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [initialNote.projectedForTest],
+            retainedRemoteOperations: [retained]
+        )
+        return MYR134Fixture(noteID: noteID, input: input, initialNote: initialNote, committedAt: date(5))
+    }
+
+    private func makeMixedIdempotentAndExecutableFixture() throws -> MYR134Fixture {
+        let noteID = uuid("00000000-0000-0000-0000-000000134011")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000134012"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000134013"),
+            createdAt: date(3),
+            batchSequence: 134011,
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 2,
+                    text: "C",
+                    modifiedAt: date(5),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB")
+                ))
+            ]
+        )
+        let retained = SyncConvergenceRetainedOperation(
+            noteID: noteID,
+            batchID: batch.id,
+            originDeviceID: batch.originDeviceID,
+            operationIndex: 0,
+            operationKind: .insert,
+            utf16Offset: 1,
+            utf16Length: nil,
+            text: "B",
+            expectedText: nil,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "A"),
+            resultContentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+            canonicalReplayKey: CanonicalReplayKeyPayload(
+                replayKey: SyncBatchReplayKey(batch: batch, change: batch.changes[0], operationIndex: 0)
+            )
+        )
+        let initialNote = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "Title",
+            body: "AB",
+            createdAt: date(1),
+            modifiedAt: date(2)
+        )
+        let input = SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [initialNote.projectedForTest],
+            retainedRemoteOperations: [retained]
+        )
+        return MYR134Fixture(noteID: noteID, input: input, initialNote: initialNote, committedAt: date(6))
+    }
+
+    private func makeLegacyPositionalFixture() throws -> MYR134Fixture {
+        let noteID = uuid("00000000-0000-0000-0000-000000134021")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000134022"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000134023"),
+            createdAt: date(3),
+            batchSequence: 134021,
+            changes: [
+                .noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
+                    noteID: noteID,
+                    utf16Offset: 0,
+                    utf16Length: 1,
+                    expectedText: "a",
+                    modifiedAt: date(4)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 2,
+                    text: "d",
+                    modifiedAt: date(5),
+                    baseContentHash: nil
+                ))
+            ]
+        )
+        let initialNote = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "Title",
+            body: "abc",
+            createdAt: date(1),
+            modifiedAt: date(2)
+        )
+        let input = SyncConvergencePlanningInput(incomingBatch: batch, currentNotes: [initialNote.projectedForTest])
+        return MYR134Fixture(noteID: noteID, input: input, initialNote: initialNote, committedAt: date(6))
+    }
+
+    private func makeCreationOnlyFixture(existing: Bool) throws -> MYR134Fixture {
+        let noteID = uuid(existing ? "00000000-0000-0000-0000-000000134031" : "00000000-0000-0000-0000-000000134032")
+        let batch = SyncBatch(
+            id: uuid(existing ? "00000000-0000-0000-0000-000000134033" : "00000000-0000-0000-0000-000000134034"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000134035"),
+            createdAt: date(3),
+            batchSequence: existing ? 134031 : 134032,
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Created",
+                    body: "Body",
+                    folderID: nil,
+                    createdAt: date(1),
+                    modifiedAt: date(2)
+                ))
+            ]
+        )
+        let initialNote = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "Created",
+            body: "Body",
+            createdAt: date(1),
+            modifiedAt: date(2)
+        )
+        let input = SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: existing ? [initialNote.projectedForTest] : []
+        )
+        return MYR134Fixture(noteID: noteID, input: input, initialNote: initialNote, committedAt: date(5))
+    }
+
+    private func makeCreatePlusBodyFixture(existingCreation: Bool) throws -> MYR134Fixture {
+        let noteID = uuid(existingCreation ? "00000000-0000-0000-0000-000000134041" : "00000000-0000-0000-0000-000000134042")
+        let batch = SyncBatch(
+            id: uuid(existingCreation ? "00000000-0000-0000-0000-000000134043" : "00000000-0000-0000-0000-000000134044"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000134045"),
+            createdAt: date(3),
+            batchSequence: existingCreation ? 134041 : 134042,
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Created",
+                    body: "A",
+                    folderID: nil,
+                    createdAt: date(1),
+                    modifiedAt: date(2)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                ))
+            ]
+        )
+        let initialNote = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "Created",
+            body: "A",
+            createdAt: date(1),
+            modifiedAt: date(2)
+        )
+        let input = SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: existingCreation ? [initialNote.projectedForTest] : []
+        )
+        return MYR134Fixture(noteID: noteID, input: input, initialNote: initialNote, committedAt: date(5))
+    }
+
+    private func makeTitleOnlyApplyFixture() throws -> MYR134Fixture {
+        let noteID = uuid("00000000-0000-0000-0000-000000134051")
+        let priorBatch = titleBatch(
+            id: uuid("00000000-0000-0000-0000-000000134052"),
+            noteID: noteID,
+            title: "Prior",
+            modifiedAt: date(2)
+        )
+        let incoming = titleBatch(
+            id: uuid("00000000-0000-0000-0000-000000134053"),
+            noteID: noteID,
+            title: "Incoming",
+            modifiedAt: date(4)
+        )
+        let initialNote = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "Prior",
+            body: "Body",
+            createdAt: date(1),
+            modifiedAt: date(2)
+        )
+        let input = SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [initialNote.projectedForTest],
+            persistedTitleWinners: [titleWinnerProjection(noteID: noteID, title: "Prior", batch: priorBatch)]
+        )
+        return MYR134Fixture(noteID: noteID, input: input, initialNote: initialNote, committedAt: date(5))
+    }
+
+    private func makeCompatibilityMissingBodyFixture() throws -> MYR134Fixture {
+        let noteID = uuid("00000000-0000-0000-0000-000000134061")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000134062"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000134063"),
+            createdAt: date(3),
+            batchSequence: 134061,
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 0,
+                    text: "Ignored",
+                    modifiedAt: date(4)
+                ))
+            ]
+        )
+        let input = SyncConvergencePlanningInput(incomingBatch: batch)
+        let placeholder = SyncConvergenceMutableNoteRecord(
+            noteID: noteID,
+            folderID: nil,
+            title: "",
+            body: "",
+            createdAt: date(1),
+            modifiedAt: date(1)
+        )
+        return MYR134Fixture(noteID: noteID, input: input, initialNote: placeholder, committedAt: date(5))
+    }
+
+    private func makeMYR134MixedRoutingFixture() throws -> MYR134MixedRoutingFixture {
+        let noneNote = uuid("00000000-0000-0000-0000-000000134101")
+        let incrementalNote = uuid("00000000-0000-0000-0000-000000134102")
+        let fallbackNote = uuid("00000000-0000-0000-0000-000000134103")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000134104"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000134105"),
+            createdAt: date(3),
+            batchSequence: 134101,
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: fallbackNote,
+                    utf16Offset: 1,
+                    text: "q",
+                    modifiedAt: date(6),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB")
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: incrementalNote,
+                    utf16Offset: 1,
+                    text: "Y",
+                    modifiedAt: date(5),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "X")
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noneNote,
+                    utf16Offset: 1,
+                    text: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: incrementalNote,
+                    utf16Offset: 2,
+                    text: "Z",
+                    modifiedAt: date(7),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "XY")
+                ))
+            ]
+        )
+        let noneRetained = SyncConvergenceRetainedOperation(
+            noteID: noneNote,
+            batchID: batch.id,
+            originDeviceID: batch.originDeviceID,
+            operationIndex: 2,
+            operationKind: .insert,
+            utf16Offset: 1,
+            utf16Length: nil,
+            text: "B",
+            expectedText: nil,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "A"),
+            resultContentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+            canonicalReplayKey: CanonicalReplayKeyPayload(
+                replayKey: SyncBatchReplayKey(batch: batch, change: batch.changes[2], operationIndex: 2)
+            )
+        )
+        let notes = [
+            noneNote: SyncConvergenceMutableNoteRecord(
+                noteID: noneNote,
+                folderID: nil,
+                title: "None",
+                body: "AB",
+                createdAt: date(1),
+                modifiedAt: date(2)
+            ),
+            incrementalNote: SyncConvergenceMutableNoteRecord(
+                noteID: incrementalNote,
+                folderID: nil,
+                title: "Incremental",
+                body: "X",
+                createdAt: date(1),
+                modifiedAt: date(2)
+            ),
+            fallbackNote: SyncConvergenceMutableNoteRecord(
+                noteID: fallbackNote,
+                folderID: nil,
+                title: "Fallback",
+                body: "ACB",
+                createdAt: date(1),
+                modifiedAt: date(2)
+            )
+        ]
+        let input = SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: notes.values.map(\.projectedForTest),
+            retainedSnapshots: [
+                SyncConvergenceRetainedSnapshot(
+                    noteID: fallbackNote,
+                    contentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+                    body: "AB",
+                    generation: 1
+                )
+            ],
+            retainedRemoteOperations: [noneRetained]
+        )
+        return MYR134MixedRoutingFixture(
+            noneNote: noneNote,
+            incrementalNote: incrementalNote,
+            fallbackNote: fallbackNote,
+            input: input,
+            initialNotes: notes,
+            committedAt: date(8)
+        )
+    }
+
     private struct TwoNoteSwappableFixture {
         let noteA: UUID
         let noteB: UUID
@@ -2332,6 +3192,129 @@ private enum IncorporationFailurePoint: CaseIterable {
     case resultEvidence
     case incorporatedRoot
     case save
+}
+
+private extension SyncConvergenceIncorporationTests.Fixture {
+    func planningInputForCurrentNotes(
+        retainedSnapshots: [SyncConvergenceRetainedSnapshot] = [],
+        retainedRemoteOperations: [SyncConvergenceRetainedOperation] = []
+    ) -> SyncConvergencePlanningInput {
+        SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [initialNote.projectedForTest],
+            retainedSnapshots: retainedSnapshots,
+            retainedRemoteOperations: retainedRemoteOperations,
+            persistedTitleWinners: priorWinner.map { [$0] } ?? []
+        )
+    }
+}
+
+private extension ValidatedSyncConvergenceIncorporationInput {
+    func planningInputForSourceOnly() -> SyncConvergencePlanningInput {
+        SyncConvergencePlanningInput(incomingBatch: sourceBatch)
+    }
+
+    func replacingPlanForTesting(_ plan: SyncConvergenceBatchPlan) throws -> ValidatedSyncConvergenceIncorporationInput {
+        let projectedBytes = try SyncConvergenceProjectedIncorporationEvidence(
+            batch: sourceBatch,
+            affectedNoteIDs: Set(plan.affectedNotePlans.map(\.noteID)),
+            operationIdentities: plan.incorporationEvidence.operationIdentities,
+            resultEvidence: plan.incorporationEvidence.resultEvidence
+        ).canonicalEncodedByteCount()
+        return ValidatedSyncConvergenceIncorporationInput(
+            validatedPlanToken: SyncConvergenceValidatedPlanToken.unvalidatedForTesting(),
+            plan: plan,
+            sourceBatch: sourceBatch,
+            sourceSchemaVersion: sourceSchemaVersion,
+            projectedFullIncorporationEvidenceBytes: projectedBytes
+        )
+    }
+}
+
+private extension SyncConvergenceBatchPlan {
+    func replacingNotePlans(_ notePlans: [SyncConvergenceNotePlan]) -> SyncConvergenceBatchPlan {
+        SyncConvergenceBatchPlan(
+            batchID: batchID,
+            originDeviceID: originDeviceID,
+            canonicalPayloadDigest: canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
+            affectedNotePlans: notePlans,
+            incorporationEvidence: incorporationEvidence,
+            historyPlan: historyPlan,
+            cleanupPlan: cleanupPlan,
+            presentationPlan: presentationPlan
+        )
+    }
+
+    func replacingRoutings(_ routings: [UUID: SyncConvergencePresentationRouting]) -> SyncConvergenceBatchPlan {
+        SyncConvergenceBatchPlan(
+            batchID: batchID,
+            originDeviceID: originDeviceID,
+            canonicalPayloadDigest: canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
+            affectedNotePlans: affectedNotePlans,
+            incorporationEvidence: incorporationEvidence,
+            historyPlan: historyPlan,
+            cleanupPlan: cleanupPlan,
+            presentationPlan: SyncConvergencePresentationPlan(noteRoutings: routings)
+        )
+    }
+
+    func replacingHistoryRetainedOperations(
+        _ operations: [SyncConvergencePlannedBodyOperation]
+    ) -> SyncConvergenceBatchPlan {
+        SyncConvergenceBatchPlan(
+            batchID: batchID,
+            originDeviceID: originDeviceID,
+            canonicalPayloadDigest: canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
+            affectedNotePlans: affectedNotePlans,
+            incorporationEvidence: incorporationEvidence,
+            historyPlan: SyncConvergenceHistoryPlan(
+                retainedOperationAdditions: operations,
+                snapshotAdditions: historyPlan.snapshotAdditions,
+                pressureNotes: historyPlan.pressureNotes
+            ),
+            cleanupPlan: cleanupPlan,
+            presentationPlan: presentationPlan
+        )
+    }
+
+    func replacingBodyEffect(
+        for noteID: UUID,
+        transform: (SyncConvergenceBodyEffect) throws -> SyncConvergenceBodyEffect
+    ) throws -> SyncConvergenceBatchPlan {
+        var notePlans = affectedNotePlans
+        let index = try XCTUnwrap(notePlans.firstIndex { $0.noteID == noteID })
+        let notePlan = notePlans[index]
+        let bodyEffect = try XCTUnwrap(notePlan.bodyEffect)
+        notePlans[index] = SyncConvergenceNotePlan(
+            noteID: notePlan.noteID,
+            creationEffect: notePlan.creationEffect,
+            bodyEffect: try transform(bodyEffect),
+            titleEffect: notePlan.titleEffect
+        )
+        return replacingNotePlans(notePlans)
+    }
+}
+
+private extension SyncConvergenceMutableNoteRecord {
+    var projectedForTest: SyncConvergenceProjectedNote {
+        SyncConvergenceProjectedNote(
+            noteID: noteID,
+            folderID: folderID,
+            title: title,
+            body: body,
+            createdAt: createdAt,
+            modifiedAt: modifiedAt
+        )
+    }
+}
+
+private extension Array where Element == UUID {
+    func sortedByUUIDStringForTest() -> [UUID] {
+        sorted { $0.uuidString < $1.uuidString }
+    }
 }
 
 private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTransaction {
