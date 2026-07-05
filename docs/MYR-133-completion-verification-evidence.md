@@ -271,7 +271,7 @@ MYR-133 remains incomplete.
 
 ## MYR-135 Verification
 
-Verified implementation SHA: `96ed5fd`
+Verified implementation SHA: `83871a48b54377861e460e783c98bafb8fe7a735`
 
 MYR-135 completes the operation-identity validation matrix for construction-time authority, post-commit payload validation, persisted SwiftData identity-row validation, and operation hash-chain validation.
 
@@ -319,43 +319,43 @@ Exit code: 0. Selected `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)` fr
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests
 ```
 
-Commit SHA: `96ed5fd`. Exit code: 0. Executed 74 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Executed 74 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests
 ```
 
-Commit SHA: `96ed5fd`. Exit code: 0. Executed 74 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Executed 74 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePlanningTests -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests -only-testing:MyRAMTests/SyncConvergenceFoundationTests -only-testing:MyRAMTests/SyncBatchPayloadCompatibilityTests -only-testing:MyRAMTests/SyncBatchUnsentQueueTests
 ```
 
-Commit SHA: `96ed5fd`. Exit code: 0. Executed 180 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Executed 191 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePlanningTests -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests -only-testing:MyRAMMacTests/SyncBatchUnsentQueueTests
 ```
 
-Commit SHA: `96ed5fd`. Exit code: 0. Executed 139 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Executed 150 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' build
 ```
 
-Commit SHA: `96ed5fd`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build
 ```
 
-Commit SHA: `96ed5fd`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
 
 ```bash
 git diff --check
 ```
 
-Commit SHA: `96ed5fd`. Exit code: 0.
+Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0.
 
 MYR-135 implementation is complete.
 
