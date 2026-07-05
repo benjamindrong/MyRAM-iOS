@@ -3624,11 +3624,14 @@ private extension SyncConvergenceNotePlan {
     ) throws -> [SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload] {
         guard routing == .incremental else { return [] }
         let operations: [SyncConvergencePlannedBodyOperation]
+        let derivesMissingBaseHashes: Bool
         switch bodyEffect {
         case .matchingBaseIncremental(let plan):
             operations = plan.operations
+            derivesMissingBaseHashes = false
         case .legacyPositional(let plan):
             operations = plan.operations
+            derivesMissingBaseHashes = true
         default:
             throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
         }
@@ -3643,6 +3646,9 @@ private extension SyncConvergenceNotePlan {
                       authority.identity == operation.operationIdentity,
                       authority.noteID == noteID else {
                     throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+                }
+                guard derivesMissingBaseHashes else {
+                    return try operation.postCommitOperationPayload()
                 }
                 // Legacy positional operations predate per-operation base hashes;
                 // persist the deterministic chain required by post-commit replay.

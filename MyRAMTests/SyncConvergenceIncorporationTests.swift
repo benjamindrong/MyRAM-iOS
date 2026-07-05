@@ -576,7 +576,13 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         let legacyEntry = try XCTUnwrap(legacyResult.work.presentationEntries.first)
         XCTAssertEqual(legacyEntry.routing, .incremental)
         XCTAssertEqual(legacyEntry.expectedPreBodyHash, SyncBatchContentHash.sha256Hex(for: "abc"))
-        XCTAssertEqual(legacyEntry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: "bc"))
+        XCTAssertEqual(legacyEntry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: "bcd"))
+        XCTAssertEqual(legacyEntry.incrementalOperations.map(\.operationIndex), [0, 1])
+        XCTAssertEqual(legacyEntry.incrementalOperations[0].baseContentHash, SyncBatchContentHash.sha256Hex(for: "abc"))
+        XCTAssertEqual(legacyEntry.incrementalOperations[0].resultContentHash, SyncBatchContentHash.sha256Hex(for: "bc"))
+        XCTAssertEqual(legacyEntry.incrementalOperations[1].baseContentHash, SyncBatchContentHash.sha256Hex(for: "bc"))
+        XCTAssertEqual(legacyEntry.incrementalOperations[1].resultContentHash, SyncBatchContentHash.sha256Hex(for: "bcd"))
+        assertHashChain(legacyEntry)
 
         let creationOnly = try makeCreationOnlyFixture(existing: false)
         let creationOnlyResult = try planIncorporateAndDecode(
@@ -848,6 +854,44 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             )
             assertNoPreflightMutation(transaction, testCase.name)
         }
+
+        let missingBaseHashPlan = try incrementalValidated.plan.replacingBodyEffect(for: incremental.noteID) { bodyEffect in
+            guard case .matchingBaseIncremental(let bodyPlan) = bodyEffect,
+                  let firstOperation = bodyPlan.operations.first else {
+                throw TestFixtureError.unexpectedPlanningOutcome
+            }
+            let malformedOperation = SyncConvergencePlannedBodyOperation(
+                noteID: firstOperation.noteID,
+                kind: firstOperation.kind,
+                utf16Offset: firstOperation.utf16Offset,
+                utf16Length: firstOperation.utf16Length,
+                text: firstOperation.text,
+                expectedText: firstOperation.expectedText,
+                baseContentHash: nil,
+                resultContentHash: firstOperation.resultContentHash,
+                operationIdentity: firstOperation.operationIdentity
+            )
+            var operations = bodyPlan.operations
+            operations[0] = malformedOperation
+            return .matchingBaseIncremental(MatchingBaseBodyPlan(
+                noteID: bodyPlan.noteID,
+                initialBody: bodyPlan.initialBody,
+                initialBodyHash: bodyPlan.initialBodyHash,
+                operations: operations,
+                finalBody: bodyPlan.finalBody,
+                finalBodyHash: bodyPlan.finalBodyHash,
+                resultEvidence: bodyPlan.resultEvidence
+            ))
+        }.replacingHistoryRetainedOperations([])
+        let missingBaseHashInput = try incrementalValidated.replacingPlanForTesting(missingBaseHashPlan)
+        let missingBaseHashTransaction = InMemoryConvergenceTransaction(notes: [incremental.noteID: incremental.initialNote])
+        let missingBaseHashOutcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: missingBaseHashInput,
+            transaction: missingBaseHashTransaction,
+            committedAt: incremental.committedAt
+        )
+        XCTAssertEqual(missingBaseHashOutcome, .failedBeforeCommit(.unexpected))
+        assertNoPreflightMutation(missingBaseHashTransaction, "matching-base operation missing base hash")
     }
 
     private struct PlannedIncorporationResult {
@@ -1084,6 +1128,13 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                     utf16Length: 1,
                     expectedText: "a",
                     modifiedAt: date(4)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 2,
+                    text: "d",
+                    modifiedAt: date(5),
+                    baseContentHash: nil
                 ))
             ]
         )
@@ -1096,7 +1147,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             modifiedAt: date(2)
         )
         let input = SyncConvergencePlanningInput(incomingBatch: batch, currentNotes: [initialNote.projectedForTest])
-        return MYR134Fixture(noteID: noteID, input: input, initialNote: initialNote, committedAt: date(5))
+        return MYR134Fixture(noteID: noteID, input: input, initialNote: initialNote, committedAt: date(6))
     }
 
     private func makeCreationOnlyFixture(existing: Bool) throws -> MYR134Fixture {
@@ -1241,11 +1292,11 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             batchSequence: 134101,
             changes: [
                 .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
-                    noteID: noneNote,
+                    noteID: fallbackNote,
                     utf16Offset: 1,
-                    text: "B",
-                    modifiedAt: date(4),
-                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+                    text: "q",
+                    modifiedAt: date(6),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB")
                 )),
                 .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
                     noteID: incrementalNote,
@@ -1255,11 +1306,11 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                     baseContentHash: SyncBatchContentHash.sha256Hex(for: "X")
                 )),
                 .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
-                    noteID: fallbackNote,
+                    noteID: noneNote,
                     utf16Offset: 1,
-                    text: "q",
-                    modifiedAt: date(6),
-                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB")
+                    text: "B",
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
                 )),
                 .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
                     noteID: incrementalNote,
@@ -1274,7 +1325,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             noteID: noneNote,
             batchID: batch.id,
             originDeviceID: batch.originDeviceID,
-            operationIndex: 0,
+            operationIndex: 2,
             operationKind: .insert,
             utf16Offset: 1,
             utf16Length: nil,
@@ -1283,7 +1334,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             baseContentHash: SyncBatchContentHash.sha256Hex(for: "A"),
             resultContentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
             canonicalReplayKey: CanonicalReplayKeyPayload(
-                replayKey: SyncBatchReplayKey(batch: batch, change: batch.changes[0], operationIndex: 0)
+                replayKey: SyncBatchReplayKey(batch: batch, change: batch.changes[2], operationIndex: 2)
             )
         )
         let notes = [
