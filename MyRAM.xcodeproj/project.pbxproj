@@ -102,6 +102,8 @@
 		BCA132010000000000000053 /* SyncConvergencePostCommitExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */; };
 		BCA132010000000000000054 /* SyncConvergencePostCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000054 /* SyncConvergencePostCommitTests.swift */; };
 		BCA132010000000000000055 /* SyncConvergencePostCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000055 /* SyncConvergencePostCommitTests.swift */; };
+		BCA137010000000000000001 /* SyncConvergencePostCommitTestDoubles.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA137020000000000000001 /* SyncConvergencePostCommitTestDoubles.swift */; };
+		BCA137010000000000000002 /* SyncConvergencePostCommitTestDoubles.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA137020000000000000002 /* SyncConvergencePostCommitTestDoubles.swift */; };
 		BCA135010000000000000001 /* SyncConvergenceIdentityTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA135020000000000000001 /* SyncConvergenceIdentityTestSupport.swift */; };
 		BCA135010000000000000002 /* SyncConvergenceIdentityTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA135020000000000000002 /* SyncConvergenceIdentityTestSupport.swift */; };
 		BCA132010000000000000056 /* SyncConvergencePostCommitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000050 /* SyncConvergencePostCommitTypes.swift */; };
@@ -254,6 +256,8 @@
 		BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitExecutor.swift; sourceTree = "<group>"; };
 		BCA132020000000000000054 /* SyncConvergencePostCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitTests.swift; sourceTree = "<group>"; };
 		BCA132020000000000000055 /* SyncConvergencePostCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergencePostCommitTests.swift; sourceTree = "<group>"; };
+		BCA137020000000000000001 /* SyncConvergencePostCommitTestDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitTestDoubles.swift; sourceTree = "<group>"; };
+		BCA137020000000000000002 /* SyncConvergencePostCommitTestDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergencePostCommitTestDoubles.swift; sourceTree = "<group>"; };
 		BCA135020000000000000001 /* SyncConvergenceIdentityTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceIdentityTestSupport.swift; sourceTree = "<group>"; };
 		BCA135020000000000000002 /* SyncConvergenceIdentityTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergenceIdentityTestSupport.swift; sourceTree = "<group>"; };
 		BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataSyncConvergencePersistenceTransaction.swift; sourceTree = "<group>"; };
@@ -499,6 +503,7 @@
 				BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */,
 				BCA132020000000000000013 /* SyncConvergenceIncorporationTests.swift */,
 				BCA132020000000000000054 /* SyncConvergencePostCommitTests.swift */,
+				BCA137020000000000000001 /* SyncConvergencePostCommitTestDoubles.swift */,
 				BCA135020000000000000001 /* SyncConvergenceIdentityTestSupport.swift */,
 				BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */,
 				BCA123020000000000000010 /* IPhoneSyncBatchAccumulatorTests.swift */,
@@ -537,6 +542,7 @@
 				BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */,
 				BCA132020000000000000014 /* SyncConvergenceIncorporationTests.swift */,
 				BCA132020000000000000055 /* SyncConvergencePostCommitTests.swift */,
+				BCA137020000000000000002 /* SyncConvergencePostCommitTestDoubles.swift */,
 				BCA135020000000000000002 /* SyncConvergenceIdentityTestSupport.swift */,
 			);
 			path = MyRAMMacTests;
@@ -891,6 +897,7 @@
 				BCA132010000000000000014 /* SyncConvergencePlanningTests.swift in Sources */,
 				BCA132010000000000000016 /* SyncConvergenceIncorporationTests.swift in Sources */,
 				BCA132010000000000000054 /* SyncConvergencePostCommitTests.swift in Sources */,
+				BCA137010000000000000001 /* SyncConvergencePostCommitTestDoubles.swift in Sources */,
 				BCA135010000000000000001 /* SyncConvergenceIdentityTestSupport.swift in Sources */,
 				BCA123010000000000000022 /* SyncBatchUnsentQueueTests.swift in Sources */,
 				BCA123010000000000000015 /* IPhoneSyncBatchAccumulatorTests.swift in Sources */,
@@ -980,6 +987,7 @@
 				BCA132010000000000000015 /* SyncConvergencePlanningTests.swift in Sources */,
 				BCA132010000000000000017 /* SyncConvergenceIncorporationTests.swift in Sources */,
 				BCA132010000000000000055 /* SyncConvergencePostCommitTests.swift in Sources */,
+				BCA137010000000000000002 /* SyncConvergencePostCommitTestDoubles.swift in Sources */,
 				BCA135010000000000000002 /* SyncConvergenceIdentityTestSupport.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
