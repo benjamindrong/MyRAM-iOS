@@ -450,11 +450,13 @@ MYR-133 remains incomplete.
 
 ## MYR-137 Verification
 
-Verified implementation SHA: `a3c2b85`.
+Verified implementation SHA: `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`.
+
+Final evidence/head SHA: recorded by the evidence-only commit that updates this section.
 
 Chosen iOS simulator: `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)`.
 
-This pass completes the MYR-137 shared test-support extraction, typed configurable fake store and adapter modes, executor-boundary failure coverage, adapter-failure matrices, real SwiftData malformed-load checks, and fresh-context partial-completion retry proof. It preserves the settled single-final-CAS executor architecture. No production files changed, no per-domain persistence writes were added, and no active iOS or native macOS drain/controller integration was added.
+This pass completes the MYR-137 shared test-support extraction, typed configurable fake store and adapter modes, executor-boundary failure coverage, adapter-failure matrices, real SwiftData malformed-load checks, stale-state remediation, and fresh-context partial-completion retry proof. It preserves the settled single-final-CAS executor architecture. No production files changed, no per-domain persistence writes were added, and no active iOS or native macOS drain/controller integration was added.
 
 The new shared test-support file is `MyRAMTests/SyncConvergencePostCommitTestDoubles.swift`. It is compiled by both `MyRAMTests` and `MyRAMMacTests`.
 
@@ -474,7 +476,8 @@ The new shared test-support file is `MyRAMTests/SyncConvergencePostCommitTestDou
 | Presentation scripted failure replays domain idempotently | `testMYR137PresentationScriptedFailureReplaysDomainIdempotently` | Two-entry presentation work retains immutable bytes and replays both entries on retry |
 | Mixed-domain zero-completion branch does not CAS | `testMYR137MixedFailureMatrixPreservesExactPendingSetIncludingZeroCompletionBranch` | Queue fail-before-removal, legacy failed, presentation failed; all three remain pending, CAS count is zero |
 | Final CAS failure modes share executor outcome while preserving distinct authoritative states | `testMYR137FinalCASFailureModesPreserveAuthoritativeStoreStateAndImmutableWork` | Covers persistence failure, stale mutable state with queue/legacy already cleared, and immutable-root replacement |
-| Stale-state retry skips already-cleared domains | `testMYR137FinalCASFailureModesPreserveAuthoritativeStoreStateAndImmutableWork` retry assertions | Retry loads queue/legacy-cleared, presentation-pending state and invokes only presentation |
+| Advanced stale state changes only synchronized mutable state bytes | `replacingMutablePostCommitState`, `testMYR137FinalCASFailureModesPreserveAuthoritativeStoreStateAndImmutableWork` | `postCommitState`, `postCommitStatePayloadData`, and `root.postCommitStatePayloadData` advance together; original work object and bytes remain equal |
+| Stale-state retry skips already-cleared domains from persisted authority | `testMYR137FinalCASFailureModesPreserveAuthoritativeStoreStateAndImmutableWork` retry assertions | Retry uses the unchanged original all-pending request, loads queue/legacy-cleared presentation-pending state, invokes only presentation, and persists `.none` |
 | CAS attempt count increments before injected failure/replacement | `FakePostCommitStore.compareAndSetPostCommitState`, final-CAS matrix assertions | `casAttemptCount == 1` for injected CAS failures |
 | Real fresh-context partial-completion retry preserves immutable evidence | `testMYR137PartialCompletionSurvivesFreshSwiftDataContextAndRetryRunsOnlyRemainingDomain` | First pass persists legacy-only state; fresh-context retry invokes only legacy and completes |
 | Existing retained tests remain present | `SyncConvergencePostCommitTests` | Eight-state matrices, queue-failure progress, final-CAS retry, tombstone cleanup, pre-payload guard, queue rollback, and MYR-136 CAS/retained-work tests all passed in focused suites |
@@ -530,6 +533,76 @@ xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Sim
 Final MYR-137 implementation. Exit code: 0. Executed 44 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
 
 MYR-137 is complete. MYR-133 remains incomplete.
+
+### PR #85 Second-Review Remediation Verification
+
+```bash
+xcrun simctl list devices available
+```
+
+Exit code: 0. Selected `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePostCommitTests
+```
+
+Implementation commit `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`. Destination `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)`. Exit code: 0. Executed 44 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests
+```
+
+Implementation commit `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`. Destination `platform=macOS`. Exit code: 0. Executed 44 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePlanningTests -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests -only-testing:MyRAMTests/SyncConvergenceFoundationTests -only-testing:MyRAMTests/SyncBatchPayloadCompatibilityTests -only-testing:MyRAMTests/SyncBatchUnsentQueueTests
+```
+
+Implementation commit `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`. Destination `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)`. Exit code: 0. Executed 206 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePlanningTests -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests -only-testing:MyRAMMacTests/SyncBatchUnsentQueueTests
+```
+
+Implementation commit `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`. Destination `platform=macOS`. Exit code: 0. Executed 165 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' build
+```
+
+Implementation commit `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`. Destination `generic/platform=iOS Simulator`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build
+```
+
+Implementation commit `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`. Destination `platform=macOS`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+```bash
+git diff --check
+```
+
+Implementation commit `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`. Exit code: 0.
+
+```bash
+git status --short
+```
+
+Implementation commit `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`. Exit code: 0. Working tree clean.
+
+```bash
+git diff --stat origin/main...HEAD
+```
+
+Implementation commit `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`. Exit code: 0. Diff remains scoped to `MyRAM.xcodeproj/project.pbxproj`, `MyRAMTests/SyncConvergencePostCommitTestDoubles.swift`, `MyRAMTests/SyncConvergencePostCommitTests.swift`, and `docs/MYR-133-completion-verification-evidence.md`.
+
+```bash
+git log --oneline origin/main..HEAD
+```
+
+Implementation commit `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`. Exit code: 0. Commits at verification time: `b42bc6a`, `6bc54d2`, `a3c2b85`, `395fb0e`.
+
+After this remediation, MYR-137 is complete. MYR-133 remains incomplete. MYR-138 remains incomplete. MYR-139 remains incomplete.
 
 ## Remaining MYR-133 Coverage Not Completed In This Pass
 
