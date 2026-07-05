@@ -721,6 +721,120 @@ func record(_ event: PostCommitInvocationEvent) {
 }
 }
 
+struct DurablePresentationEffectKey: Hashable {
+let incorporationBatchID: UUID
+let noteID: UUID
+let committedPostBodyHash: String
+}
+
+final class DurablePostCommitExternalEffectLedger {
+private let lock = NSLock()
+private var removedQueueBatchIDs: Set<SyncBatchID> = []
+private var completedLegacyBatchIDs: Set<UUID> = []
+private var completedPresentationKeys: Set<DurablePresentationEffectKey> = []
+private var physicalEffectCountsByDomain: [String: Int] = [:]
+
+func seedQueueRemoval(_ batchIDs: Set<SyncBatchID>) {
+    lock.withLock {
+        for batchID in batchIDs where removedQueueBatchIDs.insert(batchID).inserted {
+            physicalEffectCountsByDomain["queue:\(batchID.uuidString)", default: 0] = 1
+        }
+    }
+}
+
+func seedLegacyCompletion(batchID: UUID) {
+    lock.withLock {
+        if completedLegacyBatchIDs.insert(batchID).inserted {
+            physicalEffectCountsByDomain["legacy:\(batchID.uuidString)", default: 0] = 1
+        }
+    }
+}
+
+func seedPresentationCompletion(
+    incorporationBatchID: UUID,
+    noteID: UUID,
+    committedPostBodyHash: String
+) {
+    let key = DurablePresentationEffectKey(
+        incorporationBatchID: incorporationBatchID,
+        noteID: noteID,
+        committedPostBodyHash: committedPostBodyHash
+    )
+    lock.withLock {
+        if completedPresentationKeys.insert(key).inserted {
+            physicalEffectCountsByDomain[
+                "presentation:\(incorporationBatchID.uuidString):\(noteID.uuidString):\(committedPostBodyHash)",
+                default: 0
+            ] = 1
+        }
+    }
+}
+
+func applyQueueRemoval(_ batchIDs: Set<SyncBatchID>) {
+    lock.withLock {
+        for batchID in batchIDs where removedQueueBatchIDs.insert(batchID).inserted {
+            physicalEffectCountsByDomain["queue:\(batchID.uuidString)", default: 0] += 1
+        }
+    }
+}
+
+func containsBatch(_ batchID: SyncBatchID) -> Bool {
+    lock.withLock {
+        !removedQueueBatchIDs.contains(batchID)
+    }
+}
+
+func completeLegacy(batchID: UUID) {
+    lock.withLock {
+        if completedLegacyBatchIDs.insert(batchID).inserted {
+            physicalEffectCountsByDomain["legacy:\(batchID.uuidString)", default: 0] += 1
+        }
+    }
+}
+
+func completePresentation(
+    incorporationBatchID: UUID,
+    noteID: UUID,
+    committedPostBodyHash: String
+) {
+    let key = DurablePresentationEffectKey(
+        incorporationBatchID: incorporationBatchID,
+        noteID: noteID,
+        committedPostBodyHash: committedPostBodyHash
+    )
+    lock.withLock {
+        if completedPresentationKeys.insert(key).inserted {
+            physicalEffectCountsByDomain[
+                "presentation:\(incorporationBatchID.uuidString):\(noteID.uuidString):\(committedPostBodyHash)",
+                default: 0
+            ] += 1
+        }
+    }
+}
+
+func queuePhysicalEffectCount(batchID: SyncBatchID) -> Int {
+    physicalEffectCount("queue:\(batchID.uuidString)")
+}
+
+func legacyPhysicalEffectCount(batchID: UUID) -> Int {
+    physicalEffectCount("legacy:\(batchID.uuidString)")
+}
+
+func presentationPhysicalEffectCount(
+    incorporationBatchID: UUID,
+    noteID: UUID,
+    committedPostBodyHash: String
+) -> Int {
+    physicalEffectCount("presentation:\(incorporationBatchID.uuidString):\(noteID.uuidString):\(committedPostBodyHash)")
+}
+
+private func physicalEffectCount(_ key: String) -> Int {
+    lock.withLock {
+        physicalEffectCountsByDomain[key, default: 0]
+    }
+}
+}
+
 final class FakePostCommitStore: SyncConvergencePostCommitStateStore {
 enum LoadBehavior {
     case current
@@ -731,6 +845,7 @@ enum LoadBehavior {
 
 enum CASBehavior {
     case succeed
+    case commitThenFailResponse
     case failPersistence
     case replaceCurrentBeforeCompare(SyncConvergencePostCommitFullRootState)
 }
@@ -842,11 +957,25 @@ func compareAndSetPostCommitState(
     switch casBehavior {
     case .succeed:
         break
+    case .commitThenFailResponse:
+        let committed = try applyCASMutation(expectedRoot: expectedRoot, expectedPayloadData: expectedPayloadData, newState: newState)
+        state = .fullRoot(committed)
+        throw SyncConvergencePostCommitFailure.persistence
     case .failPersistence:
         throw SyncConvergencePostCommitFailure.persistence
     case .replaceCurrentBeforeCompare(let replacement):
         state = .fullRoot(replacement)
     }
+    let loaded = try applyCASMutation(expectedRoot: expectedRoot, expectedPayloadData: expectedPayloadData, newState: newState)
+    state = .fullRoot(loaded)
+    return loaded
+}
+
+private func applyCASMutation(
+    expectedRoot: SyncConvergencePostCommitRootSnapshot,
+    expectedPayloadData: Data,
+    newState: SyncConvergencePostCommitState
+) throws -> SyncConvergencePostCommitFullRootState {
     guard case .fullRoot(let current) = state,
           current.root == expectedRoot.root,
           current.postCommitStatePayloadData == expectedPayloadData else {
@@ -873,15 +1002,13 @@ func compareAndSetPostCommitState(
         postCommitWorkPayloadData: current.root.postCommitWorkPayloadData,
         postCommitStatePayloadData: payload
     )
-    let loaded = SyncConvergencePostCommitFullRootState(
+    return SyncConvergencePostCommitFullRootState(
         root: root,
         postCommitState: newState,
         postCommitStatePayloadData: payload,
         postCommitWorkPayload: current.postCommitWorkPayload,
         postCommitWorkPayloadData: current.postCommitWorkPayloadData
     )
-    state = .fullRoot(loaded)
-    return loaded
 }
 
 var currentPostCommitState: SyncConvergencePostCommitState? {
@@ -1013,6 +1140,32 @@ func containsBatch(withID id: SyncBatchID) throws -> Bool {
 }
 }
 
+final class IdempotentQueueCleanupAdapter: SyncConvergenceQueueCleanupAdapter {
+let ledger: DurablePostCommitExternalEffectLedger
+let recorder: PostCommitInvocationRecorder?
+var removals: [Set<SyncBatchID>] = []
+var verificationChecks: [SyncBatchID] = []
+
+init(
+    ledger: DurablePostCommitExternalEffectLedger,
+    recorder: PostCommitInvocationRecorder? = nil
+) {
+    self.ledger = ledger
+    self.recorder = recorder
+}
+
+func removeBatches(withIDs ids: Set<SyncBatchID>) throws {
+    removals.append(ids)
+    recorder?.record(.queueCleanup(ids.sorted { $0.uuidString < $1.uuidString }))
+    ledger.applyQueueRemoval(ids)
+}
+
+func containsBatch(withID id: SyncBatchID) throws -> Bool {
+    verificationChecks.append(id)
+    return ledger.containsBatch(id)
+}
+}
+
 final class FakeLegacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapter {
 struct Step {
     let result: SyncConvergencePostCommitAdapterResult
@@ -1048,6 +1201,33 @@ func performLegacyCleanup(
         externalEffectCount += 1
     }
     return step.result
+}
+}
+
+final class IdempotentLegacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapter {
+let ledger: DurablePostCommitExternalEffectLedger
+let recorder: PostCommitInvocationRecorder?
+var requests: [SyncConvergencePostCommitRequest] = []
+
+var callCount: Int {
+    requests.count
+}
+
+init(
+    ledger: DurablePostCommitExternalEffectLedger,
+    recorder: PostCommitInvocationRecorder? = nil
+) {
+    self.ledger = ledger
+    self.recorder = recorder
+}
+
+func performLegacyCleanup(
+    for request: SyncConvergencePostCommitRequest
+) async -> SyncConvergencePostCommitAdapterResult {
+    requests.append(request)
+    recorder?.record(.legacyCleanup(batchID: request.sourceBatchID))
+    ledger.completeLegacy(batchID: request.sourceBatchID)
+    return .verifiedComplete
 }
 }
 
@@ -1095,6 +1275,34 @@ func refreshPresentation(
         externalEffectNoteIDs.append(request.noteID)
     }
     return defaultResult
+}
+}
+
+final class IdempotentPresentationAdapter: SyncConvergencePresentationAdapter {
+let ledger: DurablePostCommitExternalEffectLedger
+let recorder: PostCommitInvocationRecorder?
+var requests: [SyncConvergencePresentationRequest] = []
+
+init(
+    ledger: DurablePostCommitExternalEffectLedger,
+    recorder: PostCommitInvocationRecorder? = nil
+) {
+    self.ledger = ledger
+    self.recorder = recorder
+}
+
+func refreshPresentation(
+    for request: SyncConvergencePresentationRequest
+) async -> SyncConvergencePostCommitAdapterResult {
+    requests.append(request)
+    recorder?.record(.presentation(noteID: request.noteID))
+    // The durable idempotency key is the immutable work-entry hash, not the recomputed body hash.
+    ledger.completePresentation(
+        incorporationBatchID: request.incorporationIdentity.batchID,
+        noteID: request.noteID,
+        committedPostBodyHash: request.committedPostBodyHash
+    )
+    return .verifiedComplete
 }
 }
 

@@ -85,7 +85,7 @@ Target membership decision:
 | Fake CAS preserves immutable work bytes | `MyRAMTests/SyncConvergencePostCommitTests.swift` `testFakeStoreCASPreservesImmutableWorkPayloadAfterPartialClear`, `FakePostCommitStore.currentWorkPayloadData` | iOS/macOS post-commit suites |
 | Eight pending-state executor matrix with legacy adapter | `testEightPendingStateMatrixWithLegacyAdapterPinsSingleCASEffects` | Pins queue -> legacy -> presentation order, exact queue and legacy work, full presentation request equality, one CAS for changed states, and no CAS for complete roots |
 | Legacy pending with nil adapter remains pending | `testEightPendingStateMatrixWithoutLegacyAdapterLeavesLegacyPending`, `testLegacyTrueWithoutAdapterRemainsPending` | iOS/macOS post-commit suites |
-| Final CAS failure leaves original domains retryable, then fresh-store retry converges | `testFinalCASFailureThenFreshStoreRetryRerunsIdempotentWorkAndCompletes` | Reconstructs retry state and work by decoding persisted root payload bytes, then re-runs queue, legacy, and presentation work from persisted all-pending state |
+| Final CAS failure leaves original domains retryable, then fresh-store retry converges | `testMYR138FailedFinalCASFreshRelaunchDecodesBytesAndAvoidsDuplicateEffects` | Reconstructs retry state and immutable work by decoding persisted root payload bytes, re-invokes queue, legacy, and presentation adapter entry points from persisted all-pending state, and keeps physical effects exactly once through durable adapter idempotency keys |
 | Completed roots remain no-op | `testCompletedPostCommitStateDoesNotCallAdaptersOrWrite` | iOS/macOS post-commit suites |
 | Caller-regenerated plans do not suppress persisted work | `testCallerPlansCannotSuppressPersistedQueueOrPresentationWork` | iOS/macOS post-commit suites |
 | Presentation requests use authoritative committed state and deterministic order | `testPresentationRequestsUseAuthoritativeCommittedStateInDeterministicOrder` | Pins complete incremental and whole-note-fallback requests in deterministic note order |
@@ -170,11 +170,15 @@ Exit code: 0. Executed 26 tests, 0 failures, 0 skips. Final result: `** TEST SUC
 
 Verified implementation SHA: `036f38e8d4ef57777076698907c229bcbda81280`
 
+Historical-at-SHA `036f38e8d4ef57777076698907c229bcbda81280`; the renamed MYR-138 final-head verification is recorded in `MYR-138 Verification`.
+
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePostCommitTests/testEightPendingStateMatrixWithLegacyAdapterPinsSingleCASEffects -only-testing:MyRAMTests/SyncConvergencePostCommitTests/testPresentationRequestsUseAuthoritativeCommittedStateInDeterministicOrder -only-testing:MyRAMTests/SyncConvergencePostCommitTests/testFinalCASFailureThenFreshStoreRetryRerunsIdempotentWorkAndCompletes
 ```
 
 Commit SHA: `036f38e8d4ef57777076698907c229bcbda81280`. Exit code: 0. Executed 3 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+Historical-at-SHA `036f38e8d4ef57777076698907c229bcbda81280`; the renamed MYR-138 final-head verification is recorded in `MYR-138 Verification`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests/testEightPendingStateMatrixWithLegacyAdapterPinsSingleCASEffects -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests/testPresentationRequestsUseAuthoritativeCommittedStateInDeterministicOrder -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests/testFinalCASFailureThenFreshStoreRetryRerunsIdempotentWorkAndCompletes
@@ -602,13 +606,105 @@ git log --oneline origin/main..HEAD
 
 Implementation commit `b42bc6a9529be587a1848ee9c3bcd385c9616b4b`. Exit code: 0. Commits at verification time: `b42bc6a`, `6bc54d2`, `a3c2b85`, `395fb0e`.
 
-After this remediation, MYR-137 is complete. MYR-133 remains incomplete. MYR-138 remains incomplete. MYR-139 remains incomplete.
+At the end of the MYR-137 remediation, MYR-137 was complete. MYR-133 remained incomplete. MYR-138 remained incomplete at that historical checkpoint. MYR-139 remained incomplete.
+
+## MYR-138 Verification
+
+Implementation SHA: `8009222b839a5a4da8f6dc21ed968397428cfc56`.
+
+Verified code SHA: `8009222b839a5a4da8f6dc21ed968397428cfc56`.
+
+Evidence commit SHA: recorded in the PR description because a Git commit cannot contain its own final SHA.
+
+Selected iOS simulator: `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)`.
+
+MYR-138 is a test and evidence pass. No production source changed. `MyRAM.xcodeproj/project.pbxproj` remained unchanged. No per-domain CAS was introduced. No active drain/controller integration was added.
+
+"Interruption after one domain CAS and before another" is not applicable. The settled executor performs queue, legacy, and presentation work before one final CAS. Crashes between domains leave the original persisted pending state intact and are covered through idempotent replay from seeded durable external-effect snapshots.
+
+### MYR-138 Requirement Matrix
+
+| Requirement | Code/Test Location | Verification |
+|---|---|---|
+| Durable external-effect state survives executor, adapter, and store reconstruction | `DurablePostCommitExternalEffectLedger` in `MyRAMTests/SyncConvergencePostCommitTestDoubles.swift` | Shared iOS/macOS post-commit suites |
+| Seeded queue removals and runtime `containsBatch` consult the same durable removed-batch state | `seedQueueRemoval(...)`, `containsBatch(...)`, `IdempotentQueueCleanupAdapter.containsBatch` | `testMYR138TombstoneRelaunchAfterQueueEffectReverifiesIdempotentlyWithoutCAS` |
+| Adapter re-entry is distinct from physical effect count | `PostCommitInvocationRecorder.events` records adapter entry; `DurablePostCommitExternalEffectLedger` records at-most-once physical effects | Same-context, fresh-relaunch, pre-CAS matrix, acknowledgement-loss, and tombstone tests |
+| Presentation deduplication and seeding use immutable `entry.committedPostBodyHash` | `seedPresentationCompletion(...)`, `IdempotentPresentationAdapter.refreshPresentation(...)` | All MYR-138 presentation-pending tests assert physical presentation count by immutable work-entry hash |
+| Pre-CAS crash boundaries replay persisted pending domains idempotently | `testMYR138RelaunchFromEachPreCASCrashBoundaryReplaysAdaptersIdempotently` | Covers before external work, after queue cleanup, after legacy cleanup, and after presentation refresh |
+| Same-context final-CAS failure retry re-invokes adapters without duplicate physical effects | `testMYR138FailedFinalCASSameContextRetryReinvokesAdaptersWithoutDuplicatingEffects` | First pass fails before mutation; retry uses same store/context and reaches `.none` |
+| Fresh relaunch after failed final CAS decodes state and work from bytes | `testMYR138FailedFinalCASFreshRelaunchDecodesBytesAndAvoidsDuplicateEffects` | Reconstructs through `FakePostCommitStore(reloading:notes:)`, re-invokes adapters, and preserves immutable work bytes |
+| Final persistence completed but caller lost acknowledgement relaunches complete | `testMYR138CommittedFinalStateSurvivesLostCASResponseAndRelaunchesComplete`, `FakePostCommitStore.CASBehavior.commitThenFailResponse` | First process commits `.none` then throws; relaunch uses post-CAS committed root and performs no adapters or CAS |
+| Tombstone relaunch after queue effect reverifies idempotently without CAS | `testMYR138TombstoneRelaunchAfterQueueEffectReverifiesIdempotentlyWithoutCAS` | Seeded removal makes `containsBatch` return false, queue verifies completion, no CAS occurs |
+| Every legacy-pending fixture uses a non-nil idempotent legacy adapter | MYR-138 tests in `SyncConvergencePostCommitTests.swift` | Executor reaches `.none` for legacy-pending fixtures |
+| Every presentation-pending relaunch seeds the committed note through `FakePostCommitStore(reloading:notes:)` | MYR-138 pre-CAS, fresh-relaunch, and acknowledgement-loss tests | Avoids unrelated missing-note failure and proves crash recovery |
+| Immutable work bytes remain unchanged through retry and state transition | MYR-138 assertions against `postCommitWorkPayloadData` and `currentWorkPayloadData` | Shared iOS/macOS post-commit suites |
+
+### Commands Run
+
+```bash
+xcrun simctl list devices available
+```
+
+Exit code: 0. Selected `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)` from available iOS 26.5 simulators.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePostCommitTests
+```
+
+Final MYR-138 iOS verification at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Executed 48 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests
+```
+
+Final MYR-138 macOS verification at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Executed 48 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePlanningTests -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests -only-testing:MyRAMTests/SyncConvergenceFoundationTests -only-testing:MyRAMTests/SyncBatchPayloadCompatibilityTests -only-testing:MyRAMTests/SyncBatchUnsentQueueTests
+```
+
+Broader iOS regression slice at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Executed 210 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePlanningTests -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests -only-testing:MyRAMMacTests/SyncBatchUnsentQueueTests
+```
+
+Broader macOS regression slice at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Executed 169 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' build
+```
+
+Generic iOS Simulator product build at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build
+```
+
+Native macOS product build at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+The first native macOS product-build attempt was run concurrently with the iOS build and failed with Xcode's shared DerivedData build database lock: `database is locked Possibly there are two concurrent builds running in the same filesystem location.` The serial rerun above passed.
+
+The same-context retry result is covered by `testMYR138FailedFinalCASSameContextRetryReinvokesAdaptersWithoutDuplicatingEffects`.
+
+The fresh-context byte-reconstruction result is covered by `testMYR138FailedFinalCASFreshRelaunchDecodesBytesAndAvoidsDuplicateEffects`.
+
+The pre-CAS boundary matrix result is covered by `testMYR138RelaunchFromEachPreCASCrashBoundaryReplaysAdaptersIdempotently`.
+
+The acknowledgement-loss result is covered by `testMYR138CommittedFinalStateSurvivesLostCASResponseAndRelaunchesComplete`.
+
+The tombstone relaunch result is covered by `testMYR138TombstoneRelaunchAfterQueueEffectReverifiesIdempotentlyWithoutCAS`.
+
+The immutable-work equality result is asserted in the MYR-138 pre-CAS, same-context, fresh-relaunch, and acknowledgement-loss tests.
+
+`docs/MYR-132-PR1-remediation.md` and `docs/MYR-132-PR2-approved-plan.md` were restored from the PR merge base during review remediation so the final MYR-138 PR diff does not carry out-of-scope MYR-132 documentation changes.
+
+MYR-138 is complete. MYR-133 remains incomplete. MYR-139 remains incomplete.
 
 ## Remaining MYR-133 Coverage Not Completed In This Pass
 
 The attached MYR-133 proposal is broader than this initial implementation pass. These items still need additional work before claiming full ticket completion:
 
-- MYR-138 crash/relaunch verification matrix beyond the fresh-context CAS retention proof added here.
 - MYR-139 final MYR-133 release-evidence pass.
 - Final-head evidence from an approved commit.
 - Inherited PR 2d review-thread disposition.
