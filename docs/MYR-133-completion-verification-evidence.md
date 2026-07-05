@@ -359,12 +359,102 @@ Commit SHA: `83871a48b54377861e460e783c98bafb8fe7a735`. Exit code: 0.
 
 MYR-135 implementation is complete.
 
+## MYR-136 Verification
+
+Verified implementation SHA: `851c3f459513c650c885b40f22a96bc180e78c63`
+
+Chosen iOS simulator: `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)`
+
+MYR-136 completes the immutable-root stale-CAS matrix for `SwiftDataSyncConvergencePostCommitStore.compareAndSetPostCommitState(...)`. The implementation is test-only. No production architecture changed, no per-domain CAS writes were added, and no active iOS or native macOS drain/controller integration was added.
+
+### MYR-136 Requirement Matrix
+
+| Requirement | Code/Test Location | Verification |
+|---|---|---|
+| `batchID` stale persisted root rejects as missing authoritative incorporation | `MyRAMTests/SyncConvergencePostCommitTests.swift` `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `batchID` | Focused iOS/macOS post-commit suites and adjacent regressions |
+| `originDeviceID` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `originDeviceID` | Same matrix; complete raw row equality before/after CAS |
+| `createdAt` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `createdAt` | Uses `setCreatedAt(...)` and proves no CAS-side mutation |
+| `batchSequence` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `batchSequence` | Same matrix |
+| `schemaVersion` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `schemaVersion` | Same matrix |
+| `committedAt` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `committedAt` | Uses `setCommittedAt(...)` and proves no CAS-side mutation |
+| `canonicalPayloadDigest` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `canonicalPayloadDigest` | Same matrix |
+| `canonicalPayloadDigestFormatVersion` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `canonicalPayloadDigestFormatVersion` | Same matrix |
+| `committedResultDigest` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `committedResultDigest` | Same matrix |
+| `committedResultDigestFormatVersion` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `committedResultDigestFormatVersion` | Same matrix |
+| `affectedNotesPayloadData` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `affectedNotesPayloadData` | Same matrix |
+| `authoritativeChildCount` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `authoritativeChildCount` | Same matrix |
+| `authoritativeChildBytes` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `authoritativeChildBytes` | Same matrix |
+| `authoritativeChildrenDigest` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `authoritativeChildrenDigest` | Same matrix |
+| `postCommitWorkPayloadData` stale persisted root rejects closed | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation` case `postCommitWorkPayloadData` | Same matrix; attempted new state differs so a partial write would be observable |
+| Derived `committedAtOrderingPayloadData` stale expected snapshot rejects closed | `testMYR136DerivedCommittedAtOrderingPayloadMismatchRejectsCASWithoutMutation` | Separate derived-field row without mutating persisted `committedAt` |
+| 15 persisted fields + 1 derived field cover all 16 immutable root projection fields | `testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation`, `testMYR136DerivedCommittedAtOrderingPayloadMismatchRejectsCASWithoutMutation` | Focused iOS/macOS post-commit suites and adjacent regressions |
+| Stale mutable expected-state payload is isolated from immutable-root mismatch | `testMYR136StaleExpectedStatePayloadRejectsCASWithoutMutation` | A -> B succeeds, then current root + stale A expected bytes attempting C fails and leaves B unchanged |
+| Matching root plus matching prior state succeeds | `testMYR136MatchingRootAndPriorStateCASChangesOnlyMutableState` | Returned state and encoded bytes match expected B |
+| Successful CAS changes only mutable state bytes | `testMYR136MatchingRootAndPriorStateCASChangesOnlyMutableState`, `MYR136RawRootSnapshot.replacingPostCommitStatePayloadData` | Full raw row equality except `postCommitStatePayloadData` |
+| Partial clear, complete clear, and fresh-context reload preserve exact immutable work bytes | `testSwiftDataStoreReloadsAfterPartialAndFullClearWithRetainedWorkPayload`, `assertRootProjection` | Existing inline SwiftData fixture retained; exact work bytes and immutable projection are asserted across both clears and reloads |
+| MYR-136 remains test/evidence scoped | No production files changed | No executor redesign, per-domain state persistence, model migration, or drain/controller integration |
+| MYR-133 remains incomplete | `Remaining MYR-133 Coverage Not Completed In This Pass` | MYR-137, MYR-138, MYR-139, inherited review-thread disposition, and final ticket-wide evidence remain incomplete |
+
+### Commands Run
+
+```bash
+xcrun simctl list devices available
+```
+
+Exit code: 0. Selected `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)` from available iOS 26.5 simulators.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePostCommitTests
+```
+
+Commit SHA: `851c3f459513c650c885b40f22a96bc180e78c63`. Exit code: 0. Executed 33 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests
+```
+
+Commit SHA: `851c3f459513c650c885b40f22a96bc180e78c63`. Exit code: 0. Executed 33 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePlanningTests -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests -only-testing:MyRAMTests/SyncConvergenceFoundationTests -only-testing:MyRAMTests/SyncBatchPayloadCompatibilityTests -only-testing:MyRAMTests/SyncBatchUnsentQueueTests
+```
+
+Commit SHA: `851c3f459513c650c885b40f22a96bc180e78c63`. Exit code: 0. Executed 195 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePlanningTests -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests -only-testing:MyRAMMacTests/SyncBatchUnsentQueueTests
+```
+
+Commit SHA: `851c3f459513c650c885b40f22a96bc180e78c63`. Exit code: 0. Executed 154 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' build
+```
+
+Commit SHA: `851c3f459513c650c885b40f22a96bc180e78c63`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build
+```
+
+Commit SHA: `851c3f459513c650c885b40f22a96bc180e78c63`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+```bash
+git diff --check
+```
+
+Commit SHA: `851c3f459513c650c885b40f22a96bc180e78c63`. Exit code: 0.
+
+MYR-136 is complete.
+MYR-133 remains incomplete.
+
 ## Remaining MYR-133 Coverage Not Completed In This Pass
 
 The attached MYR-133 proposal is broader than this initial implementation pass. These items still need additional work before claiming full ticket completion:
 
-- Per-field stale-CAS matrix against SwiftData roots.
-- Remaining Phase 7 and Phase 9 load, save, reload, adapter-failure, and crash-window coverage beyond the fresh-store final-CAS retry added here.
+- MYR-137 adapter-failure verification matrix.
+- MYR-138 crash/relaunch verification matrix beyond the fresh-context CAS retention proof added here.
+- MYR-139 final MYR-133 release-evidence pass.
 - Final-head evidence from an approved commit.
 - Inherited PR 2d review-thread disposition.
 - Complete ticket-wide requirement mapping.
