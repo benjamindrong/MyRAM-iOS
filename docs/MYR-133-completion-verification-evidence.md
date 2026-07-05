@@ -610,9 +610,11 @@ At the end of the MYR-137 remediation, MYR-137 was complete. MYR-133 remained in
 
 ## MYR-138 Verification
 
-Implementation SHA: recorded by the MYR-138 implementation commit.
+Implementation SHA: `8009222b839a5a4da8f6dc21ed968397428cfc56`.
 
-Final evidence/head SHA: recorded by the MYR-138 implementation commit.
+Verified code SHA: `8009222b839a5a4da8f6dc21ed968397428cfc56`.
+
+Evidence commit SHA: recorded in the PR description because a Git commit cannot contain its own final SHA.
 
 Selected iOS simulator: `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)`.
 
@@ -626,7 +628,7 @@ MYR-138 is a test and evidence pass. No production source changed. `MyRAM.xcodep
 |---|---|---|
 | Durable external-effect state survives executor, adapter, and store reconstruction | `DurablePostCommitExternalEffectLedger` in `MyRAMTests/SyncConvergencePostCommitTestDoubles.swift` | Shared iOS/macOS post-commit suites |
 | Seeded queue removals and runtime `containsBatch` consult the same durable removed-batch state | `seedQueueRemoval(...)`, `containsBatch(...)`, `IdempotentQueueCleanupAdapter.containsBatch` | `testMYR138TombstoneRelaunchAfterQueueEffectReverifiesIdempotentlyWithoutCAS` |
-| Adapter invocation is distinct from physical effect count | `DurablePostCommitExternalEffectLedger` invocation and physical-effect counters | Same-context, fresh-relaunch, pre-CAS matrix, acknowledgement-loss, and tombstone tests |
+| Adapter re-entry is distinct from physical effect count | `PostCommitInvocationRecorder.events` records adapter entry; `DurablePostCommitExternalEffectLedger` records at-most-once physical effects | Same-context, fresh-relaunch, pre-CAS matrix, acknowledgement-loss, and tombstone tests |
 | Presentation deduplication and seeding use immutable `entry.committedPostBodyHash` | `seedPresentationCompletion(...)`, `IdempotentPresentationAdapter.refreshPresentation(...)` | All MYR-138 presentation-pending tests assert physical presentation count by immutable work-entry hash |
 | Pre-CAS crash boundaries replay persisted pending domains idempotently | `testMYR138RelaunchFromEachPreCASCrashBoundaryReplaysAdaptersIdempotently` | Covers before external work, after queue cleanup, after legacy cleanup, and after presentation refresh |
 | Same-context final-CAS failure retry re-invokes adapters without duplicate physical effects | `testMYR138FailedFinalCASSameContextRetryReinvokesAdaptersWithoutDuplicatingEffects` | First pass fails before mutation; retry uses same store/context and reaches `.none` |
@@ -649,25 +651,51 @@ Exit code: 0. Selected `iPhone 16 Pro (1C546BCF-C14F-42C8-A4F1-B53026F3183C)` fr
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePostCommitTests
 ```
 
-Immediately after changing the shared fake CAS success path. Exit code: 0. Executed 44 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Immediately after changing the shared fake CAS success path. Exit code: 0. Executed 48 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests
 ```
 
-Immediately after changing the shared fake CAS success path. Exit code: 0. Executed 44 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Immediately after changing the shared fake CAS success path. Exit code: 0. Executed 48 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePostCommitTests
 ```
 
-Final MYR-138 iOS verification. Exit code: 0. Executed 48 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Final MYR-138 iOS verification at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Executed 48 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests
 ```
 
-Final MYR-138 macOS verification. Exit code: 0. Executed 48 tests, 0 failures, 0 skips. Final result: `** TEST SUCCEEDED **`.
+Final MYR-138 macOS verification at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Executed 48 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test -only-testing:MyRAMTests/SyncConvergencePlanningTests -only-testing:MyRAMTests/SyncConvergenceIncorporationTests -only-testing:MyRAMTests/SyncConvergencePostCommitTests -only-testing:MyRAMTests/SyncConvergenceFoundationTests -only-testing:MyRAMTests/SyncBatchPayloadCompatibilityTests -only-testing:MyRAMTests/SyncBatchUnsentQueueTests
+```
+
+Broader iOS regression slice at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Executed 210 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test -only-testing:MyRAMMacTests/SyncConvergencePlanningTests -only-testing:MyRAMMacTests/SyncConvergenceIncorporationTests -only-testing:MyRAMMacTests/SyncConvergencePostCommitTests -only-testing:MyRAMMacTests/SyncBatchUnsentQueueTests
+```
+
+Broader macOS regression slice at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Executed 169 tests, 0 failures, 0 unexpected failures. Final result: `** TEST SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' build
+```
+
+Generic iOS Simulator product build at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+```bash
+xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build
+```
+
+Native macOS product build at verified code SHA `8009222b839a5a4da8f6dc21ed968397428cfc56`. Exit code: 0. Final result: `** BUILD SUCCEEDED **`.
+
+The first native macOS product-build attempt was run concurrently with the iOS build and failed with Xcode's shared DerivedData build database lock: `database is locked Possibly there are two concurrent builds running in the same filesystem location.` The serial rerun above passed.
 
 The same-context retry result is covered by `testMYR138FailedFinalCASSameContextRetryReinvokesAdaptersWithoutDuplicatingEffects`.
 
@@ -680,6 +708,8 @@ The acknowledgement-loss result is covered by `testMYR138CommittedFinalStateSurv
 The tombstone relaunch result is covered by `testMYR138TombstoneRelaunchAfterQueueEffectReverifiesIdempotentlyWithoutCAS`.
 
 The immutable-work equality result is asserted in the MYR-138 pre-CAS, same-context, fresh-relaunch, and acknowledgement-loss tests.
+
+`docs/MYR-132-PR1-remediation.md` and `docs/MYR-132-PR2-approved-plan.md` were restored from the PR merge base during review remediation so the final MYR-138 PR diff does not carry out-of-scope MYR-132 documentation changes.
 
 MYR-138 is complete. MYR-133 remains incomplete. MYR-139 remains incomplete.
 
