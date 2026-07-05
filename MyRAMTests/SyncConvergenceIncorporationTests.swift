@@ -545,19 +545,32 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertEqual(fixture.transaction.notes[fixture.noteB]?.body, "XY")
         let root = try XCTUnwrap(fixture.transaction.roots[fixture.batchID])
         let work = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(root.postCommitWorkPayloadData!)
-        XCTAssertEqual(Set(work.presentationEntries.map(\.noteID)), [fixture.noteA, fixture.noteB])
 
         let persistedIdentities = fixture.transaction.children[fixture.batchID]?.operationIdentities ?? []
+        XCTAssertEqual(persistedIdentities.count, 2)
+        XCTAssertEqual(work.presentationEntries.count, 2)
+        XCTAssertEqual(
+            work.presentationEntries.map(\.noteID).sorted { $0.uuidString < $1.uuidString },
+            [fixture.noteA, fixture.noteB].sorted { $0.uuidString < $1.uuidString }
+        )
+
         for noteID in [fixture.noteA, fixture.noteB] {
             let plannedIdentity = try operationIdentity(for: noteID, in: fixture.validatedInput.plan)
-            let persistedRow = try XCTUnwrap(persistedIdentities.first { $0.noteID == noteID })
-            let workEntry = try XCTUnwrap(work.presentationEntries.first { $0.noteID == noteID })
-            let workIdentity = try XCTUnwrap(workEntry.incrementalOperations.first?.operationIdentity)
+            let persistedRowsForNote = persistedIdentities.filter { $0.noteID == noteID }
+            XCTAssertEqual(persistedRowsForNote.count, 1)
+            let persistedRow = try XCTUnwrap(persistedRowsForNote.first)
+
+            let workEntriesForNote = work.presentationEntries.filter { $0.noteID == noteID }
+            XCTAssertEqual(workEntriesForNote.count, 1)
+            let workEntry = try XCTUnwrap(workEntriesForNote.first)
+
+            XCTAssertEqual(workEntry.incrementalOperations.count, 1)
+            let workOperation = try XCTUnwrap(workEntry.incrementalOperations.first)
 
             XCTAssertEqual(persistedRow.noteID, noteID)
             XCTAssertEqual(persistedRow.operationIdentity, plannedIdentity)
-            XCTAssertEqual(workIdentity, plannedIdentity)
             XCTAssertEqual(workEntry.noteID, noteID)
+            XCTAssertEqual(workOperation.operationIdentity, plannedIdentity)
             XCTAssertFalse(persistedIdentities.contains { $0.noteID != noteID && $0.operationIdentity == plannedIdentity })
             XCTAssertFalse(work.presentationEntries.contains { $0.noteID != noteID && $0.incrementalOperations.contains { $0.operationIdentity == plannedIdentity } })
         }

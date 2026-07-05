@@ -823,6 +823,32 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertEqual(try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(encoded), validPayload)
 
         let otherUUID = uuid("00000000-0000-0000-0000-000000135501")
+        let letterBatchID = uuid("abcdefab-cdef-abcd-efab-cdefabcdefab")
+        let letterOriginID = uuid("fedcbafe-dcba-fedc-bafe-dcbafedcbafe")
+        let letterBearingIdentity = valid.operationIdentity.replacingForTest(
+            batchID: letterBatchID,
+            originDeviceID: letterOriginID,
+            canonicalReplayKey: valid.operationIdentity.canonicalReplayKey.replacingForTest(
+                originDeviceID: letterOriginID,
+                batchID: letterBatchID
+            )
+        )
+        let letterBearingValid = valid.replacingForTest(operationIdentity: letterBearingIdentity)
+        XCTAssertNoThrow(
+            try payload(
+                entryNoteID: TestIDs.noteA,
+                committedPostBodyHash: postHash,
+                operations: [letterBearingValid]
+            ).encodedPayloadData()
+        )
+
+        let uppercaseOuterBatch = letterBearingValid.operationIdentity.batchIDLowercase.uppercased()
+        XCTAssertNotEqual(uppercaseOuterBatch, letterBearingValid.operationIdentity.batchIDLowercase)
+        let uppercaseOuterOrigin = letterBearingValid.operationIdentity.originDeviceIDLowercase.uppercased()
+        XCTAssertNotEqual(uppercaseOuterOrigin, letterBearingValid.operationIdentity.originDeviceIDLowercase)
+        let uppercaseNestedBatch = letterBearingValid.operationIdentity.canonicalReplayKey.batchIDLowercase.uppercased()
+        XCTAssertNotEqual(uppercaseNestedBatch, letterBearingValid.operationIdentity.canonicalReplayKey.batchIDLowercase)
+
         let cases: [(String, SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload)] = [
             (
                 "unsupported identity version",
@@ -838,14 +864,14 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             ),
             (
                 "uppercase outer batch UUID string",
-                valid.replacingForTest(operationIdentity: try valid.operationIdentity.replacingRawStringsForTest(
-                    batchIDLowercase: "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA"
+                letterBearingValid.replacingForTest(operationIdentity: try letterBearingValid.operationIdentity.replacingRawStringsForTest(
+                    batchIDLowercase: uppercaseOuterBatch
                 ))
             ),
             (
                 "uppercase outer origin UUID string",
-                valid.replacingForTest(operationIdentity: try valid.operationIdentity.replacingRawStringsForTest(
-                    originDeviceIDLowercase: "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB"
+                letterBearingValid.replacingForTest(operationIdentity: try letterBearingValid.operationIdentity.replacingRawStringsForTest(
+                    originDeviceIDLowercase: uppercaseOuterOrigin
                 ))
             ),
             (
@@ -856,8 +882,8 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             ),
             (
                 "uppercase nested replay-key UUID string",
-                valid.replacingForTest(operationIdentity: try valid.operationIdentity.replacingRawStringsForTest(
-                    canonicalReplayKeyBatchIDLowercase: "CCCCCCCC-CCCC-CCCC-CCCC-CCCCCCCCCCCC"
+                letterBearingValid.replacingForTest(operationIdentity: try letterBearingValid.operationIdentity.replacingRawStringsForTest(
+                    canonicalReplayKeyBatchIDLowercase: uppercaseNestedBatch
                 ))
             ),
             (
