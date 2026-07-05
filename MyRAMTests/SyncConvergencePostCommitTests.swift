@@ -212,6 +212,12 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             newState: queueOnly
         )
         XCTAssertEqual(clearedPresentation.postCommitWorkPayloadData, workPayloadData)
+        XCTAssertEqual(clearedPresentation.root.postCommitWorkPayloadData, workPayloadData)
+        assertRootProjection(
+            clearedPresentation.root,
+            equals: loadedA.root,
+            replacingStatePayloadData: clearedPresentation.postCommitStatePayloadData
+        )
 
         let storeB = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
         guard case .fullRoot(let loadedB) = try storeB.loadState(matching: identity) else {
@@ -221,11 +227,24 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertFalse(loadedB.postCommitState.presentationRefreshPending)
         XCTAssertEqual(loadedB.postCommitWorkPayload?.queueCleanupBatchIDs, [identity.batchID, TestIDs.extraBatch].sorted { $0.uuidString < $1.uuidString })
         XCTAssertEqual(loadedB.postCommitWorkPayload?.presentationEntries.count, 1)
+        XCTAssertEqual(loadedB.postCommitWorkPayloadData, workPayloadData)
+        assertRootProjection(
+            loadedB.root,
+            equals: loadedA.root,
+            replacingStatePayloadData: clearedPresentation.postCommitStatePayloadData
+        )
 
-        _ = try storeB.compareAndSetPostCommitState(
+        let fullyCleared = try storeB.compareAndSetPostCommitState(
             expectedRoot: SyncConvergencePostCommitRootSnapshot(root: loadedB.root),
             expectedPayloadData: loadedB.postCommitStatePayloadData,
             newState: .none
+        )
+        XCTAssertEqual(fullyCleared.postCommitWorkPayloadData, workPayloadData)
+        XCTAssertEqual(fullyCleared.root.postCommitWorkPayloadData, workPayloadData)
+        assertRootProjection(
+            fullyCleared.root,
+            equals: loadedA.root,
+            replacingStatePayloadData: fullyCleared.postCommitStatePayloadData
         )
         let storeC = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
         guard case .fullRoot(let loadedC) = try storeC.loadState(matching: identity) else {
@@ -233,6 +252,184 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         }
         XCTAssertEqual(loadedC.postCommitState, .none)
         XCTAssertEqual(loadedC.postCommitWorkPayloadData, workPayloadData)
+        assertRootProjection(
+            loadedC.root,
+            equals: loadedA.root,
+            replacingStatePayloadData: fullyCleared.postCommitStatePayloadData
+        )
+    }
+
+    func testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation() throws {
+        struct Case {
+            let label: String
+            let expectedFailure: SyncConvergencePostCommitFailure
+            let mutate: (MYR136Fixture, ModelContext, IncorporatedSyncBatch) throws -> Void
+        }
+
+        let sourceBatchID = uuid("00000000-0000-0000-0000-000000135702")
+        let cases: [Case] = [
+            Case(
+                label: "batchID",
+                expectedFailure: .missingAuthoritativeIncorporation(batchID: sourceBatchID)
+            ) { _, _, root in
+                root.batchID = self.uuid("00000000-0000-0000-0000-000000136001")
+            },
+            Case(label: "originDeviceID", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.originDeviceID = self.uuid("00000000-0000-0000-0000-000000136002")
+            },
+            Case(label: "createdAt", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.setCreatedAt(Date(timeIntervalSince1970: 136_003))
+            },
+            Case(label: "batchSequence", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.batchSequence = (root.batchSequence ?? 0) + 136
+            },
+            Case(label: "schemaVersion", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.schemaVersion += 1
+            },
+            Case(label: "committedAt", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.setCommittedAt(Date(timeIntervalSince1970: 136_006))
+            },
+            Case(label: "canonicalPayloadDigest", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.canonicalPayloadDigest = "myr136-canonical-digest"
+            },
+            Case(label: "canonicalPayloadDigestFormatVersion", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.canonicalPayloadDigestFormatVersion += 1
+            },
+            Case(label: "committedResultDigest", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.committedResultDigest = "myr136-committed-result-digest"
+            },
+            Case(label: "committedResultDigestFormatVersion", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.committedResultDigestFormatVersion += 1
+            },
+            Case(label: "affectedNotesPayloadData", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.affectedNotesPayloadData = Data([0x13, 0x60, 0x11])
+            },
+            Case(label: "authoritativeChildCount", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.authoritativeChildCount += 1
+            },
+            Case(label: "authoritativeChildBytes", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.authoritativeChildBytes += 1
+            },
+            Case(label: "authoritativeChildrenDigest", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { _, _, root in
+                root.authoritativeChildrenDigest = "myr136-authoritative-children"
+            },
+            Case(label: "postCommitWorkPayloadData", expectedFailure: .inconsistentIncorporationIdentity(batchID: sourceBatchID)) { fixture, _, root in
+                root.postCommitWorkPayloadData = try SyncConvergencePostCommitWorkPayloadV1(
+                    queueCleanupBatchIDs: [fixture.request.sourceBatchID],
+                    legacyCleanupRequired: false,
+                    presentationEntries: []
+                ).encodedPayloadData()
+            }
+        ]
+
+        XCTAssertEqual(cases.count, 15)
+        for testCase in cases {
+            let fixture = try makeMYR136Fixture()
+            let mutationContext = ModelContext(fixture.container)
+            let row = try fixture.rawRoot(context: mutationContext)
+            try testCase.mutate(fixture, mutationContext, row)
+            try mutationContext.save()
+            let beforeCAS = try fixture.rawRootSnapshot()
+
+            XCTAssertThrowsError(
+                try fixture.store().compareAndSetPostCommitState(
+                    expectedRoot: SyncConvergencePostCommitRootSnapshot(root: fixture.loaded.root),
+                    expectedPayloadData: fixture.loaded.postCommitStatePayloadData,
+                    newState: myr136StateC()
+                ),
+                testCase.label
+            ) { error in
+                XCTAssertEqual(error as? SyncConvergencePostCommitFailure, testCase.expectedFailure, testCase.label)
+            }
+            XCTAssertEqual(try fixture.rawRootSnapshot(), beforeCAS, testCase.label)
+        }
+    }
+
+    func testMYR136DerivedCommittedAtOrderingPayloadMismatchRejectsCASWithoutMutation() throws {
+        let fixture = try makeMYR136Fixture()
+        let beforeCAS = try fixture.rawRootSnapshot()
+        let alteredOrderingPayloadData = try CommittedAtOrderingPayload(
+            batchID: fixture.request.sourceBatchID,
+            committedAt: Date(timeIntervalSince1970: 136_016)
+        ).encodedEvidenceData()
+        let staleRoot = copyRootProjection(
+            fixture.loaded.root,
+            committedAtOrderingPayloadData: alteredOrderingPayloadData
+        )
+
+        XCTAssertThrowsError(
+            try fixture.store().compareAndSetPostCommitState(
+                expectedRoot: SyncConvergencePostCommitRootSnapshot(root: staleRoot),
+                expectedPayloadData: fixture.loaded.postCommitStatePayloadData,
+                newState: myr136StateC()
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncConvergencePostCommitFailure,
+                .inconsistentIncorporationIdentity(batchID: fixture.request.sourceBatchID)
+            )
+        }
+        XCTAssertEqual(try fixture.rawRootSnapshot(), beforeCAS)
+    }
+
+    func testMYR136StaleExpectedStatePayloadRejectsCASWithoutMutation() throws {
+        let fixture = try makeMYR136Fixture()
+        let stateAData = fixture.loaded.postCommitStatePayloadData
+        let stateB = myr136StateB()
+        let stateC = myr136StateC()
+        let afterStateB = try fixture.store().compareAndSetPostCommitState(
+            expectedRoot: SyncConvergencePostCommitRootSnapshot(root: fixture.loaded.root),
+            expectedPayloadData: stateAData,
+            newState: stateB
+        )
+        let stateBRow = try fixture.rawRootSnapshot()
+
+        XCTAssertThrowsError(
+            try fixture.store().compareAndSetPostCommitState(
+                expectedRoot: SyncConvergencePostCommitRootSnapshot(root: afterStateB.root),
+                expectedPayloadData: stateAData,
+                newState: stateC
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncConvergencePostCommitFailure,
+                .inconsistentIncorporationIdentity(batchID: fixture.request.sourceBatchID)
+            )
+        }
+        XCTAssertEqual(try fixture.rawRootSnapshot(), stateBRow)
+        XCTAssertEqual(
+            try SyncConvergenceStableEncoding.decode(
+                SyncConvergencePostCommitState.self,
+                from: stateBRow.postCommitStatePayloadData
+            ),
+            stateB
+        )
+    }
+
+    func testMYR136MatchingRootAndPriorStateCASChangesOnlyMutableState() throws {
+        let fixture = try makeMYR136Fixture()
+        let beforeCAS = try fixture.rawRootSnapshot()
+        let stateB = myr136StateB()
+        let expectedStateBData = try SyncConvergenceStableEncoding.encode(stateB)
+
+        let afterCAS = try fixture.store().compareAndSetPostCommitState(
+            expectedRoot: SyncConvergencePostCommitRootSnapshot(root: fixture.loaded.root),
+            expectedPayloadData: fixture.loaded.postCommitStatePayloadData,
+            newState: stateB
+        )
+
+        XCTAssertEqual(afterCAS.postCommitState, stateB)
+        XCTAssertEqual(afterCAS.postCommitStatePayloadData, expectedStateBData)
+        XCTAssertEqual(afterCAS.root.postCommitStatePayloadData, expectedStateBData)
+        assertRootProjection(
+            afterCAS.root,
+            equals: fixture.loaded.root,
+            replacingStatePayloadData: expectedStateBData
+        )
+
+        let afterRow = try fixture.rawRootSnapshot()
+        XCTAssertNotEqual(afterRow.postCommitStatePayloadData, beforeCAS.postCommitStatePayloadData)
+        XCTAssertEqual(afterRow, beforeCAS.replacingPostCommitStatePayloadData(expectedStateBData))
     }
 
     func testLegacyTrueWithoutAdapterRemainsPending() async {
@@ -1371,6 +1568,162 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         let committedResultDigestFormatVersion: Int
     }
 
+    private struct MYR136Fixture {
+        let base: MYR135PersistedIdentityFixture
+        let loaded: SyncConvergencePostCommitFullRootState
+        let rootModelID: UUID
+
+        var container: ModelContainer {
+            base.container
+        }
+
+        var request: SyncConvergencePostCommitRequest {
+            base.request
+        }
+
+        func store(context: ModelContext? = nil) -> SwiftDataSyncConvergencePostCommitStore {
+            SwiftDataSyncConvergencePostCommitStore(context: context ?? ModelContext(container))
+        }
+
+        func rawRoot(
+            context: ModelContext,
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) throws -> IncorporatedSyncBatch {
+            let rootModelID = self.rootModelID
+            return try XCTUnwrap(
+                context.fetch(FetchDescriptor<IncorporatedSyncBatch>(
+                    predicate: #Predicate { $0.id == rootModelID }
+                )).first,
+                file: file,
+                line: line
+            )
+        }
+
+        func rawRootSnapshot(
+            file: StaticString = #filePath,
+            line: UInt = #line
+        ) throws -> MYR136RawRootSnapshot {
+            try MYR136RawRootSnapshot(root: rawRoot(context: ModelContext(container), file: file, line: line))
+        }
+    }
+
+    private struct MYR136RawRootSnapshot: Equatable {
+        let batchKey: String
+        let id: UUID
+        let batchID: UUID
+        let originDeviceID: UUID
+        let createdAt: Date
+        let createdAtBitPattern: UInt64
+        let batchSequence: UInt64?
+        let schemaVersion: Int
+        let committedAt: Date
+        let committedAtBitPattern: UInt64
+        let canonicalPayloadDigest: String
+        let canonicalPayloadDigestFormatVersion: Int
+        let committedResultDigest: String
+        let committedResultDigestFormatVersion: Int
+        let affectedNotesPayloadData: Data
+        let authoritativeChildCount: Int
+        let authoritativeChildBytes: Int
+        let authoritativeChildrenDigest: String
+        let postCommitWorkPayloadData: Data?
+        let postCommitStatePayloadData: Data
+
+        init(
+            batchKey: String,
+            id: UUID,
+            batchID: UUID,
+            originDeviceID: UUID,
+            createdAt: Date,
+            createdAtBitPattern: UInt64,
+            batchSequence: UInt64?,
+            schemaVersion: Int,
+            committedAt: Date,
+            committedAtBitPattern: UInt64,
+            canonicalPayloadDigest: String,
+            canonicalPayloadDigestFormatVersion: Int,
+            committedResultDigest: String,
+            committedResultDigestFormatVersion: Int,
+            affectedNotesPayloadData: Data,
+            authoritativeChildCount: Int,
+            authoritativeChildBytes: Int,
+            authoritativeChildrenDigest: String,
+            postCommitWorkPayloadData: Data?,
+            postCommitStatePayloadData: Data
+        ) {
+            self.batchKey = batchKey
+            self.id = id
+            self.batchID = batchID
+            self.originDeviceID = originDeviceID
+            self.createdAt = createdAt
+            self.createdAtBitPattern = createdAtBitPattern
+            self.batchSequence = batchSequence
+            self.schemaVersion = schemaVersion
+            self.committedAt = committedAt
+            self.committedAtBitPattern = committedAtBitPattern
+            self.canonicalPayloadDigest = canonicalPayloadDigest
+            self.canonicalPayloadDigestFormatVersion = canonicalPayloadDigestFormatVersion
+            self.committedResultDigest = committedResultDigest
+            self.committedResultDigestFormatVersion = committedResultDigestFormatVersion
+            self.affectedNotesPayloadData = affectedNotesPayloadData
+            self.authoritativeChildCount = authoritativeChildCount
+            self.authoritativeChildBytes = authoritativeChildBytes
+            self.authoritativeChildrenDigest = authoritativeChildrenDigest
+            self.postCommitWorkPayloadData = postCommitWorkPayloadData
+            self.postCommitStatePayloadData = postCommitStatePayloadData
+        }
+
+        init(root: IncorporatedSyncBatch) throws {
+            try root.validateDateAuthority()
+            batchKey = root.batchKey
+            id = root.id
+            batchID = root.batchID
+            originDeviceID = root.originDeviceID
+            createdAt = root.createdAt
+            createdAtBitPattern = root.createdAtBitPattern
+            batchSequence = root.batchSequence
+            schemaVersion = root.schemaVersion
+            committedAt = root.committedAt
+            committedAtBitPattern = root.committedAtBitPattern
+            canonicalPayloadDigest = root.canonicalPayloadDigest
+            canonicalPayloadDigestFormatVersion = root.canonicalPayloadDigestFormatVersion
+            committedResultDigest = root.committedResultDigest
+            committedResultDigestFormatVersion = root.committedResultDigestFormatVersion
+            affectedNotesPayloadData = Data(root.affectedNotesPayloadData)
+            authoritativeChildCount = root.authoritativeChildCount
+            authoritativeChildBytes = root.authoritativeChildBytes
+            authoritativeChildrenDigest = root.authoritativeChildrenDigest
+            postCommitWorkPayloadData = root.postCommitWorkPayloadData.map { Data($0) }
+            postCommitStatePayloadData = Data(root.postCommitStatePayloadData)
+        }
+
+        func replacingPostCommitStatePayloadData(_ data: Data) -> Self {
+            MYR136RawRootSnapshot(
+                batchKey: batchKey,
+                id: id,
+                batchID: batchID,
+                originDeviceID: originDeviceID,
+                createdAt: createdAt,
+                createdAtBitPattern: createdAtBitPattern,
+                batchSequence: batchSequence,
+                schemaVersion: schemaVersion,
+                committedAt: committedAt,
+                committedAtBitPattern: committedAtBitPattern,
+                canonicalPayloadDigest: canonicalPayloadDigest,
+                canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
+                committedResultDigest: committedResultDigest,
+                committedResultDigestFormatVersion: committedResultDigestFormatVersion,
+                affectedNotesPayloadData: affectedNotesPayloadData,
+                authoritativeChildCount: authoritativeChildCount,
+                authoritativeChildBytes: authoritativeChildBytes,
+                authoritativeChildrenDigest: authoritativeChildrenDigest,
+                postCommitWorkPayloadData: postCommitWorkPayloadData,
+                postCommitStatePayloadData: data
+            )
+        }
+    }
+
     private func makeMYR135PersistedIdentityFixture() throws -> MYR135PersistedIdentityFixture {
         let noteID = uuid("00000000-0000-0000-0000-000000135701")
         let batch = SyncBatch(
@@ -1474,6 +1827,101 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 persistedIncorporationIdentity: result.persistedIncorporationIdentity
             ),
             workPayload: workPayload
+        )
+    }
+
+    private func makeMYR136Fixture(
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws -> MYR136Fixture {
+        let base = try makeMYR135PersistedIdentityFixture()
+        let store = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(base.container))
+        guard case .fullRoot(let loaded) = try store.loadState(matching: base.request.persistedIncorporationIdentity) else {
+            throw PostCommitTestFixtureError.unexpectedPlanningOutcome
+        }
+        let root = try base.rootSnapshot(file: file, line: line)
+        let rootBatchID = base.request.sourceBatchID
+        let rootModel = try XCTUnwrap(
+            ModelContext(base.container).fetch(FetchDescriptor<IncorporatedSyncBatch>(
+                predicate: #Predicate { $0.batchID == rootBatchID }
+            )).first,
+            file: file,
+            line: line
+        )
+        XCTAssertEqual(root.postCommitStatePayloadData, loaded.postCommitStatePayloadData, file: file, line: line)
+        XCTAssertEqual(root.postCommitWorkPayloadData, loaded.postCommitWorkPayloadData, file: file, line: line)
+        return MYR136Fixture(base: base, loaded: loaded, rootModelID: rootModel.id)
+    }
+
+    private func myr136StateB() -> SyncConvergencePostCommitState {
+        SyncConvergencePostCommitState(
+            queueCleanupPending: true,
+            legacyCleanupPending: true,
+            presentationRefreshPending: false
+        )
+    }
+
+    private func myr136StateC() -> SyncConvergencePostCommitState {
+        SyncConvergencePostCommitState(
+            queueCleanupPending: false,
+            legacyCleanupPending: true,
+            presentationRefreshPending: false
+        )
+    }
+
+    private func copyRootProjection(
+        _ root: SyncConvergenceIncorporatedRootProjection,
+        batchID: UUID? = nil,
+        originDeviceID: UUID? = nil,
+        createdAt: Date? = nil,
+        batchSequence: UInt64?? = nil,
+        schemaVersion: Int? = nil,
+        committedAt: Date? = nil,
+        canonicalPayloadDigest: String? = nil,
+        canonicalPayloadDigestFormatVersion: Int? = nil,
+        committedResultDigest: String? = nil,
+        committedResultDigestFormatVersion: Int? = nil,
+        committedAtOrderingPayloadData: Data? = nil,
+        affectedNotesPayloadData: Data? = nil,
+        authoritativeChildCount: Int? = nil,
+        authoritativeChildBytes: Int? = nil,
+        authoritativeChildrenDigest: String? = nil,
+        postCommitWorkPayloadData: Data?? = nil,
+        postCommitStatePayloadData: Data? = nil
+    ) -> SyncConvergenceIncorporatedRootProjection {
+        SyncConvergenceIncorporatedRootProjection(
+            batchID: batchID ?? root.batchID,
+            originDeviceID: originDeviceID ?? root.originDeviceID,
+            createdAt: createdAt ?? root.createdAt,
+            batchSequence: batchSequence ?? root.batchSequence,
+            schemaVersion: schemaVersion ?? root.schemaVersion,
+            committedAt: committedAt ?? root.committedAt,
+            canonicalPayloadDigest: canonicalPayloadDigest ?? root.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion ?? root.canonicalPayloadDigestFormatVersion,
+            committedResultDigest: committedResultDigest ?? root.committedResultDigest,
+            committedResultDigestFormatVersion: committedResultDigestFormatVersion ?? root.committedResultDigestFormatVersion,
+            committedAtOrderingPayloadData: committedAtOrderingPayloadData ?? root.committedAtOrderingPayloadData,
+            affectedNotesPayloadData: affectedNotesPayloadData ?? root.affectedNotesPayloadData,
+            authoritativeChildCount: authoritativeChildCount ?? root.authoritativeChildCount,
+            authoritativeChildBytes: authoritativeChildBytes ?? root.authoritativeChildBytes,
+            authoritativeChildrenDigest: authoritativeChildrenDigest ?? root.authoritativeChildrenDigest,
+            postCommitWorkPayloadData: postCommitWorkPayloadData ?? root.postCommitWorkPayloadData,
+            postCommitStatePayloadData: postCommitStatePayloadData ?? root.postCommitStatePayloadData
+        )
+    }
+
+    private func assertRootProjection(
+        _ actual: SyncConvergenceIncorporatedRootProjection,
+        equals expected: SyncConvergenceIncorporatedRootProjection,
+        replacingStatePayloadData statePayloadData: Data,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(
+            actual,
+            copyRootProjection(expected, postCommitStatePayloadData: statePayloadData),
+            file: file,
+            line: line
         )
     }
 
