@@ -271,7 +271,7 @@ MYR-133 remains incomplete.
 
 ## MYR-135 Verification
 
-Verified implementation SHA: pending final commit.
+Verified implementation SHA: `7f1ca4b`
 
 MYR-135 completes the operation-identity validation matrix for construction-time authority, post-commit payload validation, persisted SwiftData identity-row validation, and operation hash-chain validation.
 
@@ -329,7 +329,7 @@ git diff --check
 
 Exit code: 0.
 
-MYR-135 implementation is complete pending final commit evidence.
+MYR-135 implementation is complete.
 
 ## Remaining MYR-133 Coverage Not Completed In This Pass
 
