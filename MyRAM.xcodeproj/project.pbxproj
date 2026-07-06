@@ -112,6 +112,11 @@
 		BCA132010000000000000059 /* SyncConvergencePostCommitExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */; };
 		BCA132010000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */; };
 		BCA132010000000000000031 /* SwiftDataSyncConvergencePersistenceTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */; };
+		BCA152010000000000000001 /* IncrementalEditIntegrationTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000001 /* IncrementalEditIntegrationTypes.swift */; };
+		BCA152010000000000000002 /* IncrementalEditIntegrationTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000001 /* IncrementalEditIntegrationTypes.swift */; };
+		BCA152010000000000000003 /* RetainedOperationCausalGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000002 /* RetainedOperationCausalGraph.swift */; };
+		BCA152010000000000000004 /* RetainedOperationCausalGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000002 /* RetainedOperationCausalGraph.swift */; };
+		BCA152010000000000000005 /* IncrementalEditIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000003 /* IncrementalEditIntegrationTests.swift */; };
 		BCA132010000000000000006 /* MyRAMSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC7009FD2FBF927F00F513B4 /* MyRAMSchema.swift */; };
 		BCB610022FEC610000610061 /* DebugDemoDataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */; };
 		BCF104022FF1040000000104 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
@@ -261,6 +266,9 @@
 		BCA135020000000000000001 /* SyncConvergenceIdentityTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceIdentityTestSupport.swift; sourceTree = "<group>"; };
 		BCA135020000000000000002 /* SyncConvergenceIdentityTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergenceIdentityTestSupport.swift; sourceTree = "<group>"; };
 		BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataSyncConvergencePersistenceTransaction.swift; sourceTree = "<group>"; };
+		BCA152020000000000000001 /* IncrementalEditIntegrationTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncrementalEditIntegrationTypes.swift; sourceTree = "<group>"; };
+		BCA152020000000000000002 /* RetainedOperationCausalGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetainedOperationCausalGraph.swift; sourceTree = "<group>"; };
+		BCA152020000000000000003 /* IncrementalEditIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncrementalEditIntegrationTests.swift; sourceTree = "<group>"; };
 		BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDemoDataGenerator.swift; sourceTree = "<group>"; };
 		BCCAFE012FEE000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		BCF104012FF1040000000104 /* MyRAMPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMPlatform.swift; sourceTree = "<group>"; };
@@ -460,6 +468,8 @@
 				BCA132020000000000000002 /* SyncConvergenceModels.swift */,
 				BCA132020000000000000010 /* SyncConvergencePlanningTypes.swift */,
 				BCA132020000000000000011 /* SyncConvergencePlanner.swift */,
+				BCA152020000000000000001 /* IncrementalEditIntegrationTypes.swift */,
+				BCA152020000000000000002 /* RetainedOperationCausalGraph.swift */,
 				BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */,
 				BCA132020000000000000050 /* SyncConvergencePostCommitTypes.swift */,
 				BCA132020000000000000051 /* SyncConvergencePostCommitGating.swift */,
@@ -505,6 +515,7 @@
 				BCA132020000000000000054 /* SyncConvergencePostCommitTests.swift */,
 				BCA137020000000000000001 /* SyncConvergencePostCommitTestDoubles.swift */,
 				BCA135020000000000000001 /* SyncConvergenceIdentityTestSupport.swift */,
+				BCA152020000000000000003 /* IncrementalEditIntegrationTests.swift */,
 				BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */,
 				BCA123020000000000000010 /* IPhoneSyncBatchAccumulatorTests.swift */,
 				BCA123020000000000000011 /* IPhoneSyncBatchApplierTests.swift */,
@@ -837,6 +848,8 @@
 				BCA132010000000000000003 /* SyncConvergenceModels.swift in Sources */,
 				BCA132010000000000000010 /* SyncConvergencePlanningTypes.swift in Sources */,
 				BCA132010000000000000012 /* SyncConvergencePlanner.swift in Sources */,
+				BCA152010000000000000001 /* IncrementalEditIntegrationTypes.swift in Sources */,
+				BCA152010000000000000003 /* RetainedOperationCausalGraph.swift in Sources */,
 				BCA132010000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift in Sources */,
 				BCA132010000000000000050 /* SyncConvergencePostCommitTypes.swift in Sources */,
 				BCA132010000000000000051 /* SyncConvergencePostCommitGating.swift in Sources */,
@@ -899,6 +912,7 @@
 				BCA132010000000000000054 /* SyncConvergencePostCommitTests.swift in Sources */,
 				BCA137010000000000000001 /* SyncConvergencePostCommitTestDoubles.swift in Sources */,
 				BCA135010000000000000001 /* SyncConvergenceIdentityTestSupport.swift in Sources */,
+				BCA152010000000000000005 /* IncrementalEditIntegrationTests.swift in Sources */,
 				BCA123010000000000000022 /* SyncBatchUnsentQueueTests.swift in Sources */,
 				BCA123010000000000000015 /* IPhoneSyncBatchAccumulatorTests.swift in Sources */,
 				BCA123010000000000000016 /* IPhoneSyncBatchApplierTests.swift in Sources */,
@@ -950,6 +964,8 @@
 				BCA132010000000000000004 /* SyncConvergenceModels.swift in Sources */,
 				BCA132010000000000000011 /* SyncConvergencePlanningTypes.swift in Sources */,
 				BCA132010000000000000013 /* SyncConvergencePlanner.swift in Sources */,
+				BCA152010000000000000002 /* IncrementalEditIntegrationTypes.swift in Sources */,
+				BCA152010000000000000004 /* RetainedOperationCausalGraph.swift in Sources */,
 				BCA132010000000000000031 /* SwiftDataSyncConvergencePersistenceTransaction.swift in Sources */,
 				BCA132010000000000000056 /* SyncConvergencePostCommitTypes.swift in Sources */,
 				BCA132010000000000000057 /* SyncConvergencePostCommitGating.swift in Sources */,
