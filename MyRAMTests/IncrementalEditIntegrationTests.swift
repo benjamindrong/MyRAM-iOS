@@ -390,6 +390,83 @@ final class IncrementalEditIntegrationTests: XCTestCase {
         XCTAssertEqual(original, permuted)
     }
 
+    func testCrossNoteCoincidentalHashCannotCreatePredecessor() {
+        let first = retainedOperation(
+            noteID: myr152UUID(101),
+            batchID: myr152UUID(296),
+            replayKey: replayKey(batchID: myr152UUID(296), sequence: 1),
+            base: "A",
+            resultHash: "B"
+        )
+        let second = retainedOperation(
+            noteID: myr152UUID(102),
+            batchID: myr152UUID(297),
+            replayKey: replayKey(batchID: myr152UUID(297), sequence: 2),
+            baseHash: "B",
+            resultHash: "C"
+        )
+
+        let original = validate(anchor: "A", operations: [first, second])
+        let permuted = validate(anchor: "A", operations: [second, first])
+
+        XCTAssertEqual(original, .recoveryRequired(.unreconstructableBase))
+        XCTAssertEqual(original, permuted)
+    }
+
+    func testMixedNoteActiveInputReturnsUnreconstructableBase() {
+        let first = retainedOperation(
+            noteID: myr152UUID(103),
+            batchID: myr152UUID(298),
+            originDeviceID: myr152UUID(398),
+            replayKey: replayKey(batchID: myr152UUID(298), originDeviceID: myr152UUID(398), sequence: 1),
+            base: "A",
+            resultHash: "B"
+        )
+        let second = retainedOperation(
+            noteID: myr152UUID(104),
+            batchID: myr152UUID(299),
+            originDeviceID: myr152UUID(399),
+            replayKey: replayKey(batchID: myr152UUID(299), originDeviceID: myr152UUID(399), sequence: 2),
+            base: "A",
+            resultHash: "C"
+        )
+
+        let original = validate(anchor: "A", operations: [first, second])
+        let permuted = validate(anchor: "A", operations: [second, first])
+
+        XCTAssertEqual(original, .recoveryRequired(.unreconstructableBase))
+        XCTAssertEqual(original, permuted)
+    }
+
+    func testSameNoteCrossBatchFallbackRemainsValid() throws {
+        let first = retainedOperation(
+            batchID: myr152UUID(310),
+            replayKey: replayKey(batchID: myr152UUID(310), sequence: 1),
+            base: "A",
+            resultHash: "B"
+        )
+        let second = retainedOperation(
+            batchID: myr152UUID(311),
+            replayKey: replayKey(batchID: myr152UUID(311), sequence: 2),
+            baseHash: "B",
+            resultHash: "C"
+        )
+
+        let original = validate(anchor: "A", operations: [first, second])
+        let permuted = validate(anchor: "A", operations: [second, first])
+
+        XCTAssertEqual(original, permuted)
+        let graph = try validGraph(from: original)
+        assertGraph(
+            graph,
+            roots: [identity(for: first)],
+            nodes: [
+                ExpectedNode(identity: identity(for: first), base: hash("A"), result: "B", predecessor: nil, successor: identity(for: second)),
+                ExpectedNode(identity: identity(for: second), base: "B", result: "C", predecessor: identity(for: first), successor: nil)
+            ]
+        )
+    }
+
     func testInvalidSameBatchRestartStillReturnsMissingCausalPredecessor() {
         let first = retainedOperation(operationIndex: 0, base: "A", resultHash: "first")
         let second = retainedOperation(operationIndex: 1, base: "A", resultHash: "second")
@@ -399,7 +476,36 @@ final class IncrementalEditIntegrationTests: XCTestCase {
         XCTAssertEqual(result, .recoveryRequired(.missingCausalPredecessor))
     }
 
-    func testCrossBatchSameDeviceAnchorForkReturnsAmbiguousCausalChain() {
+    func testCrossBatchRepeatedAnchorStateUsesActualRootClassification() throws {
+        let first = retainedOperation(
+            batchID: myr152UUID(312),
+            replayKey: replayKey(batchID: myr152UUID(312), sequence: 1),
+            base: "A",
+            resultHash: hash("A")
+        )
+        let second = retainedOperation(
+            batchID: myr152UUID(313),
+            replayKey: replayKey(batchID: myr152UUID(313), sequence: 2),
+            base: "A",
+            resultHash: "B"
+        )
+
+        let original = validate(anchor: "A", operations: [first, second])
+        let permuted = validate(anchor: "A", operations: [second, first])
+
+        XCTAssertEqual(original, permuted)
+        let graph = try validGraph(from: original)
+        assertGraph(
+            graph,
+            roots: [identity(for: first)],
+            nodes: [
+                ExpectedNode(identity: identity(for: first), base: hash("A"), result: hash("A"), predecessor: nil, successor: identity(for: second)),
+                ExpectedNode(identity: identity(for: second), base: hash("A"), result: "B", predecessor: identity(for: first), successor: nil)
+            ]
+        )
+    }
+
+    func testMultipleActualSameDeviceRootsAcrossBatchesAreAmbiguous() {
         let first = retainedOperation(batchID: myr152UUID(221), operationIndex: 0, base: "A", resultHash: "first")
         let second = retainedOperation(
             batchID: myr152UUID(222),
@@ -410,8 +516,10 @@ final class IncrementalEditIntegrationTests: XCTestCase {
         )
 
         let result = validate(anchor: "A", operations: [second, first])
+        let permuted = validate(anchor: "A", operations: [first, second])
 
         XCTAssertEqual(result, .recoveryRequired(.ambiguousCausalChain))
+        XCTAssertEqual(result, permuted)
     }
 
     func testAmbiguousJoinReturnsAmbiguousCausalChain() {

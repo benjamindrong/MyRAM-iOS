@@ -39,6 +39,10 @@ struct RetainedOperationCausalGraphValidator {
                 replayKeys[Self.identity(for: $0)]! < replayKeys[Self.identity(for: $1)]!
             }
 
+        guard activeOperationsBelongToSingleNote(activeOperations) else {
+            return .recoveryRequired(.unreconstructableBase)
+        }
+
         let metadataNodes = activeOperations.map { operation in
             MetadataNode(
                 operation: operation,
@@ -106,6 +110,12 @@ struct RetainedOperationCausalGraphValidator {
         return Array(recordsByIdentity.values)
     }
 
+    private func activeOperationsBelongToSingleNote(
+        _ operations: [SyncConvergenceRetainedOperationRecord]
+    ) -> Bool {
+        Set(operations.map(\.noteID)).count <= 1
+    }
+
     private func validateBatchHistory(
         normalizedOperations: [SyncConvergenceRetainedOperationRecord],
         incorporatedOperationIdentities: Set<SyncConvergenceRetainedOperationIdentity>,
@@ -162,8 +172,11 @@ struct RetainedOperationCausalGraphValidator {
         let successorIdentitiesByPredecessor = Dictionary(grouping: predecessorByIdentity.keys) {
             predecessorByIdentity[$0]!.identity
         }
+        let roots = nodes
+            .filter { $0.baseContentHash == anchorContentHash && predecessorByIdentity[$0.identity] == nil }
+
         if successorIdentitiesByPredecessor.values.contains(where: { $0.count > 1 }) ||
-            hasCrossBatchSameDeviceAnchorFork(nodes: nodes, anchorContentHash: anchorContentHash) {
+            hasCrossBatchSameDeviceRootFork(roots: roots) {
             return .recoveryRequired(.ambiguousCausalChain)
         }
 
@@ -172,9 +185,7 @@ struct RetainedOperationCausalGraphValidator {
                 canonicalIndex(for: lhs, in: nodes) < canonicalIndex(for: rhs, in: nodes)
             }.first!
         }
-        let roots = nodes
-            .filter { $0.baseContentHash == anchorContentHash && predecessorByIdentity[$0.identity] == nil }
-            .map(\.identity)
+        let rootIdentities = roots.map(\.identity)
 
         let validatedNodes = nodes.map { node in
             ValidatedRetainedOperationNode(
@@ -188,14 +199,14 @@ struct RetainedOperationCausalGraphValidator {
             )
         }
 
-        guard graphIsRooted(nodes: validatedNodes, rootIdentities: roots) else {
+        guard graphIsRooted(nodes: validatedNodes, rootIdentities: rootIdentities) else {
             return .recoveryRequired(.unreconstructableBase)
         }
 
         return .valid(
             RetainedOperationCausalGraph(
                 anchorContentHash: anchorContentHash,
-                rootIdentities: roots,
+                rootIdentities: rootIdentities,
                 nodes: validatedNodes
             )
         )
@@ -216,6 +227,7 @@ struct RetainedOperationCausalGraphValidator {
             let earlierMatches = nodes.filter { candidate in
                 candidate.identity != node.identity &&
                 candidate.operation.originDeviceID == node.operation.originDeviceID &&
+                candidate.operation.noteID == node.operation.noteID &&
                 candidate.resultContentHash == node.baseContentHash &&
                 candidate.replayKey < node.replayKey
             }
@@ -248,8 +260,8 @@ struct RetainedOperationCausalGraphValidator {
         return predecessor
     }
 
-    private func hasCrossBatchSameDeviceAnchorFork(nodes: [MetadataNode], anchorContentHash: String) -> Bool {
-        let rootsByDevice = Dictionary(grouping: nodes.filter { $0.baseContentHash == anchorContentHash }) {
+    private func hasCrossBatchSameDeviceRootFork(roots: [MetadataNode]) -> Bool {
+        let rootsByDevice = Dictionary(grouping: roots) {
             $0.operation.originDeviceID
         }
 
