@@ -151,19 +151,7 @@ struct RetainedOperationCausalGraphValidator {
         nodes: [MetadataNode],
         anchorContentHash: String
     ) -> IncrementalEditCausalValidationResult {
-        let predecessorCandidatesByIdentity = predecessorCandidates(for: nodes, anchorContentHash: anchorContentHash)
-
-        if hasAmbiguousJoin(predecessorCandidatesByIdentity) ||
-            hasNonAnchorFork(nodes: nodes, anchorContentHash: anchorContentHash) ||
-            hasCrossBatchSameDeviceAnchorFork(nodes: nodes, anchorContentHash: anchorContentHash) {
-            return .recoveryRequired(.ambiguousCausalChain)
-        }
-
-        if hasSameBatchSequencingFault(nodes: nodes, anchorContentHash: anchorContentHash) {
-            return .recoveryRequired(.missingCausalPredecessor)
-        }
-
-        let predecessorByIdentity = predecessorCandidatesByIdentity.compactMapValues(\.first)
+        let predecessorByIdentity = directionalPredecessors(for: nodes)
 
         for node in nodes where node.baseContentHash != anchorContentHash {
             guard predecessorByIdentity[node.identity] != nil else {
@@ -174,6 +162,11 @@ struct RetainedOperationCausalGraphValidator {
         let successorIdentitiesByPredecessor = Dictionary(grouping: predecessorByIdentity.keys) {
             predecessorByIdentity[$0]!.identity
         }
+        if successorIdentitiesByPredecessor.values.contains(where: { $0.count > 1 }) ||
+            hasCrossBatchSameDeviceAnchorFork(nodes: nodes, anchorContentHash: anchorContentHash) {
+            return .recoveryRequired(.ambiguousCausalChain)
+        }
+
         let successorByPredecessor = successorIdentitiesByPredecessor.mapValues { identities in
             identities.sorted { lhs, rhs in
                 canonicalIndex(for: lhs, in: nodes) < canonicalIndex(for: rhs, in: nodes)
@@ -208,43 +201,51 @@ struct RetainedOperationCausalGraphValidator {
         )
     }
 
-    private func predecessorCandidates(
-        for nodes: [MetadataNode],
-        anchorContentHash: String
-    ) -> [SyncConvergenceRetainedOperationIdentity: [MetadataNode]] {
-        var nodesByDeviceAndResult: [DeviceHash: [MetadataNode]] = [:]
+    private func directionalPredecessors(
+        for nodes: [MetadataNode]
+    ) -> [SyncConvergenceRetainedOperationIdentity: MetadataNode] {
+        let nodesByIdentity = Dictionary(uniqueKeysWithValues: nodes.map { ($0.identity, $0) })
+        var predecessors: [SyncConvergenceRetainedOperationIdentity: MetadataNode] = [:]
+
         for node in nodes {
-            nodesByDeviceAndResult[
-                DeviceHash(deviceID: node.operation.originDeviceID, hash: node.resultContentHash),
-                default: []
-            ].append(node)
+            if let sameBatchPredecessor = activeSameBatchPredecessor(for: node, in: nodesByIdentity) {
+                predecessors[node.identity] = sameBatchPredecessor
+                continue
+            }
+
+            let earlierMatches = nodes.filter { candidate in
+                candidate.identity != node.identity &&
+                candidate.operation.originDeviceID == node.operation.originDeviceID &&
+                candidate.resultContentHash == node.baseContentHash &&
+                candidate.replayKey < node.replayKey
+            }
+
+            if let predecessor = earlierMatches.max(by: { $0.replayKey < $1.replayKey }) {
+                predecessors[node.identity] = predecessor
+            }
         }
 
-        var candidates: [SyncConvergenceRetainedOperationIdentity: [MetadataNode]] = [:]
-        for node in nodes {
-            let matchingPredecessors = nodesByDeviceAndResult[
-                DeviceHash(deviceID: node.operation.originDeviceID, hash: node.baseContentHash),
-                default: []
-            ]
-            candidates[node.identity] = matchingPredecessors.filter { $0.identity != node.identity }
-        }
-        return candidates
+        return predecessors
     }
 
-    private func hasAmbiguousJoin(
-        _ predecessorCandidatesByIdentity: [SyncConvergenceRetainedOperationIdentity: [MetadataNode]]
-    ) -> Bool {
-        predecessorCandidatesByIdentity.values.contains { $0.count > 1 }
-    }
-
-    private func hasNonAnchorFork(nodes: [MetadataNode], anchorContentHash: String) -> Bool {
-        let successorsByDeviceAndBase = Dictionary(grouping: nodes) {
-            DeviceHash(deviceID: $0.operation.originDeviceID, hash: $0.baseContentHash)
+    private func activeSameBatchPredecessor(
+        for node: MetadataNode,
+        in nodesByIdentity: [SyncConvergenceRetainedOperationIdentity: MetadataNode]
+    ) -> MetadataNode? {
+        guard node.operation.operationIndex > 0 else {
+            return nil
         }
-
-        return successorsByDeviceAndBase.contains { key, successors in
-            key.hash != anchorContentHash && successors.count > 1
+        let predecessorIdentity = SyncConvergenceRetainedOperationIdentity(
+            batchID: node.operation.batchID,
+            operationIndex: node.operation.operationIndex - 1
+        )
+        guard let predecessor = nodesByIdentity[predecessorIdentity],
+              predecessor.operation.originDeviceID == node.operation.originDeviceID,
+              predecessor.operation.noteID == node.operation.noteID
+        else {
+            return nil
         }
+        return predecessor
     }
 
     private func hasCrossBatchSameDeviceAnchorFork(nodes: [MetadataNode], anchorContentHash: String) -> Bool {
@@ -255,32 +256,6 @@ struct RetainedOperationCausalGraphValidator {
         return rootsByDevice.values.contains { roots in
             Set(roots.map(\.operation.batchID)).count > 1
         }
-    }
-
-    private func hasSameBatchSequencingFault(nodes: [MetadataNode], anchorContentHash: String) -> Bool {
-        let groups = Dictionary(grouping: nodes) { node in
-            SameBatchNoteKey(
-                batchID: node.operation.batchID,
-                originDeviceID: node.operation.originDeviceID,
-                noteID: node.operation.noteID
-            )
-        }
-
-        for group in groups.values {
-            let ordered = group.sorted { $0.operation.operationIndex < $1.operation.operationIndex }
-            guard ordered.count > 1 else { continue }
-
-            for index in ordered.indices.dropFirst() {
-                let previous = ordered[ordered.index(before: index)]
-                let current = ordered[index]
-                if current.operation.operationIndex != previous.operation.operationIndex + 1 ||
-                    current.baseContentHash != previous.resultContentHash {
-                    return true
-                }
-            }
-        }
-
-        return false
     }
 
     private func graphIsRooted(
@@ -363,11 +338,6 @@ struct RetainedOperationCausalGraphValidator {
         let replayKey: ValidatedCanonicalReplayKey
         let baseContentHash: String
         let resultContentHash: String
-    }
-
-    private struct DeviceHash: Hashable {
-        let deviceID: UUID
-        let hash: String
     }
 
     private struct SameBatchNoteKey: Hashable {

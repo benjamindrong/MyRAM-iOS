@@ -217,8 +217,10 @@ final class IncrementalEditIntegrationTests: XCTestCase {
         let third = retainedOperation(batchID: myr152UUID(262), replayKey: replayKey(batchID: myr152UUID(262), sequence: 3), baseHash: "first", resultHash: "third")
 
         let result = validate(anchor: "A", operations: [third, first, second])
+        let permuted = validate(anchor: "A", operations: [second, first, third])
 
         XCTAssertEqual(result, .recoveryRequired(.ambiguousCausalChain))
+        XCTAssertEqual(result, permuted)
     }
 
     func testSameBatchAnchorRestartWithoutGapReturnsMissingCausalPredecessor() {
@@ -269,6 +271,123 @@ final class IncrementalEditIntegrationTests: XCTestCase {
                 ExpectedNode(identity: identity(for: second), base: hash("A"), result: "second", predecessor: identity(for: first), successor: nil)
             ]
         )
+    }
+
+    func testRepeatedAnchorStateInSameBatchIsDirectionalLinearGraph() throws {
+        let first = retainedOperation(operationIndex: 0, base: "A", resultHash: hash("A"))
+        let second = retainedOperation(operationIndex: 1, base: "A", resultHash: hash("A"))
+
+        let original = validate(anchor: "A", operations: [first, second])
+        let permuted = validate(anchor: "A", operations: [second, first])
+
+        XCTAssertEqual(original, permuted)
+        let graph = try validGraph(from: original)
+        assertGraph(
+            graph,
+            roots: [identity(for: first)],
+            nodes: [
+                ExpectedNode(identity: identity(for: first), base: hash("A"), result: hash("A"), predecessor: nil, successor: identity(for: second)),
+                ExpectedNode(identity: identity(for: second), base: hash("A"), result: hash("A"), predecessor: identity(for: first), successor: nil)
+            ]
+        )
+    }
+
+    func testCrossBatchReturnToEarlierHashUsesEarlierReplayKeyDirection() throws {
+        let first = retainedOperation(
+            batchID: myr152UUID(290),
+            replayKey: replayKey(batchID: myr152UUID(290), sequence: 1),
+            base: "A",
+            resultHash: "B"
+        )
+        let second = retainedOperation(
+            batchID: myr152UUID(291),
+            replayKey: replayKey(batchID: myr152UUID(291), sequence: 2),
+            baseHash: "B",
+            resultHash: hash("A")
+        )
+
+        let original = validate(anchor: "A", operations: [first, second])
+        let permuted = validate(anchor: "A", operations: [second, first])
+
+        XCTAssertEqual(original, permuted)
+        let graph = try validGraph(from: original)
+        assertGraph(
+            graph,
+            roots: [identity(for: first)],
+            nodes: [
+                ExpectedNode(identity: identity(for: first), base: hash("A"), result: "B", predecessor: nil, successor: identity(for: second)),
+                ExpectedNode(identity: identity(for: second), base: "B", result: hash("A"), predecessor: identity(for: first), successor: nil)
+            ]
+        )
+    }
+
+    func testRepeatedIntermediateHashKeepsImmediateSameBatchPredecessor() throws {
+        let first = retainedOperation(operationIndex: 0, base: "A", resultHash: "B")
+        let second = retainedOperation(operationIndex: 1, baseHash: "B", resultHash: "B")
+        let third = retainedOperation(operationIndex: 2, baseHash: "B", resultHash: "C")
+
+        let original = validate(anchor: "A", operations: [first, second, third])
+        let permuted = validate(anchor: "A", operations: [third, first, second])
+
+        XCTAssertEqual(original, permuted)
+        let graph = try validGraph(from: original)
+        assertGraph(
+            graph,
+            roots: [identity(for: first)],
+            nodes: [
+                ExpectedNode(identity: identity(for: first), base: hash("A"), result: "B", predecessor: nil, successor: identity(for: second)),
+                ExpectedNode(identity: identity(for: second), base: "B", result: "B", predecessor: identity(for: first), successor: identity(for: third)),
+                ExpectedNode(identity: identity(for: third), base: "B", result: "C", predecessor: identity(for: second), successor: nil)
+            ]
+        )
+        XCTAssertFalse(graph.nodes.contains { node in
+            graph.nodes.filter { $0.successorIdentity == node.identity }.count > 1
+        })
+        XCTAssertFalse(graph.nodes.contains { $0.predecessorIdentity == nil && $0.baseContentHash != hash("A") })
+    }
+
+    func testLaterOperationCannotBecomeBackwardPredecessor() throws {
+        let first = retainedOperation(
+            batchID: myr152UUID(292),
+            replayKey: replayKey(batchID: myr152UUID(292), sequence: 1),
+            base: "A",
+            resultHash: "B"
+        )
+        let second = retainedOperation(
+            batchID: myr152UUID(293),
+            replayKey: replayKey(batchID: myr152UUID(293), sequence: 2),
+            baseHash: "B",
+            resultHash: hash("A")
+        )
+
+        let graph = try validGraph(from: validate(anchor: "A", operations: [second, first]))
+
+        XCTAssertNil(graph.nodes[0].predecessorIdentity)
+        XCTAssertEqual(graph.nodes[0].successorIdentity, identity(for: second))
+        XCTAssertEqual(graph.nodes[1].predecessorIdentity, identity(for: first))
+    }
+
+    func testCrossDeviceCoincidentalHashDoesNotCreateCausalEdge() {
+        let first = retainedOperation(
+            batchID: myr152UUID(294),
+            originDeviceID: myr152UUID(394),
+            replayKey: replayKey(batchID: myr152UUID(294), originDeviceID: myr152UUID(394), sequence: 1),
+            base: "A",
+            resultHash: "B"
+        )
+        let second = retainedOperation(
+            batchID: myr152UUID(295),
+            originDeviceID: myr152UUID(395),
+            replayKey: replayKey(batchID: myr152UUID(295), originDeviceID: myr152UUID(395), sequence: 2),
+            baseHash: "B",
+            resultHash: "C"
+        )
+
+        let original = validate(anchor: "A", operations: [first, second])
+        let permuted = validate(anchor: "A", operations: [second, first])
+
+        XCTAssertEqual(original, .recoveryRequired(.unreconstructableBase))
+        XCTAssertEqual(original, permuted)
     }
 
     func testInvalidSameBatchRestartStillReturnsMissingCausalPredecessor() {
