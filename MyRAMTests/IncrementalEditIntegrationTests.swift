@@ -232,29 +232,71 @@ final class IncrementalEditIntegrationTests: XCTestCase {
         XCTAssertEqual(result, .recoveryRequired(.missingCausalPredecessor))
     }
 
-    func testSameBatchIndexGapAnchorRestartReturnsMissingCausalPredecessor() {
+    func testSameBatchIndexGapUsesLatestEarlierRetainedBodyOperation() throws {
         let first = retainedOperation(operationIndex: 0, base: "A", resultHash: "first")
-        let second = retainedOperation(operationIndex: 2, base: "A", resultHash: "second")
+        let second = retainedOperation(operationIndex: 2, baseHash: "first", resultHash: "second")
 
-        let result = validate(anchor: "A", operations: [second, first])
+        let original = validate(anchor: "A", operations: [second, first])
+        let permuted = validate(anchor: "A", operations: [first, second])
 
-        XCTAssertEqual(result, .recoveryRequired(.missingCausalPredecessor))
+        XCTAssertEqual(original, permuted)
+        let graph = try validGraph(from: original)
+        assertGraph(
+            graph,
+            roots: [identity(for: first)],
+            nodes: [
+                ExpectedNode(identity: identity(for: first), base: hash("A"), result: "first", predecessor: nil, successor: identity(for: second)),
+                ExpectedNode(identity: identity(for: second), base: "first", result: "second", predecessor: identity(for: first), successor: nil)
+            ]
+        )
     }
 
-    func testLoneIndexOneOperationReturnsMissingCausalPredecessor() {
+    func testFirstRetainedBodyAtGlobalIndexOneIsAcceptedAsRoot() throws {
         let operation = retainedOperation(operationIndex: 1, base: "A", resultHash: "second")
 
-        let result = validate(anchor: "A", operations: [operation])
+        let graph = try validGraph(from: validate(anchor: "A", operations: [operation]))
 
-        XCTAssertEqual(result, .recoveryRequired(.missingCausalPredecessor))
+        assertGraph(
+            graph,
+            roots: [identity(for: operation)],
+            nodes: [
+                ExpectedNode(identity: identity(for: operation), base: hash("A"), result: "second", predecessor: nil, successor: nil)
+            ]
+        )
     }
 
-    func testLoneIndexTwoOperationReturnsMissingCausalPredecessor() {
+    func testFirstRetainedBodyAtGlobalIndexTwoIsAcceptedAsRootAcrossPermutations() {
         let operation = retainedOperation(operationIndex: 2, base: "A", resultHash: "third")
 
-        let result = validate(anchor: "A", operations: [operation])
+        let original = validate(anchor: "A", operations: [operation])
+        let permuted = validate(anchor: "A", operations: [operation])
 
-        XCTAssertEqual(result, .recoveryRequired(.missingCausalPredecessor))
+        XCTAssertEqual(original, permuted)
+        guard case .valid(let graph) = original else {
+            return XCTFail("Expected valid causal graph, got \(original)")
+        }
+        XCTAssertEqual(graph.rootIdentities, [identity(for: operation)])
+    }
+
+    func testSameNoteBodyOperationsSeparatedByNonBodyChangesRemainLinear() throws {
+        let first = retainedOperation(operationIndex: 1, base: "A", resultHash: "first")
+        let second = retainedOperation(operationIndex: 4, baseHash: "first", resultHash: "second")
+        let third = retainedOperation(operationIndex: 7, baseHash: "second", resultHash: "third")
+
+        let original = validate(anchor: "A", operations: [third, first, second])
+        let permuted = validate(anchor: "A", operations: [second, third, first])
+
+        XCTAssertEqual(original, permuted)
+        let graph = try validGraph(from: original)
+        assertGraph(
+            graph,
+            roots: [identity(for: first)],
+            nodes: [
+                ExpectedNode(identity: identity(for: first), base: hash("A"), result: "first", predecessor: nil, successor: identity(for: second)),
+                ExpectedNode(identity: identity(for: second), base: "first", result: "second", predecessor: identity(for: first), successor: identity(for: third)),
+                ExpectedNode(identity: identity(for: third), base: "second", result: "third", predecessor: identity(for: second), successor: nil)
+            ]
+        )
     }
 
     func testValidNoOpDeclaredSameBatchLinkageIsAccepted() throws {
@@ -644,16 +686,37 @@ final class IncrementalEditIntegrationTests: XCTestCase {
         XCTAssertEqual(graph.rootIdentities, [identity(for: remaining)])
     }
 
-    func testIncorporatedPredecessorIdentityWithoutRecordReturnsMissingCausalPredecessor() {
+    func testNoncontiguousIncorporatedPredecessorRepresentedByAnchorAllowsActiveRoot() throws {
+        let incorporated = retainedOperation(operationIndex: 0, baseHash: "old", resultHash: hash("A"))
+        let remaining = retainedOperation(operationIndex: 3, base: "A", resultHash: "second")
+
+        let original = validate(
+            anchor: "A",
+            operations: [remaining, incorporated],
+            incorporated: [identity(for: incorporated)]
+        )
+        let permuted = validate(
+            anchor: "A",
+            operations: [incorporated, remaining],
+            incorporated: [identity(for: incorporated)]
+        )
+
+        XCTAssertEqual(original, permuted)
+        let graph = try validGraph(from: original)
+        XCTAssertEqual(graph.nodes.map(\.identity), [identity(for: remaining)])
+        XCTAssertEqual(graph.rootIdentities, [identity(for: remaining)])
+    }
+
+    func testIncorporatedPredecessorIdentityWithoutRecordDoesNotForceGlobalIndexContiguity() throws {
         let operation = retainedOperation(operationIndex: 1, base: "A", resultHash: "second")
 
-        let result = validate(
+        let graph = try validGraph(from: validate(
             anchor: "A",
             operations: [operation],
             incorporated: [SyncConvergenceRetainedOperationIdentity(batchID: operation.batchID, operationIndex: 0)]
-        )
+        ))
 
-        XCTAssertEqual(result, .recoveryRequired(.missingCausalPredecessor))
+        XCTAssertEqual(graph.rootIdentities, [identity(for: operation)])
     }
 
     func testDifferentDeviceRemainingRootAfterIncorporatedRecordRemainsValid() throws {
@@ -694,7 +757,8 @@ final class IncrementalEditIntegrationTests: XCTestCase {
     }
 
     func testBatchHistoryFaultPrecedesGraphAmbiguityAcrossPermutations() {
-        let batchFault = retainedOperation(operationIndex: 1, base: "A", resultHash: "batch-fault")
+        let batchFaultPredecessor = retainedOperation(operationIndex: 0, base: "A", resultHash: "expected-base")
+        let batchFault = retainedOperation(operationIndex: 2, base: "A", resultHash: "batch-fault")
         let root = retainedOperation(
             batchID: myr152UUID(280),
             replayKey: replayKey(batchID: myr152UUID(280), sequence: 2),
@@ -714,8 +778,8 @@ final class IncrementalEditIntegrationTests: XCTestCase {
             resultHash: "fork-b"
         )
 
-        let original = validate(anchor: "A", operations: [batchFault, root, forkA, forkB])
-        let permuted = validate(anchor: "A", operations: [forkB, root, forkA, batchFault])
+        let original = validate(anchor: "A", operations: [batchFault, root, forkA, forkB, batchFaultPredecessor])
+        let permuted = validate(anchor: "A", operations: [forkB, batchFaultPredecessor, root, forkA, batchFault])
 
         XCTAssertEqual(original, .recoveryRequired(.missingCausalPredecessor))
         XCTAssertEqual(original, permuted)

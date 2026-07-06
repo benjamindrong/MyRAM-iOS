@@ -121,27 +121,17 @@ struct RetainedOperationCausalGraphValidator {
         incorporatedOperationIdentities: Set<SyncConvergenceRetainedOperationIdentity>,
         anchorContentHash: String
     ) -> IncrementalEditRecoveryReason? {
-        let operationsByIdentity = Dictionary(uniqueKeysWithValues: normalizedOperations.map {
-            (Self.identity(for: $0), $0)
-        })
         let activeOperations = normalizedOperations.filter {
             !incorporatedOperationIdentities.contains(Self.identity(for: $0))
         }
 
         for operation in activeOperations.sorted(by: sameBatchSort) {
-            guard operation.operationIndex > 0 else { continue }
+            guard let predecessor = retainedSameBatchPredecessor(
+                for: operation,
+                in: normalizedOperations
+            ) else { continue }
 
-            let predecessorIdentity = SyncConvergenceRetainedOperationIdentity(
-                batchID: operation.batchID,
-                operationIndex: operation.operationIndex - 1
-            )
-
-            guard let predecessor = operationsByIdentity[predecessorIdentity],
-                  predecessor.originDeviceID == operation.originDeviceID,
-                  predecessor.noteID == operation.noteID
-            else {
-                return .missingCausalPredecessor
-            }
+            let predecessorIdentity = Self.identity(for: predecessor)
 
             if incorporatedOperationIdentities.contains(predecessorIdentity) {
                 guard predecessor.resultContentHash == anchorContentHash,
@@ -244,20 +234,30 @@ struct RetainedOperationCausalGraphValidator {
         for node: MetadataNode,
         in nodesByIdentity: [SyncConvergenceRetainedOperationIdentity: MetadataNode]
     ) -> MetadataNode? {
-        guard node.operation.operationIndex > 0 else {
-            return nil
-        }
-        let predecessorIdentity = SyncConvergenceRetainedOperationIdentity(
-            batchID: node.operation.batchID,
-            operationIndex: node.operation.operationIndex - 1
-        )
-        guard let predecessor = nodesByIdentity[predecessorIdentity],
-              predecessor.operation.originDeviceID == node.operation.originDeviceID,
-              predecessor.operation.noteID == node.operation.noteID
-        else {
-            return nil
-        }
-        return predecessor
+        nodesByIdentity.values
+            .filter { candidate in
+                candidate.identity != node.identity &&
+                candidate.operation.batchID == node.operation.batchID &&
+                candidate.operation.originDeviceID == node.operation.originDeviceID &&
+                candidate.operation.noteID == node.operation.noteID &&
+                candidate.operation.operationIndex < node.operation.operationIndex
+            }
+            .max { $0.operation.operationIndex < $1.operation.operationIndex }
+    }
+
+    private func retainedSameBatchPredecessor(
+        for operation: SyncConvergenceRetainedOperationRecord,
+        in operations: [SyncConvergenceRetainedOperationRecord]
+    ) -> SyncConvergenceRetainedOperationRecord? {
+        operations
+            .filter { candidate in
+                Self.identity(for: candidate) != Self.identity(for: operation) &&
+                candidate.batchID == operation.batchID &&
+                candidate.originDeviceID == operation.originDeviceID &&
+                candidate.noteID == operation.noteID &&
+                candidate.operationIndex < operation.operationIndex
+            }
+            .max { $0.operationIndex < $1.operationIndex }
     }
 
     private func hasCrossBatchSameDeviceRootFork(roots: [MetadataNode]) -> Bool {
