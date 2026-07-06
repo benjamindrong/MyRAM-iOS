@@ -163,12 +163,6 @@ struct RetainedOperationCausalGraphValidator {
     ) -> IncrementalEditCausalValidationResult {
         let predecessorByIdentity = directionalPredecessors(for: nodes)
 
-        for node in nodes where node.baseContentHash != anchorContentHash {
-            guard predecessorByIdentity[node.identity] != nil else {
-                return .recoveryRequired(.unreconstructableBase)
-            }
-        }
-
         let successorIdentitiesByPredecessor = Dictionary(grouping: predecessorByIdentity.keys) {
             predecessorByIdentity[$0]!.identity
         }
@@ -178,6 +172,12 @@ struct RetainedOperationCausalGraphValidator {
         if successorIdentitiesByPredecessor.values.contains(where: { $0.count > 1 }) ||
             hasCrossBatchSameDeviceRootFork(roots: roots) {
             return .recoveryRequired(.ambiguousCausalChain)
+        }
+
+        for node in nodes where node.baseContentHash != anchorContentHash {
+            guard predecessorByIdentity[node.identity] != nil else {
+                return .recoveryRequired(.unreconstructableBase)
+            }
         }
 
         let successorByPredecessor = successorIdentitiesByPredecessor.mapValues { identities in
@@ -352,9 +352,4 @@ struct RetainedOperationCausalGraphValidator {
         let resultContentHash: String
     }
 
-    private struct SameBatchNoteKey: Hashable {
-        let batchID: UUID
-        let originDeviceID: UUID
-        let noteID: UUID
-    }
 }

@@ -522,6 +522,64 @@ final class IncrementalEditIntegrationTests: XCTestCase {
         XCTAssertEqual(result, permuted)
     }
 
+    func testGraphAmbiguityPrecedesUnreconstructableBaseAcrossPermutations() {
+        let noteID = myr152UUID(105)
+        let forkDeviceID = myr152UUID(400)
+        let unknownDeviceID = myr152UUID(401)
+
+        let firstRoot = retainedOperation(
+            noteID: noteID,
+            batchID: myr152UUID(320),
+            originDeviceID: forkDeviceID,
+            replayKey: replayKey(
+                batchID: myr152UUID(320),
+                originDeviceID: forkDeviceID,
+                sequence: 1
+            ),
+            base: "A",
+            resultHash: "B"
+        )
+        let secondRoot = retainedOperation(
+            noteID: noteID,
+            batchID: myr152UUID(321),
+            originDeviceID: forkDeviceID,
+            replayKey: replayKey(
+                batchID: myr152UUID(321),
+                originDeviceID: forkDeviceID,
+                sequence: 2
+            ),
+            base: "A",
+            resultHash: "C"
+        )
+        let unknown = retainedOperation(
+            noteID: noteID,
+            batchID: myr152UUID(322),
+            originDeviceID: unknownDeviceID,
+            replayKey: replayKey(
+                batchID: myr152UUID(322),
+                originDeviceID: unknownDeviceID,
+                sequence: 3
+            ),
+            baseHash: "X",
+            resultHash: "Y"
+        )
+
+        let original = validate(
+            anchor: "A",
+            operations: [firstRoot, secondRoot, unknown]
+        )
+        let permuted = validate(
+            anchor: "A",
+            operations: [unknown, secondRoot, firstRoot]
+        )
+
+        XCTAssertEqual(
+            original,
+            .recoveryRequired(.ambiguousCausalChain)
+        )
+        XCTAssertEqual(original, permuted)
+    }
+
     func testAmbiguousJoinReturnsAmbiguousCausalChain() {
         let first = retainedOperation(batchID: myr152UUID(231), operationIndex: 0, base: "A", resultHash: "shared")
         let second = retainedOperation(batchID: myr152UUID(232), operationIndex: 0, base: "A", resultHash: "shared")
