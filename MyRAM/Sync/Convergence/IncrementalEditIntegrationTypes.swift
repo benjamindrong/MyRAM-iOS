@@ -19,7 +19,6 @@ enum IncrementalEditRecoveryReason: Equatable {
     case ambiguousCausalChain
     case invalidOperationIdentity
     case invalidReplayKey
-    case retainedResultHashMismatch
 }
 
 struct ValidatedRetainedOperationNode: Equatable {
@@ -28,9 +27,12 @@ struct ValidatedRetainedOperationNode: Equatable {
     let replayKey: ValidatedCanonicalReplayKey
     let baseContentHash: String
     let resultContentHash: String
+    let predecessorIdentity: SyncConvergenceRetainedOperationIdentity?
+    let successorIdentity: SyncConvergenceRetainedOperationIdentity?
 }
 
 struct RetainedOperationCausalGraph: Equatable {
     let anchorContentHash: String
+    let rootIdentities: [SyncConvergenceRetainedOperationIdentity]
     let nodes: [ValidatedRetainedOperationNode]
 }

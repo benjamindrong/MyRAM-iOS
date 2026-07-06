@@ -6,41 +6,42 @@ struct RetainedOperationCausalGraphValidator {
             return .recoveryRequired(.anchorHashMismatch)
         }
 
-        let activeOperations = input.operations.filter {
-            !input.incorporatedOperationIdentities.contains(Self.identity(for: $0))
-        }
-
-        guard identitiesAreValid(in: activeOperations) else {
+        guard identitiesAreValid(in: input.operations) else {
             return .recoveryRequired(.invalidOperationIdentity)
         }
 
         let replayKeys: [SyncConvergenceRetainedOperationIdentity: ValidatedCanonicalReplayKey]
         do {
-            replayKeys = try validatedReplayKeys(for: activeOperations)
+            replayKeys = try validatedReplayKeys(for: input.operations)
         } catch {
             return .recoveryRequired(.invalidReplayKey)
         }
 
-        guard explicitHashesArePresent(in: activeOperations) else {
+        guard explicitHashesArePresent(in: input.operations) else {
             return .recoveryRequired(.unreconstructableBase)
         }
 
-        let nodes = activeOperations.map { operation in
-            let identity = Self.identity(for: operation)
-            return ValidatedRetainedOperationNode(
+        guard let normalizedOperations = normalizeDuplicateIdentities(input.operations) else {
+            return .recoveryRequired(.invalidOperationIdentity)
+        }
+
+        let activeOperations = normalizedOperations
+            .filter { !input.incorporatedOperationIdentities.contains(Self.identity(for: $0)) }
+            .sorted {
+                replayKeys[Self.identity(for: $0)]! < replayKeys[Self.identity(for: $1)]!
+            }
+
+        let metadataNodes = activeOperations.map { operation in
+            MetadataNode(
                 operation: operation,
-                identity: identity,
-                replayKey: replayKeys[identity]!,
+                identity: Self.identity(for: operation),
+                replayKey: replayKeys[Self.identity(for: operation)]!,
                 baseContentHash: operation.baseContentHash!,
                 resultContentHash: operation.resultContentHash!
             )
         }
 
-        return validateCausalGraph(
-            nodes: nodes,
-            anchorContent: input.anchorContent,
-            anchorContentHash: input.anchorContentHash
-        )
+        return validateCausalGraph(nodes: metadataNodes, anchorContentHash: input.anchorContentHash)
     }
 
     private static func identity(
@@ -81,145 +82,181 @@ struct RetainedOperationCausalGraphValidator {
         }
     }
 
+    private func normalizeDuplicateIdentities(
+        _ operations: [SyncConvergenceRetainedOperationRecord]
+    ) -> [SyncConvergenceRetainedOperationRecord]? {
+        var recordsByIdentity: [SyncConvergenceRetainedOperationIdentity: SyncConvergenceRetainedOperationRecord] = [:]
+
+        for operation in operations {
+            let identity = Self.identity(for: operation)
+            if let existing = recordsByIdentity[identity], existing != operation {
+                return nil
+            }
+            recordsByIdentity[identity] = operation
+        }
+
+        return Array(recordsByIdentity.values)
+    }
+
     private func validateCausalGraph(
-        nodes: [ValidatedRetainedOperationNode],
-        anchorContent: String,
+        nodes: [MetadataNode],
         anchorContentHash: String
     ) -> IncrementalEditCausalValidationResult {
-        var nodesByResult: [DeviceHash: [ValidatedRetainedOperationNode]] = [:]
-        for node in nodes {
-            nodesByResult[DeviceHash(deviceID: node.operation.originDeviceID, hash: node.resultContentHash), default: []]
-                .append(node)
+        let predecessorCandidatesByIdentity = predecessorCandidates(for: nodes, anchorContentHash: anchorContentHash)
+
+        if hasAmbiguousJoin(predecessorCandidatesByIdentity) ||
+            hasNonAnchorFork(nodes: nodes, anchorContentHash: anchorContentHash) ||
+            hasCrossBatchSameDeviceAnchorFork(nodes: nodes, anchorContentHash: anchorContentHash) {
+            return .recoveryRequired(.ambiguousCausalChain)
         }
 
-        for node in nodes {
-            let predecessorKey = DeviceHash(deviceID: node.operation.originDeviceID, hash: node.baseContentHash)
-            let predecessors = nodesByResult[predecessorKey, default: []]
-            if predecessors.count > 1 {
-                return .recoveryRequired(.ambiguousCausalChain)
+        if hasSameBatchSequencingFault(nodes: nodes, anchorContentHash: anchorContentHash) {
+            return .recoveryRequired(.missingCausalPredecessor)
+        }
+
+        let predecessorByIdentity = predecessorCandidatesByIdentity.compactMapValues(\.first)
+        let successorIdentitiesByPredecessor = Dictionary(grouping: predecessorByIdentity.keys) {
+            predecessorByIdentity[$0]!.identity
+        }
+
+        if successorIdentitiesByPredecessor.values.contains(where: { $0.count > 1 }) {
+            return .recoveryRequired(.ambiguousCausalChain)
+        }
+
+        for node in nodes where node.baseContentHash != anchorContentHash {
+            guard predecessorByIdentity[node.identity] != nil else {
+                return .recoveryRequired(.unreconstructableBase)
             }
         }
 
-        var reachable = Set<SyncConvergenceRetainedOperationIdentity>()
-        var visitedCount = -1
-        while visitedCount != reachable.count {
-            visitedCount = reachable.count
-            for node in nodes {
-                guard !reachable.contains(node.identity) else { continue }
-                if node.baseContentHash == anchorContentHash {
-                    reachable.insert(node.identity)
-                    continue
-                }
-                let predecessorKey = DeviceHash(deviceID: node.operation.originDeviceID, hash: node.baseContentHash)
-                if let predecessor = nodesByResult[predecessorKey]?.first,
-                   reachable.contains(predecessor.identity) {
-                    reachable.insert(node.identity)
-                }
-            }
+        let successorByPredecessor = successorIdentitiesByPredecessor.mapValues { identities in
+            identities.sorted { lhs, rhs in
+                canonicalIndex(for: lhs, in: nodes) < canonicalIndex(for: rhs, in: nodes)
+            }.first!
+        }
+        let roots = nodes
+            .filter { $0.baseContentHash == anchorContentHash }
+            .map(\.identity)
+
+        let validatedNodes = nodes.map { node in
+            ValidatedRetainedOperationNode(
+                operation: node.operation,
+                identity: node.identity,
+                replayKey: node.replayKey,
+                baseContentHash: node.baseContentHash,
+                resultContentHash: node.resultContentHash,
+                predecessorIdentity: predecessorByIdentity[node.identity]?.identity,
+                successorIdentity: successorByPredecessor[node.identity]
+            )
         }
 
-        for node in nodes where !reachable.contains(node.identity) {
-            if sameDeviceHasAnchorRoot(for: node, in: nodes, anchorContentHash: anchorContentHash) {
-                return .recoveryRequired(.missingCausalPredecessor)
-            }
-            return .recoveryRequired(.unreconstructableBase)
-        }
-
-        if retainedResultHashMismatchExists(
-            in: nodes,
-            anchorContent: anchorContent,
-            anchorContentHash: anchorContentHash
-        ) {
-            return .recoveryRequired(.retainedResultHashMismatch)
-        }
-
-        return .valid(RetainedOperationCausalGraph(anchorContentHash: anchorContentHash, nodes: nodes))
+        return .valid(
+            RetainedOperationCausalGraph(
+                anchorContentHash: anchorContentHash,
+                rootIdentities: roots,
+                nodes: validatedNodes
+            )
+        )
     }
 
-    private func sameDeviceHasAnchorRoot(
-        for node: ValidatedRetainedOperationNode,
-        in nodes: [ValidatedRetainedOperationNode],
+    private func predecessorCandidates(
+        for nodes: [MetadataNode],
         anchorContentHash: String
+    ) -> [SyncConvergenceRetainedOperationIdentity: [MetadataNode]] {
+        var nodesByDeviceAndResult: [DeviceHash: [MetadataNode]] = [:]
+        for node in nodes {
+            nodesByDeviceAndResult[
+                DeviceHash(deviceID: node.operation.originDeviceID, hash: node.resultContentHash),
+                default: []
+            ].append(node)
+        }
+
+        var candidates: [SyncConvergenceRetainedOperationIdentity: [MetadataNode]] = [:]
+        for node in nodes where node.baseContentHash != anchorContentHash {
+            candidates[node.identity] = nodesByDeviceAndResult[
+                DeviceHash(deviceID: node.operation.originDeviceID, hash: node.baseContentHash),
+                default: []
+            ]
+        }
+        return candidates
+    }
+
+    private func hasAmbiguousJoin(
+        _ predecessorCandidatesByIdentity: [SyncConvergenceRetainedOperationIdentity: [MetadataNode]]
     ) -> Bool {
-        nodes.contains {
-            $0.operation.originDeviceID == node.operation.originDeviceID &&
-            $0.baseContentHash == anchorContentHash
+        predecessorCandidatesByIdentity.values.contains { $0.count > 1 }
+    }
+
+    private func hasNonAnchorFork(nodes: [MetadataNode], anchorContentHash: String) -> Bool {
+        let successorsByDeviceAndBase = Dictionary(grouping: nodes) {
+            DeviceHash(deviceID: $0.operation.originDeviceID, hash: $0.baseContentHash)
+        }
+
+        return successorsByDeviceAndBase.contains { key, successors in
+            key.hash != anchorContentHash && successors.count > 1
         }
     }
 
-    private func retainedResultHashMismatchExists(
-        in nodes: [ValidatedRetainedOperationNode],
-        anchorContent: String,
-        anchorContentHash: String
-    ) -> Bool {
-        var knownContentByHash = [anchorContentHash: anchorContent]
-        let orderedNodes = nodes.sorted { $0.replayKey < $1.replayKey }
-        var progressed = true
+    private func hasCrossBatchSameDeviceAnchorFork(nodes: [MetadataNode], anchorContentHash: String) -> Bool {
+        let rootsByDevice = Dictionary(grouping: nodes.filter { $0.baseContentHash == anchorContentHash }) {
+            $0.operation.originDeviceID
+        }
 
-        while progressed {
-            progressed = false
-            for node in orderedNodes where knownContentByHash[node.resultContentHash] == nil {
-                guard let baseContent = knownContentByHash[node.baseContentHash],
-                      let resultContent = replay(node.operation, against: baseContent)
-                else {
-                    continue
-                }
-                guard SyncBatchContentHash.sha256Hex(for: resultContent) == node.resultContentHash else {
+        return rootsByDevice.values.contains { roots in
+            Set(roots.map(\.operation.batchID)).count > 1
+        }
+    }
+
+    private func hasSameBatchSequencingFault(nodes: [MetadataNode], anchorContentHash: String) -> Bool {
+        let groups = Dictionary(grouping: nodes) { node in
+            SameBatchNoteKey(
+                batchID: node.operation.batchID,
+                originDeviceID: node.operation.originDeviceID,
+                noteID: node.operation.noteID
+            )
+        }
+
+        for group in groups.values {
+            let ordered = group.sorted { $0.operation.operationIndex < $1.operation.operationIndex }
+            guard ordered.count > 1 else { continue }
+
+            for index in ordered.indices.dropFirst() {
+                let previous = ordered[ordered.index(before: index)]
+                let current = ordered[index]
+                if current.operation.operationIndex != previous.operation.operationIndex + 1 ||
+                    current.baseContentHash != previous.resultContentHash ||
+                    current.baseContentHash == anchorContentHash {
                     return true
                 }
-                knownContentByHash[node.resultContentHash] = resultContent
-                progressed = true
             }
         }
 
         return false
     }
 
-    private func replay(_ operation: SyncConvergenceRetainedOperationRecord, against content: String) -> String? {
-        switch operation.operationKind {
-        case .insert:
-            guard let text = operation.text,
-                  operation.utf16Offset >= 0,
-                  operation.utf16Offset <= content.utf16.count,
-                  let index = String.Index(utf16Offset: operation.utf16Offset, in: content)
-            else {
-                return nil
-            }
-            var result = content
-            result.insert(contentsOf: text, at: index)
-            return result
+    private func canonicalIndex(
+        for identity: SyncConvergenceRetainedOperationIdentity,
+        in nodes: [MetadataNode]
+    ) -> Int {
+        nodes.firstIndex { $0.identity == identity }!
+    }
 
-        case .delete:
-            guard let length = operation.utf16Length,
-                  length >= 0,
-                  operation.utf16Offset >= 0,
-                  operation.utf16Offset + length <= content.utf16.count,
-                  let lower = String.Index(utf16Offset: operation.utf16Offset, in: content),
-                  let upper = String.Index(utf16Offset: operation.utf16Offset + length, in: content)
-            else {
-                return nil
-            }
-            var result = content
-            result.removeSubrange(lower..<upper)
-            return result
-        }
+    private struct MetadataNode: Equatable {
+        let operation: SyncConvergenceRetainedOperationRecord
+        let identity: SyncConvergenceRetainedOperationIdentity
+        let replayKey: ValidatedCanonicalReplayKey
+        let baseContentHash: String
+        let resultContentHash: String
     }
 
     private struct DeviceHash: Hashable {
         let deviceID: UUID
         let hash: String
     }
-}
 
-private extension String.Index {
-    init?(utf16Offset: Int, in string: String) {
-        guard let utf16Index = string.utf16.index(
-            string.utf16.startIndex,
-            offsetBy: utf16Offset,
-            limitedBy: string.utf16.endIndex
-        ) else {
-            return nil
-        }
-        self.init(utf16Index, within: string)
+    private struct SameBatchNoteKey: Hashable {
+        let batchID: UUID
+        let originDeviceID: UUID
+        let noteID: UUID
     }
 }

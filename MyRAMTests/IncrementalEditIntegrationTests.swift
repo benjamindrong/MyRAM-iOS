@@ -2,8 +2,16 @@ import XCTest
 @testable import MyRAM
 
 final class IncrementalEditIntegrationTests: XCTestCase {
+    func testEmptyInputWithVerifiedAnchorReturnsEmptyGraph() throws {
+        let graph = try validGraph(from: validate(anchor: "A", operations: []))
+
+        XCTAssertEqual(graph.anchorContentHash, hash("A"))
+        XCTAssertEqual(graph.rootIdentities, [])
+        XCTAssertEqual(graph.nodes, [])
+    }
+
     func testBadAnchorShortCircuitsBeforeInvalidIdentity() {
-        let operation = retainedOperation(operationIndex: -1, base: "A", result: "AB")
+        let operation = retainedOperation(operationIndex: -1, base: "A", resultHash: "result")
 
         let result = validate(anchor: "A", anchorHash: hash("wrong"), operations: [operation])
 
@@ -15,7 +23,7 @@ final class IncrementalEditIntegrationTests: XCTestCase {
             operationIndex: -1,
             replayKey: replayKey(operationIndex: -1).replacingForTest(version: 99),
             base: "A",
-            result: "AB"
+            resultHash: "result"
         )
 
         let result = validate(anchor: "A", operations: [operation])
@@ -23,11 +31,11 @@ final class IncrementalEditIntegrationTests: XCTestCase {
         XCTAssertEqual(result, .recoveryRequired(.invalidOperationIdentity))
     }
 
-    func testInvalidReplayKeyReturnsRecovery() {
+    func testInvalidReplayKeyPrecedesMissingHashes() {
         let operation = retainedOperation(
             replayKey: replayKey().replacingForTest(version: 99),
-            base: "A",
-            result: "AB"
+            baseHash: nil,
+            resultHash: nil
         )
 
         let result = validate(anchor: "A", operations: [operation])
@@ -36,7 +44,7 @@ final class IncrementalEditIntegrationTests: XCTestCase {
     }
 
     func testNilBaseContentHashReturnsUnreconstructableBase() {
-        let operation = retainedOperation(result: "AB", baseHash: .explicit(nil))
+        let operation = retainedOperation(baseHash: nil, resultHash: "result")
 
         let result = validate(anchor: "A", operations: [operation])
 
@@ -44,7 +52,7 @@ final class IncrementalEditIntegrationTests: XCTestCase {
     }
 
     func testNilResultContentHashReturnsUnreconstructableBase() {
-        let operation = retainedOperation(base: "A", resultHash: .explicit(nil))
+        let operation = retainedOperation(base: "A", resultHash: nil)
 
         let result = validate(anchor: "A", operations: [operation])
 
@@ -52,125 +60,258 @@ final class IncrementalEditIntegrationTests: XCTestCase {
     }
 
     func testDirectAnchorOperationWithExplicitHashesReachesValidGraph() throws {
-        let operation = retainedOperation(base: "A", result: "AB")
+        let operation = retainedOperation(base: "A", resultHash: "declared-result")
 
-        let result = validate(anchor: "A", operations: [operation])
+        let graph = try validGraph(from: validate(anchor: "A", operations: [operation]))
 
-        let graph = try validGraph(from: result)
-        XCTAssertEqual(graph.nodes.map(\.identity), [identity(for: operation)])
-        XCTAssertEqual(graph.nodes.map(\.baseContentHash), [hash("A")])
-        XCTAssertEqual(graph.nodes.map(\.resultContentHash), [hash("AB")])
-    }
-
-    func testSameDeviceChainWithExplicitHashesReachesValidGraph() throws {
-        let first = retainedOperation(operationIndex: 0, base: "A", result: "AB")
-        let second = retainedOperation(operationIndex: 1, base: "AB", result: "ABC")
-
-        let result = validate(anchor: "A", operations: [second, first])
-
-        let graph = try validGraph(from: result)
-        XCTAssertEqual(
-            Set<SyncConvergenceRetainedOperationIdentity>(graph.nodes.map(\.identity)),
-            [identity(for: first), identity(for: second)]
+        assertGraph(
+            graph,
+            roots: [identity(for: operation)],
+            nodes: [
+                ExpectedNode(
+                    identity: identity(for: operation),
+                    base: hash("A"),
+                    result: "declared-result",
+                    predecessor: nil,
+                    successor: nil
+                )
+            ]
         )
     }
 
-    func testConcurrentChainsDescendingFromSameExplicitAnchorAreValid() throws {
+    func testSameDeviceChainWithExplicitHashesReachesValidGraph() throws {
+        let first = retainedOperation(operationIndex: 0, base: "A", resultHash: "first")
+        let second = retainedOperation(operationIndex: 1, baseHash: "first", resultHash: "second")
+
+        let graph = try validGraph(from: validate(anchor: "A", operations: [second, first]))
+
+        assertGraph(
+            graph,
+            roots: [identity(for: first)],
+            nodes: [
+                ExpectedNode(identity: identity(for: first), base: hash("A"), result: "first", predecessor: nil, successor: identity(for: second)),
+                ExpectedNode(identity: identity(for: second), base: "first", result: "second", predecessor: identity(for: first), successor: nil)
+            ]
+        )
+    }
+
+    func testConcurrentAnchorRootsFromDifferentDevicesAreValid() throws {
         let first = retainedOperation(
             batchID: myr152UUID(201),
             originDeviceID: myr152UUID(301),
-            operationIndex: 0,
-            replayKey: replayKey(batchID: myr152UUID(201), originDeviceID: myr152UUID(301)),
+            replayKey: replayKey(batchID: myr152UUID(201), originDeviceID: myr152UUID(301), sequence: 1),
             base: "A",
-            result: "AB"
+            resultHash: "first"
         )
         let second = retainedOperation(
             batchID: myr152UUID(202),
             originDeviceID: myr152UUID(302),
-            operationIndex: 0,
-            replayKey: replayKey(batchID: myr152UUID(202), originDeviceID: myr152UUID(302)),
+            replayKey: replayKey(batchID: myr152UUID(202), originDeviceID: myr152UUID(302), sequence: 2),
             base: "A",
-            result: "AC"
+            resultHash: "second"
         )
 
-        let result = validate(anchor: "A", operations: [second, first])
+        let graph = try validGraph(from: validate(anchor: "A", operations: [second, first]))
 
-        let graph = try validGraph(from: result)
-        XCTAssertEqual(
-            Set<SyncConvergenceRetainedOperationIdentity>(graph.nodes.map(\.identity)),
-            [identity(for: first), identity(for: second)]
+        assertGraph(
+            graph,
+            roots: [identity(for: first), identity(for: second)],
+            nodes: [
+                ExpectedNode(identity: identity(for: first), base: hash("A"), result: "first", predecessor: nil, successor: nil),
+                ExpectedNode(identity: identity(for: second), base: hash("A"), result: "second", predecessor: nil, successor: nil)
+            ]
         )
     }
 
+    func testPR1LinkageOnlyBoundaryAllowsArbitraryDirectRootResultHash() throws {
+        let operation = retainedOperation(base: "A", resultHash: "not-the-hash-of-AB")
+
+        let graph = try validGraph(from: validate(anchor: "A", operations: [operation]))
+
+        XCTAssertEqual(graph.nodes.map(\.resultContentHash), ["not-the-hash-of-AB"])
+    }
+
+    func testPR1LinkageOnlyBoundaryDoesNotEvaluateDeleteExpectedText() throws {
+        let operation = retainedOperation(
+            kind: .delete,
+            utf16Offset: 0,
+            utf16Length: 1,
+            text: nil,
+            expectedText: "not-present",
+            base: "A",
+            resultHash: "declared-delete-result"
+        )
+
+        let graph = try validGraph(from: validate(anchor: "A", operations: [operation]))
+
+        XCTAssertEqual(graph.nodes.map(\.identity), [identity(for: operation)])
+    }
+
+    func testPR1LinkageOnlyBoundaryUsesDeclaredResultHashForSuccessorLinkage() throws {
+        let first = retainedOperation(operationIndex: 0, base: "A", resultHash: "declared-link")
+        let second = retainedOperation(operationIndex: 1, baseHash: "declared-link", resultHash: "second")
+
+        let graph = try validGraph(from: validate(anchor: "A", operations: [second, first]))
+
+        XCTAssertEqual(graph.nodes[0].successorIdentity, identity(for: second))
+        XCTAssertEqual(graph.nodes[1].predecessorIdentity, identity(for: first))
+    }
+
     func testUnknownBaseReturnsUnreconstructableBase() {
-        let operation = retainedOperation(result: "AB", baseHash: .explicit(hash("unknown")))
+        let operation = retainedOperation(baseHash: "unknown", resultHash: "result")
 
         let result = validate(anchor: "A", operations: [operation])
 
         XCTAssertEqual(result, .recoveryRequired(.unreconstructableBase))
     }
 
-    func testMissingSameDevicePredecessorReturnsMissingCausalPredecessor() {
-        let root = retainedOperation(operationIndex: 0, base: "A", result: "AB")
-        let dependent = retainedOperation(operationIndex: 2, result: "ABCD", baseHash: .explicit(hash("ABC")))
+    func testUnrelatedUnknownBaseBatchDoesNotInheritMissingPredecessorDiagnosis() {
+        let root = retainedOperation(batchID: myr152UUID(210), operationIndex: 0, base: "A", resultHash: "first")
+        let unrelated = retainedOperation(
+            batchID: myr152UUID(211),
+            operationIndex: 0,
+            replayKey: replayKey(batchID: myr152UUID(211), operationIndex: 0, sequence: 2),
+            baseHash: "unknown",
+            resultHash: "other"
+        )
 
-        let result = validate(anchor: "A", operations: [root, dependent])
+        let result = validate(anchor: "A", operations: [root, unrelated])
 
-        XCTAssertEqual(result, .recoveryRequired(.missingCausalPredecessor))
+        XCTAssertEqual(result, .recoveryRequired(.unreconstructableBase))
     }
 
-    func testMultipleValidPredecessorsReturnAmbiguousCausalChain() {
-        let first = retainedOperation(batchID: myr152UUID(211), operationIndex: 0, base: "A", result: "AB")
-        let second = retainedOperation(batchID: myr152UUID(212), operationIndex: 0, base: "A", result: "AB")
-        let dependent = retainedOperation(batchID: myr152UUID(213), operationIndex: 0, base: "AB", result: "ABC")
+    func testSameDeviceForkReturnsAmbiguousCausalChain() {
+        let first = retainedOperation(operationIndex: 0, base: "A", resultHash: "first")
+        let second = retainedOperation(operationIndex: 1, baseHash: "first", resultHash: "second")
+        let third = retainedOperation(operationIndex: 2, baseHash: "first", resultHash: "third")
 
-        let result = validate(anchor: "A", operations: [first, second, dependent])
+        let result = validate(anchor: "A", operations: [third, first, second])
 
         XCTAssertEqual(result, .recoveryRequired(.ambiguousCausalChain))
     }
 
-    func testResultHashMismatchLeavesDependentBaseUnreconstructable() {
-        let first = retainedOperation(operationIndex: 0, base: "A", resultHash: .explicit(hash("AX")))
-        let dependent = retainedOperation(operationIndex: 1, base: "AB", result: "ABC")
+    func testSameBatchAnchorRestartWithoutGapReturnsMissingCausalPredecessor() {
+        let first = retainedOperation(operationIndex: 0, base: "A", resultHash: "first")
+        let second = retainedOperation(operationIndex: 1, base: "A", resultHash: "second")
 
-        let result = validate(anchor: "A", operations: [first, dependent])
+        let result = validate(anchor: "A", operations: [second, first])
 
         XCTAssertEqual(result, .recoveryRequired(.missingCausalPredecessor))
     }
 
-    func testRetainedResultHashMismatchReturnsRecovery() {
-        let operation = retainedOperation(base: "A", result: "AB", resultHash: .explicit(hash("AX")))
+    func testSameBatchIndexGapAnchorRestartReturnsMissingCausalPredecessor() {
+        let first = retainedOperation(operationIndex: 0, base: "A", resultHash: "first")
+        let second = retainedOperation(operationIndex: 2, base: "A", resultHash: "second")
 
-        let result = validate(anchor: "A", operations: [operation])
+        let result = validate(anchor: "A", operations: [second, first])
 
-        XCTAssertEqual(result, .recoveryRequired(.retainedResultHashMismatch))
+        XCTAssertEqual(result, .recoveryRequired(.missingCausalPredecessor))
     }
 
-    func testDuplicateFilteringIsNonFatalForIndependentRemainingOperation() throws {
-        let duplicate = retainedOperation(operationIndex: 0, base: "A", result: "AB")
-        let remaining = retainedOperation(operationIndex: 1, base: "A", result: "AC")
+    func testCrossBatchSameDeviceAnchorForkReturnsAmbiguousCausalChain() {
+        let first = retainedOperation(batchID: myr152UUID(221), operationIndex: 0, base: "A", resultHash: "first")
+        let second = retainedOperation(
+            batchID: myr152UUID(222),
+            operationIndex: 0,
+            replayKey: replayKey(batchID: myr152UUID(222), sequence: 2),
+            base: "A",
+            resultHash: "second"
+        )
+
+        let result = validate(anchor: "A", operations: [second, first])
+
+        XCTAssertEqual(result, .recoveryRequired(.ambiguousCausalChain))
+    }
+
+    func testAmbiguousJoinReturnsAmbiguousCausalChain() {
+        let first = retainedOperation(batchID: myr152UUID(231), operationIndex: 0, base: "A", resultHash: "shared")
+        let second = retainedOperation(batchID: myr152UUID(232), operationIndex: 0, base: "A", resultHash: "shared")
+        let dependent = retainedOperation(batchID: myr152UUID(233), operationIndex: 0, baseHash: "shared", resultHash: "dependent")
+
+        let result = validate(anchor: "A", operations: [dependent, second, first])
+
+        XCTAssertEqual(result, .recoveryRequired(.ambiguousCausalChain))
+    }
+
+    func testEquivalentInInputDuplicateIsCoalesced() throws {
+        let operation = retainedOperation(base: "A", resultHash: "first")
+
+        let graph = try validGraph(from: validate(anchor: "A", operations: [operation, operation]))
+
+        XCTAssertEqual(graph.nodes.map(\.identity), [identity(for: operation)])
+    }
+
+    func testConflictingDuplicateIdentityReturnsInvalidOperationIdentity() {
+        let first = retainedOperation(base: "A", resultHash: "first")
+        let second = retainedOperation(base: "A", resultHash: "conflicting")
+
+        let result = validate(anchor: "A", operations: [first, second])
+
+        XCTAssertEqual(result, .recoveryRequired(.invalidOperationIdentity))
+    }
+
+    func testMalformedIncorporatedRecordIsValidatedBeforeFiltering() {
+        let operation = retainedOperation(operationIndex: -1, base: "A", resultHash: "first")
 
         let result = validate(
             anchor: "A",
-            operations: [duplicate, remaining],
-            incorporated: [identity(for: duplicate)]
+            operations: [operation],
+            incorporated: [identity(for: operation)]
         )
 
-        let graph = try validGraph(from: result)
+        XCTAssertEqual(result, .recoveryRequired(.invalidOperationIdentity))
+    }
+
+    func testIncorporatedDuplicatePlusIndependentRootRemainsValid() throws {
+        let incorporated = retainedOperation(operationIndex: 0, base: "A", resultHash: "first")
+        let remaining = retainedOperation(operationIndex: 1, base: "A", resultHash: "second")
+
+        let graph = try validGraph(
+            from: validate(anchor: "A", operations: [incorporated, remaining], incorporated: [identity(for: incorporated)])
+        )
+
         XCTAssertEqual(graph.nodes.map(\.identity), [identity(for: remaining)])
     }
 
-    func testDuplicateFilteringCanMakeRemainingDependencyUnreconstructable() {
-        let duplicate = retainedOperation(operationIndex: 0, base: "A", result: "AB")
-        let remaining = retainedOperation(operationIndex: 1, base: "AB", result: "ABC")
+    func testDependencyOnFilteredIncorporatedOperationReturnsUnreconstructableBase() {
+        let incorporated = retainedOperation(operationIndex: 0, base: "A", resultHash: "first")
+        let remaining = retainedOperation(operationIndex: 1, baseHash: "first", resultHash: "second")
 
         let result = validate(
             anchor: "A",
-            operations: [duplicate, remaining],
-            incorporated: [identity(for: duplicate)]
+            operations: [incorporated, remaining],
+            incorporated: [identity(for: incorporated)]
         )
 
         XCTAssertEqual(result, .recoveryRequired(.unreconstructableBase))
+    }
+
+    func testValidResultIsEqualAcrossInputPermutations() {
+        let first = retainedOperation(operationIndex: 0, base: "A", resultHash: "first")
+        let second = retainedOperation(operationIndex: 1, baseHash: "first", resultHash: "second")
+        let third = retainedOperation(
+            batchID: myr152UUID(240),
+            originDeviceID: myr152UUID(340),
+            replayKey: replayKey(batchID: myr152UUID(240), originDeviceID: myr152UUID(340), sequence: 2),
+            base: "A",
+            resultHash: "third"
+        )
+
+        let original = validate(anchor: "A", operations: [first, second, third])
+        let permuted = validate(anchor: "A", operations: [third, second, first])
+
+        XCTAssertEqual(original, permuted)
+    }
+
+    func testGraphFaultResultIsEqualAcrossInputPermutations() {
+        let first = retainedOperation(operationIndex: 0, base: "A", resultHash: "first")
+        let second = retainedOperation(operationIndex: 1, baseHash: "first", resultHash: "second")
+        let third = retainedOperation(operationIndex: 2, baseHash: "first", resultHash: "third")
+
+        let original = validate(anchor: "A", operations: [first, second, third])
+        let permuted = validate(anchor: "A", operations: [third, second, first])
+
+        XCTAssertEqual(original, permuted)
     }
 
     func testRecoveryShapeCannotCarryPartialOutput() {
@@ -212,31 +353,48 @@ final class IncrementalEditIntegrationTests: XCTestCase {
         return graph
     }
 
+    private func assertGraph(
+        _ graph: RetainedOperationCausalGraph,
+        roots: [SyncConvergenceRetainedOperationIdentity],
+        nodes expectedNodes: [ExpectedNode],
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(graph.rootIdentities, roots, file: file, line: line)
+        XCTAssertEqual(graph.nodes.map(\.identity), expectedNodes.map(\.identity), file: file, line: line)
+        XCTAssertEqual(graph.nodes.map(\.baseContentHash), expectedNodes.map(\.base), file: file, line: line)
+        XCTAssertEqual(graph.nodes.map(\.resultContentHash), expectedNodes.map(\.result), file: file, line: line)
+        XCTAssertEqual(graph.nodes.map(\.predecessorIdentity), expectedNodes.map(\.predecessor), file: file, line: line)
+        XCTAssertEqual(graph.nodes.map(\.successorIdentity), expectedNodes.map(\.successor), file: file, line: line)
+    }
+
     private func retainedOperation(
         noteID: UUID = myr152UUID(100),
         batchID: UUID = myr152UUID(200),
         originDeviceID: UUID = myr152UUID(300),
         operationIndex: Int = 0,
         replayKey: CanonicalReplayKeyPayload? = nil,
-        base: String = "A",
-        result: String = "AB",
-        baseHash: HashOverride = .derived,
-        resultHash: HashOverride = .derived
+        kind: SyncConvergencePlannedBodyOperation.Kind = .insert,
+        utf16Offset: Int = 0,
+        utf16Length: Int? = nil,
+        text: String? = "x",
+        expectedText: String? = nil,
+        base: String? = nil,
+        baseHash: String? = nil,
+        resultHash: String?
     ) -> SyncConvergenceRetainedOperationRecord {
-        let insertedText = result.hasPrefix(base) ? String(result.dropFirst(base.count)) : "B"
-        let insertionOffset = result.hasPrefix(base) ? base.utf16.count : 1
-        return SyncConvergenceRetainedOperationRecord(
+        SyncConvergenceRetainedOperationRecord(
             noteID: noteID,
             batchID: batchID,
             originDeviceID: originDeviceID,
             operationIndex: operationIndex,
-            operationKind: .insert,
-            utf16Offset: insertionOffset,
-            utf16Length: nil,
-            text: insertedText,
-            expectedText: nil,
-            baseContentHash: baseHash.resolve(default: hash(base)),
-            resultContentHash: resultHash.resolve(default: hash(result)),
+            operationKind: kind,
+            utf16Offset: utf16Offset,
+            utf16Length: utf16Length,
+            text: text,
+            expectedText: expectedText,
+            baseContentHash: base.map(hash) ?? baseHash,
+            resultContentHash: resultHash,
             canonicalReplayKey: replayKey ?? self.replayKey(
                 batchID: batchID,
                 originDeviceID: originDeviceID,
@@ -249,14 +407,15 @@ final class IncrementalEditIntegrationTests: XCTestCase {
     private func replayKey(
         batchID: UUID = myr152UUID(200),
         originDeviceID: UUID = myr152UUID(300),
-        operationIndex: Int = 0
+        operationIndex: Int = 0,
+        sequence: UInt64 = 1
     ) -> CanonicalReplayKeyPayload {
         CanonicalReplayKeyPayload(
-            modifiedAtBitPattern: SyncConvergenceDateBits.bitPattern(for: Date(timeIntervalSinceReferenceDate: 10)),
+            modifiedAtBitPattern: SyncConvergenceDateBits.bitPattern(for: Date(timeIntervalSinceReferenceDate: Double(sequence))),
             originDeviceIDLowercase: originDeviceID.uuidString.lowercased(),
             batchOrderKind: .sequenced,
             legacyCreatedAtBitPattern: nil,
-            sequence: 1,
+            sequence: sequence,
             batchIDLowercase: batchID.uuidString.lowercased(),
             operationIndex: operationIndex
         )
@@ -275,22 +434,16 @@ final class IncrementalEditIntegrationTests: XCTestCase {
         SyncBatchContentHash.sha256Hex(for: content)
     }
 
-    private enum TestFailure: Error {
-        case unexpectedRecovery
+    private struct ExpectedNode {
+        let identity: SyncConvergenceRetainedOperationIdentity
+        let base: String
+        let result: String
+        let predecessor: SyncConvergenceRetainedOperationIdentity?
+        let successor: SyncConvergenceRetainedOperationIdentity?
     }
 
-    private enum HashOverride {
-        case derived
-        case explicit(String?)
-
-        func resolve(default derivedHash: String) -> String? {
-            switch self {
-            case .derived:
-                return derivedHash
-            case .explicit(let hash):
-                return hash
-            }
-        }
+    private enum TestFailure: Error {
+        case unexpectedRecovery
     }
 }
 
