@@ -177,6 +177,53 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
         ))
     }
 
+    func loadExplicitDeleteProvenance(
+        identity: SyncConvergenceRetainedOperationIdentity
+    ) throws -> ExplicitDeleteProvenanceProjection? {
+        let batchID = identity.batchID
+        let operationIndex = identity.operationIndex
+        return try fetchOne(ExplicitDeleteProvenance.self, #Predicate {
+            $0.batchID == batchID && $0.operationIndex == operationIndex
+        }).map(explicitDeleteProvenanceProjection)
+    }
+
+    func insertExplicitDeleteProvenance(_ record: ExplicitDeleteProvenanceRecord) throws {
+        let canonicalData = try record.canonicalPayloadData()
+        let batchID = record.batchID
+        let operationIndex = record.operationIndex
+        if let existing = try fetchOne(ExplicitDeleteProvenance.self, #Predicate {
+            $0.batchID == batchID && $0.operationIndex == operationIndex
+        }) {
+            guard existing.canonicalRecordPayloadData == canonicalData else {
+                throw SyncConvergenceTransactionFailure.inconsistentIncorporationState(noteID: record.noteID)
+            }
+            return
+        }
+        context.insert(try ExplicitDeleteProvenance(record: record, canonicalRecordPayloadData: canonicalData))
+    }
+
+    func compactExplicitDeleteProvenance(
+        identity: SyncConvergenceRetainedOperationIdentity,
+        using snapshot: SyncConvergenceSnapshotRecord
+    ) throws -> ExplicitDeleteProvenanceCompactionResult {
+        let batchID = identity.batchID
+        let operationIndex = identity.operationIndex
+        guard let existing = try fetchOne(ExplicitDeleteProvenance.self, #Predicate {
+            $0.batchID == batchID && $0.operationIndex == operationIndex
+        }) else {
+            return .retainedFull(.occurrenceNotFound)
+        }
+        let projection = try explicitDeleteProvenanceProjection(existing)
+        let result = ExplicitDeleteProvenanceCompactor().compact(
+            record: projection.record,
+            baseSnapshot: snapshot
+        )
+        if case .compacted(let compacted) = result, compacted != projection.record {
+            try existing.replace(with: compacted, canonicalRecordPayloadData: compacted.canonicalPayloadData())
+        }
+        return result
+    }
+
     func loadSnapshot(noteID: UUID, generation: Int) throws -> SyncConvergenceSnapshotProjection? {
         try fetchOne(NoteContentSnapshot.self, #Predicate {
             $0.noteID == noteID && $0.generation == generation
@@ -308,6 +355,23 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
             resultContentHash: model.resultContentHash,
             canonicalReplayKey: try CanonicalReplayKeyPayload.decodeEvidenceData(model.canonicalReplayKeyPayloadData),
             modifiedAt: model.modifiedAt
+        )
+    }
+
+    private func explicitDeleteProvenanceProjection(
+        _ model: ExplicitDeleteProvenance
+    ) throws -> ExplicitDeleteProvenanceProjection {
+        try SyncConvergencePersistenceValidation.validate(model)
+        let record = try SyncConvergenceStableEncoding.decode(
+            ExplicitDeleteProvenanceRecord.self,
+            from: model.canonicalRecordPayloadData
+        )
+        guard record.canonicalReplayKey == (try CanonicalReplayKeyPayload.decodeEvidenceData(model.canonicalReplayKeyPayloadData)) else {
+            throw SyncConvergenceTransactionFailure.corruptHistory(noteID: model.noteID)
+        }
+        return ExplicitDeleteProvenanceProjection(
+            record: record,
+            canonicalPayloadData: model.canonicalRecordPayloadData
         )
     }
 

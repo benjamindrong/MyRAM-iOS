@@ -14,6 +14,7 @@ enum MyRAMModelRegistry {
         PinnedThought.self,
         NoteContentSnapshot.self,
         RetainedBodyOperation.self,
+        ExplicitDeleteProvenance.self,
         IncorporatedSyncBatch.self,
         IncorporatedBatchTombstone.self,
         IncorporatedBatchNoteEffect.self,

@@ -115,6 +115,106 @@ final class RetainedBodyOperation {
 }
 
 @Model
+final class ExplicitDeleteProvenance {
+    @Attribute(.unique) var provenanceKey: String
+    var id: UUID
+    var noteID: UUID
+    var batchID: UUID
+    var operationIndex: Int
+    var originDeviceID: UUID
+    var tierRaw: String
+    var formatVersion: Int
+    var canonicalReplayKeyPayloadData: Data
+    var canonicalRecordPayloadData: Data
+    var baseContentHash: String
+    var resultContentHash: String
+    var deletedText: String?
+    var deletedTextDigest: String
+    var deletedUTF16Length: Int
+    var leftContext: String?
+    var leftContextDigest: String
+    var leftContextUTF16Length: Int
+    var rightContext: String?
+    var rightContextDigest: String
+    var rightContextUTF16Length: Int
+    var originalUTF16Offset: Int
+    var occurrenceOrdinal: Int
+    var baseSnapshotGeneration: Int?
+    private(set) var createdAt: Date
+    private(set) var createdAtBitPattern: UInt64
+    var payloadByteCount: Int
+
+    init(id: UUID = UUID(), record: ExplicitDeleteProvenanceRecord, canonicalRecordPayloadData: Data) throws {
+        self.provenanceKey = record.provenanceKey
+        self.id = id
+        self.noteID = record.noteID
+        self.batchID = record.batchID
+        self.operationIndex = record.operationIndex
+        self.originDeviceID = record.originDeviceID
+        self.tierRaw = record.tier.rawValue
+        self.formatVersion = record.formatVersion
+        self.canonicalReplayKeyPayloadData = try record.canonicalReplayKey.encodedEvidenceData()
+        self.canonicalRecordPayloadData = canonicalRecordPayloadData
+        self.baseContentHash = record.baseContentHash
+        self.resultContentHash = record.resultContentHash
+        self.deletedText = record.deletedText
+        self.deletedTextDigest = record.deletedTextDigest
+        self.deletedUTF16Length = record.deletedUTF16Length
+        self.leftContext = record.leftContext
+        self.leftContextDigest = record.leftContextDigest
+        self.leftContextUTF16Length = record.leftContextUTF16Length
+        self.rightContext = record.rightContext
+        self.rightContextDigest = record.rightContextDigest
+        self.rightContextUTF16Length = record.rightContextUTF16Length
+        self.originalUTF16Offset = record.originalUTF16Offset
+        self.occurrenceOrdinal = record.occurrenceOrdinal
+        self.baseSnapshotGeneration = record.baseSnapshotGeneration
+        self.createdAt = record.createdAt
+        self.createdAtBitPattern = record.createdAtBitPattern
+        self.payloadByteCount = record.payloadByteCount
+    }
+
+    func validateDateAuthority() throws {
+        try SyncConvergenceDateAuthority.validate(
+            date: createdAt,
+            bitPattern: createdAtBitPattern,
+            field: "createdAt"
+        )
+    }
+
+    func replace(with record: ExplicitDeleteProvenanceRecord, canonicalRecordPayloadData: Data) throws {
+        guard provenanceKey == record.provenanceKey else {
+            throw SyncConvergenceTransactionFailure.inconsistentIncorporationState(noteID: noteID)
+        }
+        noteID = record.noteID
+        batchID = record.batchID
+        operationIndex = record.operationIndex
+        originDeviceID = record.originDeviceID
+        tierRaw = record.tier.rawValue
+        formatVersion = record.formatVersion
+        canonicalReplayKeyPayloadData = try record.canonicalReplayKey.encodedEvidenceData()
+        self.canonicalRecordPayloadData = canonicalRecordPayloadData
+        baseContentHash = record.baseContentHash
+        resultContentHash = record.resultContentHash
+        deletedText = record.deletedText
+        deletedTextDigest = record.deletedTextDigest
+        deletedUTF16Length = record.deletedUTF16Length
+        leftContext = record.leftContext
+        leftContextDigest = record.leftContextDigest
+        leftContextUTF16Length = record.leftContextUTF16Length
+        rightContext = record.rightContext
+        rightContextDigest = record.rightContextDigest
+        rightContextUTF16Length = record.rightContextUTF16Length
+        originalUTF16Offset = record.originalUTF16Offset
+        occurrenceOrdinal = record.occurrenceOrdinal
+        baseSnapshotGeneration = record.baseSnapshotGeneration
+        createdAt = record.createdAt
+        createdAtBitPattern = record.createdAtBitPattern
+        payloadByteCount = record.payloadByteCount
+    }
+}
+
+@Model
 final class IncorporatedSyncBatch {
     @Attribute(.unique) var batchKey: String
     var id: UUID
@@ -555,6 +655,8 @@ final class NoteHistoryCompactionState {
     var newestRetainedGeneration: Int
     var retainedOperationCount: Int
     var retainedOperationBytes: Int
+    var explicitDeleteProvenanceCount: Int
+    var explicitDeleteProvenanceBytes: Int
     var retainedSnapshotCount: Int
     var retainedSnapshotBytes: Int
     var fullIncorporationEvidenceBytes: Int
@@ -572,6 +674,8 @@ final class NoteHistoryCompactionState {
         self.newestRetainedGeneration = 0
         self.retainedOperationCount = 0
         self.retainedOperationBytes = 0
+        self.explicitDeleteProvenanceCount = 0
+        self.explicitDeleteProvenanceBytes = 0
         self.retainedSnapshotCount = 0
         self.retainedSnapshotBytes = 0
         self.fullIncorporationEvidenceBytes = 0
@@ -758,6 +862,28 @@ enum SyncConvergencePersistenceValidation {
     static func validate(_ operation: RetainedBodyOperation) throws {
         try operation.validateDateAuthority()
         _ = try CanonicalReplayKeyPayload.decodeEvidenceData(operation.canonicalReplayKeyPayloadData)
+    }
+
+    static func validate(_ provenance: ExplicitDeleteProvenance) throws {
+        try provenance.validateDateAuthority()
+        _ = try CanonicalReplayKeyPayload.decodeEvidenceData(provenance.canonicalReplayKeyPayloadData)
+        let record = try SyncConvergenceStableEncoding.decode(
+            ExplicitDeleteProvenanceRecord.self,
+            from: provenance.canonicalRecordPayloadData
+        )
+        guard record.provenanceKey == provenance.provenanceKey,
+              record.noteID == provenance.noteID,
+              record.batchID == provenance.batchID,
+              record.operationIndex == provenance.operationIndex,
+              record.originDeviceID == provenance.originDeviceID,
+              record.tier.rawValue == provenance.tierRaw,
+              record.formatVersion == provenance.formatVersion,
+              record.baseContentHash == provenance.baseContentHash,
+              record.resultContentHash == provenance.resultContentHash,
+              record.payloadByteCount == provenance.payloadByteCount
+        else {
+            throw SyncConvergenceValidationError.modelPayloadDisagreement(field: "explicitDeleteProvenance")
+        }
     }
 
     static func validate(_ batch: IncorporatedSyncBatch) throws {

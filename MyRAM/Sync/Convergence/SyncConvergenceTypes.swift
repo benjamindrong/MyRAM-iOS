@@ -11,6 +11,10 @@ enum SyncConvergenceKey {
         join(.namespace("operation"), .uuid(batchID), .int(operationIndex))
     }
 
+    static func explicitDeleteProvenance(batchID: UUID, operationIndex: Int) -> String {
+        join(.namespace("explicit-delete-provenance"), .uuid(batchID), .int(operationIndex))
+    }
+
     static func incorporatedBatch(batchID: UUID) -> String {
         join(.namespace("batch"), .uuid(batchID))
     }
