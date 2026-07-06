@@ -25,6 +25,14 @@ struct RetainedOperationCausalGraphValidator {
             return .recoveryRequired(.invalidOperationIdentity)
         }
 
+        if let batchHistoryFailure = validateBatchHistory(
+            normalizedOperations: normalizedOperations,
+            incorporatedOperationIdentities: input.incorporatedOperationIdentities,
+            anchorContentHash: input.anchorContentHash
+        ) {
+            return .recoveryRequired(batchHistoryFailure)
+        }
+
         let activeOperations = normalizedOperations
             .filter { !input.incorporatedOperationIdentities.contains(Self.identity(for: $0)) }
             .sorted {
@@ -98,6 +106,47 @@ struct RetainedOperationCausalGraphValidator {
         return Array(recordsByIdentity.values)
     }
 
+    private func validateBatchHistory(
+        normalizedOperations: [SyncConvergenceRetainedOperationRecord],
+        incorporatedOperationIdentities: Set<SyncConvergenceRetainedOperationIdentity>,
+        anchorContentHash: String
+    ) -> IncrementalEditRecoveryReason? {
+        let operationsByIdentity = Dictionary(uniqueKeysWithValues: normalizedOperations.map {
+            (Self.identity(for: $0), $0)
+        })
+        let activeOperations = normalizedOperations.filter {
+            !incorporatedOperationIdentities.contains(Self.identity(for: $0))
+        }
+
+        for operation in activeOperations.sorted(by: sameBatchSort) {
+            guard operation.operationIndex > 0 else { continue }
+
+            let predecessorIdentity = SyncConvergenceRetainedOperationIdentity(
+                batchID: operation.batchID,
+                operationIndex: operation.operationIndex - 1
+            )
+
+            guard let predecessor = operationsByIdentity[predecessorIdentity],
+                  predecessor.originDeviceID == operation.originDeviceID,
+                  predecessor.noteID == operation.noteID
+            else {
+                return .missingCausalPredecessor
+            }
+
+            if incorporatedOperationIdentities.contains(predecessorIdentity) {
+                guard predecessor.resultContentHash == anchorContentHash,
+                      operation.baseContentHash == anchorContentHash
+                else {
+                    return .unreconstructableBase
+                }
+            } else if operation.baseContentHash != predecessor.resultContentHash {
+                return .missingCausalPredecessor
+            }
+        }
+
+        return nil
+    }
+
     private func validateCausalGraph(
         nodes: [MetadataNode],
         anchorContentHash: String
@@ -115,13 +164,6 @@ struct RetainedOperationCausalGraphValidator {
         }
 
         let predecessorByIdentity = predecessorCandidatesByIdentity.compactMapValues(\.first)
-        let successorIdentitiesByPredecessor = Dictionary(grouping: predecessorByIdentity.keys) {
-            predecessorByIdentity[$0]!.identity
-        }
-
-        if successorIdentitiesByPredecessor.values.contains(where: { $0.count > 1 }) {
-            return .recoveryRequired(.ambiguousCausalChain)
-        }
 
         for node in nodes where node.baseContentHash != anchorContentHash {
             guard predecessorByIdentity[node.identity] != nil else {
@@ -129,13 +171,16 @@ struct RetainedOperationCausalGraphValidator {
             }
         }
 
+        let successorIdentitiesByPredecessor = Dictionary(grouping: predecessorByIdentity.keys) {
+            predecessorByIdentity[$0]!.identity
+        }
         let successorByPredecessor = successorIdentitiesByPredecessor.mapValues { identities in
             identities.sorted { lhs, rhs in
                 canonicalIndex(for: lhs, in: nodes) < canonicalIndex(for: rhs, in: nodes)
             }.first!
         }
         let roots = nodes
-            .filter { $0.baseContentHash == anchorContentHash }
+            .filter { $0.baseContentHash == anchorContentHash && predecessorByIdentity[$0.identity] == nil }
             .map(\.identity)
 
         let validatedNodes = nodes.map { node in
@@ -148,6 +193,10 @@ struct RetainedOperationCausalGraphValidator {
                 predecessorIdentity: predecessorByIdentity[node.identity]?.identity,
                 successorIdentity: successorByPredecessor[node.identity]
             )
+        }
+
+        guard graphIsRooted(nodes: validatedNodes, rootIdentities: roots) else {
+            return .recoveryRequired(.unreconstructableBase)
         }
 
         return .valid(
@@ -172,11 +221,12 @@ struct RetainedOperationCausalGraphValidator {
         }
 
         var candidates: [SyncConvergenceRetainedOperationIdentity: [MetadataNode]] = [:]
-        for node in nodes where node.baseContentHash != anchorContentHash {
-            candidates[node.identity] = nodesByDeviceAndResult[
+        for node in nodes {
+            let matchingPredecessors = nodesByDeviceAndResult[
                 DeviceHash(deviceID: node.operation.originDeviceID, hash: node.baseContentHash),
                 default: []
             ]
+            candidates[node.identity] = matchingPredecessors.filter { $0.identity != node.identity }
         }
         return candidates
     }
@@ -224,14 +274,80 @@ struct RetainedOperationCausalGraphValidator {
                 let previous = ordered[ordered.index(before: index)]
                 let current = ordered[index]
                 if current.operation.operationIndex != previous.operation.operationIndex + 1 ||
-                    current.baseContentHash != previous.resultContentHash ||
-                    current.baseContentHash == anchorContentHash {
+                    current.baseContentHash != previous.resultContentHash {
                     return true
                 }
             }
         }
 
         return false
+    }
+
+    private func graphIsRooted(
+        nodes: [ValidatedRetainedOperationNode],
+        rootIdentities: [SyncConvergenceRetainedOperationIdentity]
+    ) -> Bool {
+        guard nodes.isEmpty || !rootIdentities.isEmpty else {
+            return false
+        }
+
+        let nodesByIdentity = Dictionary(uniqueKeysWithValues: nodes.map { ($0.identity, $0) })
+        var visited = Set<SyncConvergenceRetainedOperationIdentity>()
+
+        for rootIdentity in rootIdentities {
+            guard let root = nodesByIdentity[rootIdentity],
+                  root.predecessorIdentity == nil
+            else {
+                return false
+            }
+
+            var current: ValidatedRetainedOperationNode? = root
+            while let node = current {
+                guard node.predecessorIdentity != node.identity,
+                      node.successorIdentity != node.identity,
+                      !visited.contains(node.identity)
+                else {
+                    return false
+                }
+                visited.insert(node.identity)
+
+                if let predecessorIdentity = node.predecessorIdentity,
+                   nodesByIdentity[predecessorIdentity] == nil {
+                    return false
+                }
+
+                if let successorIdentity = node.successorIdentity {
+                    guard let successor = nodesByIdentity[successorIdentity],
+                          successor.predecessorIdentity == node.identity
+                    else {
+                        return false
+                    }
+                    current = successor
+                } else {
+                    current = nil
+                }
+            }
+        }
+
+        return visited.count == nodes.count
+    }
+
+    private func sameBatchSort(
+        _ lhs: SyncConvergenceRetainedOperationRecord,
+        _ rhs: SyncConvergenceRetainedOperationRecord
+    ) -> Bool {
+        let lhsKey = sameBatchSortKey(lhs)
+        let rhsKey = sameBatchSortKey(rhs)
+        if lhsKey != rhsKey { return lhsKey < rhsKey }
+        return lhs.operationIndex < rhs.operationIndex
+    }
+
+    private func sameBatchSortKey(_ operation: SyncConvergenceRetainedOperationRecord) -> String {
+        [
+            operation.originDeviceID.uuidString.lowercased(),
+            operation.noteID.uuidString.lowercased(),
+            operation.batchID.uuidString.lowercased()
+        ].joined(separator: "|")
     }
 
     private func canonicalIndex(
