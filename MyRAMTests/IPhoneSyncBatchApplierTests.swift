@@ -407,6 +407,7 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         XCTAssertFalse(seenBatchStore.hasSeen(batchID))
     }
 
+    @discardableResult
     private func apply(
         batchID: String = "00000000-0000-0000-0000-000000125100",
         changes: [SyncBatchChange],
