@@ -533,6 +533,14 @@ protocol SyncConvergencePersistenceTransaction {
     func insertResultEvidence(_ record: SyncConvergenceResultEvidenceRecord) throws
     func loadRetainedOperation(identity: SyncConvergenceRetainedOperationIdentity) throws -> SyncConvergenceRetainedOperationProjection?
     func insertRetainedOperation(_ record: SyncConvergenceRetainedOperationRecord) throws
+    func loadExplicitDeleteProvenance(
+        identity: SyncConvergenceRetainedOperationIdentity
+    ) throws -> ExplicitDeleteProvenanceProjection?
+    func insertExplicitDeleteProvenance(_ record: ExplicitDeleteProvenanceRecord) throws
+    func compactExplicitDeleteProvenance(
+        identity: SyncConvergenceRetainedOperationIdentity,
+        using snapshot: SyncConvergenceSnapshotRecord
+    ) throws -> ExplicitDeleteProvenanceCompactionResult
     func loadSnapshot(noteID: UUID, generation: Int) throws -> SyncConvergenceSnapshotProjection?
     func loadHighestSnapshotGeneration(noteID: UUID) throws -> Int?
     func insertSnapshot(_ record: SyncConvergenceSnapshotRecord) throws
@@ -546,6 +554,8 @@ struct SyncConvergenceHistoryAccountingProjection: Equatable {
     let retainedOperationCount: Int
     let snapshotBytes: Int
     let retainedOperationBytes: Int
+    let explicitDeleteProvenanceCount: Int
+    let explicitDeleteProvenanceBytes: Int
     let fullIncorporationEvidenceBytes: Int
     let diagnosticEvidenceBytes: Int
     let cleanupEvidenceBytes: Int
@@ -560,6 +570,8 @@ struct SyncConvergenceHistoryAccountingProjection: Equatable {
             retainedOperationCount: 0,
             snapshotBytes: 0,
             retainedOperationBytes: 0,
+            explicitDeleteProvenanceCount: 0,
+            explicitDeleteProvenanceBytes: 0,
             fullIncorporationEvidenceBytes: 0,
             diagnosticEvidenceBytes: 0,
             cleanupEvidenceBytes: 0,

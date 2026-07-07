@@ -3673,6 +3673,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
     var tombstones: [UUID: SyncConvergenceIncorporatedTombstoneProjection] = [:]
     var children: [UUID: SyncConvergenceIncorporatedChildrenProjection] = [:]
     var retainedOperations: [SyncConvergenceRetainedOperationIdentity: SyncConvergenceRetainedOperationProjection] = [:]
+    var explicitDeleteProvenance: [SyncConvergenceRetainedOperationIdentity: ExplicitDeleteProvenanceProjection] = [:]
     var snapshots: [String: SyncConvergenceSnapshotProjection] = [:]
     var saveCalled = false
     var rollbackCalled = false
@@ -3830,6 +3831,45 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
         try throwIfConfigured(.retainedOperation)
     }
 
+    func loadExplicitDeleteProvenance(
+        identity: SyncConvergenceRetainedOperationIdentity
+    ) throws -> ExplicitDeleteProvenanceProjection? {
+        explicitDeleteProvenance[identity]
+    }
+
+    func insertExplicitDeleteProvenance(_ record: ExplicitDeleteProvenanceRecord) throws {
+        stageRollback()
+        let canonicalData = try record.canonicalPayloadData()
+        if let existing = explicitDeleteProvenance[record.identity] {
+            guard existing.canonicalPayloadData == canonicalData else {
+                throw SyncConvergenceTransactionFailure.inconsistentIncorporationState(noteID: record.noteID)
+            }
+            return
+        }
+        explicitDeleteProvenance[record.identity] = ExplicitDeleteProvenanceProjection(
+            record: record,
+            canonicalPayloadData: canonicalData
+        )
+    }
+
+    func compactExplicitDeleteProvenance(
+        identity: SyncConvergenceRetainedOperationIdentity,
+        using snapshot: SyncConvergenceSnapshotRecord
+    ) throws -> ExplicitDeleteProvenanceCompactionResult {
+        stageRollback()
+        guard let existing = explicitDeleteProvenance[identity] else {
+            return .retainedFull(.occurrenceNotFound)
+        }
+        let result = ExplicitDeleteProvenanceCompactor().compact(record: existing.record, baseSnapshot: snapshot)
+        if case .compacted(let compacted) = result {
+            explicitDeleteProvenance[identity] = ExplicitDeleteProvenanceProjection(
+                record: compacted,
+                canonicalPayloadData: try compacted.canonicalPayloadData()
+            )
+        }
+        return result
+    }
+
     func loadSnapshot(noteID: UUID, generation: Int) throws -> SyncConvergenceSnapshotProjection? {
         snapshots["\(noteID.uuidString.lowercased())|\(generation)"]
     }
@@ -3868,6 +3908,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
         tombstones = rollbackSnapshot.tombstones
         children = rollbackSnapshot.children
         retainedOperations = rollbackSnapshot.retainedOperations
+        explicitDeleteProvenance = rollbackSnapshot.explicitDeleteProvenance
         snapshots = rollbackSnapshot.snapshots
         self.rollbackSnapshot = nil
     }
@@ -3919,6 +3960,7 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             tombstones: tombstones,
             children: children,
             retainedOperations: retainedOperations,
+            explicitDeleteProvenance: explicitDeleteProvenance,
             snapshots: snapshots
         )
     }
@@ -3941,6 +3983,7 @@ private struct TransactionState: Equatable {
     let tombstones: [UUID: SyncConvergenceIncorporatedTombstoneProjection]
     let children: [UUID: SyncConvergenceIncorporatedChildrenProjection]
     let retainedOperations: [SyncConvergenceRetainedOperationIdentity: SyncConvergenceRetainedOperationProjection]
+    let explicitDeleteProvenance: [SyncConvergenceRetainedOperationIdentity: ExplicitDeleteProvenanceProjection]
     let snapshots: [String: SyncConvergenceSnapshotProjection]
 }
 

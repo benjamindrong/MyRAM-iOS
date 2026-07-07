@@ -1826,6 +1826,7 @@ private struct SyncConvergenceHistoryPolicy {
                 return .failed(.invalidMergePlan(noteID: noteID))
             }
             let projectedOperationBytes = current.retainedOperationBytes + addedOperationBytes
+            let projectedProvenanceBytes = current.explicitDeleteProvenanceBytes
             let projectedFullEvidenceBytes = current.fullIncorporationEvidenceBytes + fullIncorporationEvidenceBytes
             let addsBoundedEvidence = !addedSnapshots.isEmpty ||
                 !addedOperations.isEmpty ||
@@ -1833,8 +1834,10 @@ private struct SyncConvergenceHistoryPolicy {
 
             if projectedSnapshotCount > Limits.hardSnapshots ||
                 projectedOperationCount > Limits.hardRetainedOperations ||
+                current.explicitDeleteProvenanceCount > Limits.hardRetainedOperations ||
                 projectedSnapshotBytes > Limits.hardSnapshotBytes ||
                 projectedOperationBytes > Limits.hardOperationBytes ||
+                projectedProvenanceBytes > Limits.hardOperationBytes ||
                 projectedFullEvidenceBytes > Limits.hardFullEvidenceBytes ||
                 current.diagnosticEvidenceBytes > Limits.hardEvidenceBytes ||
                 current.cleanupEvidenceBytes > Limits.hardEvidenceBytes ||
@@ -1846,8 +1849,10 @@ private struct SyncConvergenceHistoryPolicy {
 
             if projectedSnapshotCount > Limits.softSnapshots ||
                 projectedOperationCount > Limits.softRetainedOperations ||
+                current.explicitDeleteProvenanceCount > Limits.softRetainedOperations ||
                 projectedSnapshotBytes > Limits.softSnapshotBytes ||
                 projectedOperationBytes > Limits.softOperationBytes ||
+                projectedProvenanceBytes > Limits.softOperationBytes ||
                 projectedFullEvidenceBytes > Limits.softFullEvidenceBytes ||
                 current.diagnosticEvidenceBytes > Limits.softEvidenceBytes ||
                 current.cleanupEvidenceBytes > Limits.softEvidenceBytes ||
