@@ -24,7 +24,6 @@ final class NotesViewModel: ObservableObject {
     @Published var currentNote: Note? = nil
     @Published var currentFolder: Folder? = nil
     @Published private(set) var syncConflicts: [SyncConflictVersion] = []
-    @Published private(set) var activeNoteSyncRevision = 0
     @Published private(set) var activeEditorSyncUpdate: ActiveEditorSyncUpdate?
     @Published private(set) var syncBatchErrorMessage: String?
     @Published private(set) var hasUndoableAction = false
@@ -1502,7 +1501,7 @@ final class NotesViewModel: ObservableObject {
             didApply: { [weak self] batch, appliedEditorBatches in
                 guard let self else { return }
                 refreshCurrentFolderContent()
-                publishActiveEditorUpdate(from: appliedEditorBatches)
+                publishActiveEditorUpdate(from: batch, appliedEditorBatches: appliedEditorBatches)
                 syncBatchErrorMessage = nil
                 onDrainBatchApplied?(batch)
             }
@@ -1519,24 +1518,51 @@ final class NotesViewModel: ObservableObject {
         drainPendingIncomingSyncBatches()
     }
 
-    private func publishActiveEditorUpdate(from appliedBatches: [AppliedEditorMutationBatch]) {
-        guard let activeNoteID = currentNote?.id else {
-            activeNoteSyncRevision += 1
-            return
-        }
+    private func publishActiveEditorUpdate(
+        from sourceBatch: SyncBatch,
+        appliedEditorBatches: [AppliedEditorMutationBatch]
+    ) {
+        guard let activeNoteID = currentNote?.id else { return }
 
-        if let batch = appliedBatches.first(where: { $0.noteID == activeNoteID }) {
+        let metadata = activeEditorMetadataUpdate(for: activeNoteID, in: sourceBatch)
+        let bodyBatch = appliedEditorBatches.first { $0.noteID == activeNoteID }
+
+        switch (metadata, bodyBatch) {
+        case let (metadata?, bodyBatch?):
             activeEditorSyncUpdate = ActiveEditorSyncUpdate(
                 noteID: activeNoteID,
-                disposition: .apply(batch)
+                metadata: metadata,
+                disposition: .apply(bodyBatch)
             )
-        } else {
-            activeNoteSyncRevision += 1
+        case let (nil, bodyBatch?):
+            activeEditorSyncUpdate = ActiveEditorSyncUpdate(
+                noteID: activeNoteID,
+                disposition: .apply(bodyBatch)
+            )
+        case let (metadata?, nil):
+            activeEditorSyncUpdate = ActiveEditorSyncUpdate(
+                noteID: activeNoteID,
+                metadata: metadata,
+                disposition: .metadataOnly
+            )
+        case (nil, nil):
+            return
         }
     }
 
+    private func activeEditorMetadataUpdate(for noteID: UUID, in sourceBatch: SyncBatch) -> ActiveEditorMetadataUpdate? {
+        var title: String?
+        for change in sourceBatch.changes {
+            guard case .noteTitleChanged(let titleChange) = change,
+                  titleChange.noteID == noteID else { continue }
+            title = titleChange.title
+        }
+
+        guard title != nil else { return nil }
+        return ActiveEditorMetadataUpdate(title: title)
+    }
+
     private func publishActiveEditorReload(noteID: UUID?, reason: ActiveEditorReloadReason) {
-        activeNoteSyncRevision += 1
         guard let noteID,
               currentNote?.id == noteID else { return }
         activeEditorSyncUpdate = ActiveEditorSyncUpdate(

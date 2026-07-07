@@ -88,8 +88,7 @@ struct NoteEditorView: View {
     @State private var pendingNoteCommitTask: Task<Void, Never>?
     @State private var hasPendingNoteCommit = false
     @State private var editorBufferOwner: EditorBufferOwner = .idle
-    @State private var deferRemoteRefreshUntilCommit = false
-    @State private var pendingActiveEditorSyncUpdate: ActiveEditorSyncUpdate?
+    @State private var pendingRemoteTitlePublication: PendingRemoteTitlePublication?
     @State private var pendingRichTextContentEncoder: DeferredRichTextContentEncoder?
     @FocusState private var isCurrentNoteSearchFocused: Bool
     @FocusState private var focusedPinnedThoughtID: UUID?
@@ -180,7 +179,9 @@ struct NoteEditorView: View {
     private var editorLifecycleContent: some View {
         editorChromeContent
             .onAppear(perform: initializeEditor)
-            .onChange(of: title) { handleEditorChange() }
+            .onChange(of: title) { _, newTitle in
+                handleObservedTitleChange(newTitle)
+            }
             .onChange(of: currentNoteSearchQuery) {
                 scheduleCurrentNoteSearchUpdate()
             }
@@ -866,7 +867,6 @@ struct NoteEditorView: View {
         if focusedPinnedThoughtID == thoughtID {
             focusedPinnedThoughtID = nil
         }
-        applyDeferredRemoteRefreshIfNeeded()
     }
 
     private func pinSelectedText(_ selectedText: String) -> Bool {
@@ -1274,7 +1274,6 @@ struct NoteEditorView: View {
             editorBufferOwner = .idle
         }
         lastSnapshot = currentNoteSnapshot()
-        applyDeferredRemoteRefreshIfNeeded()
     }
 
     private func handleEditorChange() {
@@ -1300,6 +1299,28 @@ struct NoteEditorView: View {
         refreshUndoState()
     }
 
+    private func handleObservedTitleChange(_ observedTitle: String) {
+        if consumeMatchingRemoteTitlePublication(observedTitle) {
+            return
+        }
+
+        handleEditorChange()
+    }
+
+    private func consumeMatchingRemoteTitlePublication(_ observedTitle: String) -> Bool {
+        guard let marker = pendingRemoteTitlePublication else { return false }
+        pendingRemoteTitlePublication = nil
+        guard marker.noteID == note.id,
+              marker.expectedTitle == observedTitle else {
+            return false
+        }
+
+        alignLastSnapshotTitle(observedTitle)
+        toolbarBridge?.title = observedTitle.isEmpty ? "Untitled" : observedTitle
+        refreshUndoState()
+        return true
+    }
+
     private func handleContentChanged(_ plainText: String, _ richTextUpdate: EditorRichTextContentUpdate) {
         content = plainText
         switch richTextUpdate {
@@ -1318,13 +1339,62 @@ struct NoteEditorView: View {
         switch update.disposition {
         case .apply(let batch):
             applyRemoteEditorBatch(batch, update: update)
+        case .metadataOnly:
+            applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
         case .reload(let reason):
             reloadNoteFromSync(reason: reason, update: update)
         case .deferred:
-            pendingActiveEditorSyncUpdate = update
+            break
         case .ignored:
             break
         }
+    }
+
+    private func applyRemoteEditorMetadataIfSafe(
+        _ metadata: ActiveEditorMetadataUpdate?,
+        update: ActiveEditorSyncUpdate
+    ) {
+        guard let metadata else { return }
+
+        let decision = ActiveEditorApplicationPolicy.metadataDecision(
+            editorBufferOwner: editorBufferOwner,
+            hasPendingNoteCommit: hasPendingNoteCommit,
+            hasActivePinnedTextEdit: hasActivePinnedThoughtEdit,
+            hasMarkedText: editorSyncBridge.hasMarkedText,
+            isApplyingUndo: isApplyingUndo,
+            selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id
+        )
+
+        switch decision {
+        case .apply:
+            if let remoteTitle = metadata.title {
+                publishRemoteTitle(remoteTitle, update: update)
+            }
+        case .deferUntilReintegration, .ignore:
+            break
+        }
+    }
+
+    private func publishRemoteTitle(_ remoteTitle: String, update: ActiveEditorSyncUpdate) {
+        guard title != remoteTitle else {
+            pendingRemoteTitlePublication = nil
+            alignLastSnapshotTitle(remoteTitle)
+            toolbarBridge?.title = remoteTitle.isEmpty ? "Untitled" : remoteTitle
+            refreshUndoState()
+            return
+        }
+
+        pendingRemoteTitlePublication = PendingRemoteTitlePublication(
+            updateID: update.id,
+            noteID: update.noteID,
+            expectedTitle: remoteTitle
+        )
+        title = remoteTitle
+        toolbarBridge?.title = remoteTitle.isEmpty ? "Untitled" : remoteTitle
+    }
+
+    private func alignLastSnapshotTitle(_ remoteTitle: String) {
+        lastSnapshot = lastSnapshot.replacingTitle(remoteTitle)
     }
 
     private func applyRemoteEditorBatch(_ batch: AppliedEditorMutationBatch, update: ActiveEditorSyncUpdate) {
@@ -1333,6 +1403,7 @@ struct NoteEditorView: View {
             hasPendingNoteCommit: hasPendingNoteCommit,
             hasActivePinnedTextEdit: hasActivePinnedThoughtEdit,
             hasMarkedText: editorSyncBridge.hasMarkedText,
+            isApplyingUndo: isApplyingUndo,
             editorAvailable: editorSyncBridge.textView != nil,
             selectedNoteMatches: batch.noteID == note.id && vm.currentNote?.id == note.id
         )
@@ -1344,37 +1415,27 @@ struct NoteEditorView: View {
             switch result.disposition {
             case .applied:
                 lastSnapshot = currentNoteSnapshot()
-                refreshUndoState()
                 if editorBufferOwner == .applyingRemoteSync {
                     editorBufferOwner = .idle
                 }
+                applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
+                refreshUndoState()
             case .noApplicableMutations:
                 if editorBufferOwner == .applyingRemoteSync {
                     editorBufferOwner = .idle
                 }
+                applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
             case .requiresReload(let reason):
                 editorBufferOwner = .idle
                 reloadNoteFromSync(reason: reason, update: update)
             }
         case .`defer`:
-            pendingActiveEditorSyncUpdate = update
+            break
         case .reload(let reason):
             reloadNoteFromSync(reason: reason, update: update)
         case .ignore:
             break
         }
-    }
-
-    private func applyDeferredRemoteRefreshIfNeeded() {
-        if let pendingActiveEditorSyncUpdate {
-            self.pendingActiveEditorSyncUpdate = nil
-            handleActiveEditorSyncUpdate(pendingActiveEditorSyncUpdate)
-            return
-        }
-
-        guard deferRemoteRefreshUntilCommit else { return }
-        deferRemoteRefreshUntilCommit = false
-        applyRemoteNoteRefresh(reason: .unsupportedIntegratedChange)
     }
 
     private func reloadNoteFromSync(reason: ActiveEditorReloadReason, update: ActiveEditorSyncUpdate) {
@@ -2241,6 +2302,18 @@ private struct NoteSnapshot: Equatable {
     var content: String = ""
     var richTextContentData: Data?
     var pinnedThoughts: [PinnedThoughtSnapshot] = []
+
+    func replacingTitle(_ title: String) -> NoteSnapshot {
+        var snapshot = self
+        snapshot.title = title
+        return snapshot
+    }
+}
+
+private struct PendingRemoteTitlePublication: Equatable {
+    let updateID: UUID
+    let noteID: UUID
+    let expectedTitle: String
 }
 
 private struct PinnedThoughtSnapshot: Equatable {

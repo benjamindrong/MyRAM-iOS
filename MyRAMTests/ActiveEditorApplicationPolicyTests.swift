@@ -9,6 +9,7 @@ final class ActiveEditorApplicationPolicyTests: XCTestCase {
                 hasPendingNoteCommit: false,
                 hasActivePinnedTextEdit: false,
                 hasMarkedText: false,
+                isApplyingUndo: false,
                 editorAvailable: true,
                 selectedNoteMatches: true
             ),
@@ -51,6 +52,7 @@ final class ActiveEditorApplicationPolicyTests: XCTestCase {
         hasPendingNoteCommit: Bool = false,
         hasActivePinnedTextEdit: Bool = false,
         hasMarkedText: Bool = false,
+        isApplyingUndo: Bool = false,
         editorAvailable: Bool = true,
         selectedNoteMatches: Bool = true
     ) -> ActiveEditorApplicationDecision {
@@ -59,6 +61,7 @@ final class ActiveEditorApplicationPolicyTests: XCTestCase {
             hasPendingNoteCommit: hasPendingNoteCommit,
             hasActivePinnedTextEdit: hasActivePinnedTextEdit,
             hasMarkedText: hasMarkedText,
+            isApplyingUndo: isApplyingUndo,
             editorAvailable: editorAvailable,
             selectedNoteMatches: selectedNoteMatches
         )
