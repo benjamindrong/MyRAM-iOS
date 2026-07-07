@@ -4,8 +4,7 @@ struct ExplicitDeleteProvenanceBuilder {
     func build(
         graph: RetainedOperationCausalGraph,
         node: ValidatedRetainedOperationNode,
-        preDeleteBody: String,
-        createdAt: Date = .now
+        preDeleteBody: String
     ) -> ExplicitDeleteProvenanceBuildResult {
         guard graph.nodes.contains(where: { $0.identity == node.identity && $0 == node }) else {
             return .recoveryRequired(.nodeAbsentFromGraph)
@@ -60,7 +59,7 @@ struct ExplicitDeleteProvenanceBuilder {
             leftContext: preDeleteBody.leftContext(before: deletedRange.lowerBound),
             rightContext: preDeleteBody.rightContext(after: deletedRange.upperBound)
         )
-        let occurrences = ExplicitDeleteOccurrenceEnumerator.occurrences(
+        let occurrences = ExplicitDeleteOccurrenceEnumerator.fullOccurrences(
             in: preDeleteBody,
             descriptor: descriptor
         )
@@ -68,6 +67,7 @@ struct ExplicitDeleteProvenanceBuilder {
             return .recoveryRequired(.occurrenceNotFound)
         }
 
+        let createdAt = node.operation.modifiedAt
         let createdAtBitPattern = SyncConvergenceDateBits.bitPattern(for: createdAt)
         let draft = ExplicitDeleteProvenanceRecord(
             formatVersion: ExplicitDeleteProvenanceConstants.formatVersion,
@@ -227,27 +227,95 @@ struct ExplicitDeleteOccurrence: Equatable {
 }
 
 enum ExplicitDeleteOccurrenceEnumerator {
-    static func occurrences(
+    static func fullOccurrences(
         in body: String,
         descriptor: ExplicitDeleteOccurrenceDescriptor
     ) -> [ExplicitDeleteOccurrence] {
+        matchingTextOccurrences(in: body, deletedText: descriptor.deletedText).filter {
+            $0.leftContext == descriptor.leftContext && $0.rightContext == descriptor.rightContext
+        }
+    }
+
+    static func compactedOccurrences(
+        in body: String,
+        deletedUTF16Length: Int,
+        leftContextUTF16Length: Int,
+        rightContextUTF16Length: Int,
+        deletedTextDigest: String,
+        leftContextDigest: String,
+        rightContextDigest: String
+    ) -> [ExplicitDeleteOccurrence] {
+        guard deletedUTF16Length > 0,
+              leftContextUTF16Length >= 0,
+              rightContextUTF16Length >= 0
+        else {
+            return []
+        }
+
+        let totalUTF16Length = body.utf16.count
         var occurrences: [ExplicitDeleteOccurrence] = []
-        var searchStart = body.startIndex
-        while searchStart <= body.endIndex,
-              let range = body.range(of: descriptor.deletedText, range: searchStart..<body.endIndex) {
+        var start = body.startIndex
+        while start <= body.endIndex {
+            let lowerOffset = body.utf16Offset(of: start)
+            guard lowerOffset + deletedUTF16Length <= totalUTF16Length else {
+                break
+            }
+            defer {
+                if start < body.endIndex {
+                    start = body.index(after: start)
+                } else {
+                    start = body.endIndex
+                }
+            }
+
+            guard min(ExplicitDeleteProvenanceConstants.contextUTF16CodeUnits, lowerOffset) == leftContextUTF16Length,
+                  min(
+                    ExplicitDeleteProvenanceConstants.contextUTF16CodeUnits,
+                    totalUTF16Length - lowerOffset - deletedUTF16Length
+                  ) == rightContextUTF16Length,
+                  let range = body.stringRange(
+                    utf16Offset: lowerOffset,
+                    utf16Length: deletedUTF16Length
+                  )
+            else {
+                continue
+            }
+
+            let deletedText = String(body[range])
             let left = body.leftContext(before: range.lowerBound)
             let right = body.rightContext(after: range.upperBound)
-            if left == descriptor.leftContext && right == descriptor.rightContext {
-                let lower = range.lowerBound.samePosition(in: body.utf16)!
-                let upper = range.upperBound.samePosition(in: body.utf16)!
-                occurrences.append(ExplicitDeleteOccurrence(
-                    utf16Range: body.utf16.distance(from: body.utf16.startIndex, to: lower)..<body.utf16.distance(from: body.utf16.startIndex, to: upper),
-                    deletedText: String(body[range]),
-                    leftContext: left,
-                    rightContext: right
-                ))
+            guard ExplicitDeleteProvenanceDigest.canonicalDigest(for: deletedText) == deletedTextDigest,
+                  ExplicitDeleteProvenanceDigest.canonicalDigest(for: left) == leftContextDigest,
+                  ExplicitDeleteProvenanceDigest.canonicalDigest(for: right) == rightContextDigest
+            else {
+                continue
             }
-            searchStart = range.upperBound
+
+            occurrences.append(ExplicitDeleteOccurrence(
+                utf16Range: lowerOffset..<(lowerOffset + deletedUTF16Length),
+                deletedText: deletedText,
+                leftContext: left,
+                rightContext: right
+            ))
+        }
+        return occurrences
+    }
+
+    static func matchingTextOccurrences(in body: String, deletedText: String) -> [ExplicitDeleteOccurrence] {
+        guard !deletedText.isEmpty else { return [] }
+        var occurrences: [ExplicitDeleteOccurrence] = []
+        var searchStart = body.startIndex
+        while searchStart < body.endIndex,
+              let range = body.range(of: deletedText, range: searchStart..<body.endIndex) {
+            let lowerOffset = body.utf16Offset(of: range.lowerBound)
+            let upperOffset = body.utf16Offset(of: range.upperBound)
+            occurrences.append(ExplicitDeleteOccurrence(
+                utf16Range: lowerOffset..<upperOffset,
+                deletedText: String(body[range]),
+                leftContext: body.leftContext(before: range.lowerBound),
+                rightContext: body.rightContext(after: range.upperBound)
+            ))
+            searchStart = body.index(after: range.lowerBound)
         }
         return occurrences
     }
@@ -281,6 +349,10 @@ extension String {
         }
         let start = String.Index(lower, within: self)!
         return String(self[start..<index])
+    }
+
+    func utf16Offset(of index: String.Index) -> Int {
+        utf16.distance(from: utf16.startIndex, to: index.samePosition(in: utf16)!)
     }
 
     func rightContext(after index: String.Index) -> String {

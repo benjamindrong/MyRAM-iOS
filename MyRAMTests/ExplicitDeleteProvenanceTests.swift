@@ -3,6 +3,53 @@ import XCTest
 @testable import MyRAM
 
 final class ExplicitDeleteProvenanceTests: XCTestCase {
+    func testDeterministicReconstructionIsByteIdenticalAcrossRetryAndRelaunch() throws {
+        let fixture = try makeDeleteFixture(base: "alpha beta gamma", deletedText: "beta", offset: 6)
+        let first = try buildRecord(fixture)
+        Thread.sleep(forTimeInterval: 0.01)
+        let second = try buildRecord(fixture)
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(try first.canonicalPayloadData(), try second.canonicalPayloadData())
+        XCTAssertEqual(first.createdAt, fixture.node.operation.modifiedAt)
+        XCTAssertEqual(first.createdAtBitPattern, SyncConvergenceDateBits.bitPattern(for: fixture.node.operation.modifiedAt))
+
+        let container = try makeContainer()
+        let firstTransaction = SwiftDataSyncConvergencePersistenceTransaction(context: ModelContext(container))
+        try firstTransaction.insertExplicitDeleteProvenance(first)
+        try firstTransaction.insertExplicitDeleteProvenance(second)
+        try firstTransaction.save()
+
+        let reloadedTransaction = SwiftDataSyncConvergencePersistenceTransaction(context: ModelContext(container))
+        let reloaded = try XCTUnwrap(reloadedTransaction.loadExplicitDeleteProvenance(identity: first.identity))
+        XCTAssertEqual(reloaded.record, first)
+        XCTAssertEqual(reloaded.canonicalPayloadData, try first.canonicalPayloadData())
+        XCTAssertEqual(try buildRecord(fixture), reloaded.record)
+    }
+
+    func testChangedOperationTimestampEvidenceChangesCanonicalProvenance() throws {
+        let first = try buildRecord(try makeDeleteFixture(
+            base: "alpha beta",
+            deletedText: "beta",
+            offset: 6,
+            modifiedAt: Date(timeIntervalSince1970: 10)
+        ))
+        let second = try buildRecord(try makeDeleteFixture(
+            base: "alpha beta",
+            deletedText: "beta",
+            offset: 6,
+            noteID: first.noteID,
+            batchID: first.batchID,
+            originDeviceID: first.originDeviceID,
+            modifiedAt: Date(timeIntervalSince1970: 11)
+        ))
+
+        XCTAssertNotEqual(first, second)
+        XCTAssertNotEqual(try first.canonicalPayloadData(), try second.canonicalPayloadData())
+        XCTAssertEqual(second.createdAt, Date(timeIntervalSince1970: 11))
+        XCTAssertEqual(second.createdAtBitPattern, SyncConvergenceDateBits.bitPattern(for: second.createdAt))
+    }
+
+
     func testValidASCIIDeleteBuildsAndValidatesDeterministically() throws {
         let fixture = try makeDeleteFixture(base: "alpha beta gamma", deletedText: "beta", offset: 6)
 
@@ -122,6 +169,69 @@ final class ExplicitDeleteProvenanceTests: XCTestCase {
         )
     }
 
+    func testOverlapSafeTextOccurrenceEnumerationUsesAscendingUTF16Starts() {
+        XCTAssertEqual(
+            ExplicitDeleteOccurrenceEnumerator.matchingTextOccurrences(in: "aaaa", deletedText: "aa").map(\.utf16Range.lowerBound),
+            [0, 1, 2]
+        )
+        XCTAssertEqual(
+            ExplicitDeleteOccurrenceEnumerator.matchingTextOccurrences(in: "aaa", deletedText: "aa").map(\.utf16Range.lowerBound),
+            [0, 1]
+        )
+        let unicodeBody = "😀😀😀"
+        let unicodeOccurrences = ExplicitDeleteOccurrenceEnumerator.matchingTextOccurrences(
+            in: unicodeBody,
+            deletedText: "😀😀"
+        )
+        XCTAssertEqual(unicodeOccurrences.map(\.utf16Range.lowerBound), [0, 2])
+        XCTAssertTrue(unicodeOccurrences.allSatisfy {
+            unicodeBody.stringRange(utf16Offset: $0.utf16Range.lowerBound, utf16Length: $0.utf16Range.count) != nil
+        })
+    }
+
+    func testMiddleOverlappingDeleteBuildsFullAndCompactedValidationToSameRange() throws {
+        let fixture = try makeDeleteFixture(base: "aaaa", deletedText: "aa", offset: 1)
+        let record = try buildRecord(fixture)
+        XCTAssertEqual(record.originalUTF16Offset, 1)
+        XCTAssertEqual(record.occurrenceOrdinal, 0)
+
+        let fullOccurrence = try validOccurrence(ExplicitDeleteProvenanceValidator().validate(
+            record: record,
+            graph: fixture.graph,
+            node: fixture.node,
+            candidateBaseBody: fixture.base
+        ))
+        XCTAssertEqual(fullOccurrence.utf16Range, 1..<3)
+        var result = fixture.base
+        result.removeSubrange(try XCTUnwrap(fixture.base.stringRange(utf16Offset: 1, utf16Length: 2)))
+        XCTAssertEqual(SyncBatchContentHash.sha256Hex(for: result), record.resultContentHash)
+
+        let wrongOrdinal = record.withOccurrenceOrdinal(1)
+        XCTAssertEqual(
+            ExplicitDeleteProvenanceValidator().validate(record: wrongOrdinal, candidateBaseBody: fixture.base),
+            .recoveryRequired(.occurrenceNotFound)
+        )
+
+        let snapshot = SyncConvergenceSnapshotRecord(
+            noteID: record.noteID,
+            contentHash: record.baseContentHash,
+            body: fixture.base,
+            generation: 7,
+            createdAt: Date(timeIntervalSince1970: 70)
+        )
+        let compacted = try compactedRecord(ExplicitDeleteProvenanceCompactor().compact(
+            record: record,
+            baseSnapshot: snapshot
+        ))
+        XCTAssertNil(compacted.deletedText)
+        let compactedOccurrence = try validOccurrence(ExplicitDeleteProvenanceValidator().validate(
+            record: compacted,
+            candidateBaseBody: fixture.base
+        ))
+        XCTAssertEqual(compactedOccurrence.utf16Range, fullOccurrence.utf16Range)
+        XCTAssertEqual(compactedOccurrence.resolvedDeletedText, fullOccurrence.resolvedDeletedText)
+    }
+
     func testRejectsNonDeleteAndMissingGraphNode() throws {
         let fixture = try makeDeleteFixture(base: "abc", deletedText: "b", offset: 1)
         var insertOperation = fixture.node.operation
@@ -204,6 +314,45 @@ final class ExplicitDeleteProvenanceTests: XCTestCase {
         XCTAssertThrowsError(try transaction.insertExplicitDeleteProvenance(contradictory))
     }
 
+    func testContradictoryDuplicateRollbackPreservesOriginalRowAcrossFreshContext() throws {
+        let fixture = try makeDeleteFixture(base: "alpha beta", deletedText: "beta", offset: 6)
+        let record = try buildRecord(fixture)
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
+        try transaction.insertExplicitDeleteProvenance(record)
+        try transaction.save()
+        let originalProjection = try XCTUnwrap(transaction.loadExplicitDeleteProvenance(identity: record.identity))
+        let originalBytes = originalProjection.canonicalPayloadData
+
+        let contradictory = record.withDeletedEvidence("other")
+        XCTAssertThrowsError(try transaction.insertExplicitDeleteProvenance(contradictory)) { error in
+            XCTAssertEqual(
+                error as? SyncConvergenceTransactionFailure,
+                .inconsistentIncorporationState(noteID: record.noteID)
+            )
+        }
+        transaction.rollback()
+
+        let freshContext = ModelContext(container)
+        let rows = try freshContext.fetch(FetchDescriptor<ExplicitDeleteProvenance>())
+        XCTAssertEqual(rows.count, 1)
+        let reloadedTransaction = SwiftDataSyncConvergencePersistenceTransaction(context: freshContext)
+        let reloaded = try XCTUnwrap(reloadedTransaction.loadExplicitDeleteProvenance(identity: record.identity))
+        XCTAssertEqual(reloaded.record, record)
+        XCTAssertEqual(reloaded.canonicalPayloadData, originalBytes)
+        XCTAssertEqual(reloaded.record.deletedText, record.deletedText)
+        XCTAssertEqual(reloaded.record.deletedTextDigest, record.deletedTextDigest)
+        XCTAssertEqual(
+            ExplicitDeleteProvenanceValidator().validate(record: reloaded.record, candidateBaseBody: fixture.base),
+            .valid(try validOccurrence(ExplicitDeleteProvenanceValidator().validate(record: record, candidateBaseBody: fixture.base)))
+        )
+
+        try reloadedTransaction.insertExplicitDeleteProvenance(record)
+        try reloadedTransaction.save()
+        XCTAssertEqual(try ModelContext(container).fetch(FetchDescriptor<ExplicitDeleteProvenance>()).count, 1)
+    }
+
     func testCorruptReplayKeyAndUnknownFormatFailClosed() throws {
         let fixture = try makeDeleteFixture(base: "alpha beta", deletedText: "beta", offset: 6)
         let record = try buildRecord(fixture)
@@ -283,12 +432,50 @@ final class ExplicitDeleteProvenanceTests: XCTestCase {
         XCTAssertEqual(compactedOccurrence.resolvedRightContext, fullOccurrence.resolvedRightContext)
     }
 
+    func testLargeNoteCompactedValidationIsDeterministicAndBoundarySafe() throws {
+        let prefix = (0..<160).map { "p\($0 % 10)" }.joined(separator: "-")
+        let suffix = (0..<160).map { "s\($0 % 7)" }.joined(separator: "_")
+        let base = "\(prefix) aaa aaa target aaa aaa \(suffix)"
+        let offset = try XCTUnwrap(base.range(of: "target")).lowerBound.samePosition(in: base.utf16)!
+        let utf16Offset = base.utf16.distance(from: base.utf16.startIndex, to: offset)
+        let fixture = try makeDeleteFixture(base: base, deletedText: "target", offset: utf16Offset)
+        let record = try buildRecord(fixture)
+        let snapshot = SyncConvergenceSnapshotRecord(
+            noteID: record.noteID,
+            contentHash: record.baseContentHash,
+            body: base,
+            generation: 11,
+            createdAt: Date(timeIntervalSince1970: 110)
+        )
+        let compacted = try compactedRecord(ExplicitDeleteProvenanceCompactor().compact(
+            record: record,
+            baseSnapshot: snapshot
+        ))
+
+        let candidates = ExplicitDeleteOccurrenceEnumerator.compactedOccurrences(
+            in: base,
+            deletedUTF16Length: compacted.deletedUTF16Length,
+            leftContextUTF16Length: compacted.leftContextUTF16Length,
+            rightContextUTF16Length: compacted.rightContextUTF16Length,
+            deletedTextDigest: compacted.deletedTextDigest,
+            leftContextDigest: compacted.leftContextDigest,
+            rightContextDigest: compacted.rightContextDigest
+        )
+        XCTAssertEqual(candidates.count, 1)
+        XCTAssertTrue(candidates.allSatisfy {
+            base.stringRange(utf16Offset: $0.utf16Range.lowerBound, utf16Length: $0.utf16Range.count) != nil
+        })
+        let first = ExplicitDeleteProvenanceValidator().validate(record: compacted, candidateBaseBody: base)
+        let second = ExplicitDeleteProvenanceValidator().validate(record: compacted, candidateBaseBody: base)
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(try validOccurrence(first).utf16Range, record.originalUTF16Offset..<(record.originalUTF16Offset + record.deletedUTF16Length))
+    }
+
     private func buildResult(_ fixture: DeleteFixture) -> ExplicitDeleteProvenanceBuildResult {
         ExplicitDeleteProvenanceBuilder().build(
             graph: fixture.graph,
             node: fixture.node,
-            preDeleteBody: fixture.base,
-            createdAt: Date(timeIntervalSince1970: 20)
+            preDeleteBody: fixture.base
         )
     }
 
@@ -322,12 +509,15 @@ final class ExplicitDeleteProvenanceTests: XCTestCase {
         deletedText: String,
         offset: Int,
         utf16Length: Int? = nil,
-        result explicitResult: String? = nil
+        result explicitResult: String? = nil,
+        noteID explicitNoteID: UUID? = nil,
+        batchID explicitBatchID: UUID? = nil,
+        originDeviceID explicitOriginDeviceID: UUID? = nil,
+        modifiedAt: Date = Date(timeIntervalSince1970: 10)
     ) throws -> DeleteFixture {
-        let noteID = UUID()
-        let batchID = UUID()
-        let originDeviceID = UUID()
-        let modifiedAt = Date(timeIntervalSince1970: 10)
+        let noteID = explicitNoteID ?? UUID()
+        let batchID = explicitBatchID ?? UUID()
+        let originDeviceID = explicitOriginDeviceID ?? UUID()
         let result = explicitResult ?? deleting(base, offset: offset, length: utf16Length ?? deletedText.utf16.count)
         let replayKey = CanonicalReplayKeyPayload(
             modifiedAtBitPattern: SyncConvergenceDateBits.bitPattern(for: modifiedAt),
@@ -393,9 +583,31 @@ private struct DeleteFixture {
 }
 
 private extension ExplicitDeleteProvenanceRecord {
+    func withOccurrenceOrdinal(_ ordinal: Int) -> Self {
+        copy(occurrenceOrdinal: ordinal)
+    }
+
+    func withDeletedEvidence(_ deletedText: String) -> Self {
+        copy(
+            deletedText: deletedText,
+            deletedTextDigest: SyncBatchContentHash.sha256Hex(for: deletedText),
+            deletedUTF16Length: deletedText.utf16.count
+        )
+    }
+
     func withFormatVersion(_ version: Int) -> Self {
+        copy(formatVersion: version)
+    }
+
+    private func copy(
+        formatVersion: Int? = nil,
+        deletedText: String? = nil,
+        deletedTextDigest: String? = nil,
+        deletedUTF16Length: Int? = nil,
+        occurrenceOrdinal: Int? = nil
+    ) -> Self {
         ExplicitDeleteProvenanceRecord(
-            formatVersion: version,
+            formatVersion: formatVersion ?? self.formatVersion,
             tier: tier,
             noteID: noteID,
             batchID: batchID,
@@ -404,9 +616,9 @@ private extension ExplicitDeleteProvenanceRecord {
             canonicalReplayKey: canonicalReplayKey,
             baseContentHash: baseContentHash,
             resultContentHash: resultContentHash,
-            deletedText: deletedText,
-            deletedTextDigest: deletedTextDigest,
-            deletedUTF16Length: deletedUTF16Length,
+            deletedText: deletedText ?? self.deletedText,
+            deletedTextDigest: deletedTextDigest ?? self.deletedTextDigest,
+            deletedUTF16Length: deletedUTF16Length ?? self.deletedUTF16Length,
             leftContext: leftContext,
             leftContextDigest: leftContextDigest,
             leftContextUTF16Length: leftContextUTF16Length,
@@ -414,7 +626,7 @@ private extension ExplicitDeleteProvenanceRecord {
             rightContextDigest: rightContextDigest,
             rightContextUTF16Length: rightContextUTF16Length,
             originalUTF16Offset: originalUTF16Offset,
-            occurrenceOrdinal: occurrenceOrdinal,
+            occurrenceOrdinal: occurrenceOrdinal ?? self.occurrenceOrdinal,
             createdAt: createdAt,
             createdAtBitPattern: createdAtBitPattern,
             payloadByteCount: payloadByteCount,

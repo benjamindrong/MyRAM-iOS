@@ -105,7 +105,7 @@ struct ExplicitDeleteProvenanceValidator {
             else {
                 return .recoveryRequired(.malformedContextEvidence)
             }
-            occurrences = ExplicitDeleteOccurrenceEnumerator.occurrences(
+            occurrences = ExplicitDeleteOccurrenceEnumerator.fullOccurrences(
                 in: candidateBaseBody,
                 descriptor: ExplicitDeleteOccurrenceDescriptor(
                     deletedText: deletedText,
@@ -121,7 +121,15 @@ struct ExplicitDeleteProvenanceValidator {
             else {
                 return .recoveryRequired(.malformedContextEvidence)
             }
-            occurrences = compactedOccurrences(in: candidateBaseBody, record: record)
+            occurrences = ExplicitDeleteOccurrenceEnumerator.compactedOccurrences(
+                in: candidateBaseBody,
+                deletedUTF16Length: record.deletedUTF16Length,
+                leftContextUTF16Length: record.leftContextUTF16Length,
+                rightContextUTF16Length: record.rightContextUTF16Length,
+                deletedTextDigest: record.deletedTextDigest,
+                leftContextDigest: record.leftContextDigest,
+                rightContextDigest: record.rightContextDigest
+            )
         }
 
         guard occurrences.indices.contains(record.occurrenceOrdinal) else {
@@ -155,41 +163,5 @@ struct ExplicitDeleteProvenanceValidator {
             resolvedLeftContext: occurrence.leftContext,
             resolvedRightContext: occurrence.rightContext
         ))
-    }
-
-    private func compactedOccurrences(
-        in body: String,
-        record: ExplicitDeleteProvenanceRecord
-    ) -> [ExplicitDeleteOccurrence] {
-        var occurrences: [ExplicitDeleteOccurrence] = []
-        var offset = 0
-        while offset + record.deletedUTF16Length <= body.utf16.count {
-            defer { offset += 1 }
-            guard let range = body.stringRange(
-                utf16Offset: offset,
-                utf16Length: record.deletedUTF16Length
-            ) else {
-                continue
-            }
-            let deletedText = String(body[range])
-            let left = body.leftContext(before: range.lowerBound)
-            let right = body.rightContext(after: range.upperBound)
-            guard deletedText.utf16.count == record.deletedUTF16Length,
-                  left.utf16.count == record.leftContextUTF16Length,
-                  right.utf16.count == record.rightContextUTF16Length,
-                  ExplicitDeleteProvenanceDigest.canonicalDigest(for: deletedText) == record.deletedTextDigest,
-                  ExplicitDeleteProvenanceDigest.canonicalDigest(for: left) == record.leftContextDigest,
-                  ExplicitDeleteProvenanceDigest.canonicalDigest(for: right) == record.rightContextDigest
-            else {
-                continue
-            }
-            occurrences.append(ExplicitDeleteOccurrence(
-                utf16Range: offset..<(offset + record.deletedUTF16Length),
-                deletedText: deletedText,
-                leftContext: left,
-                rightContext: right
-            ))
-        }
-        return occurrences
     }
 }

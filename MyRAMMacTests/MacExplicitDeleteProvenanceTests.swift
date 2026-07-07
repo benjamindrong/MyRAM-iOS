@@ -7,8 +7,7 @@ final class MacExplicitDeleteProvenanceTests: XCTestCase {
         guard case .record(let record) = ExplicitDeleteProvenanceBuilder().build(
             graph: fixture.graph,
             node: fixture.node,
-            preDeleteBody: fixture.base,
-            createdAt: Date(timeIntervalSince1970: 20)
+            preDeleteBody: fixture.base
         ) else {
             return XCTFail("expected provenance record")
         }
@@ -28,8 +27,7 @@ final class MacExplicitDeleteProvenanceTests: XCTestCase {
         guard case .record(let record) = ExplicitDeleteProvenanceBuilder().build(
             graph: fixture.graph,
             node: fixture.node,
-            preDeleteBody: fixture.base,
-            createdAt: Date(timeIntervalSince1970: 20)
+            preDeleteBody: fixture.base
         ) else {
             return XCTFail("expected provenance record")
         }
