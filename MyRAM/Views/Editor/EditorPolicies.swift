@@ -1,13 +1,5 @@
 import Foundation
 
-enum EditorBufferOwner {
-    case idle
-    case localEditing
-    case applyingRemoteSync
-    case restoringHistory
-    case resolvingConflict
-}
-
 enum EditorBufferReloadPolicy {
     static func shouldDeferRemoteRefresh(owner: EditorBufferOwner, hasPendingNoteCommit: Bool) -> Bool {
         owner == .localEditing && hasPendingNoteCommit

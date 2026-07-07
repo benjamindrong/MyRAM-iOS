@@ -1,9 +1,9 @@
 import XCTest
 @testable import MyRAMMac
 
-final class MacEditorSelectionMapperTests: XCTestCase {
+final class EditorSelectionMapperTests: XCTestCase {
     func testInsertionBeforeCaretShiftsForward() {
-        let mapped = MacEditorSelectionMapper.selectionAfterInsertion(
+        let mapped = EditorSelectionMapper.selectionAfterInsertion(
             current: NSRange(location: 5, length: 0),
             insertionOffset: 2,
             insertedUTF16Length: 3,
@@ -14,7 +14,7 @@ final class MacEditorSelectionMapperTests: XCTestCase {
     }
 
     func testInsertionAfterCaretLeavesSelectionUnchanged() {
-        let mapped = MacEditorSelectionMapper.selectionAfterInsertion(
+        let mapped = EditorSelectionMapper.selectionAfterInsertion(
             current: NSRange(location: 5, length: 0),
             insertionOffset: 8,
             insertedUTF16Length: 3,
@@ -25,7 +25,7 @@ final class MacEditorSelectionMapperTests: XCTestCase {
     }
 
     func testInsertionInsideSelectionExpandsSelection() {
-        let mapped = MacEditorSelectionMapper.selectionAfterInsertion(
+        let mapped = EditorSelectionMapper.selectionAfterInsertion(
             current: NSRange(location: 2, length: 5),
             insertionOffset: 4,
             insertedUTF16Length: 3,
@@ -36,7 +36,7 @@ final class MacEditorSelectionMapperTests: XCTestCase {
     }
 
     func testDeletionBeforeCaretShiftsBackward() {
-        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+        let mapped = EditorSelectionMapper.selectionAfterDeletion(
             current: NSRange(location: 8, length: 0),
             deletedRange: NSRange(location: 2, length: 3),
             resultingTextLength: 7
@@ -46,7 +46,7 @@ final class MacEditorSelectionMapperTests: XCTestCase {
     }
 
     func testDeletionAfterCaretLeavesSelectionUnchanged() {
-        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+        let mapped = EditorSelectionMapper.selectionAfterDeletion(
             current: NSRange(location: 2, length: 0),
             deletedRange: NSRange(location: 5, length: 3),
             resultingTextLength: 7
@@ -56,7 +56,7 @@ final class MacEditorSelectionMapperTests: XCTestCase {
     }
 
     func testDeletionOverlappingCaretClampsToDeletionStart() {
-        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+        let mapped = EditorSelectionMapper.selectionAfterDeletion(
             current: NSRange(location: 4, length: 0),
             deletedRange: NSRange(location: 2, length: 4),
             resultingTextLength: 6
@@ -66,7 +66,7 @@ final class MacEditorSelectionMapperTests: XCTestCase {
     }
 
     func testDeletionOverlappingSelectionClampsValidly() {
-        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+        let mapped = EditorSelectionMapper.selectionAfterDeletion(
             current: NSRange(location: 2, length: 6),
             deletedRange: NSRange(location: 4, length: 3),
             resultingTextLength: 7
@@ -76,7 +76,7 @@ final class MacEditorSelectionMapperTests: XCTestCase {
     }
 
     func testDeletionOverlapFromBeforeKeepsDeletionStart() {
-        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+        let mapped = EditorSelectionMapper.selectionAfterDeletion(
             current: NSRange(location: 5, length: 4),
             deletedRange: NSRange(location: 3, length: 4),
             resultingTextLength: 6
@@ -86,7 +86,7 @@ final class MacEditorSelectionMapperTests: XCTestCase {
     }
 
     func testDeletionStraddlingSelectionStartKeepsDeletionStart() {
-        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+        let mapped = EditorSelectionMapper.selectionAfterDeletion(
             current: NSRange(location: 5, length: 4),
             deletedRange: NSRange(location: 4, length: 2),
             resultingTextLength: 7
@@ -96,7 +96,7 @@ final class MacEditorSelectionMapperTests: XCTestCase {
     }
 
     func testLongDeletionFromZeroKeepsDeletionStart() {
-        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+        let mapped = EditorSelectionMapper.selectionAfterDeletion(
             current: NSRange(location: 5, length: 4),
             deletedRange: NSRange(location: 0, length: 6),
             resultingTextLength: 3
@@ -106,7 +106,7 @@ final class MacEditorSelectionMapperTests: XCTestCase {
     }
 
     func testDeletionInsideSelectionTailShrinksSelection() {
-        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+        let mapped = EditorSelectionMapper.selectionAfterDeletion(
             current: NSRange(location: 5, length: 4),
             deletedRange: NSRange(location: 7, length: 2),
             resultingTextLength: 7
@@ -116,7 +116,7 @@ final class MacEditorSelectionMapperTests: XCTestCase {
     }
 
     func testDeletionContainingSelectionCollapsesToDeletionStart() {
-        let mapped = MacEditorSelectionMapper.selectionAfterDeletion(
+        let mapped = EditorSelectionMapper.selectionAfterDeletion(
             current: NSRange(location: 4, length: 2),
             deletedRange: NSRange(location: 3, length: 4),
             resultingTextLength: 3

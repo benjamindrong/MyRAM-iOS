@@ -13,8 +13,8 @@ struct MacIncomingSyncApplicationPlan: Equatable {
 }
 
 enum MacSelectedEditorAction: Equatable {
-    case applyBodyInsertion(MacAppliedBodyInsertion)
-    case applyBodyDeletion(MacAppliedBodyDeletion)
+    case applyBodyInsertion(AppliedEditorBodyInsertion)
+    case applyBodyDeletion(AppliedEditorBodyDeletion)
 }
 
 enum MacSelectedEditorReloadReason: Equatable {

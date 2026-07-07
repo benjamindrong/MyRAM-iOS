@@ -32,7 +32,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
             appliedBatch.changes,
             [
                 .bodyInserted(
-                    MacAppliedBodyInsertion(
+                    AppliedEditorBodyInsertion(
                         noteID: note.id,
                         utf16Offset: 0,
                         text: "Remote",
@@ -57,7 +57,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
             appliedBatch.changes,
             [
                 .bodyInserted(
-                    MacAppliedBodyInsertion(
+                    AppliedEditorBodyInsertion(
                         noteID: note.id,
                         utf16Offset: 0,
                         text: "x",
@@ -82,7 +82,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
             appliedBatch.changes,
             [
                 .bodyInserted(
-                    MacAppliedBodyInsertion(
+                    AppliedEditorBodyInsertion(
                         noteID: note.id,
                         utf16Offset: 3,
                         text: "x",
@@ -117,7 +117,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
             appliedBatch.changes,
             [
                 .bodyInserted(
-                    MacAppliedBodyInsertion(
+                    AppliedEditorBodyInsertion(
                         noteID: note.id,
                         utf16Offset: 3,
                         text: "x",
@@ -152,7 +152,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
             appliedBatch.changes,
             [
                 .bodyDeleted(
-                    MacAppliedBodyDeletion(
+                    AppliedEditorBodyDeletion(
                         noteID: note.id,
                         range: NSRange(location: 2, length: 2),
                         deletedText: "cd",
@@ -212,7 +212,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
             appliedBatch.changes,
             [
                 .bodyInserted(
-                    MacAppliedBodyInsertion(
+                    AppliedEditorBodyInsertion(
                         noteID: note.id,
                         utf16Offset: 1,
                         text: "Z",
@@ -248,7 +248,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
             appliedBatch.changes,
             [
                 .bodyInserted(
-                    MacAppliedBodyInsertion(
+                    AppliedEditorBodyInsertion(
                         noteID: note.id,
                         utf16Offset: 1,
                         text: "X",
@@ -256,7 +256,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
                     )
                 ),
                 .bodyDeleted(
-                    MacAppliedBodyDeletion(
+                    AppliedEditorBodyDeletion(
                         noteID: note.id,
                         range: NSRange(location: 2, length: 1),
                         deletedText: "b",
@@ -351,7 +351,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
         let bridge = MacEditorSyncBridge()
         bridge.textView = textView
         _ = bridge.applyBatch(
-            [.applyBodyInsertion(MacAppliedBodyInsertion(noteID: noteID, utf16Offset: 2, text: "x", modifiedAt: Date()))],
+            [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 2, text: "x", modifiedAt: Date()))],
             selectedNoteID: noteID
         )
 

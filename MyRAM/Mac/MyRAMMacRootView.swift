@@ -188,7 +188,7 @@ struct MyRAMMacRootView: View {
 
         guard let selectedNoteID, !plan.editorActions.isEmpty else { return }
         let result = editorSyncBridge.applyBatch(plan.editorActions, selectedNoteID: selectedNoteID)
-        if result.requiresFallbackReload {
+        if case .requiresReload = result.disposition {
             reloadSelectedEditor(reason: .unsafeIncrementalApply)
         }
     }

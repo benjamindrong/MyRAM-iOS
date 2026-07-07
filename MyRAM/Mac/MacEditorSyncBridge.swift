@@ -1,11 +1,6 @@
 #if os(macOS)
 import AppKit
 
-struct MacEditorRemoteBatchApplyResult: Equatable {
-    let appliedCount: Int
-    let requiresFallbackReload: Bool
-}
-
 @MainActor
 final class MacEditorSyncBridge: ObservableObject {
     weak var textView: NSTextView?
@@ -15,21 +10,23 @@ final class MacEditorSyncBridge: ObservableObject {
     func applyBatch(
         _ actions: [MacSelectedEditorAction],
         selectedNoteID: UUID
-    ) -> MacEditorRemoteBatchApplyResult {
+    ) -> EditorRemoteBatchApplyResult {
         guard let textView, let textStorage = textView.textStorage else {
-            return MacEditorRemoteBatchApplyResult(appliedCount: 0, requiresFallbackReload: !actions.isEmpty)
+            return EditorRemoteBatchApplyResult(
+                appliedCount: 0,
+                disposition: actions.isEmpty ? .noApplicableMutations : .requiresReload(.editorUnavailable)
+            )
         }
 
         var selection = textView.selectedRange()
         var appliedCount = 0
-        var requiresFallbackReload = false
         let originalScrollOrigin = textView.enclosingScrollView?.contentView.bounds.origin
 
         isApplyingRemoteSync = true
         textStorage.beginEditing()
         defer {
             textStorage.endEditing()
-            textView.setSelectedRange(selection.macClamped(toLength: textStorage.length))
+            textView.setSelectedRange(selection.editorClamped(toLength: textStorage.length))
             if let originalScrollOrigin {
                 textView.enclosingScrollView?.contentView.setBoundsOrigin(originalScrollOrigin)
             }
@@ -46,8 +43,10 @@ final class MacEditorSyncBridge: ObservableObject {
             switch action {
             case .applyBodyInsertion(let insertion):
                 guard insertion.utf16Offset >= 0, insertion.utf16Offset <= textStorage.length else {
-                    requiresFallbackReload = true
-                    return MacEditorRemoteBatchApplyResult(appliedCount: appliedCount, requiresFallbackReload: true)
+                    return EditorRemoteBatchApplyResult(
+                        appliedCount: appliedCount,
+                        disposition: appliedCount > 0 ? .requiresReload(.partialBatchApplication) : .requiresReload(.invalidInsertionOffset)
+                    )
                 }
 
                 let attributes = MacRemoteInsertionAttributePolicy.attributesForRemoteInsertion(
@@ -57,7 +56,7 @@ final class MacEditorSyncBridge: ObservableObject {
                 )
                 let attributedText = NSAttributedString(string: insertion.text, attributes: attributes)
                 textStorage.replaceCharacters(in: NSRange(location: insertion.utf16Offset, length: 0), with: attributedText)
-                selection = MacEditorSelectionMapper.selectionAfterInsertion(
+                selection = EditorSelectionMapper.selectionAfterInsertion(
                     current: selection,
                     insertionOffset: insertion.utf16Offset,
                     insertedUTF16Length: (insertion.text as NSString).length,
@@ -67,18 +66,22 @@ final class MacEditorSyncBridge: ObservableObject {
 
             case .applyBodyDeletion(let deletion):
                 guard NSMaxRange(deletion.range) <= textStorage.length else {
-                    requiresFallbackReload = true
-                    return MacEditorRemoteBatchApplyResult(appliedCount: appliedCount, requiresFallbackReload: true)
+                    return EditorRemoteBatchApplyResult(
+                        appliedCount: appliedCount,
+                        disposition: appliedCount > 0 ? .requiresReload(.partialBatchApplication) : .requiresReload(.invalidDeletionRange)
+                    )
                 }
 
                 let editorText = (textStorage.string as NSString).substring(with: deletion.range)
                 guard editorText == deletion.deletedText else {
-                    requiresFallbackReload = true
-                    return MacEditorRemoteBatchApplyResult(appliedCount: appliedCount, requiresFallbackReload: true)
+                    return EditorRemoteBatchApplyResult(
+                        appliedCount: appliedCount,
+                        disposition: appliedCount > 0 ? .requiresReload(.partialBatchApplication) : .requiresReload(.deletedTextMismatch)
+                    )
                 }
 
                 textStorage.replaceCharacters(in: deletion.range, with: "")
-                selection = MacEditorSelectionMapper.selectionAfterDeletion(
+                selection = EditorSelectionMapper.selectionAfterDeletion(
                     current: selection,
                     deletedRange: deletion.range,
                     resultingTextLength: textStorage.length
@@ -87,9 +90,9 @@ final class MacEditorSyncBridge: ObservableObject {
             }
         }
 
-        return MacEditorRemoteBatchApplyResult(
+        return EditorRemoteBatchApplyResult(
             appliedCount: appliedCount,
-            requiresFallbackReload: requiresFallbackReload
+            disposition: appliedCount > 0 ? .applied : .noApplicableMutations
         )
     }
 }

@@ -1,7 +1,6 @@
-#if os(macOS)
 import Foundation
 
-enum MacEditorSelectionMapper {
+enum EditorSelectionMapper {
     static func selectionAfterInsertion(
         current: NSRange,
         insertionOffset: Int,
@@ -17,14 +16,14 @@ enum MacEditorSelectionMapper {
             return NSRange(
                 location: current.location + insertedUTF16Length,
                 length: current.length
-            ).macClamped(toLength: resultingTextLength)
+            ).editorClamped(toLength: resultingTextLength)
         }
 
         if insertionOffset < currentEnd {
             return NSRange(
                 location: current.location,
                 length: current.length + insertedUTF16Length
-            ).macClamped(toLength: resultingTextLength)
+            ).editorClamped(toLength: resultingTextLength)
         }
 
         return clamped(current, toLength: resultingTextLength)
@@ -46,7 +45,7 @@ enum MacEditorSelectionMapper {
             return NSRange(
                 location: current.location - deletedRange.length,
                 length: current.length
-            ).macClamped(toLength: resultingTextLength)
+            ).editorClamped(toLength: resultingTextLength)
         }
 
         if deletedRange.location >= currentEnd {
@@ -55,7 +54,7 @@ enum MacEditorSelectionMapper {
 
         if current.length == 0 {
             return NSRange(location: deletedRange.location, length: 0)
-                .macClamped(toLength: resultingTextLength)
+                .editorClamped(toLength: resultingTextLength)
         }
 
         let overlapStart = max(current.location, deletedRange.location)
@@ -71,11 +70,19 @@ enum MacEditorSelectionMapper {
         let adjustedLength = max(0, current.length - removedFromSelection)
 
         return NSRange(location: adjustedLocation, length: adjustedLength)
-            .macClamped(toLength: resultingTextLength)
+            .editorClamped(toLength: resultingTextLength)
     }
 
     private static func clamped(_ range: NSRange, toLength length: Int) -> NSRange {
-        range.macClamped(toLength: length)
+        range.editorClamped(toLength: length)
     }
 }
-#endif
+
+extension NSRange {
+    func editorClamped(toLength length: Int) -> NSRange {
+        let safeTextLength = max(length, 0)
+        let safeLocation = min(max(location, 0), safeTextLength)
+        let maxLength = max(safeTextLength - safeLocation, 0)
+        return NSRange(location: safeLocation, length: min(self.length, maxLength))
+    }
+}

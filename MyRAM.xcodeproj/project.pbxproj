@@ -30,7 +30,6 @@
 		BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000001 /* MacNoteEditorView.swift */; };
 		BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000002 /* MacTextViewRepresentable.swift */; };
 		BCA106010000000000000003 /* MacEditorSampleDocument.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000003 /* MacEditorSampleDocument.swift */; };
-		BCA106010000000000000004 /* MacEditorSelectionMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000004 /* MacEditorSelectionMapper.swift */; };
 		BCA106010000000000000005 /* MacRemoteInsertionAttributePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000005 /* MacRemoteInsertionAttributePolicy.swift */; };
 		BCA106010000000000000006 /* MacIncomingSyncApplicationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000006 /* MacIncomingSyncApplicationPolicy.swift */; };
 		BCA106010000000000000007 /* MacEditorSyncBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000007 /* MacEditorSyncBridge.swift */; };
@@ -84,6 +83,16 @@
 		BCA123010000000000000023 /* FileBackedSyncBatchQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */; };
 		BCA123010000000000000024 /* FileBackedSyncBatchQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */; };
 		BCA123010000000000000025 /* SyncBatchUnsentQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */; };
+		BCA154010000000000000001 /* AppliedEditorMutation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000001 /* AppliedEditorMutation.swift */; };
+		BCA154010000000000000002 /* AppliedEditorMutation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000001 /* AppliedEditorMutation.swift */; };
+		BCA154010000000000000003 /* ActiveEditorApplicationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */; };
+		BCA154010000000000000004 /* ActiveEditorApplicationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */; };
+		BCA154010000000000000005 /* EditorSelectionMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000003 /* EditorSelectionMapper.swift */; };
+		BCA154010000000000000006 /* EditorSelectionMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000003 /* EditorSelectionMapper.swift */; };
+		BCA154010000000000000007 /* EditorRemoteApplyResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000004 /* EditorRemoteApplyResult.swift */; };
+		BCA154010000000000000008 /* EditorRemoteApplyResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000004 /* EditorRemoteApplyResult.swift */; };
+		BCA154010000000000000009 /* ActiveEditorApplicationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000005 /* ActiveEditorApplicationPolicyTests.swift */; };
+		BCA15401000000000000000A /* EditorSelectionMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000006 /* EditorSelectionMapperTests.swift */; };
 		BCA132010000000000000001 /* SyncConvergenceTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000001 /* SyncConvergenceTypes.swift */; };
 		BCA132010000000000000002 /* SyncConvergenceTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000001 /* SyncConvergenceTypes.swift */; };
 		BCA132010000000000000003 /* SyncConvergenceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000002 /* SyncConvergenceModels.swift */; };
@@ -213,7 +222,6 @@
 		BCA106020000000000000001 /* MacNoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteEditorView.swift; sourceTree = "<group>"; };
 		BCA106020000000000000002 /* MacTextViewRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTextViewRepresentable.swift; sourceTree = "<group>"; };
 		BCA106020000000000000003 /* MacEditorSampleDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSampleDocument.swift; sourceTree = "<group>"; };
-		BCA106020000000000000004 /* MacEditorSelectionMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSelectionMapper.swift; sourceTree = "<group>"; };
 		BCA106020000000000000005 /* MacRemoteInsertionAttributePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacRemoteInsertionAttributePolicy.swift; sourceTree = "<group>"; };
 		BCA106020000000000000006 /* MacIncomingSyncApplicationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacIncomingSyncApplicationPolicy.swift; sourceTree = "<group>"; };
 		BCA106020000000000000007 /* MacEditorSyncBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSyncBridge.swift; sourceTree = "<group>"; };
@@ -256,6 +264,12 @@
 		BCA123020000000000000014 /* SyncBatchUnsentQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchUnsentQueue.swift; sourceTree = "<group>"; };
 		BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchUnsentQueueTests.swift; sourceTree = "<group>"; };
 		BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBackedSyncBatchQueue.swift; sourceTree = "<group>"; };
+		BCA154020000000000000001 /* AppliedEditorMutation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppliedEditorMutation.swift; sourceTree = "<group>"; };
+		BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorApplicationPolicy.swift; sourceTree = "<group>"; };
+		BCA154020000000000000003 /* EditorSelectionMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionMapper.swift; sourceTree = "<group>"; };
+		BCA154020000000000000004 /* EditorRemoteApplyResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorRemoteApplyResult.swift; sourceTree = "<group>"; };
+		BCA154020000000000000005 /* ActiveEditorApplicationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorApplicationPolicyTests.swift; sourceTree = "<group>"; };
+		BCA154020000000000000006 /* EditorSelectionMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionMapperTests.swift; sourceTree = "<group>"; };
 		BCA132020000000000000001 /* SyncConvergenceTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceTypes.swift; sourceTree = "<group>"; };
 		BCA132020000000000000002 /* SyncConvergenceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceModels.swift; sourceTree = "<group>"; };
 		BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceFoundationTests.swift; sourceTree = "<group>"; };
@@ -434,7 +448,6 @@
 				BCA106020000000000000001 /* MacNoteEditorView.swift */,
 				BCA106020000000000000002 /* MacTextViewRepresentable.swift */,
 				BCA106020000000000000003 /* MacEditorSampleDocument.swift */,
-				BCA106020000000000000004 /* MacEditorSelectionMapper.swift */,
 				BCA106020000000000000005 /* MacRemoteInsertionAttributePolicy.swift */,
 				BCA106020000000000000006 /* MacIncomingSyncApplicationPolicy.swift */,
 				BCA106020000000000000007 /* MacEditorSyncBridge.swift */,
@@ -536,6 +549,8 @@
 				BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */,
 				BCA123020000000000000010 /* IPhoneSyncBatchAccumulatorTests.swift */,
 				BCA123020000000000000011 /* IPhoneSyncBatchApplierTests.swift */,
+				BCA154020000000000000005 /* ActiveEditorApplicationPolicyTests.swift */,
+				BCA154020000000000000006 /* EditorSelectionMapperTests.swift */,
 				C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */,
 				C097F00112FF000000000011 /* EditorFocusSelectionPolicyTests.swift */,
 				C11200022FF1120000000001 /* EditorSearchSessionTests.swift */,
@@ -645,6 +660,7 @@
 			children = (
 				BCA123030000000000000001 /* Batch */,
 				BCA132030000000000000001 /* Convergence */,
+				BCA154030000000000000001 /* EditorApplication */,
 				BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */,
 				BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */,
 				BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */,
@@ -653,6 +669,17 @@
 				C07100172FF0000000000001 /* MyRAMSyncModels.swift */,
 			);
 			path = Sync;
+			sourceTree = "<group>";
+		};
+		BCA154030000000000000001 /* EditorApplication */ = {
+			isa = PBXGroup;
+			children = (
+				BCA154020000000000000001 /* AppliedEditorMutation.swift */,
+				BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */,
+				BCA154020000000000000003 /* EditorSelectionMapper.swift */,
+				BCA154020000000000000004 /* EditorRemoteApplyResult.swift */,
+			);
+			path = EditorApplication;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -916,6 +943,10 @@
 				C097F01012FF000000000001 /* BareTextViewProfilingView.swift in Sources */,
 				C097F01022FF000000000002 /* EditorChecklistRendering.swift in Sources */,
 				C097F01042FF000000000004 /* EditorPolicies.swift in Sources */,
+				BCA154010000000000000001 /* AppliedEditorMutation.swift in Sources */,
+				BCA154010000000000000003 /* ActiveEditorApplicationPolicy.swift in Sources */,
+				BCA154010000000000000005 /* EditorSelectionMapper.swift in Sources */,
+				BCA154010000000000000007 /* EditorRemoteApplyResult.swift in Sources */,
 				C07100092FF0000000000001 /* MyRAMSyncController.swift in Sources */,
 				BCE65D162EA5457600F2D0AA /* NotesListView.swift in Sources */,
 				BCE65D1C2EA569BD00F2D0AA /* PersistenceManager.swift in Sources */,
@@ -938,6 +969,8 @@
 				BCA123010000000000000022 /* SyncBatchUnsentQueueTests.swift in Sources */,
 				BCA123010000000000000015 /* IPhoneSyncBatchAccumulatorTests.swift in Sources */,
 				BCA123010000000000000016 /* IPhoneSyncBatchApplierTests.swift in Sources */,
+				BCA154010000000000000009 /* ActiveEditorApplicationPolicyTests.swift in Sources */,
+				BCA15401000000000000000A /* EditorSelectionMapperTests.swift in Sources */,
 				C108F0112FF0000000000001 /* EditorFormattingMutationApplierTests.swift in Sources */,
 				C097F01112FF000000000011 /* EditorFocusSelectionPolicyTests.swift in Sources */,
 				C11200112FF1120000000001 /* EditorSearchSessionTests.swift in Sources */,
@@ -963,7 +996,6 @@
 				BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */,
 				BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */,
 				BCA106010000000000000003 /* MacEditorSampleDocument.swift in Sources */,
-				BCA106010000000000000004 /* MacEditorSelectionMapper.swift in Sources */,
 				BCA106010000000000000005 /* MacRemoteInsertionAttributePolicy.swift in Sources */,
 				BCA106010000000000000006 /* MacIncomingSyncApplicationPolicy.swift in Sources */,
 				BCA106010000000000000007 /* MacEditorSyncBridge.swift in Sources */,
@@ -998,6 +1030,10 @@
 				BCA132010000000000000059 /* SyncConvergencePostCommitExecutor.swift in Sources */,
 				BCA123010000000000000021 /* SyncBatchUnsentQueue.swift in Sources */,
 				BCA123010000000000000024 /* FileBackedSyncBatchQueue.swift in Sources */,
+				BCA154010000000000000002 /* AppliedEditorMutation.swift in Sources */,
+				BCA154010000000000000004 /* ActiveEditorApplicationPolicy.swift in Sources */,
+				BCA154010000000000000006 /* EditorSelectionMapper.swift in Sources */,
+				BCA154010000000000000008 /* EditorRemoteApplyResult.swift in Sources */,
 				BCA122010000000000000001 /* MacSyncModels.swift in Sources */,
 				BCA122010000000000000002 /* MacSyncDeviceIdentity.swift in Sources */,
 				BCA122010000000000000003 /* MacSyncSeenBatchStore.swift in Sources */,
