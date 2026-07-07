@@ -7,6 +7,10 @@ final class UIKitEditorSyncBridge: ObservableObject {
 
     private(set) var isApplyingRemoteSync = false
 
+    var hasMarkedText: Bool {
+        textView?.markedTextRange != nil
+    }
+
     func apply(
         _ batch: AppliedEditorMutationBatch,
         selectedNoteID: UUID

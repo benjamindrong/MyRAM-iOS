@@ -2400,35 +2400,6 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(noteB.content, "world remote-b")
     }
 
-    func testEditorBufferDefersRemoteRefreshDuringPendingLocalEdit() {
-        XCTAssertTrue(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
-            owner: .localEditing,
-            hasPendingNoteCommit: true
-        ))
-    }
-
-    func testEditorBufferAllowsRemoteRefreshWhenLocalEditHasCommitted() {
-        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
-            owner: .localEditing,
-            hasPendingNoteCommit: false
-        ))
-    }
-
-    func testEditorBufferAllowsDeliberateNonLocalOwnersToRefresh() {
-        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
-            owner: .idle,
-            hasPendingNoteCommit: true
-        ))
-        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
-            owner: .restoringHistory,
-            hasPendingNoteCommit: true
-        ))
-        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
-            owner: .resolvingConflict,
-            hasPendingNoteCommit: true
-        ))
-    }
-
     func testSelectionFormattingPolicyAllowsSmallSelectionScan() {
         XCTAssertFalse(EditorSelectionFormattingPolicy.shouldDeferFullFormattingScan(
             selectionLength: EditorSelectionFormattingPolicy.largeSelectionFormattingThreshold

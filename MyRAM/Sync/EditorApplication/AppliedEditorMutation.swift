@@ -17,6 +17,15 @@ struct AppliedEditorBodyDeletion: Equatable, Sendable {
 enum AppliedEditorMutation: Equatable, Sendable {
     case bodyInsertion(AppliedEditorBodyInsertion)
     case bodyDeletion(AppliedEditorBodyDeletion)
+
+    var noteID: UUID {
+        switch self {
+        case .bodyInsertion(let insertion):
+            insertion.noteID
+        case .bodyDeletion(let deletion):
+            deletion.noteID
+        }
+    }
 }
 
 struct AppliedEditorMutationBatch: Equatable, Sendable {

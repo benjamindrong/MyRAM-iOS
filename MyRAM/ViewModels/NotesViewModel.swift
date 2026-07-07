@@ -25,6 +25,7 @@ final class NotesViewModel: ObservableObject {
     @Published var currentFolder: Folder? = nil
     @Published private(set) var syncConflicts: [SyncConflictVersion] = []
     @Published private(set) var activeNoteSyncRevision = 0
+    @Published private(set) var activeEditorSyncUpdate: ActiveEditorSyncUpdate?
     @Published private(set) var syncBatchErrorMessage: String?
     @Published private(set) var hasUndoableAction = false
     @Published private(set) var hasRedoableAction = false
@@ -682,7 +683,7 @@ final class NotesViewModel: ObservableObject {
         )
 
         if result.shouldRefreshActiveNote {
-            activeNoteSyncRevision += 1
+            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
     }
@@ -701,7 +702,7 @@ final class NotesViewModel: ObservableObject {
         )
 
         if result.shouldRefreshActiveNote {
-            activeNoteSyncRevision += 1
+            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
     }
@@ -722,7 +723,7 @@ final class NotesViewModel: ObservableObject {
         )
 
         if result.shouldRefreshActiveNote {
-            activeNoteSyncRevision += 1
+            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
     }
@@ -741,7 +742,7 @@ final class NotesViewModel: ObservableObject {
         )
 
         if result.shouldRefreshActiveNote {
-            activeNoteSyncRevision += 1
+            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
     }
@@ -1460,7 +1461,7 @@ final class NotesViewModel: ObservableObject {
         try? context.save()
         refreshCurrentFolderContent()
         if result.shouldRefreshActiveNote {
-            activeNoteSyncRevision += 1
+            publishActiveEditorReload(noteID: activeNoteID, reason: .unsupportedIntegratedChange)
         }
     }
 
@@ -1498,10 +1499,10 @@ final class NotesViewModel: ObservableObject {
             nextBatch: { [pendingIncomingBatches] in pendingIncomingBatches.first },
             apply: { batch in try applier.apply(batch) },
             remove: { [pendingIncomingBatches] batchID in pendingIncomingBatches.remove(batchID) },
-            didApply: { [weak self] batch, _ in
+            didApply: { [weak self] batch, appliedEditorBatches in
                 guard let self else { return }
                 refreshCurrentFolderContent()
-                activeNoteSyncRevision += 1
+                publishActiveEditorUpdate(from: appliedEditorBatches)
                 syncBatchErrorMessage = nil
                 onDrainBatchApplied?(batch)
             }
@@ -1516,6 +1517,32 @@ final class NotesViewModel: ObservableObject {
     /// nested drain trigger would take.
     func drainPendingIncomingSyncBatchesForTesting() {
         drainPendingIncomingSyncBatches()
+    }
+
+    private func publishActiveEditorUpdate(from appliedBatches: [AppliedEditorMutationBatch]) {
+        guard let activeNoteID = currentNote?.id else {
+            activeNoteSyncRevision += 1
+            return
+        }
+
+        if let batch = appliedBatches.first(where: { $0.noteID == activeNoteID }) {
+            activeEditorSyncUpdate = ActiveEditorSyncUpdate(
+                noteID: activeNoteID,
+                disposition: .apply(batch)
+            )
+        } else {
+            activeNoteSyncRevision += 1
+        }
+    }
+
+    private func publishActiveEditorReload(noteID: UUID?, reason: ActiveEditorReloadReason) {
+        activeNoteSyncRevision += 1
+        guard let noteID,
+              currentNote?.id == noteID else { return }
+        activeEditorSyncUpdate = ActiveEditorSyncUpdate(
+            noteID: noteID,
+            disposition: .reload(reason)
+        )
     }
 
     nonisolated private static func pendingIncomingBatchQueueFileURL() -> URL? {

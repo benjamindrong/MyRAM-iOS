@@ -17,31 +17,55 @@ final class IPhoneSyncBatchApplier {
         self.bodyHashCapabilityEnabled = bodyHashCapabilityEnabled
     }
 
-    func apply(_ batch: SyncBatch) throws {
-        guard !seenBatchStore.hasSeen(batch.id) else { return }
+    @discardableResult
+    func apply(_ batch: SyncBatch) throws -> [AppliedEditorMutationBatch] {
+        guard !seenBatchStore.hasSeen(batch.id) else { return [] }
 
         try SyncBatchPreflight(bodyHashCapabilityEnabled: bodyHashCapabilityEnabled).validate(batch: batch) { [weak self] noteID in
             try self?.loadNote(id: noteID)?.content
         }
 
+        var noteOrder: [UUID] = []
+        var mutationsByNoteID: [UUID: [AppliedEditorMutation]] = [:]
         for change in batch.changes {
-            try apply(change)
+            if let mutation = try apply(change) {
+                let noteID = mutation.noteID
+                if mutationsByNoteID[noteID] == nil {
+                    noteOrder.append(noteID)
+                }
+                mutationsByNoteID[noteID, default: []].append(mutation)
+            }
         }
 
         try context.save()
         seenBatchStore.markSeen(batch.id)
+
+        return try noteOrder.compactMap { noteID in
+            guard let mutations = mutationsByNoteID[noteID],
+                  !mutations.isEmpty,
+                  let note = try loadNote(id: noteID) else {
+                return nil
+            }
+            return AppliedEditorMutationBatch(
+                noteID: noteID,
+                mutations: mutations,
+                authoritativeBody: note.content
+            )
+        }
     }
 
-    private func apply(_ change: SyncBatchChange) throws {
+    private func apply(_ change: SyncBatchChange) throws -> AppliedEditorMutation? {
         switch change {
         case .noteCreated(let change):
             try applyNoteCreated(change)
+            return nil
         case .noteTitleChanged(let change):
             try applyTitleChanged(change)
+            return nil
         case .noteBodyTextInserted(let change):
-            try applyBodyTextInserted(change)
+            return try applyBodyTextInserted(change)
         case .noteBodyTextDeleted(let change):
-            try applyBodyTextDeleted(change)
+            return try applyBodyTextDeleted(change)
         case .noteBodyReconciled(let change):
             throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
         }
@@ -64,31 +88,43 @@ final class IPhoneSyncBatchApplier {
         note.modifiedAt = change.modifiedAt
     }
 
-    private func applyBodyTextInserted(_ change: SyncBatchNoteBodyTextInsertedChange) throws {
-        guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return }
+    private func applyBodyTextInserted(_ change: SyncBatchNoteBodyTextInsertedChange) throws -> AppliedEditorMutation? {
+        guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return nil }
 
         let clampedOffset = note.content.syncBatchClampedUTF16Offset(change.utf16Offset)
         let insertionOffset = note.content.syncBatchSafeInsertionOffset(fallingForwardFrom: clampedOffset)
         note.content = note.content.syncBatchInserting(change.text, atUTF16Offset: insertionOffset)
         note.richTextContentData = nil
         note.modifiedAt = change.modifiedAt
+        return .bodyInsertion(AppliedEditorBodyInsertion(
+            noteID: change.noteID,
+            utf16Offset: insertionOffset,
+            text: change.text,
+            modifiedAt: change.modifiedAt
+        ))
     }
 
-    private func applyBodyTextDeleted(_ change: SyncBatchNoteBodyTextDeletedChange) throws {
+    private func applyBodyTextDeleted(_ change: SyncBatchNoteBodyTextDeletedChange) throws -> AppliedEditorMutation? {
         guard let note = try loadNote(id: change.noteID),
               change.utf16Length > 0,
               let range = note.content.syncBatchSafeUTF16Range(location: change.utf16Offset, length: change.utf16Length) else {
-            return
+            return nil
         }
 
         let targetText = (note.content as NSString).substring(with: range)
         if let expectedText = change.expectedText, targetText != expectedText {
-            return
+            return nil
         }
 
         note.content = (note.content as NSString).replacingCharacters(in: range, with: "")
         note.richTextContentData = nil
         note.modifiedAt = change.modifiedAt
+        return .bodyDeletion(AppliedEditorBodyDeletion(
+            noteID: change.noteID,
+            range: range,
+            deletedText: targetText,
+            modifiedAt: change.modifiedAt
+        ))
     }
 
     private func loadNote(id: UUID) throws -> Note? {

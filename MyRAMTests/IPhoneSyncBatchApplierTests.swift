@@ -52,7 +52,7 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000125005")!, content: "A😀B", in: container)
 
-        try apply(
+        let appliedBatches = try apply(
             changes: [
                 .noteBodyTextInserted(
                     SyncBatchNoteBodyTextInsertedChange(
@@ -67,6 +67,20 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         )
 
         XCTAssertEqual(note.content, "A😀xB")
+        XCTAssertEqual(appliedBatches, [
+            AppliedEditorMutationBatch(
+                noteID: note.id,
+                mutations: [
+                    .bodyInsertion(AppliedEditorBodyInsertion(
+                        noteID: note.id,
+                        utf16Offset: 3,
+                        text: "x",
+                        modifiedAt: Date(timeIntervalSince1970: 4)
+                    ))
+                ],
+                authoritativeBody: "A😀xB"
+            )
+        ])
     }
 
     func testMatchingBaseHashUsesExistingPositionalInsertionPath() throws {
@@ -128,7 +142,7 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000125006")!, content: "abcdef", in: container)
 
-        try apply(
+        let appliedBatches = try apply(
             changes: [
                 .noteBodyTextDeleted(
                     SyncBatchNoteBodyTextDeletedChange(
@@ -144,6 +158,20 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         )
 
         XCTAssertEqual(note.content, "abef")
+        XCTAssertEqual(appliedBatches, [
+            AppliedEditorMutationBatch(
+                noteID: note.id,
+                mutations: [
+                    .bodyDeletion(AppliedEditorBodyDeletion(
+                        noteID: note.id,
+                        range: NSRange(location: 2, length: 2),
+                        deletedText: "cd",
+                        modifiedAt: Date(timeIntervalSince1970: 5)
+                    ))
+                ],
+                authoritativeBody: "abef"
+            )
+        ])
     }
 
     func testUnsafeDeleteDoesNotRemoveUnrelatedLocalText() throws {
@@ -383,13 +411,13 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         batchID: String = "00000000-0000-0000-0000-000000125100",
         changes: [SyncBatchChange],
         in container: ModelContainer
-    ) throws {
+    ) throws -> [AppliedEditorMutationBatch] {
         let applier = IPhoneSyncBatchApplier(
             context: container.mainContext,
             seenBatchStore: SyncBatchSeenBatchStore(defaults: makeDefaults()),
             bodyHashCapabilityEnabled: true
         )
-        try applier.apply(
+        return try applier.apply(
             SyncBatch(
                 id: UUID(uuidString: batchID)!,
                 originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000125200")!,
