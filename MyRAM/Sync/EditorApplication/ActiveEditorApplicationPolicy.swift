@@ -13,17 +13,20 @@ struct ActiveEditorSyncUpdate: Identifiable, Equatable {
     let noteID: UUID
     let metadata: ActiveEditorMetadataUpdate?
     let disposition: ActiveEditorSyncDisposition
+    let expectedPreBodyHash: String?
 
     init(
         id: UUID = UUID(),
         noteID: UUID,
         metadata: ActiveEditorMetadataUpdate? = nil,
-        disposition: ActiveEditorSyncDisposition
+        disposition: ActiveEditorSyncDisposition,
+        expectedPreBodyHash: String? = nil
     ) {
         self.id = id
         self.noteID = noteID
         self.metadata = metadata
         self.disposition = disposition
+        self.expectedPreBodyHash = expectedPreBodyHash
     }
 }
 

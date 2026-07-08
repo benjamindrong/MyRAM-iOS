@@ -102,6 +102,8 @@
 		BCA132010000000000000005 /* SyncConvergenceFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */; };
 		BCA132010000000000000010 /* SyncConvergencePlanningTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000010 /* SyncConvergencePlanningTypes.swift */; };
 		BCA132010000000000000011 /* SyncConvergencePlanningTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000010 /* SyncConvergencePlanningTypes.swift */; };
+		BCA155010000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */; };
+		BCA155010000000000000002 /* SyncConvergenceRewriteSafetyPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */; };
 		BCA153010000000000000001 /* ExplicitDeleteProvenanceTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000001 /* ExplicitDeleteProvenanceTypes.swift */; };
 		BCA153010000000000000002 /* ExplicitDeleteProvenanceTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000001 /* ExplicitDeleteProvenanceTypes.swift */; };
 		BCA153010000000000000003 /* ExplicitDeleteProvenanceBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000002 /* ExplicitDeleteProvenanceBuilder.swift */; };
@@ -112,6 +114,8 @@
 		BCA132010000000000000013 /* SyncConvergencePlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000011 /* SyncConvergencePlanner.swift */; };
 		BCA132010000000000000014 /* SyncConvergencePlanningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */; };
 		BCA132010000000000000015 /* SyncConvergencePlanningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */; };
+		BCA155010000000000000003 /* SyncConvergenceRewriteSafetyPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA155020000000000000002 /* SyncConvergenceRewriteSafetyPolicyTests.swift */; };
+		BCA155010000000000000004 /* SyncConvergenceRewriteSafetyPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA155020000000000000002 /* SyncConvergenceRewriteSafetyPolicyTests.swift */; };
 		BCA132010000000000000016 /* SyncConvergenceIncorporationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000013 /* SyncConvergenceIncorporationTests.swift */; };
 		BCA132010000000000000017 /* SyncConvergenceIncorporationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000014 /* SyncConvergenceIncorporationTests.swift */; };
 		BCA132010000000000000050 /* SyncConvergencePostCommitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000050 /* SyncConvergencePostCommitTypes.swift */; };
@@ -280,11 +284,13 @@
 		BCA132020000000000000002 /* SyncConvergenceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceModels.swift; sourceTree = "<group>"; };
 		BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceFoundationTests.swift; sourceTree = "<group>"; };
 		BCA132020000000000000010 /* SyncConvergencePlanningTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePlanningTypes.swift; sourceTree = "<group>"; };
+		BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceRewriteSafetyPolicy.swift; sourceTree = "<group>"; };
 		BCA153020000000000000001 /* ExplicitDeleteProvenanceTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceTypes.swift; sourceTree = "<group>"; };
 		BCA153020000000000000002 /* ExplicitDeleteProvenanceBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceBuilder.swift; sourceTree = "<group>"; };
 		BCA153020000000000000003 /* ExplicitDeleteProvenanceValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceValidator.swift; sourceTree = "<group>"; };
 		BCA132020000000000000011 /* SyncConvergencePlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePlanner.swift; sourceTree = "<group>"; };
 		BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePlanningTests.swift; sourceTree = "<group>"; };
+		BCA155020000000000000002 /* SyncConvergenceRewriteSafetyPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceRewriteSafetyPolicyTests.swift; sourceTree = "<group>"; };
 		BCA132020000000000000013 /* SyncConvergenceIncorporationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceIncorporationTests.swift; sourceTree = "<group>"; };
 		BCA132020000000000000014 /* SyncConvergenceIncorporationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergenceIncorporationTests.swift; sourceTree = "<group>"; };
 		BCA153020000000000000004 /* ExplicitDeleteProvenanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceTests.swift; sourceTree = "<group>"; };
@@ -500,6 +506,7 @@
 				BCA132020000000000000001 /* SyncConvergenceTypes.swift */,
 				BCA132020000000000000002 /* SyncConvergenceModels.swift */,
 				BCA132020000000000000010 /* SyncConvergencePlanningTypes.swift */,
+				BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */,
 				BCA153020000000000000001 /* ExplicitDeleteProvenanceTypes.swift */,
 				BCA153020000000000000002 /* ExplicitDeleteProvenanceBuilder.swift */,
 				BCA153020000000000000003 /* ExplicitDeleteProvenanceValidator.swift */,
@@ -548,6 +555,7 @@
 				BCA123020000000000000009 /* SyncBatchPayloadCompatibilityTests.swift */,
 				BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */,
 				BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */,
+				BCA155020000000000000002 /* SyncConvergenceRewriteSafetyPolicyTests.swift */,
 				BCA132020000000000000013 /* SyncConvergenceIncorporationTests.swift */,
 				BCA132020000000000000054 /* SyncConvergencePostCommitTests.swift */,
 				BCA137020000000000000001 /* SyncConvergencePostCommitTestDoubles.swift */,
@@ -902,6 +910,7 @@
 				BCA132010000000000000001 /* SyncConvergenceTypes.swift in Sources */,
 				BCA132010000000000000003 /* SyncConvergenceModels.swift in Sources */,
 				BCA132010000000000000010 /* SyncConvergencePlanningTypes.swift in Sources */,
+				BCA155010000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift in Sources */,
 				BCA153010000000000000001 /* ExplicitDeleteProvenanceTypes.swift in Sources */,
 				BCA153010000000000000003 /* ExplicitDeleteProvenanceBuilder.swift in Sources */,
 				BCA153010000000000000005 /* ExplicitDeleteProvenanceValidator.swift in Sources */,
@@ -972,6 +981,7 @@
 				BCA123010000000000000014 /* SyncBatchPayloadCompatibilityTests.swift in Sources */,
 				BCA132010000000000000005 /* SyncConvergenceFoundationTests.swift in Sources */,
 				BCA132010000000000000014 /* SyncConvergencePlanningTests.swift in Sources */,
+				BCA155010000000000000003 /* SyncConvergenceRewriteSafetyPolicyTests.swift in Sources */,
 				BCA132010000000000000016 /* SyncConvergenceIncorporationTests.swift in Sources */,
 				BCA132010000000000000054 /* SyncConvergencePostCommitTests.swift in Sources */,
 				BCA137010000000000000001 /* SyncConvergencePostCommitTestDoubles.swift in Sources */,
@@ -1030,6 +1040,7 @@
 				BCA132010000000000000002 /* SyncConvergenceTypes.swift in Sources */,
 				BCA132010000000000000004 /* SyncConvergenceModels.swift in Sources */,
 				BCA132010000000000000011 /* SyncConvergencePlanningTypes.swift in Sources */,
+				BCA155010000000000000002 /* SyncConvergenceRewriteSafetyPolicy.swift in Sources */,
 				BCA153010000000000000002 /* ExplicitDeleteProvenanceTypes.swift in Sources */,
 				BCA153010000000000000004 /* ExplicitDeleteProvenanceBuilder.swift in Sources */,
 				BCA153010000000000000006 /* ExplicitDeleteProvenanceValidator.swift in Sources */,
@@ -1077,6 +1088,7 @@
 				BCA12201000000000000000B /* MacSyncBatchControllerTests.swift in Sources */,
 				BCA123010000000000000025 /* SyncBatchUnsentQueueTests.swift in Sources */,
 				BCA132010000000000000015 /* SyncConvergencePlanningTests.swift in Sources */,
+				BCA155010000000000000004 /* SyncConvergenceRewriteSafetyPolicyTests.swift in Sources */,
 				BCA132010000000000000017 /* SyncConvergenceIncorporationTests.swift in Sources */,
 				BCA132010000000000000055 /* SyncConvergencePostCommitTests.swift in Sources */,
 				BCA137010000000000000002 /* SyncConvergencePostCommitTestDoubles.swift in Sources */,

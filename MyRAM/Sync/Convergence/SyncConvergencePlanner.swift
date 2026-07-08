@@ -1266,6 +1266,30 @@ private struct SyncOperationReplayEngine {
             body: body,
             generation: base.generation + 1
         )
+        let deleteEvidence = plannedOperations.compactMap { operation -> SyncConvergenceDeleteEvidence? in
+            guard operation.kind == .delete,
+                  let utf16Length = operation.utf16Length,
+                  let expectedText = operation.expectedText else { return nil }
+            return SyncConvergenceDeleteEvidence(
+                operationIdentity: operation.operationIdentity,
+                utf16Offset: operation.utf16Offset,
+                utf16Length: utf16Length,
+                expectedText: expectedText,
+                baseContentHash: operation.baseContentHash,
+                resultContentHash: operation.resultContentHash
+            )
+        }
+        let safetyResult = SyncConvergenceRewriteSafetyPolicy().validate(SyncConvergenceRewriteSafetyInput(
+            noteID: projectedCurrent.noteID,
+            sourceBatchID: batchID,
+            priorBody: projectedCurrent.body,
+            candidateBody: body,
+            deleteEvidence: deleteEvidence,
+            context: .plannerMerge
+        ))
+        guard case .safe(let safetyReceipt) = safetyResult else {
+            return .failed(.unprovenTextLoss(noteID: projectedCurrent.noteID))
+        }
         return .success(PlannedBodyResult(
             effect: .reconstructedConflict(ReconstructedConflictBodyPlan(
                 noteID: projectedCurrent.noteID,
@@ -1279,7 +1303,8 @@ private struct SyncOperationReplayEngine {
                 retainedOperationAdditions: plannedOperations,
                 snapshotAdditions: [snapshot],
                 resultEvidence: evidence,
-                presentationRouting: .wholeNoteFallback
+                presentationRouting: .wholeNoteFallback,
+                rewriteSafetyReceipt: safetyReceipt
             )),
             finalBody: body,
             operationIdentities: operations.map(\.identity),
@@ -2729,6 +2754,35 @@ struct SyncConvergenceIncorporationExecutor {
             guard SyncBatchContentHash.sha256Hex(for: currentBody) == plan.projectedPreMergeCurrentHash else {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
             }
+            guard let plannedReceipt = plan.rewriteSafetyReceipt,
+                  plannedReceipt.noteID == plan.noteID,
+                  plannedReceipt.priorBodyHash == plan.projectedPreMergeCurrentHash,
+                  plannedReceipt.candidateBodyHash == plan.finalBodyHash else {
+                throw ExecutorFailure(.unprovenTextLoss(noteID: plan.noteID))
+            }
+            let deleteEvidence = plan.retainedOperationAdditions.compactMap { operation -> SyncConvergenceDeleteEvidence? in
+                guard operation.kind == .delete,
+                      let utf16Length = operation.utf16Length,
+                      let expectedText = operation.expectedText else { return nil }
+                return SyncConvergenceDeleteEvidence(
+                    operationIdentity: operation.operationIdentity,
+                    utf16Offset: operation.utf16Offset,
+                    utf16Length: utf16Length,
+                    expectedText: expectedText,
+                    baseContentHash: operation.baseContentHash,
+                    resultContentHash: operation.resultContentHash
+                )
+            }
+            guard case .safe(let receipt) = SyncConvergenceRewriteSafetyPolicy().validate(SyncConvergenceRewriteSafetyInput(
+                noteID: plan.noteID,
+                sourceBatchID: nil,
+                priorBody: currentBody,
+                candidateBody: plan.finalBody,
+                deleteEvidence: deleteEvidence,
+                context: .reconciliation
+            )), receipt == plannedReceipt else {
+                throw ExecutorFailure(.unprovenTextLoss(noteID: plan.noteID))
+            }
         case .legacyPositional(let plan):
             let currentBody = try requiredAuthoritativePreBody(
                 current: current,
@@ -3139,7 +3193,8 @@ struct SyncConvergenceIncorporationExecutor {
                     routing: routingPayload,
                     expectedPreBodyHash: try notePlan.expectedPreBodyHash(for: routing),
                     committedPostBodyHash: try notePlan.committedPostBodyHash(for: routing),
-                    incrementalOperations: operations
+                    incrementalOperations: operations,
+                    rewriteSafetyReceipt: notePlan.rewriteSafetyReceipt(for: routing)
                 )
             }
             guard Set(entries.map(\.noteID)) == expectedRoutedNoteIDs,
@@ -3457,6 +3512,11 @@ private extension SyncConvergenceMutableNoteRecord {
 }
 
 private extension SyncConvergenceNotePlan {
+    func rewriteSafetyReceipt(for routing: SyncConvergencePresentationRouting) -> SyncConvergenceRewriteSafetyReceipt? {
+        guard routing == .wholeNoteFallback,
+              case .reconstructedConflict(let plan) = bodyEffect else { return nil }
+        return plan.rewriteSafetyReceipt
+    }
     var hasMutableNoteEffect: Bool {
         plannedFinalBody != nil || plannedResultingTitle != nil
     }

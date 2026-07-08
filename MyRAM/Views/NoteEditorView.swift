@@ -1483,6 +1483,12 @@ struct NoteEditorView: View {
     }
 
     private func applyRemoteEditorReloadIfSafe(reason: ActiveEditorReloadReason, update: ActiveEditorSyncUpdate) {
+        if reason == .authoritativeConvergencePresentation,
+           let expectedPreBodyHash = update.expectedPreBodyHash,
+           SyncBatchContentHash.sha256Hex(for: content) != expectedPreBodyHash {
+            acknowledgeConvergencePresentation(update, result: .stillPending)
+            return
+        }
         switch activeEditorStateDecision(selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id) {
         case .apply:
             applyRemoteNoteRefresh(reason: reason)

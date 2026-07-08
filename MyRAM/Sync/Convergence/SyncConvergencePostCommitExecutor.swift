@@ -247,6 +247,7 @@ actor SyncConvergencePostCommitExecutor {
                     expectedPreBodyHash: entry.expectedPreBodyHash,
                     committedPostBodyHash: entry.committedPostBodyHash,
                     incrementalOperations: entry.incrementalOperations,
+                    rewriteSafetyReceipt: entry.rewriteSafetyReceipt,
                     committedNote: note,
                     committedBodyHash: SyncBatchContentHash.sha256Hex(for: note.body),
                     committedTitle: note.title

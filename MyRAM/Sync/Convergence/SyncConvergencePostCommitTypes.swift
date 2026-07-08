@@ -78,9 +78,34 @@ struct SyncConvergencePresentationRequest: Equatable, Sendable {
     let expectedPreBodyHash: String?
     let committedPostBodyHash: String
     let incrementalOperations: [SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload]
+    let rewriteSafetyReceipt: SyncConvergenceRewriteSafetyReceipt?
     let committedNote: SyncConvergenceMutableNoteRecord
     let committedBodyHash: String
     let committedTitle: String
+
+    init(
+        incorporationIdentity: SyncConvergencePersistedIncorporationIdentity,
+        noteID: UUID,
+        routing: SyncConvergencePresentationRouting,
+        expectedPreBodyHash: String?,
+        committedPostBodyHash: String,
+        incrementalOperations: [SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload],
+        rewriteSafetyReceipt: SyncConvergenceRewriteSafetyReceipt? = nil,
+        committedNote: SyncConvergenceMutableNoteRecord,
+        committedBodyHash: String,
+        committedTitle: String
+    ) {
+        self.incorporationIdentity = incorporationIdentity
+        self.noteID = noteID
+        self.routing = routing
+        self.expectedPreBodyHash = expectedPreBodyHash
+        self.committedPostBodyHash = committedPostBodyHash
+        self.incrementalOperations = incrementalOperations
+        self.rewriteSafetyReceipt = rewriteSafetyReceipt
+        self.committedNote = committedNote
+        self.committedBodyHash = committedBodyHash
+        self.committedTitle = committedTitle
+    }
 }
 
 enum SyncConvergencePostCommitLoadedState: Equatable {
@@ -229,6 +254,23 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
         let expectedPreBodyHash: String?
         let committedPostBodyHash: String
         let incrementalOperations: [IncrementalOperationPayload]
+        let rewriteSafetyReceipt: SyncConvergenceRewriteSafetyReceipt?
+
+        init(
+            noteID: UUID,
+            routing: SyncConvergencePostCommitPresentationRoutingPayload,
+            expectedPreBodyHash: String?,
+            committedPostBodyHash: String,
+            incrementalOperations: [IncrementalOperationPayload],
+            rewriteSafetyReceipt: SyncConvergenceRewriteSafetyReceipt? = nil
+        ) {
+            self.noteID = noteID
+            self.routing = routing
+            self.expectedPreBodyHash = expectedPreBodyHash
+            self.committedPostBodyHash = committedPostBodyHash
+            self.incrementalOperations = incrementalOperations
+            self.rewriteSafetyReceipt = rewriteSafetyReceipt
+        }
 
         func validate() throws {
             try expectedPreBodyHash.map(validateBodyHash)
@@ -241,6 +283,13 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
             case .wholeNoteFallback:
                 guard incrementalOperations.isEmpty else {
                     throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+                }
+                if let receipt = rewriteSafetyReceipt {
+                    guard receipt.noteID == noteID,
+                          receipt.priorBodyHash == expectedPreBodyHash,
+                          receipt.candidateBodyHash == committedPostBodyHash else {
+                        throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+                    }
                 }
             case .none:
                 guard incrementalOperations.isEmpty else {

@@ -190,6 +190,37 @@ struct ReconstructedConflictBodyPlan: Equatable {
     let snapshotAdditions: [SyncConvergenceSnapshotAddition]
     let resultEvidence: SyncConvergenceResultEvidence
     let presentationRouting: SyncConvergencePresentationRouting
+    let rewriteSafetyReceipt: SyncConvergenceRewriteSafetyReceipt?
+
+    init(
+        noteID: UUID,
+        reconstructedBaseBody: String,
+        reconstructedBaseHash: String,
+        projectedPreMergeCurrentBody: String,
+        projectedPreMergeCurrentHash: String,
+        orderedOperationIdentities: [OperationIdentityPayload],
+        finalBody: String,
+        finalBodyHash: String,
+        retainedOperationAdditions: [SyncConvergencePlannedBodyOperation],
+        snapshotAdditions: [SyncConvergenceSnapshotAddition],
+        resultEvidence: SyncConvergenceResultEvidence,
+        presentationRouting: SyncConvergencePresentationRouting,
+        rewriteSafetyReceipt: SyncConvergenceRewriteSafetyReceipt? = nil
+    ) {
+        self.noteID = noteID
+        self.reconstructedBaseBody = reconstructedBaseBody
+        self.reconstructedBaseHash = reconstructedBaseHash
+        self.projectedPreMergeCurrentBody = projectedPreMergeCurrentBody
+        self.projectedPreMergeCurrentHash = projectedPreMergeCurrentHash
+        self.orderedOperationIdentities = orderedOperationIdentities
+        self.finalBody = finalBody
+        self.finalBodyHash = finalBodyHash
+        self.retainedOperationAdditions = retainedOperationAdditions
+        self.snapshotAdditions = snapshotAdditions
+        self.resultEvidence = resultEvidence
+        self.presentationRouting = presentationRouting
+        self.rewriteSafetyReceipt = rewriteSafetyReceipt
+    }
 }
 
 struct LegacyBodyPlan: Equatable {

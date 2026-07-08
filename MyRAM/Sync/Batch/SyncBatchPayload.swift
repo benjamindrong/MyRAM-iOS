@@ -370,6 +370,7 @@ enum SyncBatchDrainFailureKind: Equatable {
     case invalidMergePlan
     case inconsistentIncorporationState
     case staleAuthoritativeState
+    case unprovenTextLoss
     case unsupportedDigestFormat
     case unexpected
 }
@@ -427,6 +428,8 @@ enum SyncBatchDrainFailureClassifier {
             "Incoming sync incorporation state needs repair."
         case .staleAuthoritativeState:
             "The note changed before the sync update could be committed. Sync will re-evaluate the latest version."
+        case .unprovenTextLoss:
+            "Incoming sync rewrite omitted text without verified delete evidence. Sync is waiting for a safer merge path."
         case .unsupportedDigestFormat:
             "Incoming sync history uses an unsupported digest format."
         case .unexpected:
