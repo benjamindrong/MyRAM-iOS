@@ -4,6 +4,23 @@ import XCTest
 
 @MainActor
 final class UIKitEditorSyncBridgeTests: XCTestCase {
+    func testNativeUndoCompletionClearsUnsafeStateBeforeResumingOnce() {
+        var isApplyingUndo = true
+        var resumeCount = 0
+        var applyingUndoWhenResumed: Bool?
+
+        NativeUndoCompletionResume.perform {
+            isApplyingUndo = false
+        } resumePendingPresentation: {
+            resumeCount += 1
+            applyingUndoWhenResumed = isApplyingUndo
+        }
+
+        XCTAssertFalse(isApplyingUndo)
+        XCTAssertEqual(resumeCount, 1)
+        XCTAssertEqual(applyingUndoWhenResumed, false)
+    }
+
     func testValidInsertionMutatesTextStorageAndPublishesOnce() {
         let noteID = UUID()
         let textView = makeTextView("Hello")

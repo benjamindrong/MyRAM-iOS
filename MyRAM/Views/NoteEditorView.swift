@@ -6,6 +6,17 @@ import UniformTypeIdentifiers
 import VisionKit
 import os
 
+@MainActor
+enum NativeUndoCompletionResume {
+    static func perform(
+        clearUnsafeState: () -> Void,
+        resumePendingPresentation: () -> Void
+    ) {
+        clearUnsafeState()
+        resumePendingPresentation()
+    }
+}
+
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -1544,11 +1555,14 @@ struct NoteEditorView: View {
             isApplyingUndo = true
             activeUndoManager?.undo()
             DispatchQueue.main.async {
-                isApplyingUndo = false
-                lastSnapshot = currentNoteSnapshot()
-                trimUndoHistory(afterRestoring: lastSnapshot)
-                refreshUndoState()
-                vm.resumePendingConvergencePresentationIfNeeded()
+                NativeUndoCompletionResume.perform {
+                    isApplyingUndo = false
+                    lastSnapshot = currentNoteSnapshot()
+                    trimUndoHistory(afterRestoring: lastSnapshot)
+                    refreshUndoState()
+                } resumePendingPresentation: {
+                    vm.resumePendingConvergencePresentationIfNeeded()
+                }
             }
             return
         }
