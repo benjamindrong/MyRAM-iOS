@@ -324,24 +324,39 @@ enum SyncBatchPlatform {
 
 enum SyncBatchQueueFileLocation {
     static func pendingIncoming(for platform: SyncBatchPlatform) -> URL? {
+        queueURL(filenameForPendingIncoming(platform: platform))
+    }
+
+    static func pendingLocalConvergence(for platform: SyncBatchPlatform) -> URL? {
+        let filename: String
+        switch platform {
+        case .iPhone:
+            filename = "ios-pending-local-convergence-batch-queue.json"
+        case .nativeMac:
+            filename = "mac-pending-local-convergence-batch-queue.json"
+        }
+        return queueURL(filename)
+    }
+
+    private static func queueURL(_ filename: String) -> URL? {
         guard let supportDirectory = FileManager.default.urls(
             for: .applicationSupportDirectory,
             in: .userDomainMask
         ).first else {
             return nil
         }
-
-        let filename: String
-        switch platform {
-        case .iPhone:
-            filename = "ios-pending-incoming-batch-queue.json"
-        case .nativeMac:
-            filename = "mac-pending-incoming-batch-queue.json"
-        }
-
         return supportDirectory
             .appendingPathComponent("MyRAM", isDirectory: true)
             .appendingPathComponent(filename)
+    }
+
+    private static func filenameForPendingIncoming(platform: SyncBatchPlatform) -> String {
+        switch platform {
+        case .iPhone:
+            return "ios-pending-incoming-batch-queue.json"
+        case .nativeMac:
+            return "mac-pending-incoming-batch-queue.json"
+        }
     }
 }
 

@@ -21,7 +21,7 @@ final class MacIncomingSyncApplicationPolicyTests: XCTestCase {
 
     func testNonSelectedBodyChangeRefreshesListOnly() {
         let selectedID = UUID()
-        let insertion = MacAppliedBodyInsertion(noteID: UUID(), utf16Offset: 1, text: "x", modifiedAt: Date())
+        let insertion = AppliedEditorBodyInsertion(noteID: UUID(), utf16Offset: 1, text: "x", modifiedAt: Date())
 
         let plan = MacIncomingSyncApplicationPolicy.plan(
             appliedBatch: MacAppliedSyncBatch(batchID: UUID(), changes: [.bodyInserted(insertion)]),
@@ -51,8 +51,8 @@ final class MacIncomingSyncApplicationPolicyTests: XCTestCase {
 
     func testSelectedBodyChangesProduceOrderedEditorActions() {
         let selectedID = UUID()
-        let insertion = MacAppliedBodyInsertion(noteID: selectedID, utf16Offset: 1, text: "x", modifiedAt: Date())
-        let deletion = MacAppliedBodyDeletion(noteID: selectedID, range: NSRange(location: 2, length: 1), deletedText: "y", modifiedAt: Date())
+        let insertion = AppliedEditorBodyInsertion(noteID: selectedID, utf16Offset: 1, text: "x", modifiedAt: Date())
+        let deletion = AppliedEditorBodyDeletion(noteID: selectedID, range: NSRange(location: 2, length: 1), deletedText: "y", modifiedAt: Date())
 
         let plan = MacIncomingSyncApplicationPolicy.plan(
             appliedBatch: MacAppliedSyncBatch(batchID: UUID(), changes: [.bodyInserted(insertion), .bodyDeleted(deletion)]),
@@ -67,7 +67,7 @@ final class MacIncomingSyncApplicationPolicyTests: XCTestCase {
 
     func testUnsafeSelectedEditorRequestsFallback() {
         let selectedID = UUID()
-        let insertion = MacAppliedBodyInsertion(noteID: selectedID, utf16Offset: 1, text: "x", modifiedAt: Date())
+        let insertion = AppliedEditorBodyInsertion(noteID: selectedID, utf16Offset: 1, text: "x", modifiedAt: Date())
 
         let plan = MacIncomingSyncApplicationPolicy.plan(
             appliedBatch: MacAppliedSyncBatch(batchID: UUID(), changes: [.bodyInserted(insertion)]),

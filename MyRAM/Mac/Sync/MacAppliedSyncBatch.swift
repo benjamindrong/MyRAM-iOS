@@ -9,8 +9,8 @@ struct MacAppliedSyncBatch: Equatable {
 enum MacAppliedSyncChange: Equatable {
     case noteCreated(MacAppliedNoteCreated)
     case titleChanged(MacAppliedTitleChanged)
-    case bodyInserted(MacAppliedBodyInsertion)
-    case bodyDeleted(MacAppliedBodyDeletion)
+    case bodyInserted(AppliedEditorBodyInsertion)
+    case bodyDeleted(AppliedEditorBodyDeletion)
 }
 
 struct MacAppliedNoteCreated: Equatable {
@@ -26,17 +26,4 @@ struct MacAppliedTitleChanged: Equatable {
     let modifiedAt: Date
 }
 
-struct MacAppliedBodyInsertion: Equatable {
-    let noteID: UUID
-    let utf16Offset: Int
-    let text: String
-    let modifiedAt: Date
-}
-
-struct MacAppliedBodyDeletion: Equatable {
-    let noteID: UUID
-    let range: NSRange
-    let deletedText: String
-    let modifiedAt: Date
-}
 #endif

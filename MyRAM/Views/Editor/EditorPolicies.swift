@@ -1,19 +1,5 @@
 import Foundation
 
-enum EditorBufferOwner {
-    case idle
-    case localEditing
-    case applyingRemoteSync
-    case restoringHistory
-    case resolvingConflict
-}
-
-enum EditorBufferReloadPolicy {
-    static func shouldDeferRemoteRefresh(owner: EditorBufferOwner, hasPendingNoteCommit: Bool) -> Bool {
-        owner == .localEditing && hasPendingNoteCommit
-    }
-}
-
 enum EditorSelectionFormattingPolicy {
     static let largeSelectionFormattingThreshold = 2_000
 

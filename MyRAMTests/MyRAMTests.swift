@@ -81,7 +81,7 @@ final class MyRAMTests: XCTestCase {
         let notes: [NoteRecord]
     }
 
-    private final class RecordingSyncController: MyRAMSyncControlling {
+    private final class RecordingSyncController: MyRAMSyncControlling, SyncConvergenceLocalBatchTransportAdapter {
         var onChangesReceived: (([SyncChange]) async -> Void)?
         var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
         var onBatchReceived: ((SyncBatch) async -> Void)?
@@ -107,8 +107,33 @@ final class MyRAMTests: XCTestCase {
             )
         }
 
-        func recordLocalBatch(_ batch: SyncBatch) {
+        func acceptLocalBatch(_ batch: SyncBatch) async throws {
             recordedBatches.append(batch)
+        }
+    }
+
+    private struct MountedEditorFixture {
+        let container: ModelContainer
+        let context: ModelContext
+        let queueFileURL: URL
+        let localQueueFileURL: URL
+        let conflictFileURL: URL
+        let recorder: RecordingSyncController
+        let vm: NotesViewModel
+        let note: Note
+        let noteID: UUID
+        let bridge: NoteEditorToolbarBridge
+        let window: UIWindow
+        let hostingController: UIHostingController<NoteEditorView>
+        let textView: UITextView
+
+        @MainActor
+        func unmount() {
+            vm.selectNote(nil)
+            vm.unregisterActiveEditor(noteID: noteID)
+            window.rootViewController = nil
+            window.isHidden = true
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
     }
 
@@ -2129,10 +2154,50 @@ final class MyRAMTests: XCTestCase {
         XCTAssertNil(change.baseContentHash)
     }
 
+    func testReadyLocalBatchRegistersConvergenceEvidenceBeforeTransport() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let recorder = RecordingSyncController()
+        let note = Note(title: "Shared", content: "Hello")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-000000127501")!
+        context.insert(note)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: recorder,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            syncBatchQuietWindow: 0
+        )
+
+        vm.commitNoteEdit(note, title: "Renamed", content: "Hello world")
+        for _ in 0..<20 where recorder.recordedBatches.isEmpty {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        let batch = try XCTUnwrap(recorder.recordedBatches.first)
+        let retained = try context.fetch(FetchDescriptor<RetainedBodyOperation>())
+        XCTAssertEqual(retained.count, 1)
+        let operation = try XCTUnwrap(retained.first)
+        XCTAssertEqual(operation.sourceRaw, SyncConvergenceRetainedOperationSource.local.rawValue)
+        XCTAssertEqual(operation.batchID, batch.id)
+        XCTAssertEqual(operation.noteID, note.id)
+        XCTAssertEqual(operation.operationKindRaw, SyncConvergencePlannedBodyOperation.Kind.insert.rawValue)
+        XCTAssertEqual(operation.baseContentHash, SyncBatchContentHash.sha256Hex(for: "Hello"))
+        XCTAssertEqual(operation.resultContentHash, SyncBatchContentHash.sha256Hex(for: "Hello world"))
+
+        let winners = try context.fetch(FetchDescriptor<NoteTitleWinner>())
+        XCTAssertEqual(winners.count, 1)
+        XCTAssertEqual(winners.first?.noteID, note.id)
+        XCTAssertEqual(winners.first?.title, "Renamed")
+    }
+
     func testIPhoneIncomingHashedMismatchRemainsQueuedAndBlocksLaterBatch() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2147,6 +2212,7 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             bodyHashCapabilityEnabled: true,
             syncBatchQuietWindow: 0
         )
@@ -2198,6 +2264,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2212,6 +2279,7 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             bodyHashCapabilityEnabled: true,
             syncBatchQuietWindow: 0
         )
@@ -2240,6 +2308,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2255,6 +2324,7 @@ final class MyRAMTests: XCTestCase {
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
             pendingIncomingBatchQueueLimit: 1,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
 
@@ -2287,6 +2357,7 @@ final class MyRAMTests: XCTestCase {
         let queueFileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("ios-pending-incoming-batch-queue.json")
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         try FileManager.default.createDirectory(at: queueFileURL, withIntermediateDirectories: true)
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
@@ -2298,6 +2369,7 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
 
@@ -2306,24 +2378,425 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(vm.syncBatchErrorMessage, "Unable to persist incoming sync batch.")
     }
 
-    func testNestedIncomingDrainDoesNotClearRemoteApplySuppression() async throws {
-        // NotesViewModel's applier uses the default UserDefaults-backed seen-batch store,
-        // which persists across test runs on the same simulator. Clear just this test's
-        // batch IDs so a prior run (including a crashed one) can't make this run's batches
-        // look already-applied.
-        let seenBatchIDsKey = SyncBatchSeenBatchStore.defaultSeenBatchIDsKey
-        let thisTestBatchIDStrings: Set<String> = [
-            "00000000-0000-0000-0000-000000128101",
-            "00000000-0000-0000-0000-000000128102"
-        ]
-        UserDefaults.standard.set(
-            (UserDefaults.standard.stringArray(forKey: seenBatchIDsKey) ?? []).filter { !thisTestBatchIDStrings.contains($0) },
-            forKey: seenBatchIDsKey
-        )
-
+    func testActiveNoteTitleOnlyIncomingBatchPublishesMetadataOnlyEditorUpdate() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let note = Note(title: "Local Title", content: "body")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-000000129001")!
+        context.insert(note)
+        try context.save()
+        let recorder = RecordingSyncController()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: recorder,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
+            syncBatchQuietWindow: 0
+        )
+        vm.selectNote(note)
+
+        let batchID = UUID()
+        await vm.applyIncomingSyncBatch(SyncBatch(
+            id: batchID,
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: note.id,
+                    title: "Remote Title",
+                    modifiedAt: Date(timeIntervalSince1970: 2)
+                ))
+            ]
+        ))
+
+        XCTAssertNil(vm.syncBatchErrorMessage)
+        XCTAssertEqual(note.title, "Remote Title")
+        XCTAssertEqual(note.content, "body")
+        XCTAssertNil(vm.activeEditorSyncUpdate)
+        XCTAssertTrue(recorder.recordedBatches.isEmpty)
+    }
+
+    func testActiveNoteMixedTitleAndBodyIncomingBatchPublishesCompositeEditorUpdate() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let note = Note(title: "Local Title", content: "Hello")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-000000129002")!
+        context.insert(note)
+        try context.save()
+        let recorder = RecordingSyncController()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: recorder,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
+            syncBatchQuietWindow: 0
+        )
+        vm.selectNote(note)
+
+        let batchID = UUID()
+        await vm.applyIncomingSyncBatch(SyncBatch(
+            id: batchID,
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 3),
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: note.id,
+                    title: "Remote Mixed Title",
+                    modifiedAt: Date(timeIntervalSince1970: 4)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: note.id,
+                    utf16Offset: "Hello".utf16.count,
+                    text: " remote",
+                    modifiedAt: Date(timeIntervalSince1970: 5)
+                ))
+            ]
+        ))
+
+        XCTAssertEqual(note.title, "Remote Mixed Title")
+        XCTAssertEqual(note.content, "Hello remote")
+        XCTAssertNil(vm.activeEditorSyncUpdate)
+        XCTAssertTrue(recorder.recordedBatches.isEmpty)
+    }
+
+    func testNonactiveTitleOnlyIncomingBatchDoesNotPublishActiveEditorUpdate() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let activeNote = Note(title: "Active", content: "active body")
+        activeNote.id = UUID(uuidString: "00000000-0000-0000-0000-000000129003")!
+        let otherNote = Note(title: "Other", content: "other body")
+        otherNote.id = UUID(uuidString: "00000000-0000-0000-0000-000000129004")!
+        context.insert(activeNote)
+        context.insert(otherNote)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
+            syncBatchQuietWindow: 0
+        )
+        vm.selectNote(activeNote)
+
+        await vm.applyIncomingSyncBatch(SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 6),
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: otherNote.id,
+                    title: "Other Remote",
+                    modifiedAt: Date(timeIntervalSince1970: 7)
+                ))
+            ]
+        ))
+
+        XCTAssertEqual(activeNote.title, "Active")
+        XCTAssertEqual(activeNote.content, "active body")
+        XCTAssertEqual(otherNote.title, "Other Remote")
+        XCTAssertNil(vm.activeEditorSyncUpdate)
+    }
+
+    func testDuplicateTitleOnlyIncomingBatchDoesNotPublishNewActiveEditorUpdate() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let note = Note(title: "Local", content: "body")
+        note.id = UUID()
+        context.insert(note)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
+            syncBatchQuietWindow: 0
+        )
+        vm.selectNote(note)
+        let batch = titleOnlyBatch(noteID: note.id, title: "Remote")
+
+        await vm.applyIncomingSyncBatch(batch)
+        XCTAssertNil(vm.activeEditorSyncUpdate)
+        note.title = "Newer Local"
+        try context.save()
+        await vm.applyIncomingSyncBatch(batch)
+
+        XCTAssertEqual(note.title, "Newer Local")
+        XCTAssertNil(vm.activeEditorSyncUpdate)
+    }
+
+    func testDuplicateMixedIncomingBatchDoesNotRepublishEditorUpdate() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let note = Note(title: "Local", content: "Hello")
+        note.id = UUID()
+        context.insert(note)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
+            syncBatchQuietWindow: 0
+        )
+        vm.selectNote(note)
+        let batch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 30),
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: note.id,
+                    title: "Remote",
+                    modifiedAt: Date(timeIntervalSince1970: 31)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: note.id,
+                    utf16Offset: "Hello".utf16.count,
+                    text: " remote",
+                    modifiedAt: Date(timeIntervalSince1970: 32)
+                ))
+            ]
+        )
+
+        await vm.applyIncomingSyncBatch(batch)
+        XCTAssertNil(vm.activeEditorSyncUpdate)
+        note.title = "Newer Local"
+        note.content = "Local body"
+        try context.save()
+        await vm.applyIncomingSyncBatch(batch)
+
+        XCTAssertEqual(note.title, "Newer Local")
+        XCTAssertEqual(note.content, "Local body")
+        XCTAssertNil(vm.activeEditorSyncUpdate)
+    }
+
+    func testMountedEditorMetadataOnlyRemoteTitleIsNotRecaptured() async throws {
+        let fixture = try makeMountedEditorFixture(title: "Local Title", content: "body")
+        defer { fixture.unmount() }
+
+        await fixture.vm.applyIncomingSyncBatch(titleOnlyBatch(noteID: fixture.note.id, title: "Remote Title"))
+        try await waitUntil("toolbar title updates") {
+            fixture.bridge.title == "Remote Title"
+        }
+        try await waitPastEditorCommitDelay()
+
+        XCTAssertEqual(fixture.note.title, "Remote Title")
+        XCTAssertEqual(fixture.note.content, "body")
+        XCTAssertTrue(fixture.recorder.recordedBatches.isEmpty)
+        XCTAssertFalse(fixture.bridge.canUndo)
+        fixture.bridge.undo?()
+        try await waitForMountedEditorLifecycle()
+        XCTAssertEqual(fixture.bridge.title, "Remote Title")
+        XCTAssertEqual(fixture.note.title, "Remote Title")
+    }
+
+    func testMountedEditorMixedRemoteTitleAndBodyIsNotRecaptured() async throws {
+        let fixture = try makeMountedEditorFixture(title: "Local Title", content: "Hello")
+        defer { fixture.unmount() }
+
+        await fixture.vm.applyIncomingSyncBatch(SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 10),
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: fixture.note.id,
+                    title: "Remote Mixed Title",
+                    modifiedAt: Date(timeIntervalSince1970: 11)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: fixture.note.id,
+                    utf16Offset: "Hello".utf16.count,
+                    text: " remote",
+                    modifiedAt: Date(timeIntervalSince1970: 12)
+                ))
+            ]
+        ))
+        try await waitUntil("toolbar title and editor body update") {
+            fixture.bridge.title == "Remote Mixed Title" && fixture.textView.text == "Hello remote"
+        }
+        try await waitPastEditorCommitDelay()
+
+        XCTAssertNil(fixture.vm.activeEditorSyncUpdate)
+        XCTAssertEqual(fixture.note.title, "Remote Mixed Title")
+        XCTAssertEqual(fixture.note.content, "Hello remote")
+        XCTAssertTrue(fixture.recorder.recordedBatches.isEmpty)
+    }
+
+    func testMountedEditorRemoteTitleDoesNotContaminateNextUndoSnapshot() async throws {
+        let fixture = try makeMountedEditorFixture(title: "Local Title", content: "body")
+        defer { fixture.unmount() }
+
+        await fixture.vm.applyIncomingSyncBatch(titleOnlyBatch(noteID: fixture.note.id, title: "Remote Title"))
+        try await waitUntil("remote title updates") {
+            fixture.bridge.title == "Remote Title"
+        }
+
+        fixture.textView.text = "body local"
+        fixture.textView.delegate?.textViewDidChange?(fixture.textView)
+        try await waitUntil("local edit enables undo") {
+            fixture.bridge.canUndo
+        }
+        fixture.bridge.undo?()
+        try await waitUntil("local body edit is undone") {
+            fixture.textView.text == "body"
+        }
+
+        XCTAssertEqual(fixture.bridge.title, "Remote Title")
+        XCTAssertEqual(fixture.note.title, "Remote Title")
+    }
+
+    func testMountedEditorUnsafeLocalBodyStateDoesNotApplyRemoteTitleOrBody() async throws {
+        let fixture = try makeMountedEditorFixture(title: "Local Title", content: "body")
+        defer { fixture.unmount() }
+
+        fixture.textView.text = "user body"
+        fixture.textView.delegate?.textViewDidChange?(fixture.textView)
+        try await waitUntil("local edit is pending") {
+            fixture.bridge.canUndo
+        }
+
+        await fixture.vm.applyIncomingSyncBatch(SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 20),
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: fixture.note.id,
+                    title: "Remote Title",
+                    modifiedAt: Date(timeIntervalSince1970: 21)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: fixture.note.id,
+                    utf16Offset: 0,
+                    text: "remote ",
+                    modifiedAt: Date(timeIntervalSince1970: 22)
+                ))
+            ]
+        ))
+        try await waitForMountedEditorLifecycle()
+
+        XCTAssertEqual(fixture.bridge.title, "Local Title")
+        XCTAssertEqual(fixture.textView.text, "user body")
+        try await waitPastEditorCommitDelay()
+        XCTAssertEqual(fixture.note.title, "Local Title")
+        XCTAssertEqual(fixture.note.content, "user body")
+        XCTAssertFalse(fixture.recorder.recordedBatches.isEmpty)
+    }
+
+    func testMountedEditorPendingLocalBodyStateDefersReload() async throws {
+        let fixture = try makeMountedEditorFixture(title: "Local Title", content: "body")
+        defer { fixture.unmount() }
+
+        fixture.textView.text = "user body"
+        fixture.textView.delegate?.textViewDidChange?(fixture.textView)
+        try await waitUntil("local edit is pending") {
+            fixture.bridge.canUndo
+        }
+        let remoteNote = Note(title: "Remote Title", content: "remote body")
+        remoteNote.id = fixture.note.id
+        remoteNote.modifiedAt = Date(timeIntervalSince1970: 50)
+        await fixture.vm.applyIncomingSyncChanges([
+            try legacyNoteSyncChange(
+                note: remoteNote,
+                baseTitle: "Local Title",
+                baseContent: "body",
+                originDeviceID: "reload-peer"
+            )
+        ])
+        try await waitForMountedEditorLifecycle()
+
+        XCTAssertEqual(fixture.bridge.title, "Local Title")
+        XCTAssertEqual(fixture.textView.text, "user body")
+        try await waitPastEditorCommitDelay()
+        XCTAssertEqual(fixture.note.title, "Local Title")
+        XCTAssertEqual(fixture.note.content, "user body")
+    }
+
+    func testMountedEditorSafeReloadAppliesAuthoritativeNote() async throws {
+        let fixture = try makeMountedEditorFixture(title: "Local Title", content: "body")
+        defer { fixture.unmount() }
+        let conflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: fixture.note.id,
+            noteID: fixture.note.id,
+            field: .noteContent,
+            localText: "body",
+            remoteText: "remote body",
+            remoteModifiedAt: Date(timeIntervalSince1970: 60),
+            preservedAt: Date(timeIntervalSince1970: 61),
+            expiresAt: Date().addingTimeInterval(1_000)
+        )
+        _ = SyncConflictStore(fileURL: fixture.conflictFileURL).preserve(conflict)
+        fixture.vm.restoreSyncConflict(conflict)
+        try await waitUntil("safe reload applies") {
+            fixture.textView.text == "remote body"
+        }
+        try await waitPastEditorCommitDelay()
+
+        XCTAssertEqual(fixture.note.content, "remote body")
+        XCTAssertTrue(fixture.recorder.recordedBatches.isEmpty)
+    }
+
+    func testMountedEditorEqualRemoteTitleDoesNotCreateLocalCommitOrUndo() async throws {
+        let fixture = try makeMountedEditorFixture(title: "Same Title", content: "body")
+        defer { fixture.unmount() }
+
+        await fixture.vm.applyIncomingSyncBatch(titleOnlyBatch(noteID: fixture.note.id, title: "Same Title"))
+        try await waitForMountedEditorLifecycle()
+        try await waitPastEditorCommitDelay()
+
+        XCTAssertEqual(fixture.bridge.title, "Same Title")
+        XCTAssertEqual(fixture.note.title, "Same Title")
+        XCTAssertTrue(fixture.recorder.recordedBatches.isEmpty)
+        XCTAssertFalse(fixture.bridge.canUndo)
+    }
+
+    func testConvergenceRuntimeProcessesQueuedIncomingBatchesSerially() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2367,8 +2840,8 @@ final class MyRAMTests: XCTestCase {
                 )
             ]
         )
-        // Pre-enqueue both batches directly so the view model's own drain loop, once
-        // started, has a second queued batch to process after the nested attempt.
+        // Pre-enqueue both batches directly so one convergence drain must serialize
+        // all queued work without the removed legacy direct-applier callback path.
         try FileBackedSyncBatchQueue(fileURL: queueFileURL).enqueueIncoming(firstBatch)
         try FileBackedSyncBatchQueue(fileURL: queueFileURL).enqueueIncoming(secondBatch)
 
@@ -2377,56 +2850,16 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
 
-        var suppressionDuringSecondBatch: Bool?
-        vm.onDrainBatchApplied = { [weak vm] batch in
-            guard let vm else { return }
-            if batch.id == firstBatch.id {
-                // Simulate a callback or refresh path re-entering the drain while the
-                // outer drain triggered by `applyIncomingSyncBatch` below is still active.
-                vm.drainPendingIncomingSyncBatchesForTesting()
-            } else if batch.id == secondBatch.id {
-                suppressionDuringSecondBatch = vm.isApplyingRemoteSyncChange
-            }
-        }
-
         await vm.applyIncomingSyncBatch(firstBatch)
 
-        XCTAssertEqual(suppressionDuringSecondBatch, true)
         XCTAssertFalse(vm.isApplyingRemoteSyncChange)
         XCTAssertEqual(noteA.content, "hello remote-a")
         XCTAssertEqual(noteB.content, "world remote-b")
-    }
-
-    func testEditorBufferDefersRemoteRefreshDuringPendingLocalEdit() {
-        XCTAssertTrue(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
-            owner: .localEditing,
-            hasPendingNoteCommit: true
-        ))
-    }
-
-    func testEditorBufferAllowsRemoteRefreshWhenLocalEditHasCommitted() {
-        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
-            owner: .localEditing,
-            hasPendingNoteCommit: false
-        ))
-    }
-
-    func testEditorBufferAllowsDeliberateNonLocalOwnersToRefresh() {
-        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
-            owner: .idle,
-            hasPendingNoteCommit: true
-        ))
-        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
-            owner: .restoringHistory,
-            hasPendingNoteCommit: true
-        ))
-        XCTAssertFalse(EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
-            owner: .resolvingConflict,
-            hasPendingNoteCommit: true
-        ))
+        XCTAssertTrue(FileBackedSyncBatchQueue(fileURL: queueFileURL).pendingBatches.isEmpty)
     }
 
     func testSelectionFormattingPolicyAllowsSmallSelectionScan() {
@@ -5710,18 +6143,138 @@ final class MyRAMTests: XCTestCase {
         isStoredInMemoryOnly: Bool,
         configurationName: String = "MyRAMTests"
     ) throws -> ModelContainer {
-        let schema = Schema([Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self])
+        let schema = Schema(MyRAMModelRegistry.models)
         let configuration = ModelConfiguration(
             configurationName,
             schema: schema,
             isStoredInMemoryOnly: isStoredInMemoryOnly
         )
 
-        return try ModelContainer(
-            for: Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self,
-            configurations: configuration
+        return try ModelContainer(for: schema, configurations: configuration)
+    }
+
+    private func makeMountedEditorFixture(
+        title: String,
+        content: String
+    ) throws -> MountedEditorFixture {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        let recorder = RecordingSyncController()
+        let note = Note(title: title, content: content)
+        note.id = UUID()
+        context.insert(note)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: recorder,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
+            syncBatchQuietWindow: 0
+        )
+        vm.selectNote(note)
+        vm.registerActiveEditor(noteID: note.id)
+        let bridge = NoteEditorToolbarBridge()
+        let view = NoteEditorView(
+            vm: vm,
+            note: note,
+            onNewNote: { _ in },
+            showsTopBar: false,
+            toolbarBridge: bridge
+        )
+        let hostingController = UIHostingController(rootView: view)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+        window.rootViewController = hostingController
+        window.makeKeyAndVisible()
+        hostingController.view.setNeedsLayout()
+        hostingController.view.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        let textView = try XCTUnwrap(hostingController.view.firstSubview(of: UITextView.self))
+        return MountedEditorFixture(
+            container: container,
+            context: context,
+            queueFileURL: queueFileURL,
+            localQueueFileURL: localQueueFileURL,
+            conflictFileURL: conflictFileURL,
+            recorder: recorder,
+            vm: vm,
+            note: note,
+            noteID: note.id,
+            bridge: bridge,
+            window: window,
+            hostingController: hostingController,
+            textView: textView
         )
     }
+
+    private func titleOnlyBatch(noteID: UUID, title: String) -> SyncBatch {
+        SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(),
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteID,
+                    title: title,
+                    modifiedAt: Date()
+                ))
+            ]
+        )
+    }
+
+    private func legacyNoteSyncChange(
+        note: Note,
+        baseTitle: String,
+        baseContent: String,
+        originDeviceID: String
+    ) throws -> SyncChange {
+        SyncChange(
+            entityType: .item,
+            entityID: note.id.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(
+                note: note,
+                baseTitle: baseTitle,
+                baseContent: baseContent,
+                baseRichTextContentData: nil
+            )),
+            updatedAt: note.modifiedAt,
+            originDeviceID: originDeviceID
+        )
+    }
+
+    private func waitForMountedEditorLifecycle(
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async throws {
+        _ = file
+        _ = line
+        try await Task.sleep(nanoseconds: 100_000_000)
+    }
+
+    private func waitPastEditorCommitDelay() async throws {
+        let delay = Double(EditorTimingPolicy.commitDelayNanoseconds) / 1_000_000_000
+        try await Task.sleep(nanoseconds: UInt64((delay + 0.25) * 1_000_000_000))
+    }
+
+    private func waitUntil(
+        _ description: String,
+        timeout: TimeInterval = 2,
+        file: StaticString = #filePath,
+        line: UInt = #line,
+        condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if condition() { return }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertTrue(condition(), "Timed out waiting for \(description)", file: file, line: line)
+    }
+
 
     private func makeJPEGData() throws -> Data {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 20, height: 20))
@@ -5990,4 +6543,19 @@ private extension UIColor {
         guard getRed(&red, green: &green, blue: &blue, alpha: &alpha) else { return nil }
         return [red, green, blue, alpha].map { ($0 * 1_000).rounded() / 1_000 }
     }
+}
+
+private extension UIView {
+    func firstSubview<T: UIView>(of type: T.Type) -> T? {
+        if let matching = self as? T {
+            return matching
+        }
+        for subview in subviews {
+            if let matching = subview.firstSubview(of: type) {
+                return matching
+            }
+        }
+        return nil
+    }
+
 }

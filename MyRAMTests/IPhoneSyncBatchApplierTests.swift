@@ -32,7 +32,7 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000125004")!, content: "", in: container)
 
-        try apply(
+        let result = try apply(
             changes: [
                 .noteTitleChanged(
                     SyncBatchNoteTitleChangedChange(
@@ -46,13 +46,15 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         )
 
         XCTAssertEqual(note.title, "Remote Title")
+        XCTAssertEqual(result.disposition, .applied)
+        XCTAssertEqual(result.appliedTitleChanges, [AppliedSyncBatchTitleChange(noteID: note.id, title: "Remote Title")])
     }
 
     func testIncomingInsertionFallsForwardAtUnsafeUTF16Boundary() throws {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000125005")!, content: "A😀B", in: container)
 
-        try apply(
+        let result = try apply(
             changes: [
                 .noteBodyTextInserted(
                     SyncBatchNoteBodyTextInsertedChange(
@@ -67,6 +69,20 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         )
 
         XCTAssertEqual(note.content, "A😀xB")
+        XCTAssertEqual(result.editorMutationBatches, [
+            AppliedEditorMutationBatch(
+                noteID: note.id,
+                mutations: [
+                    .bodyInsertion(AppliedEditorBodyInsertion(
+                        noteID: note.id,
+                        utf16Offset: 3,
+                        text: "x",
+                        modifiedAt: Date(timeIntervalSince1970: 4)
+                    ))
+                ],
+                authoritativeBody: "A😀xB"
+            )
+        ])
     }
 
     func testMatchingBaseHashUsesExistingPositionalInsertionPath() throws {
@@ -128,7 +144,7 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000125006")!, content: "abcdef", in: container)
 
-        try apply(
+        let result = try apply(
             changes: [
                 .noteBodyTextDeleted(
                     SyncBatchNoteBodyTextDeletedChange(
@@ -144,6 +160,20 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         )
 
         XCTAssertEqual(note.content, "abef")
+        XCTAssertEqual(result.editorMutationBatches, [
+            AppliedEditorMutationBatch(
+                noteID: note.id,
+                mutations: [
+                    .bodyDeletion(AppliedEditorBodyDeletion(
+                        noteID: note.id,
+                        range: NSRange(location: 2, length: 2),
+                        deletedText: "cd",
+                        modifiedAt: Date(timeIntervalSince1970: 5)
+                    ))
+                ],
+                authoritativeBody: "abef"
+            )
+        ])
     }
 
     func testUnsafeDeleteDoesNotRemoveUnrelatedLocalText() throws {
@@ -213,17 +243,65 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
             ]
         )
 
-        try IPhoneSyncBatchApplier(
+        let firstResult = try IPhoneSyncBatchApplier(
             context: container.mainContext,
             seenBatchStore: SyncBatchSeenBatchStore(defaults: defaults)
         ).apply(batch)
         XCTAssertTrue(SyncBatchSeenBatchStore(defaults: defaults).hasSeen(batchID))
-        try IPhoneSyncBatchApplier(
+        let secondResult = try IPhoneSyncBatchApplier(
             context: container.mainContext,
             seenBatchStore: SyncBatchSeenBatchStore(defaults: defaults)
         ).apply(batch)
 
         XCTAssertEqual(note.content, "Once")
+        XCTAssertEqual(firstResult.disposition, .applied)
+        XCTAssertEqual(secondResult.disposition, .alreadySeen)
+        XCTAssertTrue(secondResult.editorMutationBatches.isEmpty)
+        XCTAssertTrue(secondResult.appliedTitleChanges.isEmpty)
+    }
+
+    func testMissingNoteTitleChangeProducesNoAppliedTitleEvidence() throws {
+        let container = try makeInMemoryContainer()
+        let missingNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000125210")!
+
+        let result = try apply(
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: missingNoteID,
+                    title: "Missing",
+                    modifiedAt: Date(timeIntervalSince1970: 14)
+                ))
+            ],
+            in: container
+        )
+
+        XCTAssertEqual(result.disposition, .applied)
+        XCTAssertTrue(result.appliedTitleChanges.isEmpty)
+        XCTAssertTrue(result.editorMutationBatches.isEmpty)
+    }
+
+    func testMultipleTitleChangesForOneNoteProduceFinalAppliedTitleEvidence() throws {
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000125211")!, content: "", in: container)
+
+        let result = try apply(
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: note.id,
+                    title: "First",
+                    modifiedAt: Date(timeIntervalSince1970: 15)
+                )),
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: note.id,
+                    title: "Final",
+                    modifiedAt: Date(timeIntervalSince1970: 16)
+                ))
+            ],
+            in: container
+        )
+
+        XCTAssertEqual(note.title, "Final")
+        XCTAssertEqual(result.appliedTitleChanges, [AppliedSyncBatchTitleChange(noteID: note.id, title: "Final")])
     }
 
     func testPlainTextMutationClearsRichTextData() throws {
@@ -379,17 +457,18 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         XCTAssertFalse(seenBatchStore.hasSeen(batchID))
     }
 
+    @discardableResult
     private func apply(
         batchID: String = "00000000-0000-0000-0000-000000125100",
         changes: [SyncBatchChange],
         in container: ModelContainer
-    ) throws {
+    ) throws -> IPhoneSyncBatchApplyResult {
         let applier = IPhoneSyncBatchApplier(
             context: container.mainContext,
             seenBatchStore: SyncBatchSeenBatchStore(defaults: makeDefaults()),
             bodyHashCapabilityEnabled: true
         )
-        try applier.apply(
+        return try applier.apply(
             SyncBatch(
                 id: UUID(uuidString: batchID)!,
                 originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000125200")!,

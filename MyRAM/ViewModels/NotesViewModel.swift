@@ -24,7 +24,7 @@ final class NotesViewModel: ObservableObject {
     @Published var currentNote: Note? = nil
     @Published var currentFolder: Folder? = nil
     @Published private(set) var syncConflicts: [SyncConflictVersion] = []
-    @Published private(set) var activeNoteSyncRevision = 0
+    @Published private(set) var activeEditorSyncUpdate: ActiveEditorSyncUpdate?
     @Published private(set) var syncBatchErrorMessage: String?
     @Published private(set) var hasUndoableAction = false
     @Published private(set) var hasRedoableAction = false
@@ -37,15 +37,23 @@ final class NotesViewModel: ObservableObject {
     private let syncConflictService: MyRAMSyncConflictService
     private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
     private let pendingIncomingBatches: FileBackedSyncBatchQueue
+    private let pendingLocalConvergenceBatches: FileBackedSyncBatchQueue
     private let bodyHashCapabilityEnabled: Bool
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
     private(set) var isApplyingRemoteSyncChange = false
-    private var isDrainingPendingIncomingBatches = false
-    /// Test-only hook invoked after each batch is applied and removed during an incoming drain.
-    var onDrainBatchApplied: ((SyncBatch) -> Void)?
+    private var mountedActiveEditorNoteID: UUID?
+    private lazy var syncConvergenceRuntime = SyncConvergenceRuntime(
+        context: context,
+        convergenceQueue: pendingIncomingBatches,
+        localObligationQueue: pendingLocalConvergenceBatches,
+        localBatchTransportAdapter: syncController as? SyncConvergenceLocalBatchTransportAdapter,
+        presentationAdapter: NotesViewModelConvergencePresentationAdapter(viewModel: self)
+    )
+    private var activeEditorPresentationAcknowledgment: ActiveEditorPresentationAcknowledgment?
     private var recentTextEditByNoteID: [UUID: Date] = [:]
     private var syncBatchReadyTask: Task<Void, Never>?
+    private var pendingConvergenceResumeTask: Task<Void, Never>?
     private var undoStack: [UndoAction] = [] {
         didSet {
             hasUndoableAction = !undoStack.isEmpty
@@ -63,6 +71,8 @@ final class NotesViewModel: ObservableObject {
         syncConflictStore: SyncConflictStore = SyncConflictStore(),
         pendingIncomingBatchQueueFileURL: URL? = NotesViewModel.pendingIncomingBatchQueueFileURL(),
         pendingIncomingBatchQueueLimit: Int = 100,
+        pendingLocalConvergenceBatchQueueFileURL: URL? = NotesViewModel.pendingLocalConvergenceBatchQueueFileURL(),
+        pendingLocalConvergenceBatchQueueLimit: Int = 100,
         bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
         syncBatchQuietWindow: TimeInterval = 3
     ) {
@@ -72,6 +82,10 @@ final class NotesViewModel: ObservableObject {
         pendingIncomingBatches = FileBackedSyncBatchQueue(
             fileURL: pendingIncomingBatchQueueFileURL,
             limit: pendingIncomingBatchQueueLimit
+        )
+        pendingLocalConvergenceBatches = FileBackedSyncBatchQueue(
+            fileURL: pendingLocalConvergenceBatchQueueFileURL,
+            limit: pendingLocalConvergenceBatchQueueLimit
         )
         self.bodyHashCapabilityEnabled = bodyHashCapabilityEnabled
         syncBatchAccumulator = IPhoneSyncBatchAccumulator(
@@ -91,13 +105,14 @@ final class NotesViewModel: ObservableObject {
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
             for await batch in stream {
-                self?.sendReadySyncBatch(batch)
+                await self?.handleReadyLocalBatch(batch)
             }
         }
         syncConflicts = syncConflictService.activeConflicts()
         purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     deinit {
@@ -120,6 +135,7 @@ final class NotesViewModel: ObservableObject {
             undoFolderDeletion(using: snapshot)
         }
         redoStack.append(action)
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func redoLastAction() {
@@ -138,6 +154,7 @@ final class NotesViewModel: ObservableObject {
             redoFolderDeletion(using: snapshot)
         }
         undoStack.append(action)
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func refreshCurrentFolderContent() {
@@ -407,8 +424,13 @@ final class NotesViewModel: ObservableObject {
     }
 
     func selectNote(_ note: Note?) {
+        let previousNoteID = currentNote?.id
+        if let previousNoteID, previousNoteID != note?.id {
+            resolveActiveEditorPresentation(noteID: previousNoteID, result: .verifiedComplete)
+        }
         currentNote = note
         UserDefaults.standard.set(note?.id.uuidString, forKey: "lastNoteID")
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func noteSuggestionLabels(for note: Note) -> [String] {
@@ -682,9 +704,10 @@ final class NotesViewModel: ObservableObject {
         )
 
         if result.shouldRefreshActiveNote {
-            activeNoteSyncRevision += 1
+            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func restoreSyncConflict(_ conflict: SyncConflictVersion) {
@@ -701,9 +724,10 @@ final class NotesViewModel: ObservableObject {
         )
 
         if result.shouldRefreshActiveNote {
-            activeNoteSyncRevision += 1
+            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func saveMergedSyncConflict(_ conflict: SyncConflictVersion, mergedText: String) {
@@ -722,9 +746,10 @@ final class NotesViewModel: ObservableObject {
         )
 
         if result.shouldRefreshActiveNote {
-            activeNoteSyncRevision += 1
+            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func discardSyncConflict(_ conflict: SyncConflictVersion) {
@@ -741,9 +766,10 @@ final class NotesViewModel: ObservableObject {
         )
 
         if result.shouldRefreshActiveNote {
-            activeNoteSyncRevision += 1
+            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func addPhotoAttachment(to note: Note, imageData: Data) {
@@ -1230,10 +1256,6 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func sendReadySyncBatch(_ batch: SyncBatch) {
-        syncController?.recordLocalBatch(batch)
-    }
-
     private func recordFolderSyncChange(_ folder: Folder) {
         guard !isApplyingRemoteSyncChange,
               let payload = try? MyRAMSyncPayloadCoding.encode(MyRAMFolderSyncPayload(folder: folder)) else { return }
@@ -1460,66 +1482,135 @@ final class NotesViewModel: ObservableObject {
         try? context.save()
         refreshCurrentFolderContent()
         if result.shouldRefreshActiveNote {
-            activeNoteSyncRevision += 1
+            publishActiveEditorReload(noteID: activeNoteID, reason: .unsupportedIntegratedChange)
         }
     }
 
     func applyIncomingSyncBatch(_ batch: SyncBatch) async {
         guard !batch.changes.isEmpty else { return }
-        if !pendingIncomingBatches.contains(batch.id) {
-            do {
-                try pendingIncomingBatches.enqueueIncoming(batch)
-            } catch {
-                let failure = SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id)
-                syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
-                return
-            }
-        }
-        drainPendingIncomingSyncBatches()
+        let outcome = await syncConvergenceRuntime.submitRemoteBatch(batch)
+        handleConvergenceRuntimeOutcome(outcome)
     }
 
-    private func drainPendingIncomingSyncBatches() {
-        // Admission must happen, and both flags below must be fully owned, before calling
-        // into the coordinator. `didApply` can synchronously trigger a reentrant call, so a
-        // rejected nested call must never touch either flag: not `isDrainingPendingIncomingBatches`
-        // (only the active drainer may hold it) and not `isApplyingRemoteSyncChange` (only the
-        // active drainer may enable/disable remote-apply suppression).
-        guard !isDrainingPendingIncomingBatches else { return }
+    private func handleReadyLocalBatch(_ batch: SyncBatch) async {
+        let outcome = await syncConvergenceRuntime.submitLocalBatch(batch)
+        handleConvergenceRuntimeOutcome(outcome)
+    }
 
-        isDrainingPendingIncomingBatches = true
-        isApplyingRemoteSyncChange = true
-        defer {
-            isDrainingPendingIncomingBatches = false
-            isApplyingRemoteSyncChange = false
-        }
-
-        let applier = IPhoneSyncBatchApplier(context: context, bodyHashCapabilityEnabled: bodyHashCapabilityEnabled)
-        let result = SyncBatchDrainCoordinator.drain(
-            nextBatch: { [pendingIncomingBatches] in pendingIncomingBatches.first },
-            apply: { batch in try applier.apply(batch) },
-            remove: { [pendingIncomingBatches] batchID in pendingIncomingBatches.remove(batchID) },
-            didApply: { [weak self] batch, _ in
-                guard let self else { return }
-                refreshCurrentFolderContent()
-                activeNoteSyncRevision += 1
-                syncBatchErrorMessage = nil
-                onDrainBatchApplied?(batch)
+    func resumePendingConvergencePresentationIfNeeded() {
+        guard pendingConvergenceResumeTask == nil else { return }
+        pendingConvergenceResumeTask = Task { [weak self] in
+            await self?.resumePendingConvergencePresentation()
+            await MainActor.run {
+                self?.pendingConvergenceResumeTask = nil
             }
-        )
+        }
+    }
 
-        if case .blocked(let failure) = result {
+    private func resumePendingConvergencePresentation() async {
+        let outcome = await syncConvergenceRuntime.resumePendingWork()
+        handleConvergenceRuntimeOutcome(outcome)
+    }
+
+    private func handleConvergenceRuntimeOutcome(_ outcome: SyncConvergenceRuntimeOutcome) {
+        switch outcome {
+        case .drained:
+            syncBatchErrorMessage = nil
+        case .pending:
+            break
+        case .alreadyDraining:
+            break
+        case .blocked(let failure):
             syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
         }
     }
 
-    /// Test-only entry point that exercises the same reentrant call path a real
-    /// nested drain trigger would take.
-    func drainPendingIncomingSyncBatchesForTesting() {
-        drainPendingIncomingSyncBatches()
+    func acknowledgeActiveEditorSyncUpdate(
+        id updateID: UUID,
+        noteID: UUID,
+        result: SyncConvergencePostCommitAdapterResult
+    ) {
+        guard let acknowledgment = activeEditorPresentationAcknowledgment,
+              acknowledgment.updateID == updateID,
+              acknowledgment.noteID == noteID else { return }
+        activeEditorPresentationAcknowledgment = nil
+        if activeEditorSyncUpdate?.id == updateID,
+           activeEditorSyncUpdate?.noteID == noteID {
+            activeEditorSyncUpdate = nil
+        }
+        acknowledgment.complete(result)
+    }
+
+    func registerActiveEditor(noteID: UUID) {
+        mountedActiveEditorNoteID = noteID
+        resumePendingConvergencePresentationIfNeeded()
+    }
+
+    func unregisterActiveEditor(noteID: UUID) {
+        guard mountedActiveEditorNoteID == noteID else { return }
+        mountedActiveEditorNoteID = nil
+        let result: SyncConvergencePostCommitAdapterResult = currentNote?.id == noteID ? .stillPending : .verifiedComplete
+        resolveActiveEditorPresentation(noteID: noteID, result: result)
+    }
+
+    private func resolveActiveEditorPresentation(
+        noteID: UUID,
+        result: SyncConvergencePostCommitAdapterResult
+    ) {
+        guard let acknowledgment = activeEditorPresentationAcknowledgment,
+              acknowledgment.noteID == noteID else { return }
+        acknowledgeActiveEditorSyncUpdate(id: acknowledgment.updateID, noteID: noteID, result: result)
+    }
+
+    func publishConvergencePresentationUpdate(
+        _ update: ActiveEditorSyncUpdate,
+        incorporationIdentity: SyncConvergencePersistedIncorporationIdentity
+    ) async -> SyncConvergencePostCommitAdapterResult {
+        guard currentNote?.id == update.noteID else { return .verifiedComplete }
+        guard mountedActiveEditorNoteID == update.noteID else { return .verifiedComplete }
+        if activeEditorPresentationAcknowledgment != nil {
+            return .stillPending
+        }
+
+        return await withCheckedContinuation { continuation in
+            activeEditorPresentationAcknowledgment = ActiveEditorPresentationAcknowledgment(
+                updateID: update.id,
+                noteID: update.noteID,
+                incorporationIdentity: incorporationIdentity,
+                continuation: continuation
+            )
+            activeEditorSyncUpdate = update
+        }
+    }
+
+    fileprivate func noteProjection(id noteID: UUID) -> SyncConvergenceProjectedNote? {
+        refreshedNote(withID: noteID).map {
+            SyncConvergenceProjectedNote(
+                noteID: $0.id,
+                folderID: $0.folder?.id,
+                title: $0.title,
+                body: $0.content,
+                createdAt: $0.createdAt,
+                modifiedAt: $0.modifiedAt
+            )
+        }
+    }
+
+    private func publishActiveEditorReload(noteID: UUID?, reason: ActiveEditorReloadReason) {
+        guard let noteID,
+              currentNote?.id == noteID else { return }
+        activeEditorSyncUpdate = ActiveEditorSyncUpdate(
+            noteID: noteID,
+            disposition: .reload(reason)
+        )
     }
 
     nonisolated private static func pendingIncomingBatchQueueFileURL() -> URL? {
         SyncBatchQueueFileLocation.pendingIncoming(for: .iPhone)
+    }
+
+    nonisolated private static func pendingLocalConvergenceBatchQueueFileURL() -> URL? {
+        SyncBatchQueueFileLocation.pendingLocalConvergence(for: .iPhone)
     }
 
     private func isIncomingTextUnsafe(
@@ -2183,6 +2274,17 @@ final class NotesViewModel: ObservableObject {
 
     nonisolated static func defaultDateFormatter(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+private struct ActiveEditorPresentationAcknowledgment {
+    let updateID: UUID
+    let noteID: UUID
+    let incorporationIdentity: SyncConvergencePersistedIncorporationIdentity
+    let continuation: CheckedContinuation<SyncConvergencePostCommitAdapterResult, Never>
+
+    func complete(_ result: SyncConvergencePostCommitAdapterResult) {
+        continuation.resume(returning: result)
     }
 }
 

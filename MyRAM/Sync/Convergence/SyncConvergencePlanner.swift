@@ -145,6 +145,7 @@ struct SyncConvergencePlanner {
                         )
                     }
                     notePlans[titleChange.noteID, default: PartialNotePlan(noteID: titleChange.noteID)].titleEffect = effect
+                    routings[titleChange.noteID] = routings[titleChange.noteID] ?? SyncConvergencePresentationRouting.none
                     operationIdentities.append(candidateIdentity)
                     resultEvidence.append(effect.resultEvidence)
                 case .failure(let failure):
@@ -224,7 +225,7 @@ struct SyncConvergencePlanner {
                 batchIDs: Set([input.incomingBatch.id]).union(queueSelection.eligibleEvidenceBatches.map(\.batch.id)),
                 retryQueueCleanup: input.candidateQueuePosition != nil || !queueSelection.eligibleEvidenceBatches.isEmpty,
                 retryLegacyCleanup: false,
-                retryPresentationRefresh: routings.values.contains { $0 != .none }
+                retryPresentationRefresh: !routings.isEmpty
             )
             let plan = SyncConvergenceBatchPlan(
                 batchID: input.incomingBatch.id,
@@ -1889,10 +1890,16 @@ struct SyncConvergencePlanValidator {
               plan.canonicalPayloadDigestFormatVersion == SyncConvergenceCanonicalBatchDigest.supportedFormatVersion else {
             return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
         }
-        guard let recomputedDigest = try? SyncConvergenceCanonicalBatchDigest.digest(
-            for: input.incomingBatch,
-            formatVersion: plan.canonicalPayloadDigestFormatVersion
-        ), recomputedDigest == plan.canonicalPayloadDigest else {
+        let recomputedDigest: String
+        do {
+            recomputedDigest = try SyncConvergenceCanonicalBatchDigest.digest(
+                for: input.incomingBatch,
+                formatVersion: plan.canonicalPayloadDigestFormatVersion
+            )
+        } catch {
+            return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
+        }
+        guard recomputedDigest == plan.canonicalPayloadDigest else {
             return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
         }
 
@@ -2067,7 +2074,7 @@ struct SyncConvergencePlanValidator {
                 }
                 expectedResultEvidence.append(bodyPlan.resultEvidence)
             case nil:
-                guard routing == nil else {
+                guard routing == nil || (routing == SyncConvergencePresentationRouting.none && notePlan.titleEffect != nil) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
             }
@@ -2126,13 +2133,18 @@ struct SyncConvergencePlanValidator {
 
         // Independently recompute the projected incorporation evidence bytes from the
         // completed plan; an encoding failure or total mismatch fails closed.
-        guard let recomputedEvidenceBytes = try? SyncConvergenceProjectedIncorporationEvidence(
-            batch: input.incomingBatch,
-            affectedNoteIDs: plannedNoteIDs,
-            operationIdentities: plan.incorporationEvidence.operationIdentities,
-            resultEvidence: plan.incorporationEvidence.resultEvidence
-        ).canonicalEncodedByteCount(),
-        recomputedEvidenceBytes == projectedFullIncorporationEvidenceBytes else {
+        let recomputedEvidenceBytes: Int
+        do {
+            recomputedEvidenceBytes = try SyncConvergenceProjectedIncorporationEvidence(
+                batch: input.incomingBatch,
+                affectedNoteIDs: plannedNoteIDs,
+                operationIdentities: plan.incorporationEvidence.operationIdentities,
+                resultEvidence: plan.incorporationEvidence.resultEvidence
+            ).canonicalEncodedByteCount()
+        } catch {
+            return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
+        }
+        guard recomputedEvidenceBytes == projectedFullIncorporationEvidenceBytes else {
             return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
         }
         return nil
@@ -3019,7 +3031,7 @@ struct SyncConvergenceIncorporationExecutor {
             let postCommitState = SyncConvergencePostCommitState(
                 queueCleanupPending: input.plan.cleanupPlan.retryQueueCleanup || !input.plan.cleanupPlan.batchIDs.isEmpty,
                 legacyCleanupPending: input.plan.cleanupPlan.retryLegacyCleanup,
-                presentationRefreshPending: input.plan.presentationPlan.noteRoutings.values.contains { $0 != .none }
+                presentationRefreshPending: !input.plan.presentationPlan.noteRoutings.isEmpty
             )
             let postCommitWorkPayload: SyncConvergencePostCommitWorkPayloadV1
             do {
@@ -3108,14 +3120,12 @@ struct SyncConvergenceIncorporationExecutor {
             let identityAuthority = try makeOperationIdentityAuthority(input: input)
             let expectedRoutedNoteIDs = Set(
                 input.plan.presentationPlan.noteRoutings
-                    .filter { $0.value != .none }
                     .map(\.key)
             )
             let entries = try expectedRoutedNoteIDs
                 .sorted { $0.uuidString < $1.uuidString }
                 .map { noteID -> SyncConvergencePostCommitWorkPayloadV1.PresentationEntry in
                 guard let routing = input.plan.presentationPlan.noteRoutings[noteID],
-                      routing != .none,
                       let routingPayload = SyncConvergencePostCommitPresentationRoutingPayload(routing),
                       let notePlan = notePlansByID[noteID] else {
                     throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
@@ -3128,7 +3138,7 @@ struct SyncConvergenceIncorporationExecutor {
                     noteID: noteID,
                     routing: routingPayload,
                     expectedPreBodyHash: try notePlan.expectedPreBodyHash(for: routing),
-                    committedPostBodyHash: try notePlan.requiredFinalBodyHash(),
+                    committedPostBodyHash: try notePlan.committedPostBodyHash(for: routing),
                     incrementalOperations: operations
                 )
             }
@@ -3136,8 +3146,11 @@ struct SyncConvergenceIncorporationExecutor {
                   entries.count == expectedRoutedNoteIDs.count else {
                 throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: nil)
             }
+            let queueCleanupBatchIDs = input.plan.cleanupPlan.batchIDs.isEmpty && input.plan.cleanupPlan.retryQueueCleanup
+                ? [input.sourceBatch.id]
+                : input.plan.cleanupPlan.batchIDs
             return SyncConvergencePostCommitWorkPayloadV1(
-                queueCleanupBatchIDs: input.plan.cleanupPlan.batchIDs,
+                queueCleanupBatchIDs: queueCleanupBatchIDs,
                 legacyCleanupRequired: input.plan.cleanupPlan.retryLegacyCleanup,
                 presentationEntries: entries
             )
@@ -3283,7 +3296,7 @@ private struct ChildProjection: Equatable, Comparable {
     }
 }
 
-private struct SyncConvergenceAffectedNotesPayloadV1: Codable, Equatable {
+struct SyncConvergenceAffectedNotesPayloadV1: Codable, Equatable {
     static let version = 1
 
     let version: Int
@@ -3304,6 +3317,24 @@ private struct SyncConvergenceAffectedNotesPayloadV1: Codable, Equatable {
             try SyncConvergenceContractValidation.validateCanonicalLowercaseUUID(noteID, field: "noteID")
         }
         return try SyncConvergenceStableEncoding.encode(self)
+    }
+
+    var noteIDs: Set<UUID> {
+        Set(noteIDsLowercase.compactMap(UUID.init(uuidString:)))
+    }
+
+    static func decodeData(_ data: Data) throws -> Self {
+        let payload = try SyncConvergenceStableEncoding.decode(Self.self, from: data)
+        guard payload.version == Self.version else {
+            throw SyncConvergenceValidationError.unsupportedEvidenceVersion(
+                field: "affectedNotesPayload",
+                version: payload.version
+            )
+        }
+        for noteID in payload.noteIDsLowercase {
+            try SyncConvergenceContractValidation.validateCanonicalLowercaseUUID(noteID, field: "noteID")
+        }
+        return payload
     }
 }
 
@@ -3631,6 +3662,13 @@ private extension SyncConvergenceNotePlan {
         }
     }
 
+    func committedPostBodyHash(for routing: SyncConvergencePresentationRouting) throws -> String {
+        if routing == .none {
+            return String(repeating: "0", count: 64)
+        }
+        return try requiredFinalBodyHash()
+    }
+
     func expectedPreBodyHash(for routing: SyncConvergencePresentationRouting) throws -> String? {
         switch routing {
         case .none:
@@ -3731,7 +3769,11 @@ private extension SyncConvergenceBodyEffect {
 
 private extension SyncConvergenceIncorporatedBatchRecord {
     var projection: SyncConvergenceIncorporatedRootProjection {
-        SyncConvergenceIncorporatedRootProjection(
+        let committedAtOrderingPayloadData = try! CommittedAtOrderingPayload(
+            batchID: batchID,
+            committedAt: committedAt
+        ).encodedEvidenceData()
+        return SyncConvergenceIncorporatedRootProjection(
             batchID: batchID,
             originDeviceID: originDeviceID,
             createdAt: createdAt,
@@ -3742,9 +3784,7 @@ private extension SyncConvergenceIncorporatedBatchRecord {
             canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
             committedResultDigest: committedResultDigest,
             committedResultDigestFormatVersion: committedResultDigestFormatVersion,
-            committedAtOrderingPayloadData: (
-                try? CommittedAtOrderingPayload(batchID: batchID, committedAt: committedAt).encodedEvidenceData()
-            ) ?? Data(),
+            committedAtOrderingPayloadData: committedAtOrderingPayloadData,
             affectedNotesPayloadData: affectedNotesPayloadData,
             authoritativeChildCount: authoritativeChildCount,
             authoritativeChildBytes: authoritativeChildBytes,
@@ -3755,7 +3795,7 @@ private extension SyncConvergenceIncorporatedBatchRecord {
     }
 }
 
-private extension SyncConvergencePostCommitState {
+extension SyncConvergencePostCommitState {
     func encodedPayloadData() throws -> Data {
         try SyncConvergenceStableEncoding.encode(self)
     }

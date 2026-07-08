@@ -14,12 +14,12 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         bridge.publishAttributedText = { published.append($0.string) }
 
         let result = bridge.applyBatch(
-            [.applyBodyInsertion(MacAppliedBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
+            [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
             selectedNoteID: noteID
         )
 
         XCTAssertEqual(textView.string, "Hello!")
-        XCTAssertEqual(result, MacEditorRemoteBatchApplyResult(appliedCount: 1, requiresFallbackReload: false))
+        XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 1, disposition: .applied))
         XCTAssertEqual(published, ["Hello!"])
     }
 
@@ -32,7 +32,7 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         let result = bridge.applyBatch(
             [
                 .applyBodyDeletion(
-                    MacAppliedBodyDeletion(
+                    AppliedEditorBodyDeletion(
                         noteID: noteID,
                         range: NSRange(location: 1, length: 2),
                         deletedText: "el",
@@ -44,7 +44,7 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         )
 
         XCTAssertEqual(textView.string, "Hlo")
-        XCTAssertEqual(result, MacEditorRemoteBatchApplyResult(appliedCount: 1, requiresFallbackReload: false))
+        XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 1, disposition: .applied))
     }
 
     func testDeletionMismatchRequiresFallbackWithoutMutatingText() {
@@ -56,7 +56,7 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         let result = bridge.applyBatch(
             [
                 .applyBodyDeletion(
-                    MacAppliedBodyDeletion(
+                    AppliedEditorBodyDeletion(
                         noteID: noteID,
                         range: NSRange(location: 1, length: 2),
                         deletedText: "xx",
@@ -68,7 +68,7 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         )
 
         XCTAssertEqual(textView.string, "Hello")
-        XCTAssertEqual(result, MacEditorRemoteBatchApplyResult(appliedCount: 0, requiresFallbackReload: true))
+        XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .requiresReload(.deletedTextMismatch)))
     }
 
     func testInsertionBeforeCaretShiftsSelectionForward() {
@@ -79,7 +79,7 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         bridge.textView = textView
 
         _ = bridge.applyBatch(
-            [.applyBodyInsertion(MacAppliedBodyInsertion(noteID: noteID, utf16Offset: 0, text: "Say ", modifiedAt: Date()))],
+            [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 0, text: "Say ", modifiedAt: Date()))],
             selectedNoteID: noteID
         )
 
@@ -93,12 +93,12 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         bridge.textView = textView
 
         let result = bridge.applyBatch(
-            [.applyBodyInsertion(MacAppliedBodyInsertion(noteID: UUID(), utf16Offset: 0, text: "x", modifiedAt: Date()))],
+            [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: UUID(), utf16Offset: 0, text: "x", modifiedAt: Date()))],
             selectedNoteID: selectedID
         )
 
         XCTAssertEqual(textView.string, "Hello")
-        XCTAssertEqual(result, MacEditorRemoteBatchApplyResult(appliedCount: 0, requiresFallbackReload: false))
+        XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .noApplicableMutations))
     }
 
     func testRemoteBridgeMutationsDoNotNotifyOutgoingCaptureButLocalEditsDo() {
@@ -116,13 +116,13 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         coordinator.register(textView)
 
         _ = bridge.applyBatch(
-            [.applyBodyInsertion(MacAppliedBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
+            [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
             selectedNoteID: noteID
         )
         _ = bridge.applyBatch(
             [
                 .applyBodyDeletion(
-                    MacAppliedBodyDeletion(
+                    AppliedEditorBodyDeletion(
                         noteID: noteID,
                         range: NSRange(location: 5, length: 1),
                         deletedText: "!",
@@ -152,7 +152,7 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         let bridge = MacEditorSyncBridge()
         bridge.textView = textView
         _ = bridge.applyBatch(
-            [.applyBodyInsertion(MacAppliedBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
+            [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
             selectedNoteID: noteID
         )
 

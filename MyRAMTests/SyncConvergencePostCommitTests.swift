@@ -392,19 +392,20 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             let outcome = await executor.execute(request(identity: identity, state: state))
 
             XCTAssertEqual(outcome, .pending([.queueCleanup]), testCase.label)
-            var expectedEvents: [PostCommitInvocationEvent] = []
+            var expectedEvents: [PostCommitInvocationEvent] = [
+                .presentation(noteID: TestIDs.noteA),
+                .legacyCleanup(batchID: identity.batchID)
+            ]
             if testCase.externalEffectExpected {
                 expectedEvents.append(.queueCleanup([TestIDs.batch, TestIDs.extraBatch]))
             }
-            expectedEvents.append(.legacyCleanup(batchID: identity.batchID))
-            expectedEvents.append(.presentation(noteID: TestIDs.noteA))
             XCTAssertEqual(recorder.events, expectedEvents, testCase.label)
             if testCase.externalEffectExpected {
                 XCTAssertTrue(queue.externalRemovalEffectOccurred, testCase.label)
             } else {
                 XCTAssertFalse(queue.externalRemovalEffectOccurred, testCase.label)
             }
-            XCTAssertEqual(store.casAttemptCount, 1, testCase.label)
+            XCTAssertEqual(store.casAttemptCount, 2, testCase.label)
             XCTAssertEqual(store.currentPostCommitState, SyncConvergencePostCommitState(
                 queueCleanupPending: true,
                 legacyCleanupPending: false,
@@ -466,16 +467,15 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
             let outcome = await executor.execute(request(identity: identity, state: state))
 
-            XCTAssertEqual(outcome, .pending([.legacyCleanup]), testCase.label)
+            XCTAssertEqual(outcome, .pending([.queueCleanup, .legacyCleanup]), testCase.label)
             XCTAssertEqual(recorder.events, [
-                .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
+                .presentation(noteID: TestIDs.noteA),
                 .legacyCleanup(batchID: identity.batchID),
-                .presentation(noteID: TestIDs.noteA)
             ], testCase.label)
             XCTAssertEqual(legacy.externalEffectCount, testCase.step.externalEffectOccurred ? 1 : 0, testCase.label)
             XCTAssertEqual(store.casAttemptCount, 1, testCase.label)
             XCTAssertEqual(store.currentPostCommitState, SyncConvergencePostCommitState(
-                queueCleanupPending: false,
+                queueCleanupPending: true,
                 legacyCleanupPending: true,
                 presentationRefreshPending: false
             ), testCase.label)
@@ -491,7 +491,10 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             let retryOutcome = await retryExecutor.execute(request(identity: identity, state: state))
 
             XCTAssertEqual(retryOutcome, .complete, testCase.label)
-            XCTAssertEqual(retryRecorder.events, [.legacyCleanup(batchID: identity.batchID)], testCase.label)
+            XCTAssertEqual(retryRecorder.events, [
+                .legacyCleanup(batchID: identity.batchID),
+                .queueCleanup([TestIDs.batch, TestIDs.extraBatch])
+            ], testCase.label)
             XCTAssertEqual(store.currentPostCommitState, SyncConvergencePostCommitState.none, testCase.label)
             XCTAssertEqual(store.currentWorkPayloadData, original.postCommitWorkPayloadData, testCase.label)
         }
@@ -519,18 +522,11 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
             let outcome = await executor.execute(request(identity: identity, state: state))
 
-            XCTAssertEqual(outcome, .pending([.presentationRefresh]), "\(behavior)")
-            XCTAssertEqual(recorder.events, [
-                .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
-                .legacyCleanup(batchID: identity.batchID)
-            ], "\(behavior)")
+            XCTAssertEqual(outcome, .failedBeforeWork(.persistence), "\(behavior)")
+            XCTAssertEqual(recorder.events, [], "\(behavior)")
             XCTAssertEqual(presentation.requests, [], "\(behavior)")
-            XCTAssertEqual(store.casAttemptCount, 1, "\(behavior)")
-            XCTAssertEqual(store.currentPostCommitState, SyncConvergencePostCommitState(
-                queueCleanupPending: false,
-                legacyCleanupPending: false,
-                presentationRefreshPending: true
-            ), "\(behavior)")
+            XCTAssertEqual(store.casAttemptCount, 0, "\(behavior)")
+            XCTAssertEqual(store.currentPostCommitState, state, "\(behavior)")
             XCTAssertEqual(store.currentWorkPayloadData, original.postCommitWorkPayloadData, "\(behavior)")
 
             store.committedNoteLoadBehavior = .currentNotes
@@ -545,7 +541,11 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             let retryOutcome = await retryExecutor.execute(request(identity: identity, state: state))
 
             XCTAssertEqual(retryOutcome, .complete, "\(behavior)")
-            XCTAssertEqual(retryRecorder.events, [.presentation(noteID: TestIDs.noteA)], "\(behavior)")
+            XCTAssertEqual(retryRecorder.events, [
+                .presentation(noteID: TestIDs.noteA),
+                .legacyCleanup(batchID: identity.batchID),
+                .queueCleanup([TestIDs.batch, TestIDs.extraBatch])
+            ], "\(behavior)")
             XCTAssertEqual(store.currentPostCommitState, SyncConvergencePostCommitState.none, "\(behavior)")
         }
     }
@@ -582,20 +582,14 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         let outcome = await executor.execute(request(identity: identity, state: state))
 
-        XCTAssertEqual(outcome, .pending([.presentationRefresh]))
+        XCTAssertEqual(outcome, .failedBeforeWork(.persistence))
         XCTAssertEqual(recorder.events, [
-            .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
-            .legacyCleanup(batchID: identity.batchID),
             .presentation(noteID: TestIDs.noteA),
             .presentation(noteID: TestIDs.noteB)
         ])
         XCTAssertEqual(presentation.externalEffectNoteIDs, [TestIDs.noteA, TestIDs.noteB])
-        XCTAssertEqual(store.casAttemptCount, 1)
-        XCTAssertEqual(store.currentPostCommitState, SyncConvergencePostCommitState(
-            queueCleanupPending: false,
-            legacyCleanupPending: false,
-            presentationRefreshPending: true
-        ))
+        XCTAssertEqual(store.casAttemptCount, 0)
+        XCTAssertEqual(store.currentPostCommitState, state)
         XCTAssertEqual(store.currentWorkPayloadData, original.postCommitWorkPayloadData)
 
         let retryRecorder = PostCommitInvocationRecorder()
@@ -613,7 +607,9 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertEqual(retryOutcome, .complete)
         XCTAssertEqual(retryRecorder.events, [
             .presentation(noteID: TestIDs.noteA),
-            .presentation(noteID: TestIDs.noteB)
+            .presentation(noteID: TestIDs.noteB),
+            .legacyCleanup(batchID: identity.batchID),
+            .queueCleanup([TestIDs.batch, TestIDs.extraBatch])
         ])
         XCTAssertEqual(store.currentPostCommitState, SyncConvergencePostCommitState.none)
         XCTAssertEqual(store.currentWorkPayloadData, original.postCommitWorkPayloadData)
@@ -666,8 +662,8 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 expectedPending: [.queueCleanup, .legacyCleanup],
                 expectedCASAttempts: 1,
                 expectedEvents: [
-                    .legacyCleanup(batchID: TestIDs.batch),
-                    .presentation(noteID: TestIDs.noteA)
+                    .presentation(noteID: TestIDs.noteA),
+                    .legacyCleanup(batchID: TestIDs.batch)
                 ]
             ),
             Case(
@@ -675,11 +671,9 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 queueBehavior: .verifiedComplete,
                 legacyStep: .init(result: .failed, externalEffectOccurred: false),
                 presentationStep: .init(result: .failed, externalEffectOccurred: false),
-                expectedPending: [.legacyCleanup, .presentationRefresh],
-                expectedCASAttempts: 1,
+                expectedPending: [.queueCleanup, .legacyCleanup, .presentationRefresh],
+                expectedCASAttempts: 0,
                 expectedEvents: [
-                    .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
-                    .legacyCleanup(batchID: TestIDs.batch),
                     .presentation(noteID: TestIDs.noteA)
                 ]
             ),
@@ -688,11 +682,9 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 queueBehavior: .incompleteRemoval(remaining: [TestIDs.extraBatch]),
                 legacyStep: .init(result: .verifiedComplete, externalEffectOccurred: true),
                 presentationStep: .init(result: .stillPending, externalEffectOccurred: true),
-                expectedPending: [.queueCleanup, .presentationRefresh],
-                expectedCASAttempts: 1,
+                expectedPending: [.queueCleanup, .legacyCleanup, .presentationRefresh],
+                expectedCASAttempts: 0,
                 expectedEvents: [
-                    .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
-                    .legacyCleanup(batchID: TestIDs.batch),
                     .presentation(noteID: TestIDs.noteA)
                 ]
             ),
@@ -704,7 +696,6 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 expectedPending: [.queueCleanup, .legacyCleanup, .presentationRefresh],
                 expectedCASAttempts: 0,
                 expectedEvents: [
-                    .legacyCleanup(batchID: TestIDs.batch),
                     .presentation(noteID: TestIDs.noteA)
                 ]
             )
@@ -736,10 +727,22 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
             let outcome = await executor.execute(request(identity: identity, state: state))
 
-            XCTAssertEqual(outcome, .pending(testCase.expectedPending), testCase.label)
+            if testCase.label.contains("presentation failed") {
+                XCTAssertEqual(outcome, .failedBeforeWork(.persistence), testCase.label)
+            } else {
+                XCTAssertEqual(outcome, .pending(testCase.expectedPending), testCase.label)
+            }
             XCTAssertEqual(recorder.events, testCase.expectedEvents, testCase.label)
-            XCTAssertEqual(queue.removalAttempts, 1, testCase.label)
-            XCTAssertEqual(legacy.callCount, 1, testCase.label)
+            let expectsQueue = testCase.expectedEvents.contains {
+                if case .queueCleanup = $0 { return true }
+                return false
+            }
+            let expectsLegacy = testCase.expectedEvents.contains {
+                if case .legacyCleanup = $0 { return true }
+                return false
+            }
+            XCTAssertEqual(queue.removalAttempts, expectsQueue ? 1 : 0, testCase.label)
+            XCTAssertEqual(legacy.callCount, expectsLegacy ? 1 : 0, testCase.label)
             XCTAssertEqual(presentation.requests.map(\.noteID), [TestIDs.noteA], testCase.label)
             XCTAssertEqual(store.casAttemptCount, testCase.expectedCASAttempts, testCase.label)
             XCTAssertEqual(store.currentWorkPayloadData, loaded.postCommitWorkPayloadData, testCase.label)
@@ -827,11 +830,17 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 .pending([.queueCleanup, .legacyCleanup, .presentationRefresh, .postCommitStatePersistence]),
                 testCase.0
             )
-            XCTAssertEqual(queue.removalAttempts, 1, testCase.0)
-            XCTAssertEqual(legacy.callCount, 1, testCase.0)
+            XCTAssertEqual(queue.removalAttempts, 0, testCase.0)
+            XCTAssertEqual(legacy.callCount, 0, testCase.0)
             XCTAssertEqual(presentation.requests.map(\.noteID), [TestIDs.noteA], testCase.0)
             XCTAssertEqual(store.casAttemptCount, 1, testCase.0)
-            XCTAssertEqual(store.attemptedNewStates, [.none], testCase.0)
+            XCTAssertEqual(store.attemptedNewStates, [
+                SyncConvergencePostCommitState(
+                    queueCleanupPending: true,
+                    legacyCleanupPending: true,
+                    presentationRefreshPending: false
+                )
+            ], testCase.0)
             XCTAssertEqual(store.state, testCase.2, testCase.0)
             XCTAssertEqual(store.currentWorkPayloadData, testCase.3, testCase.0)
             if testCase.0 == "stale mutable state with queue and legacy already cleared" {
@@ -883,15 +892,14 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         let firstOutcome = await firstExecutor.execute(fixture.request)
 
-        XCTAssertEqual(firstOutcome, .pending([.legacyCleanup]))
+        XCTAssertEqual(firstOutcome, .pending([.queueCleanup, .legacyCleanup]))
         XCTAssertEqual(firstRecorder.events, [
-            .queueCleanup(fixture.base.workPayload.queueCleanupBatchIDs.sorted { $0.uuidString < $1.uuidString }),
+            .presentation(noteID: fixture.base.noteID),
             .legacyCleanup(batchID: fixture.request.sourceBatchID),
-            .presentation(noteID: fixture.base.noteID)
         ])
         let afterFirst = try fixture.rawRootSnapshot()
         let legacyOnly = SyncConvergencePostCommitState(
-            queueCleanupPending: false,
+            queueCleanupPending: true,
             legacyCleanupPending: true,
             presentationRefreshPending: false
         )
@@ -914,8 +922,11 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         let secondOutcome = await secondExecutor.execute(fixture.request)
 
         XCTAssertEqual(secondOutcome, .complete)
-        XCTAssertEqual(secondRecorder.events, [.legacyCleanup(batchID: fixture.request.sourceBatchID)])
-        XCTAssertEqual(secondQueue.removalAttempts, 0)
+        XCTAssertEqual(secondRecorder.events, [
+            .legacyCleanup(batchID: fixture.request.sourceBatchID),
+            .queueCleanup(fixture.base.workPayload.queueCleanupBatchIDs.sorted { $0.uuidString < $1.uuidString })
+        ])
+        XCTAssertEqual(secondQueue.removalAttempts, 1)
         XCTAssertEqual(secondPresentation.requests, [])
         let afterSecond = try fixture.rawRootSnapshot()
         XCTAssertEqual(
@@ -1286,21 +1297,21 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 name: "queue legacy",
                 state: SyncConvergencePostCommitState(queueCleanupPending: true, legacyCleanupPending: true, presentationRefreshPending: false),
                 expectedOutcome: .complete,
-                expectedEvents: [.queueCleanup([TestIDs.batch, TestIDs.extraBatch]), .legacyCleanup(batchID: TestIDs.batch)],
+                expectedEvents: [.legacyCleanup(batchID: TestIDs.batch), .queueCleanup([TestIDs.batch, TestIDs.extraBatch])],
                 expectedPersistedState: SyncConvergencePostCommitState.none
             ),
             Case(
                 name: "queue presentation",
                 state: SyncConvergencePostCommitState(queueCleanupPending: true, legacyCleanupPending: false, presentationRefreshPending: true),
                 expectedOutcome: .complete,
-                expectedEvents: [.queueCleanup([TestIDs.batch, TestIDs.extraBatch]), .presentation(noteID: TestIDs.noteA)],
+                expectedEvents: [.presentation(noteID: TestIDs.noteA), .queueCleanup([TestIDs.batch, TestIDs.extraBatch])],
                 expectedPersistedState: SyncConvergencePostCommitState.none
             ),
             Case(
                 name: "legacy presentation",
                 state: SyncConvergencePostCommitState(queueCleanupPending: false, legacyCleanupPending: true, presentationRefreshPending: true),
                 expectedOutcome: .complete,
-                expectedEvents: [.legacyCleanup(batchID: TestIDs.batch), .presentation(noteID: TestIDs.noteA)],
+                expectedEvents: [.presentation(noteID: TestIDs.noteA), .legacyCleanup(batchID: TestIDs.batch)],
                 expectedPersistedState: SyncConvergencePostCommitState.none
             ),
             Case(
@@ -1308,9 +1319,9 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 state: SyncConvergencePostCommitState(queueCleanupPending: true, legacyCleanupPending: true, presentationRefreshPending: true),
                 expectedOutcome: .complete,
                 expectedEvents: [
-                    .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
+                    .presentation(noteID: TestIDs.noteA),
                     .legacyCleanup(batchID: TestIDs.batch),
-                    .presentation(noteID: TestIDs.noteA)
+                    .queueCleanup([TestIDs.batch, TestIDs.extraBatch])
                 ],
                 expectedPersistedState: SyncConvergencePostCommitState.none
             )
@@ -1354,7 +1365,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             )
             XCTAssertEqual(store.persistedState, testCase.expectedPersistedState, testCase.name)
             XCTAssertEqual(store.currentWorkPayloadData, store.originalWorkPayloadData, testCase.name)
-            XCTAssertEqual(store.writeCount, testCase.expectedPersistedState == nil ? 0 : 1, testCase.name)
+            XCTAssertEqual(store.writeCount, testCase.state.pendingWork.count, testCase.name)
         }
     }
 
@@ -1366,7 +1377,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             ),
             (
                 SyncConvergencePostCommitState(queueCleanupPending: true, legacyCleanupPending: true, presentationRefreshPending: false),
-                SyncConvergencePostCommitState(queueCleanupPending: false, legacyCleanupPending: true, presentationRefreshPending: false)
+                nil
             ),
             (
                 SyncConvergencePostCommitState(queueCleanupPending: false, legacyCleanupPending: true, presentationRefreshPending: true),
@@ -1374,7 +1385,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             ),
             (
                 SyncConvergencePostCommitState(queueCleanupPending: true, legacyCleanupPending: true, presentationRefreshPending: true),
-                SyncConvergencePostCommitState(queueCleanupPending: false, legacyCleanupPending: true, presentationRefreshPending: false)
+                SyncConvergencePostCommitState(queueCleanupPending: true, legacyCleanupPending: true, presentationRefreshPending: false)
             )
         ]
 
@@ -1392,18 +1403,17 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
             let outcome = await executor.execute(request(identity: identity, state: state))
 
-            XCTAssertEqual(outcome, .pending([.legacyCleanup]))
+            var expectedPending = state.pendingWork
+            expectedPending.remove(.presentationRefresh)
+            XCTAssertEqual(outcome, .pending(expectedPending))
             var expectedEvents: [PostCommitInvocationEvent] = []
-            if state.queueCleanupPending {
-                expectedEvents.append(.queueCleanup([TestIDs.batch, TestIDs.extraBatch]))
-            }
             if state.presentationRefreshPending {
                 expectedEvents.append(.presentation(noteID: TestIDs.noteA))
             }
             XCTAssertEqual(recorder.events, expectedEvents)
             XCTAssertEqual(store.persistedState, expectedPersistedState)
             XCTAssertEqual(store.currentWorkPayloadData, store.originalWorkPayloadData)
-            XCTAssertEqual(store.writeCount, expectedPersistedState == nil ? 0 : 1)
+            XCTAssertEqual(store.writeCount, state.presentationRefreshPending ? 1 : 0)
         }
     }
 
@@ -1466,9 +1476,9 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
             XCTAssertEqual(outcome, .complete, testCase.0)
             XCTAssertEqual(recorder.events, [
-                .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
+                .presentation(noteID: TestIDs.noteA),
                 .legacyCleanup(batchID: TestIDs.batch),
-                .presentation(noteID: TestIDs.noteA)
+                .queueCleanup([TestIDs.batch, TestIDs.extraBatch])
             ], testCase.0)
             XCTAssertEqual(retryStore.currentPostCommitState, SyncConvergencePostCommitState.none, testCase.0)
             XCTAssertEqual(retryStore.currentWorkPayloadData, workBytes, testCase.0)
@@ -1516,18 +1526,14 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         let outcome = await executor.execute(request(identity: identity, state: state))
 
         XCTAssertEqual(outcome, .pending([.queueCleanup, .legacyCleanup, .presentationRefresh, .postCommitStatePersistence]))
-        XCTAssertEqual(recorder.events, [
-            .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
-            .legacyCleanup(batchID: TestIDs.batch),
-            .presentation(noteID: TestIDs.noteA)
-        ])
+        XCTAssertEqual(recorder.events, [.presentation(noteID: TestIDs.noteA)])
         XCTAssertEqual(store.writeCount, 1)
         XCTAssertEqual(store.persistedState, nil)
         XCTAssertEqual(store.currentPostCommitState, state)
         XCTAssertEqual(store.currentWorkPayloadData, workBytes)
-        XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.batch), 1)
-        XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.extraBatch), 1)
-        XCTAssertEqual(ledger.legacyPhysicalEffectCount(batchID: TestIDs.batch), 1)
+        XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.batch), 0)
+        XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.extraBatch), 0)
+        XCTAssertEqual(ledger.legacyPhysicalEffectCount(batchID: TestIDs.batch), 0)
         XCTAssertEqual(
             ledger.presentationPhysicalEffectCount(
                 incorporationBatchID: identity.batchID,
@@ -1543,12 +1549,9 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         XCTAssertEqual(retryOutcome, .complete)
         XCTAssertEqual(recorder.events, [
-            .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
-            .legacyCleanup(batchID: TestIDs.batch),
             .presentation(noteID: TestIDs.noteA),
-            .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
             .legacyCleanup(batchID: TestIDs.batch),
-            .presentation(noteID: TestIDs.noteA)
+            .queueCleanup([TestIDs.batch, TestIDs.extraBatch])
         ])
         XCTAssertEqual(store.currentPostCommitState, Optional(SyncConvergencePostCommitState.none))
         XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.batch), 1)
@@ -1593,11 +1596,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         let outcome = await executor.execute(request(identity: identity, state: state))
 
         XCTAssertEqual(outcome, .pending([.queueCleanup, .legacyCleanup, .presentationRefresh, .postCommitStatePersistence]))
-        XCTAssertEqual(recorder.events, [
-            .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
-            .legacyCleanup(batchID: TestIDs.batch),
-            .presentation(noteID: TestIDs.noteA)
-        ])
+        XCTAssertEqual(recorder.events, [.presentation(noteID: TestIDs.noteA)])
         XCTAssertEqual(store.writeCount, 1)
         XCTAssertEqual(store.persistedState, nil)
         XCTAssertEqual(store.currentPostCommitState, state)
@@ -1634,13 +1633,13 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         XCTAssertEqual(retryOutcome, .complete)
         XCTAssertEqual(retryRecorder.events, [
-            .queueCleanup([TestIDs.batch, TestIDs.extraBatch]),
+            .presentation(noteID: TestIDs.noteA),
             .legacyCleanup(batchID: TestIDs.batch),
-            .presentation(noteID: TestIDs.noteA)
+            .queueCleanup([TestIDs.batch, TestIDs.extraBatch])
         ])
         XCTAssertEqual(retryStore.persistedState, Optional(SyncConvergencePostCommitState.none))
         XCTAssertEqual(retryStore.currentPostCommitState, Optional(SyncConvergencePostCommitState.none))
-        XCTAssertEqual(retryStore.writeCount, 1)
+        XCTAssertEqual(retryStore.writeCount, 3)
         XCTAssertEqual(retryStore.currentWorkPayloadData, retryStore.originalWorkPayloadData)
         XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.batch), 1)
         XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.extraBatch), 1)
@@ -1681,16 +1680,21 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         let outcome = await executor.execute(request(identity: identity, state: state))
 
-        XCTAssertEqual(outcome, .pending([.queueCleanup, .legacyCleanup, .presentationRefresh, .postCommitStatePersistence]))
+        XCTAssertEqual(outcome, .pending([.queueCleanup, .legacyCleanup, .postCommitStatePersistence]))
         guard case .fullRoot(let committedRoot) = store.state else {
             return XCTFail("Expected committed root after lost CAS response")
         }
-        XCTAssertEqual(store.currentPostCommitState, SyncConvergencePostCommitState.none)
-        XCTAssertEqual(committedRoot.postCommitState, .none)
+        let stateAfterLostLegacyCAS = SyncConvergencePostCommitState(
+            queueCleanupPending: true,
+            legacyCleanupPending: false,
+            presentationRefreshPending: false
+        )
+        XCTAssertEqual(store.currentPostCommitState, stateAfterLostLegacyCAS)
+        XCTAssertEqual(committedRoot.postCommitState, stateAfterLostLegacyCAS)
         XCTAssertNotEqual(committedRoot.postCommitStatePayloadData, originalStateBytes)
         XCTAssertEqual(committedRoot.postCommitWorkPayloadData, workBytes)
-        XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.batch), 1)
-        XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.extraBatch), 1)
+        XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.batch), 0)
+        XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.extraBatch), 0)
         XCTAssertEqual(ledger.legacyPhysicalEffectCount(batchID: TestIDs.batch), 1)
         XCTAssertEqual(
             ledger.presentationPhysicalEffectCount(
@@ -1708,7 +1712,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         guard case .fullRoot(let reloadedRoot) = retryStore.state else {
             return XCTFail("Expected full root after committed-root reload")
         }
-        XCTAssertEqual(reloadedRoot.postCommitState, .none)
+        XCTAssertEqual(reloadedRoot.postCommitState, stateAfterLostLegacyCAS)
         XCTAssertEqual(reloadedRoot.postCommitStatePayloadData, committedRoot.root.postCommitStatePayloadData)
         let retryRecorder = PostCommitInvocationRecorder()
         let retryExecutor = SyncConvergencePostCommitExecutor(
@@ -1721,8 +1725,8 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         let retryOutcome = await retryExecutor.execute(request(identity: identity, state: state))
 
         XCTAssertEqual(retryOutcome, .complete)
-        XCTAssertEqual(retryRecorder.events, [])
-        XCTAssertEqual(retryStore.casAttemptCount, 0)
+        XCTAssertEqual(retryRecorder.events, [.queueCleanup([TestIDs.batch, TestIDs.extraBatch])])
+        XCTAssertEqual(retryStore.casAttemptCount, 1)
         XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.batch), 1)
         XCTAssertEqual(ledger.queuePhysicalEffectCount(batchID: TestIDs.extraBatch), 1)
         XCTAssertEqual(ledger.legacyPhysicalEffectCount(batchID: TestIDs.batch), 1)

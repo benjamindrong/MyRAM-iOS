@@ -1,5 +1,15 @@
 import Foundation
 
+@MainActor
+protocol SyncConvergenceLocalBatchTransportAdapter: AnyObject {
+    func acceptLocalBatch(_ batch: SyncBatch) async throws
+}
+
+enum SyncConvergenceLocalBatchTransportError: Error, Equatable {
+    case unavailable
+    case acceptanceNotDurable(batchID: UUID)
+}
+
 struct SyncConvergencePostCommitRequest: Equatable, Sendable {
     let sourceBatchID: UUID
     let affectedNoteIDs: Set<UUID>
@@ -80,6 +90,13 @@ enum SyncConvergencePostCommitLoadedState: Equatable {
     case inconsistent
 }
 
+enum SyncConvergencePersistedPostCommitStatus: Equatable {
+    case pending(SyncConvergencePostCommitRequest)
+    case completed(SyncConvergencePersistedIncorporationIdentity)
+    case tombstone(SyncConvergencePostCommitRequest)
+    case missing
+}
+
 struct SyncConvergencePostCommitFullRootState: Equatable {
     let root: SyncConvergenceIncorporatedRootProjection
     let postCommitState: SyncConvergencePostCommitState
@@ -100,6 +117,11 @@ protocol SyncConvergencePostCommitStateStore {
         expectedPayloadData: Data,
         newState: SyncConvergencePostCommitState
     ) throws -> SyncConvergencePostCommitFullRootState
+}
+
+protocol SyncConvergencePendingPostCommitSource {
+    func loadPendingPostCommitRequests() throws -> [SyncConvergencePostCommitRequest]
+    func loadPostCommitStatus(forBatchID batchID: UUID) throws -> SyncConvergencePersistedPostCommitStatus
 }
 
 protocol SyncConvergenceQueueCleanupAdapter {
@@ -220,6 +242,10 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
                 guard incrementalOperations.isEmpty else {
                     throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
                 }
+            case .none:
+                guard incrementalOperations.isEmpty else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+                }
             }
             let operationIndices = incrementalOperations.map(\.operationIndex)
             guard operationIndices == Set(operationIndices).sorted() else {
@@ -307,6 +333,7 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
 enum SyncConvergencePostCommitPresentationRoutingPayload: String, Codable, Equatable, Sendable {
     case incremental
     case wholeNoteFallback
+    case none
 
     var routing: SyncConvergencePresentationRouting {
         switch self {
@@ -314,6 +341,8 @@ enum SyncConvergencePostCommitPresentationRoutingPayload: String, Codable, Equat
             return .incremental
         case .wholeNoteFallback:
             return .wholeNoteFallback
+        case .none:
+            return .none
         }
     }
 
@@ -324,7 +353,7 @@ enum SyncConvergencePostCommitPresentationRoutingPayload: String, Codable, Equat
         case .wholeNoteFallback:
             self = .wholeNoteFallback
         case .none:
-            return nil
+            self = .none
         }
     }
 }

@@ -129,7 +129,7 @@ final class MacSyncBatchApplier {
         }
         note.modifiedAt = change.modifiedAt
         return .bodyInserted(
-            MacAppliedBodyInsertion(
+            AppliedEditorBodyInsertion(
                 noteID: change.noteID,
                 utf16Offset: insertionOffset,
                 text: change.text,
@@ -162,7 +162,7 @@ final class MacSyncBatchApplier {
         }
         note.modifiedAt = change.modifiedAt
         return .bodyDeleted(
-            MacAppliedBodyDeletion(
+            AppliedEditorBodyDeletion(
                 noteID: change.noteID,
                 range: range,
                 deletedText: targetText,

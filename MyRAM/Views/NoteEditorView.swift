@@ -6,6 +6,17 @@ import UniformTypeIdentifiers
 import VisionKit
 import os
 
+@MainActor
+enum NativeUndoCompletionResume {
+    static func perform(
+        clearUnsafeState: () -> Void,
+        resumePendingPresentation: () -> Void
+    ) {
+        clearUnsafeState()
+        resumePendingPresentation()
+    }
+}
+
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -21,6 +32,7 @@ struct NoteEditorView: View {
     var currentNoteSearchFocusToken = 0
     var onOpenSyncConflicts: (() -> Void)?
     @StateObject private var formattingController = TextFormattingController()
+    @StateObject private var editorSyncBridge = UIKitEditorSyncBridge()
     
     @State private var title: String = ""
     @State private var content: String = ""
@@ -56,7 +68,6 @@ struct NoteEditorView: View {
     @State private var redoHistory: [NoteSnapshot] = []
     @State private var lastSnapshot = NoteSnapshot()
     @State private var isApplyingUndo = false
-    @State private var isApplyingRemoteSyncUpdate = false
     @State private var selectedPickerItems: [PhotosPickerItem] = []
     @State private var showingPhotoPicker = false
     @State private var showingFileImporter = false
@@ -88,7 +99,7 @@ struct NoteEditorView: View {
     @State private var pendingNoteCommitTask: Task<Void, Never>?
     @State private var hasPendingNoteCommit = false
     @State private var editorBufferOwner: EditorBufferOwner = .idle
-    @State private var deferRemoteRefreshUntilCommit = false
+    @State private var pendingRemoteTitlePublication: PendingRemoteTitlePublication?
     @State private var pendingRichTextContentEncoder: DeferredRichTextContentEncoder?
     @FocusState private var isCurrentNoteSearchFocused: Bool
     @FocusState private var focusedPinnedThoughtID: UUID?
@@ -178,8 +189,13 @@ struct NoteEditorView: View {
 
     private var editorLifecycleContent: some View {
         editorChromeContent
-            .onAppear(perform: initializeEditor)
-            .onChange(of: title) { handleEditorChange() }
+            .onAppear {
+                vm.registerActiveEditor(noteID: note.id)
+                initializeEditor()
+            }
+            .onChange(of: title) { _, newTitle in
+                handleObservedTitleChange(newTitle)
+            }
             .onChange(of: currentNoteSearchQuery) {
                 scheduleCurrentNoteSearchUpdate()
             }
@@ -207,6 +223,7 @@ struct NoteEditorView: View {
                 clearCurrentNoteSearch()
                 commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
+                vm.unregisterActiveEditor(noteID: note.id)
             }
             .onChange(of: focusedPinnedThoughtID) { oldValue, newValue in
                 guard oldValue != newValue else { return }
@@ -214,8 +231,8 @@ struct NoteEditorView: View {
                     commitPinnedThoughtEdit(withID: oldValue)
                 }
             }
-            .onChange(of: vm.activeNoteSyncRevision) {
-                reloadNoteFromSync()
+            .onChange(of: vm.activeEditorSyncUpdate) { _, update in
+                handleActiveEditorSyncUpdate(update)
             }
             .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
                 isKeyboardVisible = true
@@ -366,6 +383,7 @@ struct NoteEditorView: View {
         SelectableTextView(
             text: $content,
             richTextContentData: $richTextContentData,
+            syncBridge: editorSyncBridge,
             keyboardFocusToggleToken: keyboardFocusToggleToken,
             captureSelectionToggleToken: captureSelectionToggleToken,
             selectAllToggleToken: selectAllToggleToken,
@@ -391,6 +409,8 @@ struct NoteEditorView: View {
             textColor: editorChromeStyle.editorTextUIColor,
             tintColor: editorChromeStyle.editorTintUIColor,
             onContentChanged: handleContentChanged,
+            onRemoteAttributedTextPublished: publishRemoteAttributedText,
+            onMarkedTextEnded: vm.resumePendingConvergencePresentationIfNeeded,
             onUndoManagerChanged: updateActiveUndoManager,
             onFormattingStateChanged: handleFormattingStateChanged,
             onEditingFocusChanged: handleEditorFocusChanged,
@@ -854,6 +874,7 @@ struct NoteEditorView: View {
             if focusedPinnedThoughtID == thoughtID {
                 focusedPinnedThoughtID = nil
             }
+            vm.resumePendingConvergencePresentationIfNeeded()
             return
         }
 
@@ -863,7 +884,7 @@ struct NoteEditorView: View {
         if focusedPinnedThoughtID == thoughtID {
             focusedPinnedThoughtID = nil
         }
-        applyDeferredRemoteRefreshIfNeeded()
+        vm.resumePendingConvergencePresentationIfNeeded()
     }
 
     private func pinSelectedText(_ selectedText: String) -> Bool {
@@ -1271,11 +1292,11 @@ struct NoteEditorView: View {
             editorBufferOwner = .idle
         }
         lastSnapshot = currentNoteSnapshot()
-        applyDeferredRemoteRefreshIfNeeded()
+        vm.resumePendingConvergencePresentationIfNeeded()
     }
 
     private func handleEditorChange() {
-        guard !isApplyingRemoteSyncUpdate else { return }
+        guard editorBufferOwner != .applyingRemoteSync else { return }
         let currentSnapshot = currentNoteSnapshot()
         guard currentSnapshot != lastSnapshot else {
             refreshUndoState()
@@ -1295,6 +1316,31 @@ struct NoteEditorView: View {
         scheduleNoteCommit()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
+        vm.resumePendingConvergencePresentationIfNeeded()
+    }
+
+    private func handleObservedTitleChange(_ observedTitle: String) {
+        if consumeMatchingRemoteTitlePublication(observedTitle) {
+            return
+        }
+
+        handleEditorChange()
+    }
+
+    private func consumeMatchingRemoteTitlePublication(_ observedTitle: String) -> Bool {
+        guard let marker = pendingRemoteTitlePublication else { return false }
+        pendingRemoteTitlePublication = nil
+        guard marker.noteID == note.id,
+              marker.expectedTitle == observedTitle else {
+            vm.acknowledgeActiveEditorSyncUpdate(id: marker.updateID, noteID: marker.noteID, result: .stillPending)
+            return false
+        }
+
+        alignLastSnapshotTitle(observedTitle)
+        toolbarBridge?.title = observedTitle.isEmpty ? "Untitled" : observedTitle
+        refreshUndoState()
+        vm.acknowledgeActiveEditorSyncUpdate(id: marker.updateID, noteID: marker.noteID, result: .verifiedComplete)
+        return true
     }
 
     private func handleContentChanged(_ plainText: String, _ richTextUpdate: EditorRichTextContentUpdate) {
@@ -1309,35 +1355,159 @@ struct NoteEditorView: View {
         handleEditorChange()
     }
 
-    private func reloadNoteFromSync() {
-        guard !hasActivePinnedThoughtEdit else {
-            deferRemoteRefreshUntilCommit = true
-            return
-        }
+    private func handleActiveEditorSyncUpdate(_ update: ActiveEditorSyncUpdate?) {
+        guard let update else { return }
 
-        guard !EditorBufferReloadPolicy.shouldDeferRemoteRefresh(
-            owner: editorBufferOwner,
-            hasPendingNoteCommit: hasPendingNoteCommit
-        ) else {
-            deferRemoteRefreshUntilCommit = true
-            return
+        switch update.disposition {
+        case .apply(let batch):
+            applyRemoteEditorBatch(batch, update: update)
+        case .metadataOnly:
+            applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
+        case .reload(let reason):
+            applyRemoteEditorReloadIfSafe(reason: reason, update: update)
+        case .deferred:
+            acknowledgeConvergencePresentation(update, result: .stillPending)
+            break
+        case .ignored:
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+            break
         }
-
-        applyRemoteNoteRefresh()
     }
 
-    private func applyDeferredRemoteRefreshIfNeeded() {
-        guard deferRemoteRefreshUntilCommit else { return }
-        deferRemoteRefreshUntilCommit = false
-        applyRemoteNoteRefresh()
+    private func applyRemoteEditorMetadataIfSafe(
+        _ metadata: ActiveEditorMetadataUpdate?,
+        update: ActiveEditorSyncUpdate
+    ) {
+        guard let metadata else { return }
+
+        let decision = activeEditorStateDecision(selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id)
+
+        switch decision {
+        case .apply:
+            if let remoteTitle = metadata.title {
+                if publishRemoteTitle(remoteTitle, update: update) {
+                    acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+                }
+            } else {
+                acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+            }
+        case .deferUntilReintegration:
+            acknowledgeConvergencePresentation(update, result: .stillPending)
+        case .ignore:
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+            break
+        }
     }
 
-    private func applyRemoteNoteRefresh() {
+    private func activeEditorStateDecision(selectedNoteMatches: Bool) -> ActiveEditorStateApplicationDecision {
+        ActiveEditorApplicationPolicy.stateDecision(
+            editorBufferOwner: editorBufferOwner,
+            hasPendingNoteCommit: hasPendingNoteCommit,
+            hasActivePinnedTextEdit: hasActivePinnedThoughtEdit,
+            hasMarkedText: editorSyncBridge.hasMarkedText,
+            isApplyingUndo: isApplyingUndo,
+            selectedNoteMatches: selectedNoteMatches
+        )
+    }
+
+    private func publishRemoteTitle(_ remoteTitle: String, update: ActiveEditorSyncUpdate) -> Bool {
+        guard title != remoteTitle else {
+            pendingRemoteTitlePublication = nil
+            alignLastSnapshotTitle(remoteTitle)
+            toolbarBridge?.title = remoteTitle.isEmpty ? "Untitled" : remoteTitle
+            refreshUndoState()
+            return true
+        }
+
+        pendingRemoteTitlePublication = PendingRemoteTitlePublication(
+            updateID: update.id,
+            noteID: update.noteID,
+            expectedTitle: remoteTitle
+        )
+        title = remoteTitle
+        toolbarBridge?.title = remoteTitle.isEmpty ? "Untitled" : remoteTitle
+        return false
+    }
+
+    private func alignLastSnapshotTitle(_ remoteTitle: String) {
+        lastSnapshot = lastSnapshot.replacingTitle(remoteTitle)
+    }
+
+    private func applyRemoteEditorBatch(_ batch: AppliedEditorMutationBatch, update: ActiveEditorSyncUpdate) {
+        let decision = ActiveEditorApplicationPolicy.decision(
+            editorBufferOwner: editorBufferOwner,
+            hasPendingNoteCommit: hasPendingNoteCommit,
+            hasActivePinnedTextEdit: hasActivePinnedThoughtEdit,
+            hasMarkedText: editorSyncBridge.hasMarkedText,
+            isApplyingUndo: isApplyingUndo,
+            editorAvailable: editorSyncBridge.textView != nil,
+            selectedNoteMatches: batch.noteID == note.id && vm.currentNote?.id == note.id
+        )
+
+        switch decision {
+        case .applyIncrementally:
+            editorBufferOwner = .applyingRemoteSync
+            let result = editorSyncBridge.apply(batch, selectedNoteID: note.id)
+            switch result.disposition {
+            case .applied:
+                lastSnapshot = currentNoteSnapshot()
+                if editorBufferOwner == .applyingRemoteSync {
+                    editorBufferOwner = .idle
+                }
+                applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
+                refreshUndoState()
+                if update.metadata == nil {
+                    acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+                }
+            case .noApplicableMutations:
+                if editorBufferOwner == .applyingRemoteSync {
+                    editorBufferOwner = .idle
+                }
+                applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
+                if update.metadata == nil {
+                    acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+                }
+            case .requiresReload(let reason):
+                editorBufferOwner = .idle
+                applyRemoteEditorReloadIfSafe(reason: reason, update: update)
+            }
+        case .`defer`:
+            acknowledgeConvergencePresentation(update, result: .stillPending)
+            break
+        case .reload(let reason):
+            applyRemoteEditorReloadIfSafe(reason: reason, update: update)
+        case .ignore:
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+            break
+        }
+    }
+
+    private func applyRemoteEditorReloadIfSafe(reason: ActiveEditorReloadReason, update: ActiveEditorSyncUpdate) {
+        switch activeEditorStateDecision(selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id) {
+        case .apply:
+            applyRemoteNoteRefresh(reason: reason)
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+        case .deferUntilReintegration:
+            acknowledgeConvergencePresentation(update, result: .stillPending)
+            break
+        case .ignore:
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+            break
+        }
+    }
+
+    private func acknowledgeConvergencePresentation(
+        _ update: ActiveEditorSyncUpdate,
+        result: SyncConvergencePostCommitAdapterResult
+    ) {
+        vm.acknowledgeActiveEditorSyncUpdate(id: update.id, noteID: update.noteID, result: result)
+    }
+
+    private func applyRemoteNoteRefresh(reason: ActiveEditorReloadReason) {
         guard vm.currentNote?.id == note.id,
               let refreshedNote = vm.refreshedNote(withID: note.id) else { return }
         cancelPendingNoteCommit()
         editorBufferOwner = .applyingRemoteSync
-        isApplyingRemoteSyncUpdate = true
         title = refreshedNote.title
         content = refreshedNote.content
         richTextContentData = refreshedNote.richTextContentData
@@ -1349,11 +1519,19 @@ struct NoteEditorView: View {
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
         DispatchQueue.main.async {
-            isApplyingRemoteSyncUpdate = false
             if editorBufferOwner == .applyingRemoteSync {
                 editorBufferOwner = .idle
             }
         }
+    }
+
+    private func publishRemoteAttributedText(_ attributedText: NSAttributedString) {
+        content = attributedText.string
+        pendingRichTextContentEncoder = nil
+        richTextContentData = RichTextContentCodec.encode(attributedText)
+        lastSnapshot = currentNoteSnapshot()
+        toolbarBridge?.title = title.isEmpty ? "Untitled" : title
+        refreshUndoState()
     }
 
     private func handleFormattingStateChanged(_ state: EditorFormattingState) {
@@ -1377,10 +1555,14 @@ struct NoteEditorView: View {
             isApplyingUndo = true
             activeUndoManager?.undo()
             DispatchQueue.main.async {
-                isApplyingUndo = false
-                lastSnapshot = currentNoteSnapshot()
-                trimUndoHistory(afterRestoring: lastSnapshot)
-                refreshUndoState()
+                NativeUndoCompletionResume.perform {
+                    isApplyingUndo = false
+                    lastSnapshot = currentNoteSnapshot()
+                    trimUndoHistory(afterRestoring: lastSnapshot)
+                    refreshUndoState()
+                } resumePendingPresentation: {
+                    vm.resumePendingConvergencePresentationIfNeeded()
+                }
             }
             return
         }
@@ -1402,6 +1584,7 @@ struct NoteEditorView: View {
         DispatchQueue.main.async {
             isApplyingUndo = false
             refreshUndoState()
+            vm.resumePendingConvergencePresentationIfNeeded()
         }
     }
 
@@ -1418,6 +1601,7 @@ struct NoteEditorView: View {
                 isApplyingUndo = false
                 lastSnapshot = currentNoteSnapshot()
                 refreshUndoState()
+                vm.resumePendingConvergencePresentationIfNeeded()
             }
             return
         }
@@ -1439,6 +1623,7 @@ struct NoteEditorView: View {
         DispatchQueue.main.async {
             isApplyingUndo = false
             refreshUndoState()
+            vm.resumePendingConvergencePresentationIfNeeded()
         }
     }
 
@@ -1459,6 +1644,7 @@ struct NoteEditorView: View {
         )
         vm.recordNoteEdited(note)
         editorBufferOwner = .idle
+        vm.resumePendingConvergencePresentationIfNeeded()
     }
 
     private func restorePinnedThoughts(_ snapshots: [PinnedThoughtSnapshot]) {
@@ -2184,6 +2370,18 @@ private struct NoteSnapshot: Equatable {
     var content: String = ""
     var richTextContentData: Data?
     var pinnedThoughts: [PinnedThoughtSnapshot] = []
+
+    func replacingTitle(_ title: String) -> NoteSnapshot {
+        var snapshot = self
+        snapshot.title = title
+        return snapshot
+    }
+}
+
+private struct PendingRemoteTitlePublication: Equatable {
+    let updateID: UUID
+    let noteID: UUID
+    let expectedTitle: String
 }
 
 private struct PinnedThoughtSnapshot: Equatable {
@@ -2673,6 +2871,7 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
 private struct SelectableTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var richTextContentData: Data?
+    let syncBridge: UIKitEditorSyncBridge
     let keyboardFocusToggleToken: Int
     let captureSelectionToggleToken: Int
     let selectAllToggleToken: Int
@@ -2698,6 +2897,8 @@ private struct SelectableTextView: UIViewRepresentable {
     let textColor: UIColor
     let tintColor: UIColor?
     let onContentChanged: (String, EditorRichTextContentUpdate) -> Void
+    let onRemoteAttributedTextPublished: (NSAttributedString) -> Void
+    let onMarkedTextEnded: () -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
     let onFormattingStateChanged: (EditorFormattingState) -> Void
     let onEditingFocusChanged: (Bool) -> Void
@@ -2712,6 +2913,9 @@ private struct SelectableTextView: UIViewRepresentable {
             tintColor: tintColor
         )
         context.coordinator.textView = textView
+        syncBridge.textView = textView
+        syncBridge.publishAttributedText = onRemoteAttributedTextPublished
+        syncBridge.onMarkedTextEnded = onMarkedTextEnded
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
         textView.delegate = context.coordinator
@@ -2725,6 +2929,9 @@ private struct SelectableTextView: UIViewRepresentable {
             os_signpost(.end, log: EditorSelectionProfiling.log, name: "SelectableTextView.updateUIView", signpostID: updateUIViewSignpostID)
         }
         context.coordinator.textView = textView
+        syncBridge.textView = textView
+        syncBridge.publishAttributedText = onRemoteAttributedTextPublished
+        syncBridge.onMarkedTextEnded = onMarkedTextEnded
         context.coordinator.formattingController = formattingController
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
@@ -2773,7 +2980,9 @@ private struct SelectableTextView: UIViewRepresentable {
         }
         context.coordinator.text = $text
         context.coordinator.richTextContentData = $richTextContentData
+        context.coordinator.syncBridge = syncBridge
         context.coordinator.onContentChanged = onContentChanged
+        context.coordinator.onRemoteAttributedTextPublished = onRemoteAttributedTextPublished
         context.coordinator.onUndoManagerChanged = onUndoManagerChanged
         context.coordinator.onFormattingStateChanged = onFormattingStateChanged
         context.coordinator.onEditingFocusChanged = onEditingFocusChanged
@@ -2886,9 +3095,11 @@ private struct SelectableTextView: UIViewRepresentable {
     func makeCoordinator() -> Coordinator {
         Coordinator(
             formattingController: formattingController,
+            syncBridge: syncBridge,
             text: $text,
             richTextContentData: $richTextContentData,
             onContentChanged: onContentChanged,
+            onRemoteAttributedTextPublished: onRemoteAttributedTextPublished,
             onUndoManagerChanged: onUndoManagerChanged,
             onFormattingStateChanged: onFormattingStateChanged,
             onEditingFocusChanged: onEditingFocusChanged,
@@ -2900,9 +3111,11 @@ private struct SelectableTextView: UIViewRepresentable {
 
     final class Coordinator: NSObject, UITextViewDelegate, UIGestureRecognizerDelegate {
         var formattingController: TextFormattingController
+        var syncBridge: UIKitEditorSyncBridge
         var text: Binding<String>
         var richTextContentData: Binding<Data?>
         var onContentChanged: (String, EditorRichTextContentUpdate) -> Void
+        var onRemoteAttributedTextPublished: (NSAttributedString) -> Void
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
         var onEditingFocusChanged: (Bool) -> Void
@@ -2942,9 +3155,11 @@ private struct SelectableTextView: UIViewRepresentable {
 
         init(
             formattingController: TextFormattingController,
+            syncBridge: UIKitEditorSyncBridge,
             text: Binding<String>,
             richTextContentData: Binding<Data?>,
             onContentChanged: @escaping (String, EditorRichTextContentUpdate) -> Void,
+            onRemoteAttributedTextPublished: @escaping (NSAttributedString) -> Void,
             onUndoManagerChanged: @escaping (UndoManager?) -> Void,
             onFormattingStateChanged: @escaping (EditorFormattingState) -> Void,
             onEditingFocusChanged: @escaping (Bool) -> Void,
@@ -2953,9 +3168,11 @@ private struct SelectableTextView: UIViewRepresentable {
             onLookupSelection: @escaping (String) -> Void
         ) {
             self.formattingController = formattingController
+            self.syncBridge = syncBridge
             self.text = text
             self.richTextContentData = richTextContentData
             self.onContentChanged = onContentChanged
+            self.onRemoteAttributedTextPublished = onRemoteAttributedTextPublished
             self.onUndoManagerChanged = onUndoManagerChanged
             self.onFormattingStateChanged = onFormattingStateChanged
             self.onEditingFocusChanged = onEditingFocusChanged
@@ -3044,6 +3261,8 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
+            syncBridge.observeMarkedTextState(textView.markedTextRange != nil)
+            guard !syncBridge.isApplyingRemoteSync else { return }
             let textChangeSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
             os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.textViewDidChange", signpostID: textChangeSignpostID)
             defer {
@@ -3058,6 +3277,7 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            syncBridge.observeMarkedTextState(textView.markedTextRange != nil)
             let selectionChangeSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
             os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.textViewDidChangeSelection", signpostID: selectionChangeSignpostID)
             defer {
