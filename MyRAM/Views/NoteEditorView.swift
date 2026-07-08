@@ -862,6 +862,7 @@ struct NoteEditorView: View {
             if focusedPinnedThoughtID == thoughtID {
                 focusedPinnedThoughtID = nil
             }
+            vm.resumePendingConvergencePresentationIfNeeded()
             return
         }
 
@@ -871,6 +872,7 @@ struct NoteEditorView: View {
         if focusedPinnedThoughtID == thoughtID {
             focusedPinnedThoughtID = nil
         }
+        vm.resumePendingConvergencePresentationIfNeeded()
     }
 
     private func pinSelectedText(_ selectedText: String) -> Bool {
@@ -1278,6 +1280,7 @@ struct NoteEditorView: View {
             editorBufferOwner = .idle
         }
         lastSnapshot = currentNoteSnapshot()
+        vm.resumePendingConvergencePresentationIfNeeded()
     }
 
     private func handleEditorChange() {
@@ -1301,6 +1304,7 @@ struct NoteEditorView: View {
         scheduleNoteCommit()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
+        vm.resumePendingConvergencePresentationIfNeeded()
     }
 
     private func handleObservedTitleChange(_ observedTitle: String) {
@@ -1565,6 +1569,7 @@ struct NoteEditorView: View {
         DispatchQueue.main.async {
             isApplyingUndo = false
             refreshUndoState()
+            vm.resumePendingConvergencePresentationIfNeeded()
         }
     }
 
@@ -1581,6 +1586,7 @@ struct NoteEditorView: View {
                 isApplyingUndo = false
                 lastSnapshot = currentNoteSnapshot()
                 refreshUndoState()
+                vm.resumePendingConvergencePresentationIfNeeded()
             }
             return
         }
@@ -1602,6 +1608,7 @@ struct NoteEditorView: View {
         DispatchQueue.main.async {
             isApplyingUndo = false
             refreshUndoState()
+            vm.resumePendingConvergencePresentationIfNeeded()
         }
     }
 
@@ -1622,6 +1629,7 @@ struct NoteEditorView: View {
         )
         vm.recordNoteEdited(note)
         editorBufferOwner = .idle
+        vm.resumePendingConvergencePresentationIfNeeded()
     }
 
     private func restorePinnedThoughts(_ snapshots: [PinnedThoughtSnapshot]) {

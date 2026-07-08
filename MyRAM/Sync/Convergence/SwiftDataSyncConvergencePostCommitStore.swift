@@ -281,12 +281,12 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
         }
     }
 
-    func loadPostCommitRequest(forBatchID batchID: UUID) throws -> SyncConvergencePostCommitRequest? {
+    func loadPostCommitStatus(forBatchID batchID: UUID) throws -> SyncConvergencePersistedPostCommitStatus {
         guard let root = try fetchOne(IncorporatedSyncBatch.self, #Predicate { $0.batchID == batchID }) else {
             guard let tombstone = try loadTombstone(batchID: batchID) else {
-                return nil
+                return .missing
             }
-            return SyncConvergencePostCommitRequest(
+            return .tombstone(SyncConvergencePostCommitRequest(
                 sourceBatchID: tombstone.batchID,
                 affectedNoteIDs: [],
                 cleanupPlan: SyncConvergenceCleanupPlan(
@@ -297,14 +297,14 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
                 ),
                 presentationPlan: SyncConvergencePresentationPlan(noteRoutings: [:]),
                 persistedIncorporationIdentity: tombstone.persistedIdentity
-            )
+            ))
         }
         let projection = try rootProjection(root)
         let state = try decodePostCommitState(root)
         guard state != .none else {
-            return nil
+            return .completed(projection.persistedIdentity)
         }
-        return try postCommitRequest(root: projection, state: state)
+        return try .pending(postCommitRequest(root: projection, state: state))
     }
 
     private func postCommitRequest(

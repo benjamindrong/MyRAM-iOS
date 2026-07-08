@@ -6,6 +6,7 @@ actor SyncConvergencePostCommitExecutor {
     private let legacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapter?
     private let presentationAdapter: SyncConvergencePresentationAdapter
     private var activeRun: (id: UUID, task: Task<SyncConvergencePostCommitOutcome, Never>)?
+    private var acknowledgedPresentations: Set<AcknowledgedPresentation> = []
 
     init(
         store: SyncConvergencePostCommitStateStore,
@@ -59,71 +60,146 @@ actor SyncConvergencePostCommitExecutor {
         _ request: SyncConvergencePostCommitRequest,
         loaded: SyncConvergencePostCommitFullRootState
     ) async -> SyncConvergencePostCommitOutcome {
-        let originalState = loaded.postCommitState
-        guard originalState != .none else {
-            return .complete
-        }
-        guard let workPayload = loaded.postCommitWorkPayload else {
+        var current = loaded
+        guard current.postCommitState != .none else { return .complete }
+        guard let workPayload = current.postCommitWorkPayload else {
             return .failedBeforeWork(.missingPostCommitWorkPayload(batchID: request.sourceBatchID))
         }
 
-        var completed: Set<SyncConvergencePostCommitPendingWork> = []
-
-        if originalState.presentationRefreshPending {
-            if await performPresentationRefresh(
-                request,
-                entries: workPayload.presentationEntries
-            ) == .verifiedComplete {
-                completed.insert(.presentationRefresh)
-            } else {
-                return pendingOutcome(for: originalState)
-            }
-        }
-
-        if originalState.legacyCleanupPending {
-            if let legacyCleanupAdapter {
-                let result = await legacyCleanupAdapter.performLegacyCleanup(for: request)
-                if result == .verifiedComplete {
-                    completed.insert(.legacyCleanup)
-                } else {
-                    return pendingOutcome(for: originalState)
+        if current.postCommitState.presentationRefreshPending {
+            let outcome = await executePresentationIfNeeded(request, loaded: current, workPayload: workPayload)
+            switch outcome {
+            case .complete:
+                guard case .fullRoot(let reloaded) = reloadState(for: request) else {
+                    return .failedBeforeWork(.missingAuthoritativeIncorporation(batchID: request.sourceBatchID))
                 }
-            } else {
-                return pendingOutcome(for: originalState)
+                current = reloaded
+            case .pending, .failedBeforeWork:
+                return outcome
             }
         }
 
-        if originalState.queueCleanupPending {
-            do {
-                if try performQueueCleanup(batchIDs: Set(workPayload.queueCleanupBatchIDs)) {
-                    completed.insert(.queueCleanup)
+        if current.postCommitState.legacyCleanupPending {
+            let outcome = await executeLegacyCleanupIfNeeded(request, loaded: current)
+            switch outcome {
+            case .complete:
+                guard case .fullRoot(let reloaded) = reloadState(for: request) else {
+                    return .failedBeforeWork(.missingAuthoritativeIncorporation(batchID: request.sourceBatchID))
                 }
-            } catch {
-                return pendingOutcome(for: originalState)
+                current = reloaded
+            case .pending, .failedBeforeWork:
+                return outcome
             }
         }
 
-        let updatedState = SyncConvergencePostCommitState(
-            queueCleanupPending: originalState.queueCleanupPending && !completed.contains(.queueCleanup),
-            legacyCleanupPending: originalState.legacyCleanupPending && !completed.contains(.legacyCleanup),
-            presentationRefreshPending: originalState.presentationRefreshPending && !completed.contains(.presentationRefresh)
+        if current.postCommitState.queueCleanupPending {
+            let outcome = executeQueueCleanupIfNeeded(request, loaded: current, workPayload: workPayload)
+            switch outcome {
+            case .complete:
+                guard case .fullRoot(let reloaded) = reloadState(for: request) else {
+                    return .failedBeforeWork(.missingAuthoritativeIncorporation(batchID: request.sourceBatchID))
+                }
+                current = reloaded
+            case .pending, .failedBeforeWork:
+                return outcome
+            }
+        }
+
+        return pendingOutcome(for: current.postCommitState)
+    }
+
+    private func executePresentationIfNeeded(
+        _ request: SyncConvergencePostCommitRequest,
+        loaded: SyncConvergencePostCommitFullRootState,
+        workPayload: SyncConvergencePostCommitWorkPayloadV1
+    ) async -> SyncConvergencePostCommitOutcome {
+        let acknowledged = acknowledgedPresentationIdentities(request, entries: workPayload.presentationEntries)
+        let result: SyncConvergencePostCommitAdapterResult
+        if acknowledged.isSubset(of: acknowledgedPresentations) {
+            result = .verifiedComplete
+        } else {
+            result = await performPresentationRefresh(request, entries: workPayload.presentationEntries)
+        }
+
+        switch result {
+        case .verifiedComplete:
+            acknowledgedPresentations.formUnion(acknowledged)
+            return persistCompletedWork(.presentationRefresh, request: request, loaded: loaded)
+        case .stillPending:
+            return pendingOutcome(for: loaded.postCommitState)
+        case .failed:
+            return .failedBeforeWork(.persistence)
+        }
+    }
+
+    private func executeLegacyCleanupIfNeeded(
+        _ request: SyncConvergencePostCommitRequest,
+        loaded: SyncConvergencePostCommitFullRootState
+    ) async -> SyncConvergencePostCommitOutcome {
+        guard let legacyCleanupAdapter else {
+            return pendingOutcome(for: loaded.postCommitState)
+        }
+        guard await legacyCleanupAdapter.performLegacyCleanup(for: request) == .verifiedComplete else {
+            return pendingOutcome(for: loaded.postCommitState)
+        }
+        return persistCompletedWork(.legacyCleanup, request: request, loaded: loaded)
+    }
+
+    private func executeQueueCleanupIfNeeded(
+        _ request: SyncConvergencePostCommitRequest,
+        loaded: SyncConvergencePostCommitFullRootState,
+        workPayload: SyncConvergencePostCommitWorkPayloadV1
+    ) -> SyncConvergencePostCommitOutcome {
+        do {
+            guard try performQueueCleanup(batchIDs: Set(workPayload.queueCleanupBatchIDs)) else {
+                return pendingOutcome(for: loaded.postCommitState)
+            }
+        } catch {
+            return pendingOutcome(for: loaded.postCommitState)
+        }
+        return persistCompletedWork(.queueCleanup, request: request, loaded: loaded)
+    }
+
+    private func persistCompletedWork(
+        _ work: SyncConvergencePostCommitPendingWork,
+        request: SyncConvergencePostCommitRequest,
+        loaded: SyncConvergencePostCommitFullRootState
+    ) -> SyncConvergencePostCommitOutcome {
+        let original = loaded.postCommitState
+        let updated = SyncConvergencePostCommitState(
+            queueCleanupPending: work == .queueCleanup ? false : original.queueCleanupPending,
+            legacyCleanupPending: work == .legacyCleanup ? false : original.legacyCleanupPending,
+            presentationRefreshPending: work == .presentationRefresh ? false : original.presentationRefreshPending
         )
-
-        guard updatedState != originalState else {
-            return pendingOutcome(for: updatedState)
-        }
 
         do {
             let persisted = try store.compareAndSetPostCommitState(
                 expectedRoot: SyncConvergencePostCommitRootSnapshot(root: loaded.root),
                 expectedPayloadData: loaded.postCommitStatePayloadData,
-                newState: updatedState
+                newState: updated
             )
-            return pendingOutcome(for: persisted.postCommitState)
+            if !persisted.postCommitState.presentationRefreshPending {
+                clearAcknowledgedPresentations(for: request)
+            }
+            return .complete
         } catch {
-            var pending = originalState.pendingWork
+            if work == .presentationRefresh,
+               case .fullRoot(let reloaded) = reloadState(for: request),
+               !reloaded.postCommitState.presentationRefreshPending {
+                clearAcknowledgedPresentations(for: request)
+                return .complete
+            }
+            var pending = original.pendingWork
             pending.insert(.postCommitStatePersistence)
             return .pending(pending)
+        }
+    }
+
+    private func reloadState(for request: SyncConvergencePostCommitRequest) -> SyncConvergencePostCommitLoadedState {
+        do {
+            return try store.loadState(matching: request.persistedIncorporationIdentity)
+        } catch {
+            return .missing
         }
     }
 
@@ -190,6 +266,33 @@ actor SyncConvergencePostCommitExecutor {
         let pending = state.pendingWork
         return pending.isEmpty ? .complete : .pending(pending)
     }
+
+    private func acknowledgedPresentationIdentities(
+        _ request: SyncConvergencePostCommitRequest,
+        entries: [SyncConvergencePostCommitWorkPayloadV1.PresentationEntry]
+    ) -> Set<AcknowledgedPresentation> {
+        Set(entries.map {
+            AcknowledgedPresentation(
+                incorporationBatchID: request.persistedIncorporationIdentity.batchID,
+                noteID: $0.noteID,
+                committedPostBodyHash: $0.committedPostBodyHash,
+                result: .verifiedComplete
+            )
+        })
+    }
+
+    private func clearAcknowledgedPresentations(for request: SyncConvergencePostCommitRequest) {
+        acknowledgedPresentations = acknowledgedPresentations.filter {
+            $0.incorporationBatchID != request.persistedIncorporationIdentity.batchID
+        }
+    }
+}
+
+private struct AcknowledgedPresentation: Hashable {
+    let incorporationBatchID: UUID
+    let noteID: UUID
+    let committedPostBodyHash: String
+    let result: SyncConvergencePostCommitAdapterResult
 }
 
 extension FileBackedSyncBatchQueue: SyncConvergenceQueueCleanupAdapter {

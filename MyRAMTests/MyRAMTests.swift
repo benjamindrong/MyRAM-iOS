@@ -81,7 +81,7 @@ final class MyRAMTests: XCTestCase {
         let notes: [NoteRecord]
     }
 
-    private final class RecordingSyncController: MyRAMSyncControlling {
+    private final class RecordingSyncController: MyRAMSyncControlling, SyncConvergenceLocalBatchTransportAdapter {
         var onChangesReceived: (([SyncChange]) async -> Void)?
         var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
         var onBatchReceived: ((SyncBatch) async -> Void)?
@@ -107,7 +107,7 @@ final class MyRAMTests: XCTestCase {
             )
         }
 
-        func recordLocalBatch(_ batch: SyncBatch) {
+        func acceptLocalBatch(_ batch: SyncBatch) async throws {
             recordedBatches.append(batch)
         }
     }

@@ -1,5 +1,15 @@
 import Foundation
 
+@MainActor
+protocol SyncConvergenceLocalBatchTransportAdapter: AnyObject {
+    func acceptLocalBatch(_ batch: SyncBatch) async throws
+}
+
+enum SyncConvergenceLocalBatchTransportError: Error, Equatable {
+    case unavailable
+    case acceptanceNotDurable(batchID: UUID)
+}
+
 struct SyncConvergencePostCommitRequest: Equatable, Sendable {
     let sourceBatchID: UUID
     let affectedNoteIDs: Set<UUID>
@@ -80,6 +90,13 @@ enum SyncConvergencePostCommitLoadedState: Equatable {
     case inconsistent
 }
 
+enum SyncConvergencePersistedPostCommitStatus: Equatable {
+    case pending(SyncConvergencePostCommitRequest)
+    case completed(SyncConvergencePersistedIncorporationIdentity)
+    case tombstone(SyncConvergencePostCommitRequest)
+    case missing
+}
+
 struct SyncConvergencePostCommitFullRootState: Equatable {
     let root: SyncConvergenceIncorporatedRootProjection
     let postCommitState: SyncConvergencePostCommitState
@@ -104,7 +121,7 @@ protocol SyncConvergencePostCommitStateStore {
 
 protocol SyncConvergencePendingPostCommitSource {
     func loadPendingPostCommitRequests() throws -> [SyncConvergencePostCommitRequest]
-    func loadPostCommitRequest(forBatchID batchID: UUID) throws -> SyncConvergencePostCommitRequest?
+    func loadPostCommitStatus(forBatchID batchID: UUID) throws -> SyncConvergencePersistedPostCommitStatus
 }
 
 protocol SyncConvergenceQueueCleanupAdapter {

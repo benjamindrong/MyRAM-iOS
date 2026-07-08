@@ -47,11 +47,13 @@ final class NotesViewModel: ObservableObject {
         context: context,
         convergenceQueue: pendingIncomingBatches,
         localObligationQueue: pendingLocalConvergenceBatches,
+        localBatchTransportAdapter: syncController as? SyncConvergenceLocalBatchTransportAdapter,
         presentationAdapter: NotesViewModelConvergencePresentationAdapter(viewModel: self)
     )
     private var activeEditorPresentationAcknowledgment: ActiveEditorPresentationAcknowledgment?
     private var recentTextEditByNoteID: [UUID: Date] = [:]
     private var syncBatchReadyTask: Task<Void, Never>?
+    private var pendingConvergenceResumeTask: Task<Void, Never>?
     private var undoStack: [UndoAction] = [] {
         didSet {
             hasUndoableAction = !undoStack.isEmpty
@@ -107,10 +109,10 @@ final class NotesViewModel: ObservableObject {
             }
         }
         syncConflicts = syncConflictService.activeConflicts()
-        resumePendingConvergencePresentationIfNeeded()
         purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     deinit {
@@ -133,6 +135,7 @@ final class NotesViewModel: ObservableObject {
             undoFolderDeletion(using: snapshot)
         }
         redoStack.append(action)
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func redoLastAction() {
@@ -151,6 +154,7 @@ final class NotesViewModel: ObservableObject {
             redoFolderDeletion(using: snapshot)
         }
         undoStack.append(action)
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func refreshCurrentFolderContent() {
@@ -703,6 +707,7 @@ final class NotesViewModel: ObservableObject {
             publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func restoreSyncConflict(_ conflict: SyncConflictVersion) {
@@ -722,6 +727,7 @@ final class NotesViewModel: ObservableObject {
             publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func saveMergedSyncConflict(_ conflict: SyncConflictVersion, mergedText: String) {
@@ -743,6 +749,7 @@ final class NotesViewModel: ObservableObject {
             publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func discardSyncConflict(_ conflict: SyncConflictVersion) {
@@ -762,6 +769,7 @@ final class NotesViewModel: ObservableObject {
             publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
         }
         refreshCurrentFolderContent()
+        resumePendingConvergencePresentationIfNeeded()
     }
 
     func addPhotoAttachment(to note: Note, imageData: Data) {
@@ -1248,10 +1256,6 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func sendReadySyncBatch(_ batch: SyncBatch) {
-        syncController?.recordLocalBatch(batch)
-    }
-
     private func recordFolderSyncChange(_ folder: Folder) {
         guard !isApplyingRemoteSyncChange,
               let payload = try? MyRAMSyncPayloadCoding.encode(MyRAMFolderSyncPayload(folder: folder)) else { return }
@@ -1491,17 +1495,15 @@ final class NotesViewModel: ObservableObject {
     private func handleReadyLocalBatch(_ batch: SyncBatch) async {
         let outcome = await syncConvergenceRuntime.submitLocalBatch(batch)
         handleConvergenceRuntimeOutcome(outcome)
-        if case .drained = outcome {
-            sendReadySyncBatch(batch)
-            handleConvergenceRuntimeOutcome(
-                syncConvergenceRuntime.completeLocalTransportAcceptance(batch)
-            )
-        }
     }
 
     func resumePendingConvergencePresentationIfNeeded() {
-        Task { [weak self] in
+        guard pendingConvergenceResumeTask == nil else { return }
+        pendingConvergenceResumeTask = Task { [weak self] in
             await self?.resumePendingConvergencePresentation()
+            await MainActor.run {
+                self?.pendingConvergenceResumeTask = nil
+            }
         }
     }
 
@@ -1512,8 +1514,12 @@ final class NotesViewModel: ObservableObject {
 
     private func handleConvergenceRuntimeOutcome(_ outcome: SyncConvergenceRuntimeOutcome) {
         switch outcome {
-        case .drained, .alreadyDraining:
+        case .drained:
             syncBatchErrorMessage = nil
+        case .pending:
+            break
+        case .alreadyDraining:
+            break
         case .blocked(let failure):
             syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
         }

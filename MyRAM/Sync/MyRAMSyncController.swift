@@ -87,7 +87,7 @@ protocol MyRAMSyncControlling: AnyObject {
         updatedAt: Date
     )
 
-    func recordLocalBatch(_ batch: SyncBatch)
+    func acceptLocalBatch(_ batch: SyncBatch) async throws
 }
 
 extension MyRAMSyncControlling {
@@ -242,10 +242,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         await updatePendingCount()
     }
 
-    func recordLocalBatch(_ batch: SyncBatch) {
-        Task {
-            await sendBatch(batch)
-        }
+    func acceptLocalBatch(_ batch: SyncBatch) async throws {
+        try await sendBatch(batch)
     }
 
     private func updatePendingCount() async {
@@ -291,12 +289,15 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
     }
 
-    private func sendBatch(_ batch: SyncBatch) async {
+    private func sendBatch(_ batch: SyncBatch) async throws {
         let sent = await sendQueuedBatch(batch)
         if sent {
             unsentBatches.removeAll(withIDs: [batch.id])
         } else {
             enqueueUnsentBatch(batch)
+        }
+        guard sent || unsentBatches.contains(batch.id) else {
+            throw SyncConvergenceLocalBatchTransportError.acceptanceNotDurable(batchID: batch.id)
         }
     }
 
@@ -398,6 +399,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 }
 
 extension MyRAMSyncController: MyRAMSyncControlling {}
+
+extension MyRAMSyncController: SyncConvergenceLocalBatchTransportAdapter {}
 
 extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {

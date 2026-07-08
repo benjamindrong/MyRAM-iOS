@@ -3,6 +3,7 @@ import SwiftData
 
 enum SyncConvergenceRuntimeOutcome {
     case drained(appliedBatchIDs: Set<UUID>)
+    case pending(Set<SyncConvergencePostCommitPendingWork>)
     case alreadyDraining
     case blocked(SyncBatchDrainFailure)
 }
@@ -12,6 +13,7 @@ final class SyncConvergenceRuntime {
     private let context: ModelContext
     private let convergenceQueue: FileBackedSyncBatchQueue
     private let localObligationQueue: FileBackedSyncBatchQueue
+    private weak var localBatchTransportAdapter: SyncConvergenceLocalBatchTransportAdapter?
     private let presentationAdapter: SyncConvergencePresentationAdapter
     private let planner = SyncConvergencePlanner()
     private let incorporationExecutor = SyncConvergenceIncorporationExecutor()
@@ -28,11 +30,13 @@ final class SyncConvergenceRuntime {
         context: ModelContext,
         convergenceQueue: FileBackedSyncBatchQueue,
         localObligationQueue: FileBackedSyncBatchQueue,
+        localBatchTransportAdapter: SyncConvergenceLocalBatchTransportAdapter?,
         presentationAdapter: SyncConvergencePresentationAdapter
     ) {
         self.context = context
         self.convergenceQueue = convergenceQueue
         self.localObligationQueue = localObligationQueue
+        self.localBatchTransportAdapter = localBatchTransportAdapter
         self.presentationAdapter = presentationAdapter
     }
 
@@ -51,7 +55,7 @@ final class SyncConvergenceRuntime {
     func submitLocalBatch(_ batch: SyncBatch) async -> SyncConvergenceRuntimeOutcome {
         do {
             try localObligationQueue.enqueueIncoming(batch)
-            try satisfyLocalObligations()
+            try await satisfyLocalObligations()
             return .drained(appliedBatchIDs: [])
         } catch {
             return .blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id))
@@ -60,15 +64,6 @@ final class SyncConvergenceRuntime {
 
     func resumePendingWork() async -> SyncConvergenceRuntimeOutcome {
         await drain()
-    }
-
-    func completeLocalTransportAcceptance(_ batch: SyncBatch) -> SyncConvergenceRuntimeOutcome {
-        do {
-            try localObligationQueue.removeBatches(withIDs: [batch.id])
-            return .drained(appliedBatchIDs: [])
-        } catch {
-            return .blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id))
-        }
     }
 
     private func drain() async -> SyncConvergenceRuntimeOutcome {
@@ -84,7 +79,7 @@ final class SyncConvergenceRuntime {
             drainRequestedWhileActive = false
 
             do {
-                try satisfyLocalObligations()
+                try await satisfyLocalObligations()
             } catch {
                 return .blocked(SyncBatchDrainFailureClassifier.classify(error))
             }
@@ -97,7 +92,12 @@ final class SyncConvergenceRuntime {
             }
             for request in pendingRequests {
                 let outcome = await postCommitExecutor.execute(request)
-                guard outcome == .complete else {
+                switch outcome {
+                case .complete:
+                    continue
+                case .pending(let pending):
+                    return .pending(pending)
+                case .failedBeforeWork:
                     return .blocked(SyncBatchDrainFailure(batchID: request.sourceBatchID, kind: .persistence))
                 }
             }
@@ -123,12 +123,22 @@ final class SyncConvergenceRuntime {
                     case .incorporated(let result):
                         appliedBatchIDs.insert(result.batchID)
                         let postCommit = await postCommitExecutor.execute(SyncConvergencePostCommitRequest(result: result))
-                        guard postCommit == .complete else {
+                        switch postCommit {
+                        case .complete:
+                            break
+                        case .pending(let pending):
+                            return .pending(pending)
+                        case .failedBeforeWork:
                             return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
                         }
                     case .alreadyIncorporated(let result):
                         let postCommit = await postCommitExecutor.execute(SyncConvergencePostCommitRequest(result: result))
-                        guard postCommit == .complete else {
+                        switch postCommit {
+                        case .complete:
+                            break
+                        case .pending(let pending):
+                            return .pending(pending)
+                        case .failedBeforeWork:
                             return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
                         }
                     case .failedBeforeCommit(let failure), .failedAndRolledBack(let failure):
@@ -138,11 +148,23 @@ final class SyncConvergenceRuntime {
                     do {
                         let cleanupBatchIDs = cleanupPlan.batchIDs.isEmpty ? [batch.id] : Array(cleanupPlan.batchIDs)
                         for cleanupBatchID in cleanupBatchIDs {
-                            guard let request = try pendingPostCommitSource.loadPostCommitRequest(forBatchID: cleanupBatchID) else {
-                                return .blocked(SyncBatchDrainFailure(batchID: cleanupBatchID, kind: .persistence))
-                            }
-                            let outcome = await postCommitExecutor.execute(request)
-                            guard outcome == .complete else {
+                            switch try pendingPostCommitSource.loadPostCommitStatus(forBatchID: cleanupBatchID) {
+                            case .pending(let request), .tombstone(let request):
+                                let outcome = await postCommitExecutor.execute(request)
+                                switch outcome {
+                                case .complete:
+                                    continue
+                                case .pending(let pending):
+                                    return .pending(pending)
+                                case .failedBeforeWork:
+                                    return .blocked(SyncBatchDrainFailure(batchID: cleanupBatchID, kind: .persistence))
+                                }
+                            case .completed:
+                                try convergenceQueue.removeBatches(withIDs: [cleanupBatchID])
+                                guard !convergenceQueue.contains(cleanupBatchID) else {
+                                    return .blocked(SyncBatchDrainFailure(batchID: cleanupBatchID, kind: .persistence))
+                                }
+                            case .missing:
                                 return .blocked(SyncBatchDrainFailure(batchID: cleanupBatchID, kind: .persistence))
                             }
                         }
@@ -159,9 +181,17 @@ final class SyncConvergenceRuntime {
         return .drained(appliedBatchIDs: appliedBatchIDs)
     }
 
-    private func satisfyLocalObligations() throws {
+    private func satisfyLocalObligations() async throws {
         for batch in localObligationQueue.pendingBatches {
             try registerLocalEvidence(for: batch)
+            guard let localBatchTransportAdapter else {
+                throw SyncConvergenceLocalBatchTransportError.unavailable
+            }
+            try await localBatchTransportAdapter.acceptLocalBatch(batch)
+            try localObligationQueue.removeBatches(withIDs: [batch.id])
+            guard !localObligationQueue.contains(batch.id) else {
+                throw SyncConvergenceLocalBatchTransportError.acceptanceNotDurable(batchID: batch.id)
+            }
         }
     }
 
@@ -495,6 +525,40 @@ final class SyncConvergenceRuntime {
             let roots = try context.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>(
                 predicate: #Predicate { $0.noteID == noteID }
             ))
+            let incorporatedBatchIDs = Set(roots.map(\.batchID))
+            let incorporatedRoots = try context.fetch(FetchDescriptor<IncorporatedSyncBatch>())
+                .filter { incorporatedBatchIDs.contains($0.batchID) }
+            for root in incorporatedRoots {
+                let affectedNoteIDs = try SyncConvergenceAffectedNotesPayloadV1
+                    .decodeData(root.affectedNotesPayloadData)
+                    .noteIDs
+                guard affectedNoteIDs.contains(noteID) else {
+                    throw SyncConvergenceTransactionFailure.corruptHistory(noteID: noteID)
+                }
+            }
+            let operationIdentities = try context.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>(
+                predicate: #Predicate { $0.noteID == noteID }
+            ))
+            let resultEvidence = try context.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>(
+                predicate: #Predicate { $0.noteID == noteID }
+            ))
+            let incorporationBlockingReferences = try context.fetch(FetchDescriptor<IncorporationBlockingReference>(
+                predicate: #Predicate { $0.noteID == noteID }
+            ))
+            let contradictions = try context.fetch(FetchDescriptor<IncorporationContradictionDiagnostic>())
+                .filter { $0.noteID == noteID }
+            let compactionStates = try context.fetch(FetchDescriptor<NoteHistoryCompactionState>(
+                predicate: #Predicate { $0.noteID == noteID }
+            ))
+            let reconciliationEpisodes = try context.fetch(FetchDescriptor<ReconciliationEpisode>(
+                predicate: #Predicate { $0.noteID == noteID }
+            ))
+            let persistedCleanupBytes = compactionStates.reduce(0) { $0 + $1.cleanupEvidenceBytes }
+            let activeReconciliationEpisodes = reconciliationEpisodes.filter { $0.completedAtBitPattern == nil }
+            let completedReconciliationEpisodes = reconciliationEpisodes.filter { $0.completedAtBitPattern != nil }
+            let reconciliationEvidenceBytes = reconciliationEpisodes.reduce(0) {
+                $0 + $1.logicalGroupingPayloadData.count
+            }
             return SyncConvergenceHistoryAccountingProjection(
                 noteID: noteID,
                 snapshotCount: snapshots.count,
@@ -503,14 +567,44 @@ final class SyncConvergenceRuntime {
                 retainedOperationBytes: retainedOperations.reduce(0) { $0 + $1.payloadUTF8ByteCount },
                 explicitDeleteProvenanceCount: provenance.count,
                 explicitDeleteProvenanceBytes: provenance.reduce(0) { $0 + $1.payloadByteCount },
-                fullIncorporationEvidenceBytes: roots.count,
-                diagnosticEvidenceBytes: diagnostics.count + blockingReferences.count,
-                cleanupEvidenceBytes: 0,
-                completedReconciliationEpisodeCount: 0,
-                activeReconciliationEpisodeCount: 0,
-                reconciliationEvidenceBytes: 0
+                fullIncorporationEvidenceBytes: fullIncorporationEvidenceBytes(
+                    roots: incorporatedRoots,
+                    noteEffects: roots,
+                    operationIdentities: operationIdentities,
+                    resultEvidence: resultEvidence
+                ),
+                diagnosticEvidenceBytes: diagnostics.reduce(0) { $0 + $1.diagnosticEvidencePayloadData.count }
+                    + blockingReferences.reduce(0) { $0 + $1.payloadUTF8ByteCount }
+                    + incorporationBlockingReferences.reduce(0) { $0 + $1.payloadUTF8ByteCount }
+                    + contradictions.reduce(0) { $0 + $1.payloadUTF8ByteCount },
+                cleanupEvidenceBytes: persistedCleanupBytes,
+                completedReconciliationEpisodeCount: completedReconciliationEpisodes.count,
+                activeReconciliationEpisodeCount: activeReconciliationEpisodes.count,
+                reconciliationEvidenceBytes: reconciliationEvidenceBytes
             )
         }
+    }
+
+    private func fullIncorporationEvidenceBytes(
+        roots: [IncorporatedSyncBatch],
+        noteEffects: [IncorporatedBatchNoteEffect],
+        operationIdentities: [IncorporatedBatchOperationIdentity],
+        resultEvidence: [IncorporatedBatchResultEvidence]
+    ) -> Int {
+        roots.reduce(0) {
+            $0
+                + $1.affectedNotesPayloadData.count
+                + $1.authoritativeChildBytes
+                + ($1.postCommitWorkPayloadData?.count ?? 0)
+                + $1.postCommitStatePayloadData.count
+        }
+        + noteEffects.reduce(0) {
+            $0
+                + ($1.preTitleKeyPayloadData?.count ?? 0)
+                + ($1.postTitleKeyPayloadData?.count ?? 0)
+        }
+        + operationIdentities.reduce(0) { $0 + $1.payloadUTF8ByteCount }
+        + resultEvidence.reduce(0) { $0 + $1.payloadUTF8ByteCount }
     }
 
     private func affectedNoteIDs(in batches: [SyncBatch]) -> Set<UUID> {
