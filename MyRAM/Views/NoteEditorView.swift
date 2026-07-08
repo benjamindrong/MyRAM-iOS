@@ -1342,7 +1342,7 @@ struct NoteEditorView: View {
         case .metadataOnly:
             applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
         case .reload(let reason):
-            reloadNoteFromSync(reason: reason, update: update)
+            applyRemoteEditorReloadIfSafe(reason: reason, update: update)
         case .deferred:
             break
         case .ignored:
@@ -1356,14 +1356,7 @@ struct NoteEditorView: View {
     ) {
         guard let metadata else { return }
 
-        let decision = ActiveEditorApplicationPolicy.metadataDecision(
-            editorBufferOwner: editorBufferOwner,
-            hasPendingNoteCommit: hasPendingNoteCommit,
-            hasActivePinnedTextEdit: hasActivePinnedThoughtEdit,
-            hasMarkedText: editorSyncBridge.hasMarkedText,
-            isApplyingUndo: isApplyingUndo,
-            selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id
-        )
+        let decision = activeEditorStateDecision(selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id)
 
         switch decision {
         case .apply:
@@ -1373,6 +1366,17 @@ struct NoteEditorView: View {
         case .deferUntilReintegration, .ignore:
             break
         }
+    }
+
+    private func activeEditorStateDecision(selectedNoteMatches: Bool) -> ActiveEditorStateApplicationDecision {
+        ActiveEditorApplicationPolicy.stateDecision(
+            editorBufferOwner: editorBufferOwner,
+            hasPendingNoteCommit: hasPendingNoteCommit,
+            hasActivePinnedTextEdit: hasActivePinnedThoughtEdit,
+            hasMarkedText: editorSyncBridge.hasMarkedText,
+            isApplyingUndo: isApplyingUndo,
+            selectedNoteMatches: selectedNoteMatches
+        )
     }
 
     private func publishRemoteTitle(_ remoteTitle: String, update: ActiveEditorSyncUpdate) {
@@ -1427,20 +1431,24 @@ struct NoteEditorView: View {
                 applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
             case .requiresReload(let reason):
                 editorBufferOwner = .idle
-                reloadNoteFromSync(reason: reason, update: update)
+                applyRemoteEditorReloadIfSafe(reason: reason, update: update)
             }
         case .`defer`:
             break
         case .reload(let reason):
-            reloadNoteFromSync(reason: reason, update: update)
+            applyRemoteEditorReloadIfSafe(reason: reason, update: update)
         case .ignore:
             break
         }
     }
 
-    private func reloadNoteFromSync(reason: ActiveEditorReloadReason, update: ActiveEditorSyncUpdate) {
-        guard update.noteID == note.id else { return }
-        applyRemoteNoteRefresh(reason: reason)
+    private func applyRemoteEditorReloadIfSafe(reason: ActiveEditorReloadReason, update: ActiveEditorSyncUpdate) {
+        switch activeEditorStateDecision(selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id) {
+        case .apply:
+            applyRemoteNoteRefresh(reason: reason)
+        case .deferUntilReintegration, .ignore:
+            break
+        }
     }
 
     private func applyRemoteNoteRefresh(reason: ActiveEditorReloadReason) {

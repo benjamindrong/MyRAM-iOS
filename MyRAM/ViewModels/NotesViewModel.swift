@@ -1498,10 +1498,10 @@ final class NotesViewModel: ObservableObject {
             nextBatch: { [pendingIncomingBatches] in pendingIncomingBatches.first },
             apply: { batch in try applier.apply(batch) },
             remove: { [pendingIncomingBatches] batchID in pendingIncomingBatches.remove(batchID) },
-            didApply: { [weak self] batch, appliedEditorBatches in
+            didApply: { [weak self] batch, applyResult in
                 guard let self else { return }
                 refreshCurrentFolderContent()
-                publishActiveEditorUpdate(from: batch, appliedEditorBatches: appliedEditorBatches)
+                publishActiveEditorUpdate(from: batch, applyResult: applyResult)
                 syncBatchErrorMessage = nil
                 onDrainBatchApplied?(batch)
             }
@@ -1520,27 +1520,31 @@ final class NotesViewModel: ObservableObject {
 
     private func publishActiveEditorUpdate(
         from sourceBatch: SyncBatch,
-        appliedEditorBatches: [AppliedEditorMutationBatch]
+        applyResult: IPhoneSyncBatchApplyResult
     ) {
         guard let activeNoteID = currentNote?.id else { return }
+        guard applyResult.disposition == .applied else { return }
 
-        let metadata = activeEditorMetadataUpdate(for: activeNoteID, in: sourceBatch)
-        let bodyBatch = appliedEditorBatches.first { $0.noteID == activeNoteID }
+        let metadata = activeEditorMetadataUpdate(for: activeNoteID, in: applyResult.appliedTitleChanges)
+        let bodyBatch = applyResult.editorMutationBatches.first { $0.noteID == activeNoteID }
 
         switch (metadata, bodyBatch) {
         case let (metadata?, bodyBatch?):
             activeEditorSyncUpdate = ActiveEditorSyncUpdate(
+                id: sourceBatch.id,
                 noteID: activeNoteID,
                 metadata: metadata,
                 disposition: .apply(bodyBatch)
             )
         case let (nil, bodyBatch?):
             activeEditorSyncUpdate = ActiveEditorSyncUpdate(
+                id: sourceBatch.id,
                 noteID: activeNoteID,
                 disposition: .apply(bodyBatch)
             )
         case let (metadata?, nil):
             activeEditorSyncUpdate = ActiveEditorSyncUpdate(
+                id: sourceBatch.id,
                 noteID: activeNoteID,
                 metadata: metadata,
                 disposition: .metadataOnly
@@ -1550,15 +1554,13 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func activeEditorMetadataUpdate(for noteID: UUID, in sourceBatch: SyncBatch) -> ActiveEditorMetadataUpdate? {
-        var title: String?
-        for change in sourceBatch.changes {
-            guard case .noteTitleChanged(let titleChange) = change,
-                  titleChange.noteID == noteID else { continue }
-            title = titleChange.title
+    private func activeEditorMetadataUpdate(
+        for noteID: UUID,
+        in appliedTitleChanges: [AppliedSyncBatchTitleChange]
+    ) -> ActiveEditorMetadataUpdate? {
+        guard let title = appliedTitleChanges.last(where: { $0.noteID == noteID })?.title else {
+            return nil
         }
-
-        guard title != nil else { return nil }
         return ActiveEditorMetadataUpdate(title: title)
     }
 

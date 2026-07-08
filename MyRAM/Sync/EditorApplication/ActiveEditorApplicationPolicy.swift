@@ -70,7 +70,7 @@ enum ActiveEditorApplicationDecision: Equatable {
     case ignore(ActiveEditorIgnoredReason)
 }
 
-enum ActiveEditorMetadataApplicationDecision: Equatable {
+enum ActiveEditorStateApplicationDecision: Equatable {
     case apply
     case deferUntilReintegration(ActiveEditorDeferredReason)
     case ignore(ActiveEditorIgnoredReason)
@@ -90,10 +90,6 @@ enum ActiveEditorApplicationPolicy {
             return .ignore(.targetNoteIsNotActive)
         }
 
-        guard editorAvailable else {
-            return .reload(.editorUnavailable)
-        }
-
         if let deferredReason = sharedDeferredReason(
             editorBufferOwner: editorBufferOwner,
             hasPendingNoteCommit: hasPendingNoteCommit,
@@ -104,17 +100,21 @@ enum ActiveEditorApplicationPolicy {
             return .`defer`(deferredReason)
         }
 
+        guard editorAvailable else {
+            return .reload(.editorUnavailable)
+        }
+
         return .applyIncrementally
     }
 
-    static func metadataDecision(
+    static func stateDecision(
         editorBufferOwner: EditorBufferOwner,
         hasPendingNoteCommit: Bool,
         hasActivePinnedTextEdit: Bool,
         hasMarkedText: Bool,
         isApplyingUndo: Bool,
         selectedNoteMatches: Bool
-    ) -> ActiveEditorMetadataApplicationDecision {
+    ) -> ActiveEditorStateApplicationDecision {
         guard selectedNoteMatches else {
             return .ignore(.targetNoteIsNotActive)
         }
