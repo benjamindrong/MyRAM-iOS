@@ -1344,8 +1344,10 @@ struct NoteEditorView: View {
         case .reload(let reason):
             applyRemoteEditorReloadIfSafe(reason: reason, update: update)
         case .deferred:
+            acknowledgeConvergencePresentation(update, result: .stillPending)
             break
         case .ignored:
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
             break
         }
     }
@@ -1363,7 +1365,11 @@ struct NoteEditorView: View {
             if let remoteTitle = metadata.title {
                 publishRemoteTitle(remoteTitle, update: update)
             }
-        case .deferUntilReintegration, .ignore:
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+        case .deferUntilReintegration:
+            acknowledgeConvergencePresentation(update, result: .stillPending)
+        case .ignore:
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
             break
         }
     }
@@ -1424,20 +1430,28 @@ struct NoteEditorView: View {
                 }
                 applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
                 refreshUndoState()
+                if update.metadata == nil {
+                    acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+                }
             case .noApplicableMutations:
                 if editorBufferOwner == .applyingRemoteSync {
                     editorBufferOwner = .idle
                 }
                 applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
+                if update.metadata == nil {
+                    acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+                }
             case .requiresReload(let reason):
                 editorBufferOwner = .idle
                 applyRemoteEditorReloadIfSafe(reason: reason, update: update)
             }
         case .`defer`:
+            acknowledgeConvergencePresentation(update, result: .stillPending)
             break
         case .reload(let reason):
             applyRemoteEditorReloadIfSafe(reason: reason, update: update)
         case .ignore:
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
             break
         }
     }
@@ -1446,9 +1460,21 @@ struct NoteEditorView: View {
         switch activeEditorStateDecision(selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id) {
         case .apply:
             applyRemoteNoteRefresh(reason: reason)
-        case .deferUntilReintegration, .ignore:
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+        case .deferUntilReintegration:
+            acknowledgeConvergencePresentation(update, result: .stillPending)
+            break
+        case .ignore:
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
             break
         }
+    }
+
+    private func acknowledgeConvergencePresentation(
+        _ update: ActiveEditorSyncUpdate,
+        result: SyncConvergencePostCommitAdapterResult
+    ) {
+        vm.acknowledgeActiveEditorSyncUpdate(id: update.id, noteID: update.noteID, result: result)
     }
 
     private func applyRemoteNoteRefresh(reason: ActiveEditorReloadReason) {

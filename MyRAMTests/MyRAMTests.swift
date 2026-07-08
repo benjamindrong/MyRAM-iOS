@@ -2149,6 +2149,45 @@ final class MyRAMTests: XCTestCase {
         XCTAssertNil(change.baseContentHash)
     }
 
+    func testReadyLocalBatchRegistersConvergenceEvidenceBeforeTransport() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let recorder = RecordingSyncController()
+        let note = Note(title: "Shared", content: "Hello")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-000000127501")!
+        context.insert(note)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: recorder,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            syncBatchQuietWindow: 0
+        )
+
+        vm.commitNoteEdit(note, title: "Renamed", content: "Hello world")
+        for _ in 0..<20 where recorder.recordedBatches.isEmpty {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+
+        let batch = try XCTUnwrap(recorder.recordedBatches.first)
+        let retained = try context.fetch(FetchDescriptor<RetainedBodyOperation>())
+        XCTAssertEqual(retained.count, 1)
+        let operation = try XCTUnwrap(retained.first)
+        XCTAssertEqual(operation.sourceRaw, SyncConvergenceRetainedOperationSource.local.rawValue)
+        XCTAssertEqual(operation.batchID, batch.id)
+        XCTAssertEqual(operation.noteID, note.id)
+        XCTAssertEqual(operation.operationKindRaw, SyncConvergencePlannedBodyOperation.Kind.insert.rawValue)
+        XCTAssertEqual(operation.baseContentHash, SyncBatchContentHash.sha256Hex(for: "Hello"))
+        XCTAssertEqual(operation.resultContentHash, SyncBatchContentHash.sha256Hex(for: "Hello world"))
+
+        let winners = try context.fetch(FetchDescriptor<NoteTitleWinner>())
+        XCTAssertEqual(winners.count, 1)
+        XCTAssertEqual(winners.first?.noteID, note.id)
+        XCTAssertEqual(winners.first?.title, "Renamed")
+    }
+
     func testIPhoneIncomingHashedMismatchRemainsQueuedAndBlocksLaterBatch() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -6127,17 +6166,14 @@ final class MyRAMTests: XCTestCase {
         isStoredInMemoryOnly: Bool,
         configurationName: String = "MyRAMTests"
     ) throws -> ModelContainer {
-        let schema = Schema([Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self])
+        let schema = Schema(MyRAMModelRegistry.models)
         let configuration = ModelConfiguration(
             configurationName,
             schema: schema,
             isStoredInMemoryOnly: isStoredInMemoryOnly
         )
 
-        return try ModelContainer(
-            for: Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self,
-            configurations: configuration
-        )
+        return try ModelContainer(for: schema, configurations: configuration)
     }
 
     private func makeMountedEditorFixture(

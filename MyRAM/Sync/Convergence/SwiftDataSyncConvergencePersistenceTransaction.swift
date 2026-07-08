@@ -159,6 +159,13 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
     }
 
     func insertRetainedOperation(_ record: SyncConvergenceRetainedOperationRecord) throws {
+        try insertRetainedOperation(record, source: .remote)
+    }
+
+    func insertRetainedOperation(
+        _ record: SyncConvergenceRetainedOperationRecord,
+        source: SyncConvergenceRetainedOperationSource
+    ) throws {
         context.insert(RetainedBodyOperation(
             noteID: record.noteID,
             batchID: record.batchID,
@@ -173,7 +180,7 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
             resultContentHash: record.resultContentHash,
             modifiedAt: record.modifiedAt,
             canonicalReplayKeyPayloadData: try record.canonicalReplayKey.encodedEvidenceData(),
-            sourceRaw: SyncConvergenceRetainedOperationSource.remote.rawValue
+            sourceRaw: source.rawValue
         ))
     }
 

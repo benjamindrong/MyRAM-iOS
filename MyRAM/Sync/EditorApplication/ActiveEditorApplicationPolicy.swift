@@ -48,6 +48,7 @@ enum ActiveEditorReloadReason: Equatable {
     case postApplyBodyMismatch
     case unsupportedIntegratedChange
     case partialBatchApplication
+    case authoritativeConvergencePresentation
 }
 
 enum ActiveEditorDeferredReason: Equatable {
