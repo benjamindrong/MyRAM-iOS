@@ -4,11 +4,19 @@ import UIKit
 final class UIKitEditorSyncBridge: ObservableObject {
     weak var textView: UITextView?
     var publishAttributedText: ((NSAttributedString) -> Void)?
+    var onMarkedTextEnded: (() -> Void)?
 
     private(set) var isApplyingRemoteSync = false
+    private var previouslyHadMarkedText = false
 
     var hasMarkedText: Bool {
         textView?.markedTextRange != nil
+    }
+
+    func observeMarkedTextState(_ hasMarkedText: Bool) {
+        defer { previouslyHadMarkedText = hasMarkedText }
+        guard previouslyHadMarkedText, !hasMarkedText else { return }
+        onMarkedTextEnded?()
     }
 
     func apply(

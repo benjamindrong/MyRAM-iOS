@@ -1596,52 +1596,6 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func publishActiveEditorUpdate(
-        from sourceBatch: SyncBatch,
-        applyResult: IPhoneSyncBatchApplyResult
-    ) {
-        guard let activeNoteID = currentNote?.id else { return }
-        guard applyResult.disposition == .applied else { return }
-
-        let metadata = activeEditorMetadataUpdate(for: activeNoteID, in: applyResult.appliedTitleChanges)
-        let bodyBatch = applyResult.editorMutationBatches.first { $0.noteID == activeNoteID }
-
-        switch (metadata, bodyBatch) {
-        case let (metadata?, bodyBatch?):
-            activeEditorSyncUpdate = ActiveEditorSyncUpdate(
-                id: sourceBatch.id,
-                noteID: activeNoteID,
-                metadata: metadata,
-                disposition: .apply(bodyBatch)
-            )
-        case let (nil, bodyBatch?):
-            activeEditorSyncUpdate = ActiveEditorSyncUpdate(
-                id: sourceBatch.id,
-                noteID: activeNoteID,
-                disposition: .apply(bodyBatch)
-            )
-        case let (metadata?, nil):
-            activeEditorSyncUpdate = ActiveEditorSyncUpdate(
-                id: sourceBatch.id,
-                noteID: activeNoteID,
-                metadata: metadata,
-                disposition: .metadataOnly
-            )
-        case (nil, nil):
-            return
-        }
-    }
-
-    private func activeEditorMetadataUpdate(
-        for noteID: UUID,
-        in appliedTitleChanges: [AppliedSyncBatchTitleChange]
-    ) -> ActiveEditorMetadataUpdate? {
-        guard let title = appliedTitleChanges.last(where: { $0.noteID == noteID })?.title else {
-            return nil
-        }
-        return ActiveEditorMetadataUpdate(title: title)
-    }
-
     private func publishActiveEditorReload(noteID: UUID?, reason: ActiveEditorReloadReason) {
         guard let noteID,
               currentNote?.id == noteID else { return }

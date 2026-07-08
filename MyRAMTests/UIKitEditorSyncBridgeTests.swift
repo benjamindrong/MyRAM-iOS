@@ -126,6 +126,19 @@ final class UIKitEditorSyncBridgeTests: XCTestCase {
         XCTAssertEqual(delegate.unsuppressedChangeCount, 0)
     }
 
+    func testMarkedTextEndPublishesOnceWithoutContentChange() {
+        let bridge = UIKitEditorSyncBridge()
+        var callbackCount = 0
+        bridge.onMarkedTextEnded = { callbackCount += 1 }
+
+        bridge.observeMarkedTextState(true)
+        bridge.observeMarkedTextState(true)
+        bridge.observeMarkedTextState(false)
+        bridge.observeMarkedTextState(false)
+
+        XCTAssertEqual(callbackCount, 1)
+    }
+
     private func makeTextView(_ string: String) -> UITextView {
         let textView = EditorTextViewFactory.makeEditorTextView(
             backgroundColor: .systemBackground,

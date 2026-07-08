@@ -399,6 +399,7 @@ struct NoteEditorView: View {
             tintColor: editorChromeStyle.editorTintUIColor,
             onContentChanged: handleContentChanged,
             onRemoteAttributedTextPublished: publishRemoteAttributedText,
+            onMarkedTextEnded: vm.resumePendingConvergencePresentationIfNeeded,
             onUndoManagerChanged: updateActiveUndoManager,
             onFormattingStateChanged: handleFormattingStateChanged,
             onEditingFocusChanged: handleEditorFocusChanged,
@@ -1398,7 +1399,6 @@ struct NoteEditorView: View {
         )
     }
 
-    @discardableResult
     private func publishRemoteTitle(_ remoteTitle: String, update: ActiveEditorSyncUpdate) -> Bool {
         guard title != remoteTitle else {
             pendingRemoteTitlePublication = nil
@@ -1548,6 +1548,7 @@ struct NoteEditorView: View {
                 lastSnapshot = currentNoteSnapshot()
                 trimUndoHistory(afterRestoring: lastSnapshot)
                 refreshUndoState()
+                vm.resumePendingConvergencePresentationIfNeeded()
             }
             return
         }
@@ -2883,6 +2884,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let tintColor: UIColor?
     let onContentChanged: (String, EditorRichTextContentUpdate) -> Void
     let onRemoteAttributedTextPublished: (NSAttributedString) -> Void
+    let onMarkedTextEnded: () -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
     let onFormattingStateChanged: (EditorFormattingState) -> Void
     let onEditingFocusChanged: (Bool) -> Void
@@ -2899,6 +2901,7 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.textView = textView
         syncBridge.textView = textView
         syncBridge.publishAttributedText = onRemoteAttributedTextPublished
+        syncBridge.onMarkedTextEnded = onMarkedTextEnded
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
         textView.delegate = context.coordinator
@@ -2914,6 +2917,7 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.textView = textView
         syncBridge.textView = textView
         syncBridge.publishAttributedText = onRemoteAttributedTextPublished
+        syncBridge.onMarkedTextEnded = onMarkedTextEnded
         context.coordinator.formattingController = formattingController
         context.coordinator.installFormattingControllerHandler()
         context.coordinator.installChecklistTapRecognizer(on: textView)
@@ -3243,6 +3247,7 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func textViewDidChange(_ textView: UITextView) {
+            syncBridge.observeMarkedTextState(textView.markedTextRange != nil)
             guard !syncBridge.isApplyingRemoteSync else { return }
             let textChangeSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
             os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.textViewDidChange", signpostID: textChangeSignpostID)
@@ -3258,6 +3263,7 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         func textViewDidChangeSelection(_ textView: UITextView) {
+            syncBridge.observeMarkedTextState(textView.markedTextRange != nil)
             let selectionChangeSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
             os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.textViewDidChangeSelection", signpostID: selectionChangeSignpostID)
             defer {
