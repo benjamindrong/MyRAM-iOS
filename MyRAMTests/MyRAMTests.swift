@@ -116,10 +116,12 @@ final class MyRAMTests: XCTestCase {
         let container: ModelContainer
         let context: ModelContext
         let queueFileURL: URL
+        let localQueueFileURL: URL
         let conflictFileURL: URL
         let recorder: RecordingSyncController
         let vm: NotesViewModel
         let note: Note
+        let noteID: UUID
         let bridge: NoteEditorToolbarBridge
         let window: UIWindow
         let hostingController: UIHostingController<NoteEditorView>
@@ -127,8 +129,11 @@ final class MyRAMTests: XCTestCase {
 
         @MainActor
         func unmount() {
+            vm.selectNote(nil)
+            vm.unregisterActiveEditor(noteID: noteID)
             window.rootViewController = nil
             window.isHidden = true
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
     }
 
@@ -2192,6 +2197,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2206,6 +2212,7 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             bodyHashCapabilityEnabled: true,
             syncBatchQuietWindow: 0
         )
@@ -2257,6 +2264,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2271,6 +2279,7 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             bodyHashCapabilityEnabled: true,
             syncBatchQuietWindow: 0
         )
@@ -2299,6 +2308,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2314,6 +2324,7 @@ final class MyRAMTests: XCTestCase {
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
             pendingIncomingBatchQueueLimit: 1,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
 
@@ -2346,6 +2357,7 @@ final class MyRAMTests: XCTestCase {
         let queueFileURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("ios-pending-incoming-batch-queue.json")
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         try FileManager.default.createDirectory(at: queueFileURL, withIntermediateDirectories: true)
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
@@ -2357,6 +2369,7 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
 
@@ -2369,6 +2382,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2384,6 +2398,7 @@ final class MyRAMTests: XCTestCase {
             syncController: recorder,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
         vm.selectNote(note)
@@ -2402,13 +2417,10 @@ final class MyRAMTests: XCTestCase {
             ]
         ))
 
+        XCTAssertNil(vm.syncBatchErrorMessage)
         XCTAssertEqual(note.title, "Remote Title")
         XCTAssertEqual(note.content, "body")
-        let update = try XCTUnwrap(vm.activeEditorSyncUpdate)
-        XCTAssertEqual(update.id, batchID)
-        XCTAssertEqual(update.noteID, note.id)
-        XCTAssertEqual(update.metadata, ActiveEditorMetadataUpdate(title: "Remote Title"))
-        XCTAssertEqual(update.disposition, .metadataOnly)
+        XCTAssertNil(vm.activeEditorSyncUpdate)
         XCTAssertTrue(recorder.recordedBatches.isEmpty)
     }
 
@@ -2416,6 +2428,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2431,6 +2444,7 @@ final class MyRAMTests: XCTestCase {
             syncController: recorder,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
         vm.selectNote(note)
@@ -2457,23 +2471,7 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(note.title, "Remote Mixed Title")
         XCTAssertEqual(note.content, "Hello remote")
-        let update = try XCTUnwrap(vm.activeEditorSyncUpdate)
-        XCTAssertEqual(update.id, batchID)
-        XCTAssertEqual(update.noteID, note.id)
-        XCTAssertEqual(update.metadata, ActiveEditorMetadataUpdate(title: "Remote Mixed Title"))
-        guard case .apply(let batch) = update.disposition else {
-            return XCTFail("Expected composite body apply update")
-        }
-        XCTAssertEqual(batch.noteID, note.id)
-        XCTAssertEqual(batch.authoritativeBody, "Hello remote")
-        XCTAssertEqual(batch.mutations, [
-            .bodyInsertion(AppliedEditorBodyInsertion(
-                noteID: note.id,
-                utf16Offset: "Hello".utf16.count,
-                text: " remote",
-                modifiedAt: Date(timeIntervalSince1970: 5)
-            ))
-        ])
+        XCTAssertNil(vm.activeEditorSyncUpdate)
         XCTAssertTrue(recorder.recordedBatches.isEmpty)
     }
 
@@ -2481,6 +2479,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2498,6 +2497,7 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
         vm.selectNote(activeNote)
@@ -2525,6 +2525,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2539,26 +2540,27 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
         vm.selectNote(note)
         let batch = titleOnlyBatch(noteID: note.id, title: "Remote")
 
         await vm.applyIncomingSyncBatch(batch)
-        let firstUpdate = try XCTUnwrap(vm.activeEditorSyncUpdate)
-        XCTAssertEqual(firstUpdate.id, batch.id)
+        XCTAssertNil(vm.activeEditorSyncUpdate)
         note.title = "Newer Local"
         try context.save()
         await vm.applyIncomingSyncBatch(batch)
 
         XCTAssertEqual(note.title, "Newer Local")
-        XCTAssertEqual(vm.activeEditorSyncUpdate, firstUpdate)
+        XCTAssertNil(vm.activeEditorSyncUpdate)
     }
 
     func testDuplicateMixedIncomingBatchDoesNotRepublishEditorUpdate() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2573,6 +2575,7 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
         vm.selectNote(note)
@@ -2596,7 +2599,7 @@ final class MyRAMTests: XCTestCase {
         )
 
         await vm.applyIncomingSyncBatch(batch)
-        let firstUpdate = try XCTUnwrap(vm.activeEditorSyncUpdate)
+        XCTAssertNil(vm.activeEditorSyncUpdate)
         note.title = "Newer Local"
         note.content = "Local body"
         try context.save()
@@ -2604,7 +2607,7 @@ final class MyRAMTests: XCTestCase {
 
         XCTAssertEqual(note.title, "Newer Local")
         XCTAssertEqual(note.content, "Local body")
-        XCTAssertEqual(vm.activeEditorSyncUpdate, firstUpdate)
+        XCTAssertNil(vm.activeEditorSyncUpdate)
     }
 
     func testMountedEditorMetadataOnlyRemoteTitleIsNotRecaptured() async throws {
@@ -2654,9 +2657,7 @@ final class MyRAMTests: XCTestCase {
         }
         try await waitPastEditorCommitDelay()
 
-        guard case .apply = try XCTUnwrap(fixture.vm.activeEditorSyncUpdate).disposition else {
-            return XCTFail("Expected one composite apply update")
-        }
+        XCTAssertNil(fixture.vm.activeEditorSyncUpdate)
         XCTAssertEqual(fixture.note.title, "Remote Mixed Title")
         XCTAssertEqual(fixture.note.content, "Hello remote")
         XCTAssertTrue(fixture.recorder.recordedBatches.isEmpty)
@@ -2791,24 +2792,11 @@ final class MyRAMTests: XCTestCase {
         XCTAssertFalse(fixture.bridge.canUndo)
     }
 
-    func testNestedIncomingDrainDoesNotClearRemoteApplySuppression() async throws {
-        // NotesViewModel's applier uses the default UserDefaults-backed seen-batch store,
-        // which persists across test runs on the same simulator. Clear just this test's
-        // batch IDs so a prior run (including a crashed one) can't make this run's batches
-        // look already-applied.
-        let seenBatchIDsKey = SyncBatchSeenBatchStore.defaultSeenBatchIDsKey
-        let thisTestBatchIDStrings: Set<String> = [
-            "00000000-0000-0000-0000-000000128101",
-            "00000000-0000-0000-0000-000000128102"
-        ]
-        UserDefaults.standard.set(
-            (UserDefaults.standard.stringArray(forKey: seenBatchIDsKey) ?? []).filter { !thisTestBatchIDStrings.contains($0) },
-            forKey: seenBatchIDsKey
-        )
-
+    func testConvergenceRuntimeProcessesQueuedIncomingBatchesSerially() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer {
             try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
@@ -2852,8 +2840,8 @@ final class MyRAMTests: XCTestCase {
                 )
             ]
         )
-        // Pre-enqueue both batches directly so the view model's own drain loop, once
-        // started, has a second queued batch to process after the nested attempt.
+        // Pre-enqueue both batches directly so one convergence drain must serialize
+        // all queued work without the removed legacy direct-applier callback path.
         try FileBackedSyncBatchQueue(fileURL: queueFileURL).enqueueIncoming(firstBatch)
         try FileBackedSyncBatchQueue(fileURL: queueFileURL).enqueueIncoming(secondBatch)
 
@@ -2862,27 +2850,16 @@ final class MyRAMTests: XCTestCase {
             syncController: nil,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
 
-        var suppressionDuringSecondBatch: Bool?
-        vm.onDrainBatchApplied = { [weak vm] batch in
-            guard let vm else { return }
-            if batch.id == firstBatch.id {
-                // Simulate a callback or refresh path re-entering the drain while the
-                // outer drain triggered by `applyIncomingSyncBatch` below is still active.
-                vm.drainPendingIncomingSyncBatchesForTesting()
-            } else if batch.id == secondBatch.id {
-                suppressionDuringSecondBatch = vm.isApplyingRemoteSyncChange
-            }
-        }
-
         await vm.applyIncomingSyncBatch(firstBatch)
 
-        XCTAssertEqual(suppressionDuringSecondBatch, true)
         XCTAssertFalse(vm.isApplyingRemoteSyncChange)
         XCTAssertEqual(noteA.content, "hello remote-a")
         XCTAssertEqual(noteB.content, "world remote-b")
+        XCTAssertTrue(FileBackedSyncBatchQueue(fileURL: queueFileURL).pendingBatches.isEmpty)
     }
 
     func testSelectionFormattingPolicyAllowsSmallSelectionScan() {
@@ -6183,6 +6160,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
         let conflictFileURL = temporarySyncConflictFileURL()
         let recorder = RecordingSyncController()
         let note = Note(title: title, content: content)
@@ -6194,9 +6172,11 @@ final class MyRAMTests: XCTestCase {
             syncController: recorder,
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
             syncBatchQuietWindow: 0
         )
         vm.selectNote(note)
+        vm.registerActiveEditor(noteID: note.id)
         let bridge = NoteEditorToolbarBridge()
         let view = NoteEditorView(
             vm: vm,
@@ -6217,10 +6197,12 @@ final class MyRAMTests: XCTestCase {
             container: container,
             context: context,
             queueFileURL: queueFileURL,
+            localQueueFileURL: localQueueFileURL,
             conflictFileURL: conflictFileURL,
             recorder: recorder,
             vm: vm,
             note: note,
+            noteID: note.id,
             bridge: bridge,
             window: window,
             hostingController: hostingController,

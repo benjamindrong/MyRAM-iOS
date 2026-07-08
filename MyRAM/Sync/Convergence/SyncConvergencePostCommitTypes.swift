@@ -102,6 +102,11 @@ protocol SyncConvergencePostCommitStateStore {
     ) throws -> SyncConvergencePostCommitFullRootState
 }
 
+protocol SyncConvergencePendingPostCommitSource {
+    func loadPendingPostCommitRequests() throws -> [SyncConvergencePostCommitRequest]
+    func loadPostCommitRequest(forBatchID batchID: UUID) throws -> SyncConvergencePostCommitRequest?
+}
+
 protocol SyncConvergenceQueueCleanupAdapter {
     func removeBatches(withIDs ids: Set<SyncBatchID>) throws
     func containsBatch(withID id: SyncBatchID) throws -> Bool
@@ -220,6 +225,10 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
                 guard incrementalOperations.isEmpty else {
                     throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
                 }
+            case .none:
+                guard incrementalOperations.isEmpty else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+                }
             }
             let operationIndices = incrementalOperations.map(\.operationIndex)
             guard operationIndices == Set(operationIndices).sorted() else {
@@ -307,6 +316,7 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
 enum SyncConvergencePostCommitPresentationRoutingPayload: String, Codable, Equatable, Sendable {
     case incremental
     case wholeNoteFallback
+    case none
 
     var routing: SyncConvergencePresentationRouting {
         switch self {
@@ -314,6 +324,8 @@ enum SyncConvergencePostCommitPresentationRoutingPayload: String, Codable, Equat
             return .incremental
         case .wholeNoteFallback:
             return .wholeNoteFallback
+        case .none:
+            return .none
         }
     }
 
@@ -324,7 +336,7 @@ enum SyncConvergencePostCommitPresentationRoutingPayload: String, Codable, Equat
         case .wholeNoteFallback:
             self = .wholeNoteFallback
         case .none:
-            return nil
+            self = .none
         }
     }
 }

@@ -139,29 +139,31 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
     }
 
     private func loadRoot(batchID: UUID) throws -> SyncConvergenceIncorporatedRootProjection? {
-        try fetchOne(IncorporatedSyncBatch.self, #Predicate { $0.batchID == batchID }).map { root in
-            let committedAtOrderingPayload = CommittedAtOrderingPayload(batchID: root.batchID, committedAt: root.committedAt)
-            try committedAtOrderingPayload.validate(against: root)
-            return SyncConvergenceIncorporatedRootProjection(
-                batchID: root.batchID,
-                originDeviceID: root.originDeviceID,
-                createdAt: root.createdAt,
-                batchSequence: root.batchSequence,
-                schemaVersion: root.schemaVersion,
-                committedAt: root.committedAt,
-                canonicalPayloadDigest: root.canonicalPayloadDigest,
-                canonicalPayloadDigestFormatVersion: root.canonicalPayloadDigestFormatVersion,
-                committedResultDigest: root.committedResultDigest,
-                committedResultDigestFormatVersion: root.committedResultDigestFormatVersion,
-                committedAtOrderingPayloadData: try committedAtOrderingPayload.encodedEvidenceData(),
-                affectedNotesPayloadData: root.affectedNotesPayloadData,
-                authoritativeChildCount: root.authoritativeChildCount,
-                authoritativeChildBytes: root.authoritativeChildBytes,
-                authoritativeChildrenDigest: root.authoritativeChildrenDigest,
-                postCommitWorkPayloadData: root.postCommitWorkPayloadData,
-                postCommitStatePayloadData: root.postCommitStatePayloadData
-            )
-        }
+        try fetchOne(IncorporatedSyncBatch.self, #Predicate { $0.batchID == batchID }).map(rootProjection)
+    }
+
+    private func rootProjection(_ root: IncorporatedSyncBatch) throws -> SyncConvergenceIncorporatedRootProjection {
+        let committedAtOrderingPayload = CommittedAtOrderingPayload(batchID: root.batchID, committedAt: root.committedAt)
+        try committedAtOrderingPayload.validate(against: root)
+        return SyncConvergenceIncorporatedRootProjection(
+            batchID: root.batchID,
+            originDeviceID: root.originDeviceID,
+            createdAt: root.createdAt,
+            batchSequence: root.batchSequence,
+            schemaVersion: root.schemaVersion,
+            committedAt: root.committedAt,
+            canonicalPayloadDigest: root.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: root.canonicalPayloadDigestFormatVersion,
+            committedResultDigest: root.committedResultDigest,
+            committedResultDigestFormatVersion: root.committedResultDigestFormatVersion,
+            committedAtOrderingPayloadData: try committedAtOrderingPayload.encodedEvidenceData(),
+            affectedNotesPayloadData: root.affectedNotesPayloadData,
+            authoritativeChildCount: root.authoritativeChildCount,
+            authoritativeChildBytes: root.authoritativeChildBytes,
+            authoritativeChildrenDigest: root.authoritativeChildrenDigest,
+            postCommitWorkPayloadData: root.postCommitWorkPayloadData,
+            postCommitStatePayloadData: root.postCommitStatePayloadData
+        )
     }
 
     private func validateWorkPayload(
@@ -259,6 +261,80 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
     }
 }
 
+extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCommitSource {
+    func loadPendingPostCommitRequests() throws -> [SyncConvergencePostCommitRequest] {
+        let descriptor = FetchDescriptor<IncorporatedSyncBatch>(
+            sortBy: [
+                SortDescriptor(\.committedAt)
+            ]
+        )
+        return try context.fetch(descriptor)
+            .sorted {
+                if $0.committedAt != $1.committedAt { return $0.committedAt < $1.committedAt }
+                return $0.batchID.uuidString < $1.batchID.uuidString
+            }
+            .compactMap { root in
+            let projection = try rootProjection(root)
+            let state = try decodePostCommitState(root)
+            guard state != .none else { return nil }
+            return try postCommitRequest(root: projection, state: state)
+        }
+    }
+
+    func loadPostCommitRequest(forBatchID batchID: UUID) throws -> SyncConvergencePostCommitRequest? {
+        guard let root = try fetchOne(IncorporatedSyncBatch.self, #Predicate { $0.batchID == batchID }) else {
+            guard let tombstone = try loadTombstone(batchID: batchID) else {
+                return nil
+            }
+            return SyncConvergencePostCommitRequest(
+                sourceBatchID: tombstone.batchID,
+                affectedNoteIDs: [],
+                cleanupPlan: SyncConvergenceCleanupPlan(
+                    batchIDs: [tombstone.batchID],
+                    retryQueueCleanup: true,
+                    retryLegacyCleanup: false,
+                    retryPresentationRefresh: false
+                ),
+                presentationPlan: SyncConvergencePresentationPlan(noteRoutings: [:]),
+                persistedIncorporationIdentity: tombstone.persistedIdentity
+            )
+        }
+        let projection = try rootProjection(root)
+        let state = try decodePostCommitState(root)
+        guard state != .none else {
+            return nil
+        }
+        return try postCommitRequest(root: projection, state: state)
+    }
+
+    private func postCommitRequest(
+        root: SyncConvergenceIncorporatedRootProjection,
+        state: SyncConvergencePostCommitState
+    ) throws -> SyncConvergencePostCommitRequest {
+        _ = try decodeWorkPayload(root: root, state: state)
+        return SyncConvergencePostCommitRequest(
+            sourceBatchID: root.batchID,
+            affectedNoteIDs: try SyncConvergenceAffectedNotesPayloadV1.decodeData(root.affectedNotesPayloadData).noteIDs,
+            cleanupPlan: SyncConvergenceCleanupPlan(
+                batchIDs: state.queueCleanupPending ? [root.batchID] : [],
+                retryQueueCleanup: state.queueCleanupPending,
+                retryLegacyCleanup: state.legacyCleanupPending,
+                retryPresentationRefresh: state.presentationRefreshPending
+            ),
+            presentationPlan: SyncConvergencePresentationPlan(noteRoutings: [:]),
+            persistedIncorporationIdentity: root.persistedIdentity
+        )
+    }
+
+    private func decodePostCommitState(_ root: IncorporatedSyncBatch) throws -> SyncConvergencePostCommitState {
+        do {
+            return try SyncConvergencePostCommitState.decodePayloadData(root.postCommitStatePayloadData)
+        } catch {
+            throw SyncConvergencePostCommitFailure.malformedPostCommitState(batchID: root.batchID)
+        }
+    }
+}
+
 private extension IncorporatedSyncBatch {
     func matches(_ identity: SyncConvergencePersistedIncorporationIdentity) -> Bool {
         batchID == identity.batchID &&
@@ -290,6 +366,18 @@ private extension SyncConvergenceIncorporatedTombstoneProjection {
 }
 
 private extension SyncConvergenceIncorporatedRootProjection {
+    var persistedIdentity: SyncConvergencePersistedIncorporationIdentity {
+        SyncConvergencePersistedIncorporationIdentity(
+            batchID: batchID,
+            canonicalPayloadDigest: canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: canonicalPayloadDigestFormatVersion,
+            committedResultDigest: committedResultDigest,
+            committedResultDigestFormatVersion: committedResultDigestFormatVersion
+        )
+    }
+}
+
+private extension SyncConvergenceIncorporatedTombstoneProjection {
     var persistedIdentity: SyncConvergencePersistedIncorporationIdentity {
         SyncConvergencePersistedIncorporationIdentity(
             batchID: batchID,

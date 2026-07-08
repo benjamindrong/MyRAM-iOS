@@ -69,9 +69,14 @@ actor SyncConvergencePostCommitExecutor {
 
         var completed: Set<SyncConvergencePostCommitPendingWork> = []
 
-        if originalState.queueCleanupPending {
-            if (try? performQueueCleanup(batchIDs: Set(workPayload.queueCleanupBatchIDs))) == true {
-                completed.insert(.queueCleanup)
+        if originalState.presentationRefreshPending {
+            if await performPresentationRefresh(
+                request,
+                entries: workPayload.presentationEntries
+            ) == .verifiedComplete {
+                completed.insert(.presentationRefresh)
+            } else {
+                return pendingOutcome(for: originalState)
             }
         }
 
@@ -80,16 +85,21 @@ actor SyncConvergencePostCommitExecutor {
                 let result = await legacyCleanupAdapter.performLegacyCleanup(for: request)
                 if result == .verifiedComplete {
                     completed.insert(.legacyCleanup)
+                } else {
+                    return pendingOutcome(for: originalState)
                 }
+            } else {
+                return pendingOutcome(for: originalState)
             }
         }
 
-        if originalState.presentationRefreshPending {
-            if await performPresentationRefresh(
-                request,
-                entries: workPayload.presentationEntries
-            ) == .verifiedComplete {
-                completed.insert(.presentationRefresh)
+        if originalState.queueCleanupPending {
+            do {
+                if try performQueueCleanup(batchIDs: Set(workPayload.queueCleanupBatchIDs)) {
+                    completed.insert(.queueCleanup)
+                }
+            } catch {
+                return pendingOutcome(for: originalState)
             }
         }
 
@@ -121,7 +131,13 @@ actor SyncConvergencePostCommitExecutor {
         guard request.sourceBatchID == request.persistedIncorporationIdentity.batchID else {
             return .failedBeforeWork(.inconsistentIncorporationIdentity(batchID: request.sourceBatchID))
         }
-        guard (try? performQueueCleanup(batchIDs: [request.sourceBatchID])) == true else {
+        let queueCleanupComplete: Bool
+        do {
+            queueCleanupComplete = try performQueueCleanup(batchIDs: [request.sourceBatchID])
+        } catch {
+            return .pending([.queueCleanup])
+        }
+        guard queueCleanupComplete else {
             return .pending([.queueCleanup])
         }
         return .complete

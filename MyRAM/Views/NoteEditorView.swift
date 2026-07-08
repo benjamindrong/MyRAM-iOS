@@ -178,7 +178,10 @@ struct NoteEditorView: View {
 
     private var editorLifecycleContent: some View {
         editorChromeContent
-            .onAppear(perform: initializeEditor)
+            .onAppear {
+                vm.registerActiveEditor(noteID: note.id)
+                initializeEditor()
+            }
             .onChange(of: title) { _, newTitle in
                 handleObservedTitleChange(newTitle)
             }
@@ -209,6 +212,7 @@ struct NoteEditorView: View {
                 clearCurrentNoteSearch()
                 commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
+                vm.unregisterActiveEditor(noteID: note.id)
             }
             .onChange(of: focusedPinnedThoughtID) { oldValue, newValue in
                 guard oldValue != newValue else { return }
@@ -1312,12 +1316,14 @@ struct NoteEditorView: View {
         pendingRemoteTitlePublication = nil
         guard marker.noteID == note.id,
               marker.expectedTitle == observedTitle else {
+            vm.acknowledgeActiveEditorSyncUpdate(id: marker.updateID, noteID: marker.noteID, result: .stillPending)
             return false
         }
 
         alignLastSnapshotTitle(observedTitle)
         toolbarBridge?.title = observedTitle.isEmpty ? "Untitled" : observedTitle
         refreshUndoState()
+        vm.acknowledgeActiveEditorSyncUpdate(id: marker.updateID, noteID: marker.noteID, result: .verifiedComplete)
         return true
     }
 
@@ -1363,9 +1369,12 @@ struct NoteEditorView: View {
         switch decision {
         case .apply:
             if let remoteTitle = metadata.title {
-                publishRemoteTitle(remoteTitle, update: update)
+                if publishRemoteTitle(remoteTitle, update: update) {
+                    acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+                }
+            } else {
+                acknowledgeConvergencePresentation(update, result: .verifiedComplete)
             }
-            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
         case .deferUntilReintegration:
             acknowledgeConvergencePresentation(update, result: .stillPending)
         case .ignore:
@@ -1385,13 +1394,14 @@ struct NoteEditorView: View {
         )
     }
 
-    private func publishRemoteTitle(_ remoteTitle: String, update: ActiveEditorSyncUpdate) {
+    @discardableResult
+    private func publishRemoteTitle(_ remoteTitle: String, update: ActiveEditorSyncUpdate) -> Bool {
         guard title != remoteTitle else {
             pendingRemoteTitlePublication = nil
             alignLastSnapshotTitle(remoteTitle)
             toolbarBridge?.title = remoteTitle.isEmpty ? "Untitled" : remoteTitle
             refreshUndoState()
-            return
+            return true
         }
 
         pendingRemoteTitlePublication = PendingRemoteTitlePublication(
@@ -1401,6 +1411,7 @@ struct NoteEditorView: View {
         )
         title = remoteTitle
         toolbarBridge?.title = remoteTitle.isEmpty ? "Untitled" : remoteTitle
+        return false
     }
 
     private func alignLastSnapshotTitle(_ remoteTitle: String) {

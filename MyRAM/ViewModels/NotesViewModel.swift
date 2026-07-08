@@ -37,19 +37,19 @@ final class NotesViewModel: ObservableObject {
     private let syncConflictService: MyRAMSyncConflictService
     private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
     private let pendingIncomingBatches: FileBackedSyncBatchQueue
+    private let pendingLocalConvergenceBatches: FileBackedSyncBatchQueue
     private let bodyHashCapabilityEnabled: Bool
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
     private(set) var isApplyingRemoteSyncChange = false
-    private var isDrainingPendingIncomingBatches = false
+    private var mountedActiveEditorNoteID: UUID?
     private lazy var syncConvergenceRuntime = SyncConvergenceRuntime(
         context: context,
         convergenceQueue: pendingIncomingBatches,
+        localObligationQueue: pendingLocalConvergenceBatches,
         presentationAdapter: NotesViewModelConvergencePresentationAdapter(viewModel: self)
     )
     private var activeEditorPresentationAcknowledgment: ActiveEditorPresentationAcknowledgment?
-    /// Test-only hook invoked after each batch is applied and removed during an incoming drain.
-    var onDrainBatchApplied: ((SyncBatch) -> Void)?
     private var recentTextEditByNoteID: [UUID: Date] = [:]
     private var syncBatchReadyTask: Task<Void, Never>?
     private var undoStack: [UndoAction] = [] {
@@ -69,6 +69,8 @@ final class NotesViewModel: ObservableObject {
         syncConflictStore: SyncConflictStore = SyncConflictStore(),
         pendingIncomingBatchQueueFileURL: URL? = NotesViewModel.pendingIncomingBatchQueueFileURL(),
         pendingIncomingBatchQueueLimit: Int = 100,
+        pendingLocalConvergenceBatchQueueFileURL: URL? = NotesViewModel.pendingLocalConvergenceBatchQueueFileURL(),
+        pendingLocalConvergenceBatchQueueLimit: Int = 100,
         bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
         syncBatchQuietWindow: TimeInterval = 3
     ) {
@@ -78,6 +80,10 @@ final class NotesViewModel: ObservableObject {
         pendingIncomingBatches = FileBackedSyncBatchQueue(
             fileURL: pendingIncomingBatchQueueFileURL,
             limit: pendingIncomingBatchQueueLimit
+        )
+        pendingLocalConvergenceBatches = FileBackedSyncBatchQueue(
+            fileURL: pendingLocalConvergenceBatchQueueFileURL,
+            limit: pendingLocalConvergenceBatchQueueLimit
         )
         self.bodyHashCapabilityEnabled = bodyHashCapabilityEnabled
         syncBatchAccumulator = IPhoneSyncBatchAccumulator(
@@ -101,6 +107,7 @@ final class NotesViewModel: ObservableObject {
             }
         }
         syncConflicts = syncConflictService.activeConflicts()
+        resumePendingConvergencePresentationIfNeeded()
         purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
@@ -413,6 +420,10 @@ final class NotesViewModel: ObservableObject {
     }
 
     func selectNote(_ note: Note?) {
+        let previousNoteID = currentNote?.id
+        if let previousNoteID, previousNoteID != note?.id {
+            resolveActiveEditorPresentation(noteID: previousNoteID, result: .verifiedComplete)
+        }
         currentNote = note
         UserDefaults.standard.set(note?.id.uuidString, forKey: "lastNoteID")
         resumePendingConvergencePresentationIfNeeded()
@@ -1475,53 +1486,17 @@ final class NotesViewModel: ObservableObject {
         guard !batch.changes.isEmpty else { return }
         let outcome = await syncConvergenceRuntime.submitRemoteBatch(batch)
         handleConvergenceRuntimeOutcome(outcome)
-        publishMetadataOnlyConvergenceFallback(from: batch, outcome: outcome)
-    }
-
-    private func drainPendingIncomingSyncBatches() {
-        // Admission must happen, and both flags below must be fully owned, before calling
-        // into the coordinator. `didApply` can synchronously trigger a reentrant call, so a
-        // rejected nested call must never touch either flag: not `isDrainingPendingIncomingBatches`
-        // (only the active drainer may hold it) and not `isApplyingRemoteSyncChange` (only the
-        // active drainer may enable/disable remote-apply suppression).
-        guard !isDrainingPendingIncomingBatches else { return }
-
-        isDrainingPendingIncomingBatches = true
-        isApplyingRemoteSyncChange = true
-        defer {
-            isDrainingPendingIncomingBatches = false
-            isApplyingRemoteSyncChange = false
-        }
-
-        let applier = IPhoneSyncBatchApplier(context: context, bodyHashCapabilityEnabled: bodyHashCapabilityEnabled)
-        let result = SyncBatchDrainCoordinator.drain(
-            nextBatch: { [pendingIncomingBatches] in pendingIncomingBatches.first },
-            apply: { batch in try applier.apply(batch) },
-            remove: { [pendingIncomingBatches] batchID in pendingIncomingBatches.remove(batchID) },
-            didApply: { [weak self] batch, applyResult in
-                guard let self else { return }
-                refreshCurrentFolderContent()
-                publishActiveEditorUpdate(from: batch, applyResult: applyResult)
-                syncBatchErrorMessage = nil
-                onDrainBatchApplied?(batch)
-            }
-        )
-
-        if case .blocked(let failure) = result {
-            syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
-        }
-    }
-
-    /// Test-only entry point that exercises the same reentrant call path a real
-    /// nested drain trigger would take.
-    func drainPendingIncomingSyncBatchesForTesting() {
-        drainPendingIncomingSyncBatches()
     }
 
     private func handleReadyLocalBatch(_ batch: SyncBatch) async {
         let outcome = await syncConvergenceRuntime.submitLocalBatch(batch)
         handleConvergenceRuntimeOutcome(outcome)
-        sendReadySyncBatch(batch)
+        if case .drained = outcome {
+            sendReadySyncBatch(batch)
+            handleConvergenceRuntimeOutcome(
+                syncConvergenceRuntime.completeLocalTransportAcceptance(batch)
+            )
+        }
     }
 
     func resumePendingConvergencePresentationIfNeeded() {
@@ -1553,16 +1528,42 @@ final class NotesViewModel: ObservableObject {
               acknowledgment.updateID == updateID,
               acknowledgment.noteID == noteID else { return }
         activeEditorPresentationAcknowledgment = nil
+        if activeEditorSyncUpdate?.id == updateID,
+           activeEditorSyncUpdate?.noteID == noteID {
+            activeEditorSyncUpdate = nil
+        }
         acknowledgment.complete(result)
     }
 
-    fileprivate func publishConvergencePresentationUpdate(
+    func registerActiveEditor(noteID: UUID) {
+        mountedActiveEditorNoteID = noteID
+        resumePendingConvergencePresentationIfNeeded()
+    }
+
+    func unregisterActiveEditor(noteID: UUID) {
+        guard mountedActiveEditorNoteID == noteID else { return }
+        mountedActiveEditorNoteID = nil
+        let result: SyncConvergencePostCommitAdapterResult = currentNote?.id == noteID ? .stillPending : .verifiedComplete
+        resolveActiveEditorPresentation(noteID: noteID, result: result)
+    }
+
+    private func resolveActiveEditorPresentation(
+        noteID: UUID,
+        result: SyncConvergencePostCommitAdapterResult
+    ) {
+        guard let acknowledgment = activeEditorPresentationAcknowledgment,
+              acknowledgment.noteID == noteID else { return }
+        acknowledgeActiveEditorSyncUpdate(id: acknowledgment.updateID, noteID: noteID, result: result)
+    }
+
+    func publishConvergencePresentationUpdate(
         _ update: ActiveEditorSyncUpdate,
         incorporationIdentity: SyncConvergencePersistedIncorporationIdentity
     ) async -> SyncConvergencePostCommitAdapterResult {
         guard currentNote?.id == update.noteID else { return .verifiedComplete }
+        guard mountedActiveEditorNoteID == update.noteID else { return .verifiedComplete }
         if activeEditorPresentationAcknowledgment != nil {
-            return .failed
+            return .stillPending
         }
 
         return await withCheckedContinuation { continuation in
@@ -1573,14 +1574,6 @@ final class NotesViewModel: ObservableObject {
                 continuation: continuation
             )
             activeEditorSyncUpdate = update
-            Task { @MainActor [weak self, updateID = update.id, noteID = update.noteID] in
-                try? await Task.sleep(nanoseconds: 250_000_000)
-                self?.acknowledgeActiveEditorSyncUpdate(
-                    id: updateID,
-                    noteID: noteID,
-                    result: .verifiedComplete
-                )
-            }
         }
     }
 
@@ -1633,28 +1626,6 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func publishMetadataOnlyConvergenceFallback(
-        from sourceBatch: SyncBatch,
-        outcome: SyncConvergenceRuntimeOutcome
-    ) {
-        guard case .drained(let appliedBatchIDs) = outcome,
-              appliedBatchIDs.contains(sourceBatch.id),
-              activeEditorSyncUpdate?.id != sourceBatch.id,
-              let activeNoteID = currentNote?.id else { return }
-        let appliedTitleChanges = sourceBatch.changes.compactMap { change -> AppliedSyncBatchTitleChange? in
-            guard case .noteTitleChanged(let titleChange) = change,
-                  titleChange.noteID == activeNoteID else { return nil }
-            return AppliedSyncBatchTitleChange(noteID: titleChange.noteID, title: titleChange.title)
-        }
-        guard let metadata = activeEditorMetadataUpdate(for: activeNoteID, in: appliedTitleChanges) else { return }
-        activeEditorSyncUpdate = ActiveEditorSyncUpdate(
-            id: sourceBatch.id,
-            noteID: activeNoteID,
-            metadata: metadata,
-            disposition: .metadataOnly
-        )
-    }
-
     private func activeEditorMetadataUpdate(
         for noteID: UUID,
         in appliedTitleChanges: [AppliedSyncBatchTitleChange]
@@ -1676,6 +1647,10 @@ final class NotesViewModel: ObservableObject {
 
     nonisolated private static func pendingIncomingBatchQueueFileURL() -> URL? {
         SyncBatchQueueFileLocation.pendingIncoming(for: .iPhone)
+    }
+
+    nonisolated private static func pendingLocalConvergenceBatchQueueFileURL() -> URL? {
+        SyncBatchQueueFileLocation.pendingLocalConvergence(for: .iPhone)
     }
 
     private func isIncomingTextUnsafe(
@@ -2350,566 +2325,6 @@ private struct ActiveEditorPresentationAcknowledgment {
 
     func complete(_ result: SyncConvergencePostCommitAdapterResult) {
         continuation.resume(returning: result)
-    }
-}
-
-private enum SyncConvergenceRuntimeOutcome {
-    case drained(appliedBatchIDs: Set<UUID>)
-    case alreadyDraining
-    case blocked(SyncBatchDrainFailure)
-}
-
-@MainActor
-private final class SyncConvergenceRuntime {
-    private let context: ModelContext
-    private let convergenceQueue: FileBackedSyncBatchQueue
-    private let presentationAdapter: SyncConvergencePresentationAdapter
-    private let planner = SyncConvergencePlanner()
-    private let incorporationExecutor = SyncConvergenceIncorporationExecutor()
-    private lazy var postCommitExecutor = SyncConvergencePostCommitExecutor(
-        store: SwiftDataSyncConvergencePostCommitStore(context: context),
-        queueCleanupAdapter: convergenceQueue,
-        presentationAdapter: presentationAdapter
-    )
-    private var isDraining = false
-
-    init(
-        context: ModelContext,
-        convergenceQueue: FileBackedSyncBatchQueue,
-        presentationAdapter: SyncConvergencePresentationAdapter
-    ) {
-        self.context = context
-        self.convergenceQueue = convergenceQueue
-        self.presentationAdapter = presentationAdapter
-    }
-
-    func submitRemoteBatch(_ batch: SyncBatch) async -> SyncConvergenceRuntimeOutcome {
-        guard !batch.changes.isEmpty else { return .drained(appliedBatchIDs: []) }
-        if !convergenceQueue.contains(batch.id) {
-            do {
-                try convergenceQueue.enqueueIncoming(batch)
-            } catch {
-                return .blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id))
-            }
-        }
-        return await drain()
-    }
-
-    func submitLocalBatch(_ batch: SyncBatch) async -> SyncConvergenceRuntimeOutcome {
-        do {
-            try registerLocalEvidence(for: batch)
-            return .drained(appliedBatchIDs: [])
-        } catch {
-            return .blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id))
-        }
-    }
-
-    func resumePendingWork() async -> SyncConvergenceRuntimeOutcome {
-        await drain()
-    }
-
-    private func drain() async -> SyncConvergenceRuntimeOutcome {
-        guard !isDraining else { return .alreadyDraining }
-        isDraining = true
-        defer { isDraining = false }
-        var appliedBatchIDs: Set<UUID> = []
-
-        while let batch = convergenceQueue.first {
-            let input = makePlanningInput(for: batch)
-            let planning = planner.plan(input: input)
-            switch planning {
-            case .planned(let incorporationInput):
-                let incorporation = incorporationExecutor.incorporate(
-                    input: incorporationInput,
-                    transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
-                    committedAt: .now
-                )
-                switch incorporation {
-                case .incorporated(let result):
-                    appliedBatchIDs.insert(result.batchID)
-                    let postCommit = await postCommitExecutor.execute(SyncConvergencePostCommitRequest(result: result))
-                    guard postCommit == .complete else {
-                        return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
-                    }
-                case .alreadyIncorporated(let result):
-                    let postCommit = await postCommitExecutor.execute(SyncConvergencePostCommitRequest(result: result))
-                    guard postCommit == .complete else {
-                        return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
-                    }
-                case .failedBeforeCommit(let failure), .failedAndRolledBack(let failure):
-                    return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
-                }
-            case .alreadyIncorporated(let cleanupPlan):
-                if cleanupPlan.batchIDs.isEmpty {
-                    convergenceQueue.remove(batch.id)
-                } else {
-                    do {
-                        try convergenceQueue.removeBatches(withIDs: cleanupPlan.batchIDs)
-                    } catch {
-                        return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
-                    }
-                }
-            case .deferred(let reason):
-                return .blocked(Self.drainFailure(for: reason, batchID: batch.id))
-            case .failedBeforeCommit(let failure):
-                return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
-            }
-        }
-        return .drained(appliedBatchIDs: appliedBatchIDs)
-    }
-
-    private func makePlanningInput(for batch: SyncBatch) -> SyncConvergencePlanningInput {
-        let queued = convergenceQueue.pendingBatches.enumerated().map {
-            SyncConvergenceQueuedBatch(batch: $0.element, queuePosition: $0.offset)
-        }
-        let noteIDs = affectedNoteIDs(in: [batch] + convergenceQueue.pendingBatches)
-        return SyncConvergencePlanningInput(
-            incomingBatch: batch,
-            currentNotes: loadCurrentNotes(noteIDs: noteIDs),
-            retainedSnapshots: loadRetainedSnapshots(noteIDs: noteIDs),
-            retainedLocalOperations: loadRetainedOperations(noteIDs: noteIDs, source: .local),
-            retainedRemoteOperations: loadRetainedOperations(noteIDs: noteIDs, source: .remote),
-            queuedBatches: queued,
-            persistedTitleWinners: loadTitleWinners(noteIDs: noteIDs),
-            incorporatedBatches: loadIncorporatedBatches(batchIDs: Set(queued.map(\.batch.id)).union([batch.id])),
-            incorporatedTombstones: loadIncorporatedTombstones(batchIDs: Set(queued.map(\.batch.id)).union([batch.id])),
-            historyStates: noteIDs.map(SyncConvergenceHistoryAccountingProjection.empty(noteID:)),
-            candidateQueuePosition: queued.first(where: { $0.batch.id == batch.id })?.queuePosition
-        )
-    }
-
-    private func registerLocalEvidence(for batch: SyncBatch) throws {
-        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
-        try registerLocalBodyEvidence(for: batch, transaction: transaction)
-        try registerLocalTitleEvidence(for: batch, transaction: transaction)
-        try transaction.save()
-    }
-
-    private func registerLocalBodyEvidence(
-        for batch: SyncBatch,
-        transaction: SwiftDataSyncConvergencePersistenceTransaction
-    ) throws {
-        let indexedBodyChanges = batch.changes.enumerated().compactMap { index, change -> (Int, SyncBatchChange)? in
-            switch change {
-            case .noteBodyTextInserted, .noteBodyTextDeleted:
-                return (index, change)
-            case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
-                return nil
-            }
-        }
-        guard !indexedBodyChanges.isEmpty else { return }
-
-        for (noteID, changes) in Dictionary(grouping: indexedBodyChanges, by: { Self.noteID(for: $0.1) }).sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
-            guard var currentBody = try transaction.loadNote(id: noteID)?.body else {
-                continue
-            }
-            var recordsByIndex: [Int: SyncConvergenceRetainedOperationRecord] = [:]
-            for (operationIndex, change) in changes.reversed() {
-                let resultHash = SyncBatchContentHash.sha256Hex(for: currentBody)
-                let previousBody = try bodyBeforeApplying(change, currentBody: currentBody)
-                let baseHash = SyncBatchContentHash.sha256Hex(for: previousBody)
-                try validateLocalBaseHash(change, reconstructedBaseHash: baseHash)
-                recordsByIndex[operationIndex] = try retainedOperationRecord(
-                    batch: batch,
-                    change: change,
-                    operationIndex: operationIndex,
-                    baseHash: baseHash,
-                    resultHash: resultHash
-                )
-                currentBody = previousBody
-            }
-
-            for operationIndex in recordsByIndex.keys.sorted() {
-                let identity = SyncConvergenceRetainedOperationIdentity(batchID: batch.id, operationIndex: operationIndex)
-                if let existing = try transaction.loadRetainedOperation(identity: identity) {
-                    guard existing.source == .local,
-                          existing.operation == recordsByIndex[operationIndex] else {
-                        throw SyncConvergenceTransactionFailure.inconsistentIncorporationState(noteID: noteID)
-                    }
-                    continue
-                }
-                try transaction.insertRetainedOperation(recordsByIndex[operationIndex]!, source: .local)
-            }
-        }
-    }
-
-    private func registerLocalTitleEvidence(
-        for batch: SyncBatch,
-        transaction: SwiftDataSyncConvergencePersistenceTransaction
-    ) throws {
-        for (operationIndex, change) in batch.changes.enumerated() {
-            guard case .noteTitleChanged(let titleChange) = change else { continue }
-            let replayKey = CanonicalReplayKeyPayload(
-                replayKey: SyncBatchReplayKey(batch: batch, change: change, operationIndex: operationIndex)
-            )
-            let currentWinner = try transaction.loadTitleWinner(noteID: titleChange.noteID)
-            if let currentWinner,
-               try ValidatedCanonicalReplayKey(replayKey) < ValidatedCanonicalReplayKey(currentWinner.canonicalReplayKey) {
-                continue
-            }
-            try transaction.insertOrUpdateTitleWinner(SyncConvergenceTitleWinnerRecord(
-                noteID: titleChange.noteID,
-                title: titleChange.title,
-                canonicalReplayKey: replayKey,
-                operationIdentity: OperationIdentityPayload(
-                    batchID: batch.id,
-                    originDeviceID: batch.originDeviceID,
-                    operationIndex: operationIndex,
-                    operationKind: Self.operationKind(for: change),
-                    canonicalReplayKey: replayKey
-                ),
-                updatedAt: .now
-            ))
-        }
-    }
-
-    private func retainedOperationRecord(
-        batch: SyncBatch,
-        change: SyncBatchChange,
-        operationIndex: Int,
-        baseHash: String,
-        resultHash: String
-    ) throws -> SyncConvergenceRetainedOperationRecord {
-        let replayKey = CanonicalReplayKeyPayload(
-            replayKey: SyncBatchReplayKey(batch: batch, change: change, operationIndex: operationIndex)
-        )
-        switch change {
-        case .noteBodyTextInserted(let inserted):
-            return SyncConvergenceRetainedOperationRecord(
-                noteID: inserted.noteID,
-                batchID: batch.id,
-                originDeviceID: batch.originDeviceID,
-                operationIndex: operationIndex,
-                operationKind: .insert,
-                utf16Offset: inserted.utf16Offset,
-                utf16Length: nil,
-                text: inserted.text,
-                expectedText: nil,
-                baseContentHash: baseHash,
-                resultContentHash: resultHash,
-                canonicalReplayKey: replayKey,
-                modifiedAt: inserted.modifiedAt
-            )
-        case .noteBodyTextDeleted(let deleted):
-            return SyncConvergenceRetainedOperationRecord(
-                noteID: deleted.noteID,
-                batchID: batch.id,
-                originDeviceID: batch.originDeviceID,
-                operationIndex: operationIndex,
-                operationKind: .delete,
-                utf16Offset: deleted.utf16Offset,
-                utf16Length: deleted.utf16Length,
-                text: nil,
-                expectedText: deleted.expectedText,
-                baseContentHash: baseHash,
-                resultContentHash: resultHash,
-                canonicalReplayKey: replayKey,
-                modifiedAt: deleted.modifiedAt
-            )
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
-            throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: Self.noteID(for: change))
-        }
-    }
-
-    private func bodyBeforeApplying(_ change: SyncBatchChange, currentBody: String) throws -> String {
-        switch change {
-        case .noteBodyTextInserted(let inserted):
-            guard let range = currentBody.syncBatchSafeUTF16Range(
-                location: inserted.utf16Offset,
-                length: inserted.text.utf16.count
-            ),
-                  (currentBody as NSString).substring(with: range) == inserted.text else {
-                throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: inserted.noteID)
-            }
-            let mutable = NSMutableString(string: currentBody)
-            mutable.deleteCharacters(in: range)
-            return String(mutable)
-        case .noteBodyTextDeleted(let deleted):
-            guard let expectedText = deleted.expectedText,
-                  currentBody.syncBatchSafeUTF16Range(location: deleted.utf16Offset, length: 0) != nil else {
-                throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: deleted.noteID)
-            }
-            let mutable = NSMutableString(string: currentBody)
-            mutable.insert(expectedText, at: deleted.utf16Offset)
-            return String(mutable)
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
-            throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: Self.noteID(for: change))
-        }
-    }
-
-    private func validateLocalBaseHash(_ change: SyncBatchChange, reconstructedBaseHash: String) throws {
-        let declared: String?
-        let noteID: UUID
-        switch change {
-        case .noteBodyTextInserted(let inserted):
-            declared = inserted.baseContentHash
-            noteID = inserted.noteID
-        case .noteBodyTextDeleted(let deleted):
-            declared = deleted.baseContentHash
-            noteID = deleted.noteID
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
-            return
-        }
-        if let declared, declared != reconstructedBaseHash {
-            throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: noteID)
-        }
-    }
-
-    private func loadCurrentNotes(noteIDs: Set<UUID>) -> [SyncConvergenceProjectedNote] {
-        noteIDs.compactMap { noteID in
-            (try? SwiftDataSyncConvergencePersistenceTransaction(context: context).loadNote(id: noteID)).map {
-                SyncConvergenceProjectedNote(
-                    noteID: $0.noteID,
-                    folderID: $0.folderID,
-                    title: $0.title,
-                    body: $0.body,
-                    createdAt: $0.createdAt,
-                    modifiedAt: $0.modifiedAt
-                )
-            }
-        }
-    }
-
-    private func loadTitleWinners(noteIDs: Set<UUID>) -> [SyncConvergenceTitleWinnerProjection] {
-        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
-        return noteIDs.compactMap { try? transaction.loadTitleWinner(noteID: $0) }
-    }
-
-    private func loadIncorporatedBatches(batchIDs: Set<UUID>) -> [SyncConvergenceIncorporatedBatchProjection] {
-        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
-        return batchIDs.compactMap { batchID -> SyncConvergenceIncorporatedBatchProjection? in
-            guard let root = try? transaction.loadIncorporatedBatch(batchID: batchID) else {
-                return nil
-            }
-            return SyncConvergenceIncorporatedBatchProjection(
-                batchID: root.batchID,
-                noteID: nil,
-                canonicalPayloadDigest: root.canonicalPayloadDigest,
-                canonicalPayloadDigestFormatVersion: root.canonicalPayloadDigestFormatVersion,
-                cleanupPlan: SyncConvergenceCleanupPlan(
-                    batchIDs: [root.batchID],
-                    retryQueueCleanup: false,
-                    retryLegacyCleanup: false,
-                    retryPresentationRefresh: false
-                )
-            )
-        }
-    }
-
-    private func loadIncorporatedTombstones(batchIDs: Set<UUID>) -> [SyncConvergenceIncorporatedBatchProjection] {
-        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
-        return batchIDs.compactMap { batchID -> SyncConvergenceIncorporatedBatchProjection? in
-            guard let tombstone = try? transaction.loadTombstone(batchID: batchID) else {
-                return nil
-            }
-            return SyncConvergenceIncorporatedBatchProjection(
-                batchID: tombstone.batchID,
-                noteID: nil,
-                canonicalPayloadDigest: tombstone.canonicalPayloadDigest,
-                canonicalPayloadDigestFormatVersion: tombstone.canonicalPayloadDigestFormatVersion,
-                cleanupPlan: SyncConvergenceCleanupPlan(
-                    batchIDs: [tombstone.batchID],
-                    retryQueueCleanup: false,
-                    retryLegacyCleanup: false,
-                    retryPresentationRefresh: false
-                )
-            )
-        }
-    }
-
-    private func loadRetainedSnapshots(noteIDs: Set<UUID>) -> [SyncConvergenceRetainedSnapshot] {
-        noteIDs.flatMap { noteID -> [SyncConvergenceRetainedSnapshot] in
-            let descriptor = FetchDescriptor<NoteContentSnapshot>(
-                predicate: #Predicate { $0.noteID == noteID },
-                sortBy: [SortDescriptor(\.generation)]
-            )
-            let snapshots = (try? context.fetch(descriptor)) ?? []
-            return snapshots.map {
-                SyncConvergenceRetainedSnapshot(
-                    noteID: $0.noteID,
-                    contentHash: $0.contentHash,
-                    body: $0.body,
-                    generation: $0.generation
-                )
-            }
-        }
-    }
-
-    private func loadRetainedOperations(
-        noteIDs: Set<UUID>,
-        source: SyncConvergenceRetainedOperationSource
-    ) -> [SyncConvergenceRetainedOperation] {
-        noteIDs.flatMap { noteID -> [SyncConvergenceRetainedOperation] in
-            let sourceRaw = source.rawValue
-            let descriptor = FetchDescriptor<RetainedBodyOperation>(
-                predicate: #Predicate { $0.noteID == noteID && $0.sourceRaw == sourceRaw },
-                sortBy: [SortDescriptor(\.modifiedAt)]
-            )
-            let operations = (try? context.fetch(descriptor)) ?? []
-            return operations.compactMap { model in
-                guard let kind = SyncConvergencePlannedBodyOperation.Kind(rawValue: model.operationKindRaw),
-                      let replayKey = try? CanonicalReplayKeyPayload.decodeEvidenceData(model.canonicalReplayKeyPayloadData)
-                else { return nil }
-                return SyncConvergenceRetainedOperation(
-                    noteID: model.noteID,
-                    batchID: model.batchID,
-                    originDeviceID: model.originDeviceID,
-                    operationIndex: model.operationIndex,
-                    operationKind: kind,
-                    utf16Offset: model.utf16Offset,
-                    utf16Length: model.utf16Length,
-                    text: model.text,
-                    expectedText: model.expectedText,
-                    baseContentHash: model.baseContentHash,
-                    resultContentHash: model.resultContentHash,
-                    canonicalReplayKey: replayKey
-                )
-            }
-        }
-    }
-
-    private func affectedNoteIDs(in batches: [SyncBatch]) -> Set<UUID> {
-        Set(batches.flatMap { $0.changes.map(Self.noteID(for:)) })
-    }
-
-    private static func noteID(for change: SyncBatchChange) -> UUID {
-        switch change {
-        case .noteCreated(let change):
-            return change.noteID
-        case .noteTitleChanged(let change):
-            return change.noteID
-        case .noteBodyTextInserted(let change):
-            return change.noteID
-        case .noteBodyTextDeleted(let change):
-            return change.noteID
-        case .noteBodyReconciled(let change):
-            return change.noteID
-        }
-    }
-
-    private static func operationKind(for change: SyncBatchChange) -> String {
-        switch change {
-        case .noteCreated:
-            return "create"
-        case .noteTitleChanged:
-            return "title"
-        case .noteBodyTextInserted:
-            return "insert"
-        case .noteBodyTextDeleted:
-            return "delete"
-        case .noteBodyReconciled:
-            return "reconcile"
-        }
-    }
-
-    private static func drainFailure(
-        for failure: SyncConvergenceTransactionFailure,
-        batchID: UUID
-    ) -> SyncBatchDrainFailure {
-        let kind: SyncBatchDrainFailureKind
-        switch failure {
-        case .swiftDataFetch, .swiftDataSave:
-            kind = .persistence
-        case .corruptHistory:
-            kind = .corruptHistory
-        case .invalidMergePlan:
-            kind = .invalidMergePlan
-        case .inconsistentIncorporationState:
-            kind = .inconsistentIncorporationState
-        case .staleAuthoritativeState:
-            kind = .staleAuthoritativeState
-        case .unsupportedDigestFormat:
-            kind = .unsupportedDigestFormat
-        case .unexpected:
-            kind = .unexpected
-        }
-        return SyncBatchDrainFailure(batchID: batchID, kind: kind)
-    }
-
-    private static func drainFailure(
-        for reason: SyncConvergenceDeferredReason,
-        batchID: UUID
-    ) -> SyncBatchDrainFailure {
-        let kind: SyncBatchDrainFailureKind
-        switch reason {
-        case .unreconstructableBase:
-            kind = .mismatchedBase
-        case .unsupportedReconciliation:
-            kind = .unsupportedReconciliation
-        case .historyPressure:
-            kind = .corruptHistory
-        }
-        return SyncBatchDrainFailure(batchID: batchID, kind: kind)
-    }
-}
-
-private final class NotesViewModelConvergencePresentationAdapter: SyncConvergencePresentationAdapter {
-    private weak var viewModel: NotesViewModel?
-
-    init(viewModel: NotesViewModel) {
-        self.viewModel = viewModel
-    }
-
-    @MainActor
-    func refreshPresentation(for request: SyncConvergencePresentationRequest) async -> SyncConvergencePostCommitAdapterResult {
-        guard let viewModel else { return .verifiedComplete }
-        guard viewModel.currentNote?.id == request.noteID else { return .verifiedComplete }
-        guard request.committedBodyHash == request.committedPostBodyHash else { return .failed }
-
-        let disposition: ActiveEditorSyncDisposition
-        switch request.routing {
-        case .incremental:
-            let mutations = request.incrementalOperations.compactMap(AppliedEditorMutation.init(postCommitOperation:))
-            guard mutations.count == request.incrementalOperations.count else { return .failed }
-            disposition = .apply(AppliedEditorMutationBatch(
-                noteID: request.noteID,
-                mutations: mutations,
-                authoritativeBody: request.committedNote.body
-            ))
-        case .wholeNoteFallback:
-            disposition = .reload(.authoritativeConvergencePresentation)
-        case .none:
-            disposition = .metadataOnly
-        }
-
-        let update = ActiveEditorSyncUpdate(
-            id: request.incorporationIdentity.batchID,
-            noteID: request.noteID,
-            metadata: ActiveEditorMetadataUpdate(title: request.committedTitle),
-            disposition: disposition
-        )
-        return await viewModel.publishConvergencePresentationUpdate(
-            update,
-            incorporationIdentity: request.incorporationIdentity
-        )
-    }
-}
-
-private extension AppliedEditorMutation {
-    init?(postCommitOperation operation: SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload) {
-        switch operation.kind {
-        case .insert:
-            guard let text = operation.text else { return nil }
-            self = .bodyInsertion(
-                AppliedEditorBodyInsertion(
-                    noteID: operation.noteID,
-                    utf16Offset: operation.utf16Offset,
-                    text: text,
-                    modifiedAt: operation.operationIdentity.canonicalReplayKey.modifiedAt
-                )
-            )
-        case .delete:
-            guard let utf16Length = operation.utf16Length,
-                  let expectedText = operation.expectedText else { return nil }
-            self = .bodyDeletion(
-                AppliedEditorBodyDeletion(
-                    noteID: operation.noteID,
-                    range: NSRange(location: operation.utf16Offset, length: utf16Length),
-                    deletedText: expectedText,
-                    modifiedAt: operation.operationIdentity.canonicalReplayKey.modifiedAt
-                )
-            )
-        }
     }
 }
 
