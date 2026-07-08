@@ -544,12 +544,21 @@ func workEntry(
     routing: SyncConvergencePostCommitPresentationRoutingPayload,
     postHash: String = SyncBatchContentHash.sha256Hex(for: "post")
 ) -> SyncConvergencePostCommitWorkPayloadV1.PresentationEntry {
-    SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+    let preHash = SyncBatchContentHash.sha256Hex(for: "pre")
+    return SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
         noteID: noteID,
         routing: routing,
-        expectedPreBodyHash: SyncBatchContentHash.sha256Hex(for: "pre"),
+        expectedPreBodyHash: preHash,
         committedPostBodyHash: postHash,
-        incrementalOperations: routing == .incremental ? [incrementalOperation(noteID: noteID, resultHash: postHash)] : []
+        incrementalOperations: routing == .incremental ? [incrementalOperation(noteID: noteID, resultHash: postHash)] : [],
+        rewriteSafetyReceipt: routing == .wholeNoteFallback
+            ? SyncConvergenceRewriteSafetyReceipt(
+                noteID: noteID,
+                priorBodyHash: preHash,
+                candidateBodyHash: postHash,
+                consumedDeleteIdentities: []
+            )
+            : nil
     )
 }
 
@@ -1035,7 +1044,13 @@ func makeFullRootState(
                 routing: .wholeNoteFallback,
                 expectedPreBodyHash: SyncBatchContentHash.sha256Hex(for: "pre"),
                 committedPostBodyHash: SyncBatchContentHash.sha256Hex(for: "post"),
-                incrementalOperations: []
+                incrementalOperations: [],
+                rewriteSafetyReceipt: SyncConvergenceRewriteSafetyReceipt(
+                    noteID: TestIDs.noteA,
+                    priorBodyHash: SyncBatchContentHash.sha256Hex(for: "pre"),
+                    candidateBodyHash: SyncBatchContentHash.sha256Hex(for: "post"),
+                    consumedDeleteIdentities: []
+                )
             )
         ] : []
     )

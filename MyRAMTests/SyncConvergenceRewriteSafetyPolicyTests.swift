@@ -6,6 +6,37 @@ import XCTest
 #endif
 
 final class SyncConvergenceRewriteSafetyPolicyTests: XCTestCase {
+    func testIdenticalNonEmptyBodyConsumesNoEvidence() {
+        guard case .safe(let receipt) = result(
+            prior: "unchanged",
+            candidate: "unchanged",
+            evidence: [deleteEvidence("changed", index: 0)]
+        ) else { return XCTFail("Expected identical body to be safe") }
+        XCTAssertTrue(receipt.consumedDeleteIdentities.isEmpty)
+    }
+
+    func testEmptyEvidenceAndMismatchedExpectedTextCannotProveLoss() {
+        assertUnsafe(prior: "alpha beta", candidate: "alpha")
+        assertUnsafe(prior: "alpha beta", candidate: "alpha", evidence: [deleteEvidence("alpha", index: 0)])
+    }
+
+    func testOffsetDriftDoesNotInvalidateExpectedTextProof() {
+        assertSafe(prior: "prefix target", candidate: "prefix ", evidence: [deleteEvidence("target", index: 0, offset: 0)])
+    }
+
+    func testDuplicateDeleteIdentityIsRejected() {
+        let evidence = deleteEvidence("foo", index: 0)
+        guard case .unsafe(.duplicateDeleteIdentity) = result(
+            prior: "foo foo",
+            candidate: "",
+            evidence: [evidence, evidence]
+        ) else { return XCTFail("Expected duplicate identity rejection") }
+    }
+
+    func testMultiCharacterEvidenceCoversOnlyItsExactMultiset() {
+        assertSafe(prior: "abc", candidate: "c", evidence: [deleteEvidence("ab", index: 0)])
+        assertUnsafe(prior: "abc", candidate: "a", evidence: [deleteEvidence("ab", index: 0)])
+    }
     func testPreservationInsertionAndReorderAreSafe() {
         assertSafe(prior: "", candidate: "")
         assertSafe(prior: "", candidate: "new")
@@ -54,10 +85,10 @@ final class SyncConvergenceRewriteSafetyPolicyTests: XCTestCase {
         ))
     }
 
-    private func deleteEvidence(_ text: String, index: Int, declaredLength: Int? = nil) -> SyncConvergenceDeleteEvidence {
+    private func deleteEvidence(_ text: String, index: Int, declaredLength: Int? = nil, offset: Int = 0) -> SyncConvergenceDeleteEvidence {
         let change = SyncBatchChange.noteBodyTextDeleted(.init(
             noteID: Self.noteID,
-            utf16Offset: 0,
+            utf16Offset: offset,
             utf16Length: declaredLength ?? text.utf16.count,
             expectedText: text,
             modifiedAt: Date(timeIntervalSinceReferenceDate: 1),
@@ -72,7 +103,7 @@ final class SyncConvergenceRewriteSafetyPolicyTests: XCTestCase {
                 operationKind: "delete",
                 canonicalReplayKey: .init(replayKey: SyncBatchReplayKey(batch: batch, change: change, operationIndex: index))
             ),
-            utf16Offset: 0,
+            utf16Offset: offset,
             utf16Length: declaredLength ?? text.utf16.count,
             expectedText: text,
             baseContentHash: nil,

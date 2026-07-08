@@ -281,15 +281,12 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
                     throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
                 }
             case .wholeNoteFallback:
-                guard incrementalOperations.isEmpty else {
+                guard incrementalOperations.isEmpty,
+                      let receipt = rewriteSafetyReceipt,
+                      receipt.noteID == noteID,
+                      receipt.priorBodyHash == expectedPreBodyHash,
+                      receipt.candidateBodyHash == committedPostBodyHash else {
                     throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
-                }
-                if let receipt = rewriteSafetyReceipt {
-                    guard receipt.noteID == noteID,
-                          receipt.priorBodyHash == expectedPreBodyHash,
-                          receipt.candidateBodyHash == committedPostBodyHash else {
-                        throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
-                    }
                 }
             case .none:
                 guard incrementalOperations.isEmpty else {

@@ -2415,6 +2415,30 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             operationIdentity: base.operationIdentity
         )
         let cases: [(String, [SyncConvergencePostCommitWorkPayloadV1.PresentationEntry])] = [
+            ("whole note fallback without rewrite receipt", [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: TestIDs.noteA,
+                    routing: .wholeNoteFallback,
+                    expectedPreBodyHash: SyncBatchContentHash.sha256Hex(for: "pre"),
+                    committedPostBodyHash: postHash,
+                    incrementalOperations: []
+                )
+            ]),
+            ("whole note fallback with contradictory rewrite receipt", [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: TestIDs.noteA,
+                    routing: .wholeNoteFallback,
+                    expectedPreBodyHash: SyncBatchContentHash.sha256Hex(for: "pre"),
+                    committedPostBodyHash: postHash,
+                    incrementalOperations: [],
+                    rewriteSafetyReceipt: SyncConvergenceRewriteSafetyReceipt(
+                        noteID: TestIDs.noteB,
+                        priorBodyHash: SyncBatchContentHash.sha256Hex(for: "wrong"),
+                        candidateBodyHash: postHash,
+                        consumedDeleteIdentities: []
+                    )
+                )
+            ]),
             ("incremental without executable operation", [
                 SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
                     noteID: TestIDs.noteA,

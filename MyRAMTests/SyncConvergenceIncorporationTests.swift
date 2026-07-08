@@ -791,6 +791,49 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertTrue(fallbackEntry.incrementalOperations.isEmpty)
     }
 
+    func testReconstructedConflictMissingRewriteReceiptFailsBeforeMutation() throws {
+        let fixture = try makeReconstructedSnapshotFixture()
+        let validated = try plannedInput(from: fixture.planningInputForCurrentNotes(retainedSnapshots: [
+            SyncConvergenceRetainedSnapshot(
+                noteID: fixture.noteID,
+                contentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+                body: "AB",
+                generation: 1
+            )
+        ]))
+        let malformedPlan = try validated.plan.replacingBodyEffect(for: fixture.noteID) { effect in
+            guard case .reconstructedConflict(let bodyPlan) = effect else {
+                throw TestFixtureError.unexpectedPlanningOutcome
+            }
+            return .reconstructedConflict(ReconstructedConflictBodyPlan(
+                noteID: bodyPlan.noteID,
+                reconstructedBaseBody: bodyPlan.reconstructedBaseBody,
+                reconstructedBaseHash: bodyPlan.reconstructedBaseHash,
+                projectedPreMergeCurrentBody: bodyPlan.projectedPreMergeCurrentBody,
+                projectedPreMergeCurrentHash: bodyPlan.projectedPreMergeCurrentHash,
+                orderedOperationIdentities: bodyPlan.orderedOperationIdentities,
+                finalBody: bodyPlan.finalBody,
+                finalBodyHash: bodyPlan.finalBodyHash,
+                retainedOperationAdditions: bodyPlan.retainedOperationAdditions,
+                snapshotAdditions: bodyPlan.snapshotAdditions,
+                resultEvidence: bodyPlan.resultEvidence,
+                presentationRouting: bodyPlan.presentationRouting,
+                rewriteSafetyReceipt: nil
+            ))
+        }
+        let malformedInput = try validated.replacingPlanForTesting(malformedPlan)
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.noteID: fixture.initialNote])
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: malformedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        XCTAssertEqual(outcome, .failedBeforeCommit(.unprovenTextLoss(noteID: fixture.noteID)))
+        XCTAssertEqual(transaction.notes[fixture.noteID], fixture.initialNote)
+    }
+
     func testMYR134RepeatedPlanningAndIncorporationProducesIdenticalWorkPayload() throws {
         let fixture = try makeMYR134MixedRoutingFixture()
         let first = try planIncorporateAndDecode(

@@ -286,6 +286,9 @@ final class SyncConvergencePlanningTests: XCTestCase {
         XCTAssertEqual(bodyPlan.reconstructedBaseBody, base)
         XCTAssertEqual(bodyPlan.finalBody, "AxB")
         XCTAssertEqual(plan.presentationPlan.noteRoutings[noteID], .wholeNoteFallback)
+        XCTAssertEqual(bodyPlan.rewriteSafetyReceipt?.noteID, noteID)
+        XCTAssertEqual(bodyPlan.rewriteSafetyReceipt?.priorBodyHash, SyncBatchContentHash.sha256Hex(for: "ACB"))
+        XCTAssertEqual(bodyPlan.rewriteSafetyReceipt?.candidateBodyHash, bodyPlan.finalBodyHash)
     }
 
     func testReconstructionFromRetainedOperationDoesNotReplayConsumedHistoryTwice() {
