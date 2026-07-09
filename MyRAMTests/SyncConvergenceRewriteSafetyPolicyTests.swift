@@ -48,12 +48,16 @@ final class SyncConvergenceRewriteSafetyPolicyTests: XCTestCase {
     }
 
     func testOneProofCoversOnlyOneDuplicateOccurrence() {
-        assertSafe(prior: "foo foo", candidate: "foo", evidence: [deleteEvidence("foo", index: 0)])
+        assertSafe(prior: "foo foo", candidate: "foo", evidence: [deleteEvidence(" foo", index: 0)])
         assertUnsafe(prior: "foo foo foo", candidate: "foo", evidence: [deleteEvidence("foo", index: 0)])
     }
 
     func testReorderPlusExplicitDeleteIsSafe() {
-        assertSafe(prior: "foo bar foo", candidate: "foo foo", evidence: [deleteEvidence("bar", index: 0)])
+        assertSafe(prior: "foo bar foo", candidate: "foo foo", evidence: [deleteEvidence("bar ", index: 0)])
+    }
+
+    func testWhitespaceOmissionRequiresExplicitEvidence() {
+        assertUnsafe(prior: "foo foo", candidate: "foo", evidence: [deleteEvidence("foo", index: 0)])
     }
 
     func testWhitespaceAndUnicodeRequireExactUTF16Evidence() {

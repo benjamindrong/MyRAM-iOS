@@ -123,7 +123,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             createdAt: date(1),
             modifiedAt: date(2)
         )
-        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+        let input = SyncConvergencePlanningInput(
             incomingBatch: batch,
             currentNotes: [SyncConvergenceProjectedNote(
                 noteID: noteID,
@@ -134,7 +134,8 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 modifiedAt: date(2)
             )],
             retainedRemoteOperations: [retained]
-        ))
+        )
+        let outcome = SyncConvergencePlanner().plan(input: input)
         guard case .planned(let validatedInput) = outcome else {
             return XCTFail("Expected all-idempotent plan, got \(outcome)")
         }
@@ -713,14 +714,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
 
         let reconstructed = try makeReconstructedSnapshotFixture()
         let reconstructedResult = try planIncorporateAndDecode(
-            input: reconstructed.planningInputForCurrentNotes(retainedSnapshots: [
-                SyncConvergenceRetainedSnapshot(
-                    noteID: reconstructed.noteID,
-                    contentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
-                    body: "AB",
-                    generation: 1
-                )
-            ]),
+            input: reconstructed.input,
             notes: [reconstructed.noteID: reconstructed.initialNote],
             committedAt: reconstructed.committedAt,
             expectedRoutings: [reconstructed.noteID: .wholeNoteFallback]
@@ -793,14 +787,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
 
     func testReconstructedConflictMissingRewriteReceiptFailsBeforeMutation() throws {
         let fixture = try makeReconstructedSnapshotFixture()
-        let validated = try plannedInput(from: fixture.planningInputForCurrentNotes(retainedSnapshots: [
-            SyncConvergenceRetainedSnapshot(
-                noteID: fixture.noteID,
-                contentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
-                body: "AB",
-                generation: 1
-            )
-        ]))
+        let validated = fixture.validatedInput
         let malformedPlan = try validated.plan.replacingBodyEffect(for: fixture.noteID) { effect in
             guard case .reconstructedConflict(let bodyPlan) = effect else {
                 throw TestFixtureError.unexpectedPlanningOutcome
@@ -831,6 +818,79 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         )
 
         XCTAssertEqual(outcome, .failedBeforeCommit(.unprovenTextLoss(noteID: fixture.noteID)))
+        XCTAssertEqual(transaction.notes[fixture.noteID], fixture.initialNote)
+    }
+
+    func testReconstructedConflictCrossNoteDeleteEvidenceFailsBeforeMutation() throws {
+        let fixture = try makeReconstructedSnapshotFixture()
+        let noteB = uuid("00000000-0000-0000-0000-0000001330b2")
+        let wrongNoteDelete = retainedDelete(
+            noteID: noteB,
+            batchID: uuid("00000000-0000-0000-0000-0000001334b2"),
+            originDeviceID: uuid("00000000-0000-0000-0000-0000001334b3"),
+            operationIndex: 0,
+            offset: 1,
+            length: 1,
+            expectedText: "C",
+            modifiedAt: date(3),
+            baseBody: "ACB",
+            resultHash: SyncBatchContentHash.sha256Hex(for: "AB")
+        )
+        let wrongNoteOperation = SyncConvergencePlannedBodyOperation(
+            noteID: noteB,
+            kind: .delete,
+            utf16Offset: wrongNoteDelete.utf16Offset,
+            utf16Length: wrongNoteDelete.utf16Length,
+            text: wrongNoteDelete.text,
+            expectedText: wrongNoteDelete.expectedText,
+            baseContentHash: wrongNoteDelete.baseContentHash,
+            resultContentHash: try XCTUnwrap(wrongNoteDelete.resultContentHash),
+            operationIdentity: OperationIdentityPayload(
+                batchID: wrongNoteDelete.batchID,
+                originDeviceID: wrongNoteDelete.originDeviceID,
+                operationIndex: wrongNoteDelete.operationIndex,
+                operationKind: wrongNoteDelete.operationKind.rawValue,
+                canonicalReplayKey: wrongNoteDelete.canonicalReplayKey
+            )
+        )
+        var malformedRetainedOperations: [SyncConvergencePlannedBodyOperation] = []
+        let malformedBodyPlan = try fixture.validatedInput.plan.replacingBodyEffect(for: fixture.noteID) { effect in
+            guard case .reconstructedConflict(let bodyPlan) = effect else {
+                throw TestFixtureError.unexpectedPlanningOutcome
+            }
+            malformedRetainedOperations = bodyPlan.retainedOperationAdditions.map { operation in
+                operation.kind == .delete ? wrongNoteOperation : operation
+            }
+            return .reconstructedConflict(ReconstructedConflictBodyPlan(
+                noteID: bodyPlan.noteID,
+                reconstructedBaseBody: bodyPlan.reconstructedBaseBody,
+                reconstructedBaseHash: bodyPlan.reconstructedBaseHash,
+                projectedPreMergeCurrentBody: bodyPlan.projectedPreMergeCurrentBody,
+                projectedPreMergeCurrentHash: bodyPlan.projectedPreMergeCurrentHash,
+                orderedOperationIdentities: bodyPlan.orderedOperationIdentities,
+                finalBody: bodyPlan.finalBody,
+                finalBodyHash: bodyPlan.finalBodyHash,
+                retainedOperationAdditions: malformedRetainedOperations,
+                snapshotAdditions: bodyPlan.snapshotAdditions,
+                resultEvidence: bodyPlan.resultEvidence,
+                presentationRouting: bodyPlan.presentationRouting,
+                rewriteSafetyReceipt: bodyPlan.rewriteSafetyReceipt
+            ))
+        }
+        let malformedPlan = malformedBodyPlan.replacingHistoryRetainedOperations(malformedRetainedOperations)
+        let malformedInput = try fixture.validatedInput.replacingPlanForTesting(malformedPlan)
+        let transaction = InMemoryConvergenceTransaction(notes: [fixture.noteID: fixture.initialNote])
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: malformedInput,
+            transaction: transaction,
+            committedAt: fixture.committedAt
+        )
+
+        XCTAssertEqual(
+            outcome,
+            SyncConvergenceIncorporationOutcome.failedBeforeCommit(.unprovenTextLoss(noteID: fixture.noteID))
+        )
         XCTAssertEqual(transaction.notes[fixture.noteID], fixture.initialNote)
     }
 
@@ -868,14 +928,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         let incremental = try makeTwoOperationFixture()
         let incrementalValidated = try plannedInput(from: incremental.planningInputForCurrentNotes())
         let reconstructed = try makeReconstructedSnapshotFixture()
-        let reconstructedValidated = try plannedInput(from: reconstructed.planningInputForCurrentNotes(retainedSnapshots: [
-            SyncConvergenceRetainedSnapshot(
-                noteID: reconstructed.noteID,
-                contentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
-                body: "AB",
-                generation: 1
-            )
-        ]))
+        let reconstructedValidated = reconstructed.validatedInput
         let titleOnly = try makeTitleOnlyApplyFixture()
         let titleOnlyValidated = try plannedInput(from: titleOnly.input)
 
@@ -2900,6 +2953,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
     fileprivate struct Fixture {
         let noteID: UUID
         let batch: SyncBatch
+        let input: SyncConvergencePlanningInput
         let plan: SyncConvergenceBatchPlan
         let projectedBytes: Int
         let validatedInput: ValidatedSyncConvergenceIncorporationInput
@@ -2974,6 +3028,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         return Fixture(
             noteID: noteID,
             batch: batch,
+            input: input,
             plan: plan,
             projectedBytes: projectedBytes,
             validatedInput: validatedInput,
@@ -3022,7 +3077,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 ))
             ]
         )
-        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+        let input = SyncConvergencePlanningInput(
             incomingBatch: batch,
             currentNotes: [SyncConvergenceProjectedNote(
                 noteID: noteID,
@@ -3033,7 +3088,8 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 modifiedAt: date(2)
             )],
             persistedTitleWinners: [priorWinner]
-        ))
+        )
+        let outcome = SyncConvergencePlanner().plan(input: input)
         guard case .planned(let validatedInput) = outcome else {
             throw TestFixtureError.unexpectedPlanningOutcome
         }
@@ -3047,6 +3103,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         return Fixture(
             noteID: noteID,
             batch: batch,
+            input: input,
             plan: plan,
             projectedBytes: projectedBytes,
             validatedInput: validatedInput,
@@ -3097,7 +3154,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 ))
             ]
         )
-        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+        let input = SyncConvergencePlanningInput(
             incomingBatch: batch,
             currentNotes: [SyncConvergenceProjectedNote(
                 noteID: noteID,
@@ -3111,7 +3168,8 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: baseHash, body: base, generation: 1)
             ],
             persistedTitleWinners: [priorWinner]
-        ))
+        )
+        let outcome = SyncConvergencePlanner().plan(input: input)
         guard case .planned(let validatedInput) = outcome else {
             throw TestFixtureError.unexpectedPlanningOutcome
         }
@@ -3125,6 +3183,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         return Fixture(
             noteID: noteID,
             batch: batch,
+            input: input,
             plan: plan,
             projectedBytes: projectedBytes,
             validatedInput: validatedInput,
@@ -3196,6 +3255,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         return Fixture(
             noteID: noteID,
             batch: batch,
+            input: input,
             plan: plan,
             projectedBytes: projectedBytes,
             validatedInput: validatedInput,
@@ -3210,13 +3270,26 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         batchID: UUID = uuid("00000000-0000-0000-0000-000000133002"),
         originID: UUID = uuid("00000000-0000-0000-0000-000000133003")
     ) throws -> Fixture {
-        let base = "AB"
-        let baseHash = SyncBatchContentHash.sha256Hex(for: base)
+        let currentBody = "ACB"
+        let incomingBase = "AB"
+        let incomingBaseHash = SyncBatchContentHash.sha256Hex(for: incomingBase)
+        let retainedDelete = retainedDelete(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000133402"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000133403"),
+            operationIndex: 0,
+            offset: 1,
+            length: 1,
+            expectedText: "C",
+            modifiedAt: date(3),
+            baseBody: currentBody,
+            resultHash: incomingBaseHash
+        )
         let initialNote = SyncConvergenceMutableNoteRecord(
             noteID: noteID,
             folderID: nil,
             title: "Title",
-            body: "ACB",
+            body: currentBody,
             createdAt: date(1),
             modifiedAt: date(2)
         )
@@ -3231,28 +3304,75 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                     utf16Offset: 1,
                     text: "x",
                     modifiedAt: date(4),
-                    baseContentHash: baseHash
+                    baseContentHash: incomingBaseHash
                 ))
             ]
         )
-        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+        let input = SyncConvergencePlanningInput(
             incomingBatch: batch,
             currentNotes: [SyncConvergenceProjectedNote(
                 noteID: noteID,
                 folderID: nil,
                 title: "Title",
-                body: "ACB",
+                body: currentBody,
                 createdAt: date(1),
                 modifiedAt: date(2)
             )],
             retainedSnapshots: [
-                SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: baseHash, body: base, generation: 1)
-            ]
-        ))
+                SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: incomingBaseHash, body: incomingBase, generation: 1)
+            ],
+            retainedRemoteOperations: [retainedDelete]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: input)
         guard case .planned(let validatedInput) = outcome else {
             throw TestFixtureError.unexpectedPlanningOutcome
         }
-        return try makeFixture(from: batch, validatedInput: validatedInput, initialNote: initialNote, committedAt: date(5))
+        return try makeFixture(from: batch, input: input, validatedInput: validatedInput, initialNote: initialNote, committedAt: date(5))
+    }
+
+    private func retainedDelete(
+        noteID: UUID,
+        batchID: UUID,
+        originDeviceID: UUID,
+        operationIndex: Int,
+        offset: Int,
+        length: Int,
+        expectedText: String?,
+        modifiedAt: Date,
+        baseBody: String,
+        resultHash: String
+    ) -> SyncConvergenceRetainedOperation {
+        let batch = SyncBatch(
+            id: batchID,
+            originDeviceID: originDeviceID,
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
+                    noteID: noteID,
+                    utf16Offset: offset,
+                    utf16Length: length,
+                    expectedText: expectedText,
+                    modifiedAt: modifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: baseBody)
+                ))
+            ]
+        )
+        return SyncConvergenceRetainedOperation(
+            noteID: noteID,
+            batchID: batchID,
+            originDeviceID: originDeviceID,
+            operationIndex: operationIndex,
+            operationKind: .delete,
+            utf16Offset: offset,
+            utf16Length: length,
+            text: nil,
+            expectedText: expectedText,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: baseBody),
+            resultContentHash: resultHash,
+            canonicalReplayKey: CanonicalReplayKeyPayload(
+                replayKey: SyncBatchReplayKey(batch: batch, change: batch.changes[0], operationIndex: operationIndex)
+            )
+        )
     }
 
     private func makeCreationFixture() throws -> Fixture {
@@ -3339,6 +3459,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
 
     private func makeFixture(
         from batch: SyncBatch,
+        input: SyncConvergencePlanningInput? = nil,
         validatedInput: ValidatedSyncConvergenceIncorporationInput,
         initialNote: SyncConvergenceMutableNoteRecord,
         committedAt: Date
@@ -3353,6 +3474,10 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         return Fixture(
             noteID: initialNote.noteID,
             batch: batch,
+            input: input ?? SyncConvergencePlanningInput(
+                incomingBatch: batch,
+                currentNotes: [initialNote.projectedForTest]
+            ),
             plan: plan,
             projectedBytes: projectedBytes,
             validatedInput: validatedInput,

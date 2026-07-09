@@ -2054,9 +2054,11 @@ struct SyncConvergencePlanValidator {
                       bodyPlan.resultEvidence.batchID == plan.batchID,
                       bodyPlan.resultEvidence.preHash == bodyPlan.projectedPreMergeCurrentHash,
                       bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
-                      routing == .wholeNoteFallback,
-                      bodyPlan.retainedOperationAdditions.allSatisfy({ $0.noteID == notePlan.noteID }) else {
+                      routing == .wholeNoteFallback else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+                guard bodyPlan.retainedOperationAdditions.allSatisfy({ $0.noteID == notePlan.noteID }) else {
+                    return .failedBeforeCommit(.unprovenTextLoss(noteID: notePlan.noteID))
                 }
                 // The deterministic union order is load-bearing: ordered identities
                 // must be strictly ascending under the one canonical comparator.
@@ -3029,6 +3031,14 @@ struct SyncConvergenceIncorporationExecutor {
             ).canonicalEncodedByteCount()
             guard expectedProjectedBytes == input.projectedFullIncorporationEvidenceBytes else {
                 throw ExecutorFailure(.invalidMergePlan(noteID: nil))
+            }
+            for notePlan in input.plan.affectedNotePlans {
+                if case .reconstructedConflict(let bodyPlan) = notePlan.bodyEffect {
+                    guard bodyPlan.rewriteSafetyReceipt != nil,
+                          bodyPlan.retainedOperationAdditions.allSatisfy({ $0.noteID == notePlan.noteID }) else {
+                        throw ExecutorFailure(.unprovenTextLoss(noteID: notePlan.noteID))
+                    }
+                }
             }
             self.input = input
             self.operationIdentities = try input.plan.incorporationEvidence.operationIdentities

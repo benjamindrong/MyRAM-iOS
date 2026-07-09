@@ -251,7 +251,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
         XCTAssertEqual(bodyPlan.finalBody, "abc")
     }
 
-    func testReconstructedConflictUsesHistoricalBaseAndWholeNoteRouting() {
+    func testReconstructedConflictDroppingUnprovenTextReturnsUnprovenTextLoss() {
         let noteID = uuid("00000000-0000-0000-0000-000000132205")
         let base = "AB"
         let baseHash = SyncBatchContentHash.sha256Hex(for: base)
@@ -278,17 +278,65 @@ final class SyncConvergencePlanningTests: XCTestCase {
             ]
         ))
 
+        guard case .failedBeforeCommit(let failure) = outcome else {
+            return XCTFail("Expected unproven text loss failure, got \(outcome)")
+        }
+        XCTAssertEqual(failure, .unprovenTextLoss(noteID: noteID))
+    }
+
+    func testReconstructedConflictUsesDeleteEvidenceForWholeNoteRouting() {
+        let noteID = uuid("00000000-0000-0000-0000-000000132206")
+        let currentBody = "ACB"
+        let incomingBase = "AB"
+        let incomingBaseHash = SyncBatchContentHash.sha256Hex(for: incomingBase)
+        let retainedDelete = retainedDelete(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000132506"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132606"),
+            operationIndex: 0,
+            offset: 1,
+            length: 1,
+            expectedText: "C",
+            modifiedAt: date(2),
+            baseBody: currentBody,
+            resultHash: incomingBaseHash
+        )
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000132306"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000132406"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    text: "x",
+                    modifiedAt: date(3),
+                    baseContentHash: incomingBaseHash
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: currentBody)],
+            retainedSnapshots: [
+                SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: incomingBaseHash, body: incomingBase, generation: 1)
+            ],
+            retainedRemoteOperations: [retainedDelete]
+        ))
+
         guard case .planned(let validatedInput) = outcome,
               let plan = Optional(validatedInput.plan),
               case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
-            return XCTFail("Expected reconstructed conflict plan, got \(outcome)")
+            return XCTFail("Expected safe reconstructed conflict plan, got \(outcome)")
         }
-        XCTAssertEqual(bodyPlan.reconstructedBaseBody, base)
+        XCTAssertEqual(bodyPlan.reconstructedBaseBody, incomingBase)
         XCTAssertEqual(bodyPlan.finalBody, "AxB")
         XCTAssertEqual(plan.presentationPlan.noteRoutings[noteID], .wholeNoteFallback)
         XCTAssertEqual(bodyPlan.rewriteSafetyReceipt?.noteID, noteID)
-        XCTAssertEqual(bodyPlan.rewriteSafetyReceipt?.priorBodyHash, SyncBatchContentHash.sha256Hex(for: "ACB"))
+        XCTAssertEqual(bodyPlan.rewriteSafetyReceipt?.priorBodyHash, SyncBatchContentHash.sha256Hex(for: currentBody))
         XCTAssertEqual(bodyPlan.rewriteSafetyReceipt?.candidateBodyHash, bodyPlan.finalBodyHash)
+        XCTAssertFalse(bodyPlan.rewriteSafetyReceipt?.consumedDeleteIdentities.isEmpty ?? true)
     }
 
     func testReconstructionFromRetainedOperationDoesNotReplayConsumedHistoryTwice() {
@@ -324,7 +372,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
 
         let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
             incomingBatch: incoming,
-            currentNotes: [projectedNote(noteID: noteID, body: "AZ")],
+            currentNotes: [projectedNote(noteID: noteID, body: "ABC")],
             retainedSnapshots: [
                 SyncConvergenceRetainedSnapshot(
                     noteID: noteID,
@@ -1186,7 +1234,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
 
         let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
             incomingBatch: incoming,
-            currentNotes: [projectedNote(noteID: noteID, body: "AX")],
+            currentNotes: [projectedNote(noteID: noteID, body: "ABC")],
             retainedSnapshots: [
                 SyncConvergenceRetainedSnapshot(
                     noteID: noteID,
@@ -1473,7 +1521,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
 
         let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
             incomingBatch: incoming,
-            currentNotes: [projectedNote(noteID: noteA, body: "AqB")],
+            currentNotes: [projectedNote(noteID: noteA, body: "AxB")],
             retainedSnapshots: [SyncConvergenceRetainedSnapshot(noteID: noteA, contentHash: baseHash, body: base, generation: 1)],
             queuedBatches: [multiNoteQueued]
         ))
@@ -1533,7 +1581,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
 
         let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
             incomingBatch: incoming,
-            currentNotes: [projectedNote(noteID: noteID, body: "AX")],
+            currentNotes: [projectedNote(noteID: noteID, body: "ABC")],
             retainedSnapshots: [
                 SyncConvergenceRetainedSnapshot(
                     noteID: noteID,
@@ -1719,7 +1767,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
 
         let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
             incomingBatch: incoming,
-            currentNotes: [projectedNote(noteID: noteID, body: "AX")],
+            currentNotes: [projectedNote(noteID: noteID, body: "ABC")],
             retainedSnapshots: [
                 SyncConvergenceRetainedSnapshot(
                     noteID: noteID,
@@ -2450,7 +2498,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
 
         let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
             incomingBatch: incoming,
-            currentNotes: [projectedNote(noteID: noteID, body: "diverged")],
+            currentNotes: [projectedNote(noteID: noteID, body: "X" + targetBody)],
             retainedSnapshots: [
                 SyncConvergenceRetainedSnapshot(
                     noteID: noteID,
@@ -2544,7 +2592,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
                     ))
                 ]
             ),
-            currentNotes: [projectedNote(noteID: noteID, body: "diverged")],
+            currentNotes: [projectedNote(noteID: noteID, body: "X" + onwardTarget)],
             retainedSnapshots: snapshots,
             retainedRemoteOperations: operations
         ))
