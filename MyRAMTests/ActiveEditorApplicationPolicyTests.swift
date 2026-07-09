@@ -2,6 +2,47 @@ import XCTest
 @testable import MyRAM
 
 final class ActiveEditorApplicationPolicyTests: XCTestCase {
+    func testWholeNoteFallbackGateAllowsAuthoritativeReloadWhenPreHashMatches() {
+        let body = "current editor body"
+        let decision = ActiveEditorWholeNoteFallbackGate.decision(
+            reason: .authoritativeConvergencePresentation,
+            expectedPreBodyHash: SyncBatchContentHash.sha256Hex(for: body),
+            currentContent: body
+        )
+
+        XCTAssertEqual(decision, .allowReload)
+    }
+
+    func testWholeNoteFallbackGateReturnsStillPendingWhenPreHashMismatches() {
+        let decision = ActiveEditorWholeNoteFallbackGate.decision(
+            reason: .authoritativeConvergencePresentation,
+            expectedPreBodyHash: SyncBatchContentHash.sha256Hex(for: "expected prior body"),
+            currentContent: "edited after convergence planned"
+        )
+
+        XCTAssertEqual(decision, .stillPending)
+    }
+
+    func testWholeNoteFallbackGateAllowsAuthoritativeReloadWithoutExpectedPreHash() {
+        let decision = ActiveEditorWholeNoteFallbackGate.decision(
+            reason: .authoritativeConvergencePresentation,
+            expectedPreBodyHash: nil,
+            currentContent: "current editor body"
+        )
+
+        XCTAssertEqual(decision, .allowReload)
+    }
+
+    func testWholeNoteFallbackGateDoesNotBlockNonAuthoritativeReloadReasons() {
+        let decision = ActiveEditorWholeNoteFallbackGate.decision(
+            reason: .preApplyBodyMismatch,
+            expectedPreBodyHash: SyncBatchContentHash.sha256Hex(for: "different body"),
+            currentContent: "current editor body"
+        )
+
+        XCTAssertEqual(decision, .allowReload)
+    }
+
     func testIdleEditorAppliesIncrementally() {
         XCTAssertEqual(
             ActiveEditorApplicationPolicy.decision(

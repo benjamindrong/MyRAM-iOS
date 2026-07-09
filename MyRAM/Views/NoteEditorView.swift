@@ -1483,9 +1483,11 @@ struct NoteEditorView: View {
     }
 
     private func applyRemoteEditorReloadIfSafe(reason: ActiveEditorReloadReason, update: ActiveEditorSyncUpdate) {
-        if reason == .authoritativeConvergencePresentation,
-           let expectedPreBodyHash = update.expectedPreBodyHash,
-           SyncBatchContentHash.sha256Hex(for: content) != expectedPreBodyHash {
+        if ActiveEditorWholeNoteFallbackGate.decision(
+            reason: reason,
+            expectedPreBodyHash: update.expectedPreBodyHash,
+            currentContent: content
+        ) == .stillPending {
             acknowledgeConvergencePresentation(update, result: .stillPending)
             return
         }

@@ -67,6 +67,28 @@ enum ActiveEditorIgnoredReason: Equatable {
     case supersededByNewerEditorUpdate
 }
 
+enum ActiveEditorWholeNoteFallbackGate {
+    enum Decision: Equatable {
+        case allowReload
+        case stillPending
+    }
+
+    static func decision(
+        reason: ActiveEditorReloadReason,
+        expectedPreBodyHash: String?,
+        currentContent: String
+    ) -> Decision {
+        guard reason == .authoritativeConvergencePresentation,
+              let expectedPreBodyHash else {
+            return .allowReload
+        }
+
+        return SyncBatchContentHash.sha256Hex(for: currentContent) == expectedPreBodyHash
+            ? .allowReload
+            : .stillPending
+    }
+}
+
 enum ActiveEditorApplicationDecision: Equatable {
     case applyIncrementally
     case `defer`(ActiveEditorDeferredReason)
