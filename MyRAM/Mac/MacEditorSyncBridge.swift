@@ -5,11 +5,15 @@ import AppKit
 final class MacEditorSyncBridge: ObservableObject {
     weak var textView: NSTextView?
     var publishAttributedText: ((NSAttributedString) -> Void)?
+#if DEBUG
+    var fullDocumentMetrics: EditorRemoteFullDocumentMetrics?
+#endif
     private(set) var isApplyingRemoteSync = false
 
     func applyBatch(
         _ actions: [MacSelectedEditorAction],
-        selectedNoteID: UUID
+        selectedNoteID: UUID,
+        authoritativeBody: String
     ) -> EditorRemoteBatchApplyResult {
         guard let textView, let textStorage = textView.textStorage else {
             return EditorRemoteBatchApplyResult(
@@ -20,6 +24,7 @@ final class MacEditorSyncBridge: ObservableObject {
 
         var selection = textView.selectedRange()
         var appliedCount = 0
+        var didApplySuccessfully = false
         let originalScrollOrigin = textView.enclosingScrollView?.contentView.bounds.origin
 
         isApplyingRemoteSync = true
@@ -33,6 +38,12 @@ final class MacEditorSyncBridge: ObservableObject {
             if appliedCount > 0 {
                 let undoManager = textView.delegate?.undoManager?(for: textView) ?? textView.undoManager
                 undoManager?.removeAllActions()
+            }
+            if didApplySuccessfully {
+                // Mutated failure paths clear stale undo state but do not publish rejected editor text.
+#if DEBUG
+                fullDocumentMetrics?.recordAttributedStringCopy()
+#endif
                 publishAttributedText?(NSAttributedString(attributedString: textView.attributedString()))
             }
             isApplyingRemoteSync = false
@@ -90,6 +101,19 @@ final class MacEditorSyncBridge: ObservableObject {
             }
         }
 
+        if appliedCount > 0 {
+#if DEBUG
+            fullDocumentMetrics?.recordAuthoritativeBodyComparison()
+#endif
+        }
+        guard appliedCount == 0 || textStorage.string == authoritativeBody else {
+            return EditorRemoteBatchApplyResult(
+                appliedCount: appliedCount,
+                disposition: .requiresReload(.postApplyBodyMismatch)
+            )
+        }
+
+        didApplySuccessfully = appliedCount > 0
         return EditorRemoteBatchApplyResult(
             appliedCount: appliedCount,
             disposition: appliedCount > 0 ? .applied : .noApplicableMutations

@@ -352,7 +352,8 @@ final class MacSyncBatchApplierTests: XCTestCase {
         bridge.textView = textView
         _ = bridge.applyBatch(
             [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 2, text: "x", modifiedAt: Date()))],
-            selectedNoteID: noteID
+            selectedNoteID: noteID,
+            authoritativeBody: "abxcd"
         )
 
         XCTAssertEqual(storedText.string, textView.string)

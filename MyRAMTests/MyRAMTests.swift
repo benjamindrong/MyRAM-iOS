@@ -2193,6 +2193,357 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(winners.first?.title, "Renamed")
     }
 
+    func testSustainedLocalTypingAccountsForWholeBodyEvidenceWork() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let base = String(repeating: "large-note-line\n", count: 2_000)
+        let inserted = (0..<20).map { "x\($0)" }
+        let finalBody = base + inserted.joined()
+        let note = Note(title: "Shared", content: finalBody)
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        var offset = base.utf16.count
+        let changes: [SyncBatchChange] = inserted.map { text in
+            defer { offset += text.utf16.count }
+            return .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                noteID: noteID,
+                utf16Offset: offset,
+                text: text,
+                modifiedAt: Date(),
+                baseContentHash: nil
+            ))
+        }
+        let batch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(),
+            changes: changes
+        )
+        let metrics = SyncConvergenceLocalEvidenceMetrics()
+        let transport = AcceptingLocalBatchTransport()
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localBatchTransportAdapter: transport,
+            presentationAdapter: CompletingPresentationAdapter(),
+            localEvidenceMetrics: metrics
+        )
+
+        let outcome = await runtime.submitLocalBatch(batch)
+
+        guard case .drained = outcome else { return XCTFail("Expected local batch to drain") }
+        XCTAssertEqual(metrics.submittedBodyOperationCount, 20)
+        XCTAssertEqual(metrics.wholeBodyHashCount, 40)
+        XCTAssertEqual(metrics.wholeBodyReconstructionCount, 20)
+        XCTAssertEqual(metrics.retainedOperationRecordCount, 20)
+        XCTAssertEqual(metrics.saveCount, 1)
+    }
+
+    func testUnrelatedIncorporationHistoryDoesNotChangeActiveNotePlanning() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let activeNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000127399")!
+        let note = Note(title: "Shared", content: "stable body")
+        note.id = activeNoteID
+        context.insert(note)
+
+        let noPendingPostCommitWork = try SyncConvergencePostCommitState.none.encodedPayloadData()
+        for index in 0..<300 {
+            let batchID = UUID(uuidString: String(format: "00000000-0000-0000-0001-%012d", index))!
+            let unrelatedNoteID = UUID(uuidString: String(format: "00000000-0000-0000-0002-%012d", index))!
+            context.insert(IncorporatedSyncBatch(
+                batchID: batchID,
+                originDeviceID: UUID(),
+                createdAt: Date(timeIntervalSince1970: TimeInterval(index)),
+                batchSequence: UInt64(index),
+                schemaVersion: 1,
+                committedAt: Date(timeIntervalSince1970: TimeInterval(index + 1)),
+                canonicalPayloadDigest: String(repeating: "a", count: 64),
+                canonicalPayloadDigestFormatVersion: 1,
+                committedResultDigest: String(repeating: "b", count: 64),
+                committedResultDigestFormatVersion: 1,
+                affectedNotesPayloadData: Data(),
+                authoritativeChildCount: 0,
+                authoritativeChildBytes: 0,
+                authoritativeChildrenDigest: String(repeating: "c", count: 64),
+                postCommitStatePayloadData: noPendingPostCommitWork
+            ))
+            context.insert(IncorporationContradictionDiagnostic(
+                batchID: batchID,
+                noteID: unrelatedNoteID,
+                diagnosticEvidencePayloadData: Data([0x01])
+            ))
+            context.insert(NoteContentSnapshot(
+                noteID: unrelatedNoteID,
+                contentHash: SyncBatchContentHash.sha256Hex(for: "history"),
+                body: "history",
+                generation: 1
+            ))
+        }
+        try context.save()
+
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: CompletingPresentationAdapter()
+        )
+
+        let history = try runtime.loadHistoryStatesForTesting(noteIDs: [activeNoteID])
+
+        XCTAssertEqual(history.count, 1)
+        XCTAssertEqual(history.first?.snapshotCount, 0)
+        XCTAssertEqual(note.content, "stable body")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<IncorporatedSyncBatch>()), 300)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<IncorporationContradictionDiagnostic>()), 300)
+
+        // Delayed remote convergence for the active note must still succeed correctly despite
+        // the unrelated history noise seeded above: insertions near the end and the start of
+        // the body, followed by a provenance-matched delete of the original text in between.
+        let endInsertion = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000156200")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                noteID: activeNoteID,
+                utf16Offset: "stable body".utf16.count,
+                text: "END",
+                modifiedAt: Date(timeIntervalSince1970: 1)
+            ))]
+        )
+        let startInsertion = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000156200")!,
+            createdAt: Date(timeIntervalSince1970: 2),
+            changes: [.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                noteID: activeNoteID,
+                utf16Offset: 0,
+                text: "TOP",
+                modifiedAt: Date(timeIntervalSince1970: 2)
+            ))]
+        )
+        let middleDeletion = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000156200")!,
+            createdAt: Date(timeIntervalSince1970: 3),
+            changes: [.noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
+                noteID: activeNoteID,
+                utf16Offset: 3,
+                utf16Length: "stable ".utf16.count,
+                expectedText: "stable ",
+                modifiedAt: Date(timeIntervalSince1970: 3)
+            ))]
+        )
+
+        var lastOutcome = await runtime.submitRemoteBatch(endInsertion)
+        guard case .drained = lastOutcome else { return XCTFail("Expected end insertion to drain under seeded history, got \(lastOutcome)") }
+        lastOutcome = await runtime.submitRemoteBatch(startInsertion)
+        guard case .drained = lastOutcome else { return XCTFail("Expected start insertion to drain under seeded history") }
+        lastOutcome = await runtime.submitRemoteBatch(middleDeletion)
+        guard case .drained = lastOutcome else { return XCTFail("Expected provenance-matched deletion to drain under seeded history") }
+
+        XCTAssertEqual(note.content, "TOPbodyEND")
+
+        // A duplicate delivery of an already-incorporated batch must not reapply its text,
+        // even with hundreds of unrelated incorporated batches in history.
+        let duplicateOutcome = await runtime.submitRemoteBatch(startInsertion)
+        guard case .drained = duplicateOutcome else { return XCTFail("Expected duplicate batch to drain without blocking") }
+        XCTAssertEqual(note.content, "TOPbodyEND")
+        XCTAssertEqual(note.content.components(separatedBy: "TOP").count - 1, 1)
+    }
+
+    func testDelayedBatchDrainRepeatsForReentrantSubmissionWithoutStrandingWork() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Base", content: String(repeating: "large note\n", count: 2_000))
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        let queuedBatches = (0..<5).map { index in
+            makeTitleBatch(
+                noteID: noteID,
+                sequence: UInt64(index + 1),
+                title: "Remote \(index + 1)"
+            )
+        }
+        let reentrantBatch = makeTitleBatch(noteID: noteID, sequence: 6, title: "Remote 6")
+        let queue = FileBackedSyncBatchQueue(fileURL: nil)
+        for batch in queuedBatches {
+            try queue.enqueueIncoming(batch)
+        }
+        // A duplicate delivery is structurally deduplicated before the runtime starts.
+        try queue.enqueueIncoming(queuedBatches[2])
+        XCTAssertEqual(queue.pendingBatches.count, 5)
+
+        let adapter = ReentrantPresentationAdapter()
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: queue,
+            localObligationQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: adapter
+        )
+        adapter.onFirstPresentation = {
+            await runtime.submitRemoteBatch(reentrantBatch)
+        }
+
+        let outcome = await runtime.resumePendingWork()
+
+        guard case .drained(let appliedBatchIDs) = outcome else {
+            return XCTFail("Expected delayed batches to drain")
+        }
+        XCTAssertEqual(adapter.reentrantOutcomeCount, 1)
+        XCTAssertTrue(adapter.didObserveAlreadyDraining)
+        XCTAssertTrue(queue.isEmpty)
+        XCTAssertEqual(appliedBatchIDs, Set(queuedBatches.map(\.id) + [reentrantBatch.id]))
+        XCTAssertEqual(note.title, "Remote 6")
+        XCTAssertEqual(note.content, String(repeating: "large note\n", count: 2_000))
+    }
+
+    func testKDelayedBatchDrainAppliesBodyInsertionsExactlyOnceAcrossRegionsAndRejectsDuplicateIncorporation() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let baseBody = String(repeating: "0123456789", count: 200)
+        let note = Note(title: "Base", content: baseBody)
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        let endOffset = baseBody.utf16.count - 10
+        let middleOffset = baseBody.utf16.count / 2
+        let startOffset = 10
+
+        func insertionBatch(sequence: UInt64, offset: Int, text: String) -> SyncBatch {
+            SyncBatch(
+                id: UUID(),
+                originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000156100")!,
+                createdAt: Date(timeIntervalSince1970: TimeInterval(sequence)),
+                batchSequence: sequence,
+                changes: [
+                    .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                        noteID: noteID,
+                        utf16Offset: offset,
+                        text: text,
+                        modifiedAt: Date(timeIntervalSince1970: TimeInterval(sequence))
+                    ))
+                ]
+            )
+        }
+
+        // Queued end-to-start so each batch's offset, expressed against the original body,
+        // remains valid at application time: every earlier insertion lands strictly after
+        // the offset the next queued batch will target.
+        let endBatch = insertionBatch(sequence: 1, offset: endOffset, text: "[END]")
+        let middleBatch = insertionBatch(sequence: 2, offset: middleOffset, text: "[MID]")
+        let startBatch = insertionBatch(sequence: 3, offset: startOffset, text: "[TOP]")
+
+        let queue = FileBackedSyncBatchQueue(fileURL: nil)
+        try queue.enqueueIncoming(endBatch)
+        try queue.enqueueIncoming(middleBatch)
+        try queue.enqueueIncoming(startBatch)
+
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: queue,
+            localObligationQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: CompletingPresentationAdapter()
+        )
+
+        let outcome = await runtime.resumePendingWork()
+
+        guard case .drained(let appliedBatchIDs) = outcome else {
+            return XCTFail("Expected K delayed body-insertion batches to drain")
+        }
+        XCTAssertEqual(appliedBatchIDs, Set([endBatch.id, middleBatch.id, startBatch.id]))
+
+        var expected = baseBody
+        expected.insert(contentsOf: "[END]", at: expected.index(expected.startIndex, offsetBy: endOffset))
+        expected.insert(contentsOf: "[MID]", at: expected.index(expected.startIndex, offsetBy: middleOffset))
+        expected.insert(contentsOf: "[TOP]", at: expected.index(expected.startIndex, offsetBy: startOffset))
+        XCTAssertEqual(note.content, expected)
+        for marker in ["[END]", "[MID]", "[TOP]"] {
+            XCTAssertEqual(note.content.components(separatedBy: marker).count - 1, 1, "\(marker) must appear exactly once")
+        }
+
+        // Re-delivering an already-incorporated batch must not reapply its text.
+        let duplicateOutcome = await runtime.submitRemoteBatch(middleBatch)
+        guard case .drained = duplicateOutcome else {
+            return XCTFail("Expected duplicate already-incorporated batch to drain without blocking")
+        }
+        XCTAssertEqual(note.content, expected)
+        XCTAssertEqual(note.content.components(separatedBy: "[MID]").count - 1, 1)
+    }
+
+    func testPublishedEditorUpdateCompletesOnceWhenAcknowledgedMultipleTimesAtViewModelLevel() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let note = Note(title: "Shared", content: "Body")
+        context.insert(note)
+        try context.save()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            syncBatchQuietWindow: 0
+        )
+        vm.selectNote(note)
+        vm.registerActiveEditor(noteID: note.id)
+        let emptyBatch = AppliedEditorMutationBatch(noteID: note.id, mutations: [], authoritativeBody: note.content)
+        let dispositions: [(ActiveEditorMetadataUpdate?, ActiveEditorSyncDisposition)] = [
+            (nil, .apply(emptyBatch)),
+            (ActiveEditorMetadataUpdate(title: nil), .apply(emptyBatch)),
+            (ActiveEditorMetadataUpdate(title: "Remote"), .apply(emptyBatch)),
+            (nil, .metadataOnly),
+            (ActiveEditorMetadataUpdate(title: "Remote"), .metadataOnly),
+            (nil, .reload(.authoritativeConvergencePresentation)),
+            (nil, .deferred(.pendingLocalCommit)),
+            (nil, .deferred(.markedTextComposition)),
+            (nil, .deferred(.activePinnedTextEdit)),
+            (nil, .ignored(.targetNoteIsNotActive))
+        ]
+        var completionCount = 0
+
+        for (index, shape) in dispositions.enumerated() {
+            let update = ActiveEditorSyncUpdate(
+                noteID: note.id,
+                metadata: shape.0,
+                disposition: shape.1
+            )
+            let identity = SyncConvergencePersistedIncorporationIdentity(
+                batchID: UUID(),
+                canonicalPayloadDigest: String(repeating: "a", count: 64),
+                canonicalPayloadDigestFormatVersion: 1,
+                committedResultDigest: String(repeating: "b", count: 64),
+                committedResultDigestFormatVersion: 1
+            )
+            let resultTask = Task {
+                await vm.publishConvergencePresentationUpdate(update, incorporationIdentity: identity)
+            }
+            try await waitUntil("active editor update \(index)") {
+                vm.activeEditorSyncUpdate?.id == update.id
+            }
+
+            vm.acknowledgeActiveEditorSyncUpdate(id: update.id, noteID: note.id, result: .verifiedComplete)
+            vm.acknowledgeActiveEditorSyncUpdate(id: update.id, noteID: note.id, result: .stillPending)
+            let result = await resultTask.value
+            if result == .verifiedComplete { completionCount += 1 }
+        }
+
+        XCTAssertEqual(completionCount, dispositions.count)
+        XCTAssertNil(vm.activeEditorSyncUpdate)
+    }
+
     func testIPhoneIncomingHashedMismatchRemainsQueuedAndBlocksLaterBatch() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -2790,6 +3141,39 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(fixture.note.title, "Same Title")
         XCTAssertTrue(fixture.recorder.recordedBatches.isEmpty)
         XCTAssertFalse(fixture.bridge.canUndo)
+    }
+
+    func testMountedEditorDeletedTextMismatchReloadsAndAcknowledgesExactlyOnce() async throws {
+        let fixture = try makeMountedEditorFixture(title: "Local Title", content: "Hello world")
+        defer { fixture.unmount() }
+
+        // Drift the live editor buffer from the authoritative body without registering it as
+        // an unsafe local edit, so the remote deletion is eligible for incremental application
+        // and the bridge's independent deletedText verification (not the runtime's provenance
+        // check) is what must catch the mismatch and route to reload.
+        fixture.textView.text = "Hello mars!"
+
+        await fixture.vm.applyIncomingSyncBatch(SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [.noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
+                noteID: fixture.note.id,
+                utf16Offset: 6,
+                utf16Length: 5,
+                expectedText: "world",
+                modifiedAt: Date(timeIntervalSince1970: 1)
+            ))]
+        ))
+
+        try await waitUntil("mismatch reload resolves the active editor sync update") {
+            fixture.vm.activeEditorSyncUpdate == nil
+        }
+        try await waitForMountedEditorLifecycle()
+
+        XCTAssertEqual(fixture.textView.text, "Hello ")
+        try await waitPastEditorCommitDelay()
+        XCTAssertEqual(fixture.note.content, "Hello ")
     }
 
     func testConvergenceRuntimeProcessesQueuedIncomingBatchesSerially() async throws {
@@ -6315,6 +6699,22 @@ final class MyRAMTests: XCTestCase {
         )
     }
 
+    private func makeTitleBatch(noteID: UUID, sequence: UInt64, title: String) -> SyncBatch {
+        SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000156001")!,
+            createdAt: Date(timeIntervalSince1970: TimeInterval(sequence)),
+            batchSequence: sequence,
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteID,
+                    title: title,
+                    modifiedAt: Date(timeIntervalSince1970: TimeInterval(sequence))
+                ))
+            ]
+        )
+    }
+
     private func temporarySyncConflictFileURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -6558,4 +6958,36 @@ private extension UIView {
         return nil
     }
 
+}
+
+@MainActor
+private final class AcceptingLocalBatchTransport: SyncConvergenceLocalBatchTransportAdapter {
+    func acceptLocalBatch(_ batch: SyncBatch) async throws {}
+}
+
+private struct CompletingPresentationAdapter: SyncConvergencePresentationAdapter {
+    func refreshPresentation(
+        for request: SyncConvergencePresentationRequest
+    ) async -> SyncConvergencePostCommitAdapterResult {
+        .verifiedComplete
+    }
+}
+
+@MainActor
+private final class ReentrantPresentationAdapter: SyncConvergencePresentationAdapter {
+    var onFirstPresentation: (() async -> SyncConvergenceRuntimeOutcome)?
+    private(set) var reentrantOutcomeCount = 0
+    private(set) var didObserveAlreadyDraining = false
+
+    func refreshPresentation(
+        for request: SyncConvergencePresentationRequest
+    ) async -> SyncConvergencePostCommitAdapterResult {
+        guard let onFirstPresentation else { return .verifiedComplete }
+        self.onFirstPresentation = nil
+        reentrantOutcomeCount += 1
+        if case .alreadyDraining = await onFirstPresentation() {
+            didObserveAlreadyDraining = true
+        }
+        return .verifiedComplete
+    }
 }
