@@ -159,17 +159,29 @@ struct MyRAMMacRootView: View {
     }
 
     private func reloadSelectedEditor(reason: MacSelectedEditorReloadReason) {
-        guard !hasUnsavedChanges else {
+        let outcome = MacSelectedEditorReloader.reload(
+            hasUnsavedChanges: hasUnsavedChanges,
+            selectedNote: selectedNote,
+            recordWholeNoteReload: {
+                #if DEBUG
+                editorSyncBridge.fullDocumentMetrics?.recordWholeNoteReload()
+                #endif
+            },
+            loadAttributedContent: { note in
+                MacNotePersistenceAdapter().attributedContent(for: note)
+            },
+            applyAttributedContent: { attributedContent in
+                attributedText = attributedContent
+            }
+        )
+
+        guard outcome != .deferredForUnsavedChanges else {
             // Defensive only: the pre-apply flush should have saved local edits before any fallback reload reason can fire.
             saveError = "Incoming sync is waiting for local edits to save."
             return
         }
 
-        guard let selectedNote else { return }
-#if DEBUG
-        MacSelectedEditorReloadMetrics.recordWholeNoteReload(on: editorSyncBridge)
-#endif
-        attributedText = MacNotePersistenceAdapter().attributedContent(for: selectedNote)
+        guard outcome == .reloaded else { return }
         saveError = nil
     }
 
@@ -340,14 +352,35 @@ struct MyRAMMacRootView: View {
     }
 }
 
-#if DEBUG
 @MainActor
-enum MacSelectedEditorReloadMetrics {
-    static func recordWholeNoteReload(on bridge: MacEditorSyncBridge) {
-        bridge.fullDocumentMetrics?.recordWholeNoteReload()
+enum MacSelectedEditorReloadOutcome: Equatable {
+    case reloaded
+    case deferredForUnsavedChanges
+    case noSelectedNote
+}
+
+@MainActor
+struct MacSelectedEditorReloader {
+    static func reload(
+        hasUnsavedChanges: Bool,
+        selectedNote: Note?,
+        recordWholeNoteReload: () -> Void,
+        loadAttributedContent: (Note) -> NSAttributedString,
+        applyAttributedContent: (NSAttributedString) -> Void
+    ) -> MacSelectedEditorReloadOutcome {
+        guard !hasUnsavedChanges else {
+            return .deferredForUnsavedChanges
+        }
+
+        guard let selectedNote else {
+            return .noSelectedNote
+        }
+
+        recordWholeNoteReload()
+        applyAttributedContent(loadAttributedContent(selectedNote))
+        return .reloaded
     }
 }
-#endif
 
 private struct MacNoteListView: View {
     let notes: [Note]

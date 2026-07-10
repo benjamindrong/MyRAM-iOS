@@ -290,14 +290,57 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         XCTAssertFalse(undoManager.canUndo)
     }
 
-    func testWholeNoteReloadMetricRecordsOnReloadPath() {
-        let bridge = MacEditorSyncBridge()
+    func testSelectedEditorReloaderAppliesContentAndRecordsMetricWhenReloadOccurs() {
+        let note = Note(title: "Reloaded", content: "Body")
         let metrics = EditorRemoteFullDocumentMetrics()
-        bridge.fullDocumentMetrics = metrics
+        var appliedContent: [String] = []
 
-        MacSelectedEditorReloadMetrics.recordWholeNoteReload(on: bridge)
+        let outcome = MacSelectedEditorReloader.reload(
+            hasUnsavedChanges: false,
+            selectedNote: note,
+            recordWholeNoteReload: { metrics.recordWholeNoteReload() },
+            loadAttributedContent: { note in NSAttributedString(string: note.content) },
+            applyAttributedContent: { attributedContent in appliedContent.append(attributedContent.string) }
+        )
 
+        XCTAssertEqual(outcome, .reloaded)
+        XCTAssertEqual(appliedContent, ["Body"])
         XCTAssertEqual(metrics.wholeNoteReloadCount, 1)
+    }
+
+    func testSelectedEditorReloaderDefersWithoutMetricWhenUnsavedChangesExist() {
+        let note = Note(title: "Reloaded", content: "Body")
+        let metrics = EditorRemoteFullDocumentMetrics()
+        var appliedContent: [String] = []
+
+        let outcome = MacSelectedEditorReloader.reload(
+            hasUnsavedChanges: true,
+            selectedNote: note,
+            recordWholeNoteReload: { metrics.recordWholeNoteReload() },
+            loadAttributedContent: { note in NSAttributedString(string: note.content) },
+            applyAttributedContent: { attributedContent in appliedContent.append(attributedContent.string) }
+        )
+
+        XCTAssertEqual(outcome, .deferredForUnsavedChanges)
+        XCTAssertTrue(appliedContent.isEmpty)
+        XCTAssertEqual(metrics.wholeNoteReloadCount, 0)
+    }
+
+    func testSelectedEditorReloaderSkipsWithoutMetricWhenSelectedNoteIsMissing() {
+        let metrics = EditorRemoteFullDocumentMetrics()
+        var appliedContent: [String] = []
+
+        let outcome = MacSelectedEditorReloader.reload(
+            hasUnsavedChanges: false,
+            selectedNote: nil,
+            recordWholeNoteReload: { metrics.recordWholeNoteReload() },
+            loadAttributedContent: { note in NSAttributedString(string: note.content) },
+            applyAttributedContent: { attributedContent in appliedContent.append(attributedContent.string) }
+        )
+
+        XCTAssertEqual(outcome, .noSelectedNote)
+        XCTAssertTrue(appliedContent.isEmpty)
+        XCTAssertEqual(metrics.wholeNoteReloadCount, 0)
     }
 
     private func makeTextView(_ string: String) -> NSTextView {
