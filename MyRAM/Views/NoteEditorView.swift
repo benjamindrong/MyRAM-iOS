@@ -1320,27 +1320,11 @@ struct NoteEditorView: View {
     }
 
     private func handleObservedTitleChange(_ observedTitle: String) {
-        if consumeMatchingRemoteTitlePublication(observedTitle) {
+        if activeEditorSyncUpdateHandler.consumeMatchingRemoteTitlePublication(observedTitle) {
             return
         }
 
         handleEditorChange()
-    }
-
-    private func consumeMatchingRemoteTitlePublication(_ observedTitle: String) -> Bool {
-        guard let marker = pendingRemoteTitlePublication else { return false }
-        pendingRemoteTitlePublication = nil
-        guard marker.noteID == note.id,
-              marker.expectedTitle == observedTitle else {
-            vm.acknowledgeActiveEditorSyncUpdate(id: marker.updateID, noteID: marker.noteID, result: .stillPending)
-            return false
-        }
-
-        alignLastSnapshotTitle(observedTitle)
-        toolbarBridge?.title = observedTitle.isEmpty ? "Untitled" : observedTitle
-        refreshUndoState()
-        vm.acknowledgeActiveEditorSyncUpdate(id: marker.updateID, noteID: marker.noteID, result: .verifiedComplete)
-        return true
     }
 
     private func handleContentChanged(_ plainText: String, _ richTextUpdate: EditorRichTextContentUpdate) {
@@ -1356,74 +1340,10 @@ struct NoteEditorView: View {
     }
 
     private func handleActiveEditorSyncUpdate(_ update: ActiveEditorSyncUpdate?) {
-        guard let update else { return }
-
-        switch update.disposition {
-        case .apply(let batch):
-            applyRemoteEditorBatch(batch, update: update)
-        case .metadataOnly:
-            applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
-        case .reload(let reason):
-            applyRemoteEditorReloadIfSafe(reason: reason, update: update)
-        case .deferred:
-            acknowledgeConvergencePresentation(update, result: .stillPending)
-        case .ignored:
-            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-        }
+        activeEditorSyncUpdateHandler.handle(update)
     }
 
-    private func applyRemoteEditorMetadataIfSafe(
-        _ metadata: ActiveEditorMetadataUpdate?,
-        update: ActiveEditorSyncUpdate
-    ) {
-        guard let metadata else {
-            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-            return
-        }
-
-        let decision = activeEditorStateDecision(selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id)
-
-        switch decision {
-        case .apply:
-            if let remoteTitle = metadata.title {
-                if publishRemoteTitle(remoteTitle, update: update) {
-                    acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-                }
-            } else {
-                acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-            }
-        case .deferUntilReintegration:
-            acknowledgeConvergencePresentation(update, result: .stillPending)
-        case .ignore:
-            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-        }
-    }
-
-    private func activeEditorStateDecision(selectedNoteMatches: Bool) -> ActiveEditorStateApplicationDecision {
-        ActiveEditorApplicationPolicy.stateDecision(
-            editorBufferOwner: editorBufferOwner,
-            hasPendingNoteCommit: hasPendingNoteCommit,
-            hasActivePinnedTextEdit: hasActivePinnedThoughtEdit,
-            hasMarkedText: editorSyncBridge.hasMarkedText,
-            isApplyingUndo: isApplyingUndo,
-            selectedNoteMatches: selectedNoteMatches
-        )
-    }
-
-    private func publishRemoteTitle(_ remoteTitle: String, update: ActiveEditorSyncUpdate) -> Bool {
-        guard title != remoteTitle else {
-            pendingRemoteTitlePublication = nil
-            alignLastSnapshotTitle(remoteTitle)
-            toolbarBridge?.title = remoteTitle.isEmpty ? "Untitled" : remoteTitle
-            refreshUndoState()
-            return true
-        }
-
-        pendingRemoteTitlePublication = PendingRemoteTitlePublication(
-            updateID: update.id,
-            noteID: update.noteID,
-            expectedTitle: remoteTitle
-        )
+    private func publishRemoteTitle(_ remoteTitle: String) -> Bool {
         title = remoteTitle
         toolbarBridge?.title = remoteTitle.isEmpty ? "Untitled" : remoteTitle
         return false
@@ -1433,80 +1353,79 @@ struct NoteEditorView: View {
         lastSnapshot = lastSnapshot.replacingTitle(remoteTitle)
     }
 
-    private func applyRemoteEditorBatch(_ batch: AppliedEditorMutationBatch, update: ActiveEditorSyncUpdate) {
-        let decision = ActiveEditorApplicationPolicy.decision(
-            editorBufferOwner: editorBufferOwner,
-            hasPendingNoteCommit: hasPendingNoteCommit,
-            hasActivePinnedTextEdit: hasActivePinnedThoughtEdit,
-            hasMarkedText: editorSyncBridge.hasMarkedText,
-            isApplyingUndo: isApplyingUndo,
-            editorAvailable: editorSyncBridge.textView != nil,
-            selectedNoteMatches: batch.noteID == note.id && vm.currentNote?.id == note.id
+    private var activeEditorSyncUpdateHandler: ActiveEditorSyncUpdateHandler {
+        ActiveEditorSyncUpdateHandler(
+            environment: ActiveEditorSyncUpdateHandler.Environment(
+                stateDecision: { update in
+                    ActiveEditorApplicationPolicy.stateDecision(
+                        editorBufferOwner: editorBufferOwner,
+                        hasPendingNoteCommit: hasPendingNoteCommit,
+                        hasActivePinnedTextEdit: hasActivePinnedThoughtEdit,
+                        hasMarkedText: editorSyncBridge.hasMarkedText,
+                        isApplyingUndo: isApplyingUndo,
+                        selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id
+                    )
+                },
+                batchDecision: { batch in
+                    ActiveEditorApplicationPolicy.decision(
+                        editorBufferOwner: editorBufferOwner,
+                        hasPendingNoteCommit: hasPendingNoteCommit,
+                        hasActivePinnedTextEdit: hasActivePinnedThoughtEdit,
+                        hasMarkedText: editorSyncBridge.hasMarkedText,
+                        isApplyingUndo: isApplyingUndo,
+                        editorAvailable: editorSyncBridge.textView != nil,
+                        selectedNoteMatches: batch.noteID == note.id && vm.currentNote?.id == note.id
+                    )
+                },
+                beginRemoteBatchApply: {
+                    editorBufferOwner = .applyingRemoteSync
+                },
+                clearRemoteBatchApplyIfNeeded: {
+                    if editorBufferOwner == .applyingRemoteSync {
+                        editorBufferOwner = .idle
+                    }
+                },
+                finishFailedRemoteBatchApply: {
+                    editorBufferOwner = .idle
+                },
+                applyBatch: { batch in
+                    editorSyncBridge.apply(batch, selectedNoteID: note.id)
+                },
+                currentContent: { content },
+                currentTitle: { title },
+                performReload: { reason in
+                    applyRemoteNoteRefresh(reason: reason)
+                },
+                applySuccessfulBatchSnapshot: {
+                    lastSnapshot = currentNoteSnapshot()
+                },
+                publishTitle: { remoteTitle in
+                    publishRemoteTitle(remoteTitle)
+                },
+                recordPendingTitlePublication: { marker in
+                    pendingRemoteTitlePublication = marker
+                },
+                clearPendingTitlePublication: {
+                    pendingRemoteTitlePublication = nil
+                },
+                pendingTitlePublication: {
+                    pendingRemoteTitlePublication
+                },
+                isCurrentNote: { noteID in
+                    noteID == note.id
+                },
+                alignPublishedTitle: { remoteTitle in
+                    alignLastSnapshotTitle(remoteTitle)
+                    toolbarBridge?.title = remoteTitle.isEmpty ? "Untitled" : remoteTitle
+                },
+                refreshUndoState: {
+                    refreshUndoState()
+                },
+                acknowledge: { update, result in
+                    vm.acknowledgeActiveEditorSyncUpdate(id: update.id, noteID: update.noteID, result: result)
+                }
+            )
         )
-
-        switch decision {
-        case .applyIncrementally:
-            editorBufferOwner = .applyingRemoteSync
-            let result = editorSyncBridge.apply(batch, selectedNoteID: note.id)
-            switch result.disposition {
-            case .applied:
-                lastSnapshot = currentNoteSnapshot()
-                if editorBufferOwner == .applyingRemoteSync {
-                    editorBufferOwner = .idle
-                }
-                if update.metadata != nil {
-                    applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
-                } else {
-                    acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-                }
-                refreshUndoState()
-            case .noApplicableMutations:
-                if editorBufferOwner == .applyingRemoteSync {
-                    editorBufferOwner = .idle
-                }
-                if update.metadata != nil {
-                    applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
-                } else {
-                    acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-                }
-            case .requiresReload(let reason):
-                editorBufferOwner = .idle
-                applyRemoteEditorReloadIfSafe(reason: reason, update: update)
-            }
-        case .`defer`:
-            acknowledgeConvergencePresentation(update, result: .stillPending)
-        case .reload(let reason):
-            applyRemoteEditorReloadIfSafe(reason: reason, update: update)
-        case .ignore:
-            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-        }
-    }
-
-    private func applyRemoteEditorReloadIfSafe(reason: ActiveEditorReloadReason, update: ActiveEditorSyncUpdate) {
-        if ActiveEditorWholeNoteFallbackGate.decision(
-            reason: reason,
-            expectedPreBodyHash: update.expectedPreBodyHash,
-            currentContent: content
-        ) == .stillPending {
-            acknowledgeConvergencePresentation(update, result: .stillPending)
-            return
-        }
-        switch activeEditorStateDecision(selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id) {
-        case .apply:
-            applyRemoteNoteRefresh(reason: reason)
-            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-        case .deferUntilReintegration:
-            acknowledgeConvergencePresentation(update, result: .stillPending)
-        case .ignore:
-            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-        }
-    }
-
-    private func acknowledgeConvergencePresentation(
-        _ update: ActiveEditorSyncUpdate,
-        result: SyncConvergencePostCommitAdapterResult
-    ) {
-        vm.acknowledgeActiveEditorSyncUpdate(id: update.id, noteID: update.noteID, result: result)
     }
 
     private func applyRemoteNoteRefresh(reason: ActiveEditorReloadReason) {
@@ -2388,12 +2307,6 @@ private struct NoteSnapshot: Equatable {
         snapshot.title = title
         return snapshot
     }
-}
-
-private struct PendingRemoteTitlePublication: Equatable {
-    let updateID: UUID
-    let noteID: UUID
-    let expectedTitle: String
 }
 
 private struct PinnedThoughtSnapshot: Equatable {

@@ -166,6 +166,9 @@ struct MyRAMMacRootView: View {
         }
 
         guard let selectedNote else { return }
+#if DEBUG
+        MacSelectedEditorReloadMetrics.recordWholeNoteReload(on: editorSyncBridge)
+#endif
         attributedText = MacNotePersistenceAdapter().attributedContent(for: selectedNote)
         saveError = nil
     }
@@ -336,6 +339,15 @@ struct MyRAMMacRootView: View {
         }
     }
 }
+
+#if DEBUG
+@MainActor
+enum MacSelectedEditorReloadMetrics {
+    static func recordWholeNoteReload(on bridge: MacEditorSyncBridge) {
+        bridge.fullDocumentMetrics?.recordWholeNoteReload()
+    }
+}
+#endif
 
 private struct MacNoteListView: View {
     let notes: [Note]

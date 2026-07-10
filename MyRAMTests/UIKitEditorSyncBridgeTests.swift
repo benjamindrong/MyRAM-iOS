@@ -88,6 +88,9 @@ final class UIKitEditorSyncBridgeTests: XCTestCase {
         let textView = makeTextView("Hello")
         let bridge = UIKitEditorSyncBridge()
         bridge.textView = textView
+        var publishCount = 0
+        bridge.publishAttributedText = { _ in publishCount += 1 }
+        registerUndoIfAvailable(in: textView)
 
         let result = bridge.apply(
             AppliedEditorMutationBatch(
@@ -102,6 +105,9 @@ final class UIKitEditorSyncBridgeTests: XCTestCase {
         )
 
         XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 1, disposition: .requiresReload(.partialBatchApplication)))
+        XCTAssertEqual(publishCount, 0)
+        XCTAssertEqual(textView.text, "Hello!")
+        XCTAssertEqual(textView.undoManager?.canUndo, false)
     }
 
     func testNonSelectedBatchIsIgnored() {
@@ -217,6 +223,68 @@ final class UIKitEditorSyncBridgeTests: XCTestCase {
         XCTAssertEqual(metrics.wholeNoteReloadCount, 0)
     }
 
+    func testPostApplyAuthoritativeBodyMismatchSuppressesPublishAndClearsUndo() {
+        let noteID = UUID()
+        let textView = makeTextView("Hello")
+        let bridge = UIKitEditorSyncBridge()
+        bridge.textView = textView
+        let metrics = EditorRemoteFullDocumentMetrics()
+        bridge.fullDocumentMetrics = metrics
+        var publishCount = 0
+        bridge.publishAttributedText = { _ in publishCount += 1 }
+        registerUndoIfAvailable(in: textView)
+
+        let result = bridge.apply(
+            AppliedEditorMutationBatch(
+                noteID: noteID,
+                mutations: [.bodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
+                authoritativeBody: "different"
+            ),
+            selectedNoteID: noteID
+        )
+
+        XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 1, disposition: .requiresReload(.postApplyBodyMismatch)))
+        XCTAssertEqual(publishCount, 0)
+        XCTAssertEqual(textView.text, "Hello!")
+        XCTAssertEqual(textView.undoManager?.canUndo, false)
+        XCTAssertEqual(metrics.attributedStringCopyCount, 0)
+        XCTAssertEqual(metrics.authoritativeBodyComparisonCount, 1)
+    }
+
+    func testEmptyMutationBatchComparesAuthoritativeBodyOnce() {
+        let noteID = UUID()
+        let textView = makeTextView("Hello")
+        let bridge = UIKitEditorSyncBridge()
+        bridge.textView = textView
+        let metrics = EditorRemoteFullDocumentMetrics()
+        bridge.fullDocumentMetrics = metrics
+
+        let result = bridge.apply(
+            AppliedEditorMutationBatch(noteID: noteID, mutations: [], authoritativeBody: "Hello"),
+            selectedNoteID: noteID
+        )
+
+        XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .noApplicableMutations))
+        XCTAssertEqual(metrics.authoritativeBodyComparisonCount, 1)
+    }
+
+    func testEmptyMutationAuthoritativeBodyMismatchRequiresReload() {
+        let noteID = UUID()
+        let textView = makeTextView("Hello")
+        let bridge = UIKitEditorSyncBridge()
+        bridge.textView = textView
+        let metrics = EditorRemoteFullDocumentMetrics()
+        bridge.fullDocumentMetrics = metrics
+
+        let result = bridge.apply(
+            AppliedEditorMutationBatch(noteID: noteID, mutations: [], authoritativeBody: "Different"),
+            selectedNoteID: noteID
+        )
+
+        XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .requiresReload(.preApplyBodyMismatch)))
+        XCTAssertEqual(metrics.authoritativeBodyComparisonCount, 1)
+    }
+
     func testDeletionBeforeSelectionMapsBackwardWithoutReload() {
         let noteID = UUID()
         let textView = makeTextView("0123456789")
@@ -247,6 +315,13 @@ final class UIKitEditorSyncBridgeTests: XCTestCase {
         return textView
     }
 
+    private func registerUndoIfAvailable(in textView: UITextView) {
+        guard let undoManager = textView.undoManager else { return }
+        let target = UndoTarget()
+        undoManager.registerUndo(withTarget: target) { $0.didUndo = true }
+        XCTAssertTrue(undoManager.canUndo)
+    }
+
     private final class CountingDelegate: NSObject, UITextViewDelegate {
         let bridge: UIKitEditorSyncBridge
         var unsuppressedChangeCount = 0
@@ -259,5 +334,9 @@ final class UIKitEditorSyncBridgeTests: XCTestCase {
             guard !bridge.isApplyingRemoteSync else { return }
             unsuppressedChangeCount += 1
         }
+    }
+
+    private final class UndoTarget: NSObject {
+        var didUndo = false
     }
 }

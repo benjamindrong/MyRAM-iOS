@@ -87,11 +87,14 @@
 		BCA154010000000000000002 /* AppliedEditorMutation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000001 /* AppliedEditorMutation.swift */; };
 		BCA154010000000000000003 /* ActiveEditorApplicationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */; };
 		BCA154010000000000000004 /* ActiveEditorApplicationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */; };
+		BCA15401000000000000000D /* ActiveEditorSyncUpdateHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */; };
+		BCA15401000000000000000E /* ActiveEditorSyncUpdateHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */; };
 		BCA154010000000000000005 /* EditorSelectionMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000003 /* EditorSelectionMapper.swift */; };
 		BCA154010000000000000006 /* EditorSelectionMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000003 /* EditorSelectionMapper.swift */; };
 		BCA154010000000000000007 /* EditorRemoteApplyResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000004 /* EditorRemoteApplyResult.swift */; };
 		BCA154010000000000000008 /* EditorRemoteApplyResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000004 /* EditorRemoteApplyResult.swift */; };
 		BCA154010000000000000009 /* ActiveEditorApplicationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000005 /* ActiveEditorApplicationPolicyTests.swift */; };
+		BCA15401000000000000000F /* ActiveEditorSyncUpdateHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA15402000000000000000A /* ActiveEditorSyncUpdateHandlerTests.swift */; };
 		BCA15401000000000000000A /* EditorSelectionMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000006 /* EditorSelectionMapperTests.swift */; };
 		BCA15401000000000000000B /* UIKitEditorSyncBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000007 /* UIKitEditorSyncBridge.swift */; };
 		BCA15401000000000000000C /* UIKitEditorSyncBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000008 /* UIKitEditorSyncBridgeTests.swift */; };
@@ -274,9 +277,11 @@
 		BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBackedSyncBatchQueue.swift; sourceTree = "<group>"; };
 		BCA154020000000000000001 /* AppliedEditorMutation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppliedEditorMutation.swift; sourceTree = "<group>"; };
 		BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorApplicationPolicy.swift; sourceTree = "<group>"; };
+		BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorSyncUpdateHandler.swift; sourceTree = "<group>"; };
 		BCA154020000000000000003 /* EditorSelectionMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionMapper.swift; sourceTree = "<group>"; };
 		BCA154020000000000000004 /* EditorRemoteApplyResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorRemoteApplyResult.swift; sourceTree = "<group>"; };
 		BCA154020000000000000005 /* ActiveEditorApplicationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorApplicationPolicyTests.swift; sourceTree = "<group>"; };
+		BCA15402000000000000000A /* ActiveEditorSyncUpdateHandlerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorSyncUpdateHandlerTests.swift; sourceTree = "<group>"; };
 		BCA154020000000000000006 /* EditorSelectionMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionMapperTests.swift; sourceTree = "<group>"; };
 		BCA154020000000000000007 /* UIKitEditorSyncBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitEditorSyncBridge.swift; sourceTree = "<group>"; };
 		BCA154020000000000000008 /* UIKitEditorSyncBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitEditorSyncBridgeTests.swift; sourceTree = "<group>"; };
@@ -566,6 +571,7 @@
 				BCA123020000000000000010 /* IPhoneSyncBatchAccumulatorTests.swift */,
 				BCA123020000000000000011 /* IPhoneSyncBatchApplierTests.swift */,
 				BCA154020000000000000005 /* ActiveEditorApplicationPolicyTests.swift */,
+				BCA15402000000000000000A /* ActiveEditorSyncUpdateHandlerTests.swift */,
 				BCA154020000000000000006 /* EditorSelectionMapperTests.swift */,
 				BCA154020000000000000008 /* UIKitEditorSyncBridgeTests.swift */,
 				C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */,
@@ -694,6 +700,7 @@
 			children = (
 				BCA154020000000000000001 /* AppliedEditorMutation.swift */,
 				BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */,
+				BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */,
 				BCA154020000000000000003 /* EditorSelectionMapper.swift */,
 				BCA154020000000000000004 /* EditorRemoteApplyResult.swift */,
 			);
@@ -965,6 +972,7 @@
 				C097F01042FF000000000004 /* EditorPolicies.swift in Sources */,
 				BCA154010000000000000001 /* AppliedEditorMutation.swift in Sources */,
 				BCA154010000000000000003 /* ActiveEditorApplicationPolicy.swift in Sources */,
+				BCA15401000000000000000D /* ActiveEditorSyncUpdateHandler.swift in Sources */,
 				BCA154010000000000000005 /* EditorSelectionMapper.swift in Sources */,
 				BCA154010000000000000007 /* EditorRemoteApplyResult.swift in Sources */,
 				BCA15401000000000000000B /* UIKitEditorSyncBridge.swift in Sources */,
@@ -992,6 +1000,7 @@
 				BCA123010000000000000015 /* IPhoneSyncBatchAccumulatorTests.swift in Sources */,
 				BCA123010000000000000016 /* IPhoneSyncBatchApplierTests.swift in Sources */,
 				BCA154010000000000000009 /* ActiveEditorApplicationPolicyTests.swift in Sources */,
+				BCA15401000000000000000F /* ActiveEditorSyncUpdateHandlerTests.swift in Sources */,
 				BCA15401000000000000000A /* EditorSelectionMapperTests.swift in Sources */,
 				BCA15401000000000000000C /* UIKitEditorSyncBridgeTests.swift in Sources */,
 				C108F0112FF0000000000001 /* EditorFormattingMutationApplierTests.swift in Sources */,
@@ -1057,6 +1066,7 @@
 				BCA123010000000000000024 /* FileBackedSyncBatchQueue.swift in Sources */,
 				BCA154010000000000000002 /* AppliedEditorMutation.swift in Sources */,
 				BCA154010000000000000004 /* ActiveEditorApplicationPolicy.swift in Sources */,
+				BCA15401000000000000000E /* ActiveEditorSyncUpdateHandler.swift in Sources */,
 				BCA154010000000000000006 /* EditorSelectionMapper.swift in Sources */,
 				BCA154010000000000000008 /* EditorRemoteApplyResult.swift in Sources */,
 				BCA122010000000000000001 /* MacSyncModels.swift in Sources */,

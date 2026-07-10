@@ -2483,7 +2483,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.content.components(separatedBy: "[MID]").count - 1, 1)
     }
 
-    func testActiveEditorPresentationAcknowledgmentCompletesExactlyOnceForEveryDispositionShape() async throws {
+    func testPublishedEditorUpdateCompletesOnceWhenAcknowledgedMultipleTimesAtViewModelLevel() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let note = Note(title: "Shared", content: "Body")

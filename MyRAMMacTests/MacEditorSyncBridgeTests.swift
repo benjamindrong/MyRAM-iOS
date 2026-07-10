@@ -234,8 +234,18 @@ final class MacEditorSyncBridgeTests: XCTestCase {
     func testPostApplyAuthoritativeBodyMismatchRequiresFallback() {
         let noteID = UUID()
         let textView = makeTextView("Hello")
+        let undoManager = UndoManager()
+        let delegate = UndoProvidingTextViewDelegate(undoManager: undoManager)
+        textView.delegate = delegate
+        let target = UndoTarget()
+        undoManager.registerUndo(withTarget: target) { $0.didUndo = true }
+        XCTAssertTrue(undoManager.canUndo)
         let bridge = MacEditorSyncBridge()
         bridge.textView = textView
+        let metrics = EditorRemoteFullDocumentMetrics()
+        bridge.fullDocumentMetrics = metrics
+        var publishCount = 0
+        bridge.publishAttributedText = { _ in publishCount += 1 }
 
         let result = bridge.applyBatch(
             [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
@@ -244,6 +254,50 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         )
 
         XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 1, disposition: .requiresReload(.postApplyBodyMismatch)))
+        XCTAssertEqual(textView.string, "Hello!")
+        XCTAssertEqual(publishCount, 0)
+        XCTAssertFalse(undoManager.canUndo)
+        XCTAssertEqual(metrics.attributedStringCopyCount, 0)
+        XCTAssertEqual(metrics.authoritativeBodyComparisonCount, 1)
+    }
+
+    func testPartialBatchApplicationSuppressesPublishAndClearsUndo() {
+        let noteID = UUID()
+        let textView = makeTextView("Hello")
+        let undoManager = UndoManager()
+        let delegate = UndoProvidingTextViewDelegate(undoManager: undoManager)
+        textView.delegate = delegate
+        let target = UndoTarget()
+        undoManager.registerUndo(withTarget: target) { $0.didUndo = true }
+        XCTAssertTrue(undoManager.canUndo)
+        let bridge = MacEditorSyncBridge()
+        bridge.textView = textView
+        var publishCount = 0
+        bridge.publishAttributedText = { _ in publishCount += 1 }
+
+        let result = bridge.applyBatch(
+            [
+                .applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date())),
+                .applyBodyDeletion(AppliedEditorBodyDeletion(noteID: noteID, range: NSRange(location: 20, length: 1), deletedText: "x", modifiedAt: Date()))
+            ],
+            selectedNoteID: noteID,
+            authoritativeBody: "Hello!"
+        )
+
+        XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 1, disposition: .requiresReload(.partialBatchApplication)))
+        XCTAssertEqual(textView.string, "Hello!")
+        XCTAssertEqual(publishCount, 0)
+        XCTAssertFalse(undoManager.canUndo)
+    }
+
+    func testWholeNoteReloadMetricRecordsOnReloadPath() {
+        let bridge = MacEditorSyncBridge()
+        let metrics = EditorRemoteFullDocumentMetrics()
+        bridge.fullDocumentMetrics = metrics
+
+        MacSelectedEditorReloadMetrics.recordWholeNoteReload(on: bridge)
+
+        XCTAssertEqual(metrics.wholeNoteReloadCount, 1)
     }
 
     private func makeTextView(_ string: String) -> NSTextView {

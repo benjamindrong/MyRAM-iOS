@@ -38,9 +38,9 @@ final class UIKitEditorSyncBridge: ObservableObject {
 #if DEBUG
             fullDocumentMetrics?.recordAuthoritativeBodyComparison()
 #endif
-        }
-        guard textView.text == batch.authoritativeBody || !batch.mutations.isEmpty else {
-            return EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .requiresReload(.preApplyBodyMismatch))
+            guard textView.text == batch.authoritativeBody else {
+                return EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .requiresReload(.preApplyBodyMismatch))
+            }
         }
 
         var selection = textView.selectedRange
@@ -48,6 +48,7 @@ final class UIKitEditorSyncBridge: ObservableObject {
         let originalTypingAttributes = textView.typingAttributes
         let wasFirstResponder = textView.isFirstResponder
         var appliedCount = 0
+        var didApplySuccessfully = false
 
         isApplyingRemoteSync = true
         textView.textStorage.beginEditing()
@@ -61,6 +62,9 @@ final class UIKitEditorSyncBridge: ObservableObject {
             }
             if appliedCount > 0 {
                 textView.undoManager?.removeAllActions()
+            }
+            if didApplySuccessfully {
+                // Mutated failure paths clear stale undo state but do not publish rejected editor text.
 #if DEBUG
                 fullDocumentMetrics?.recordAttributedStringCopy()
 #endif
@@ -139,6 +143,7 @@ final class UIKitEditorSyncBridge: ObservableObject {
             )
         }
 
+        didApplySuccessfully = true
         return EditorRemoteBatchApplyResult(appliedCount: appliedCount, disposition: .applied)
     }
 
