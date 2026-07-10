@@ -623,6 +623,7 @@ enum SyncConvergenceTransactionFailure: Error, Equatable {
     case invalidMergePlan(noteID: UUID?)
     case inconsistentIncorporationState(noteID: UUID?)
     case staleAuthoritativeState(noteID: UUID?)
+    case unprovenTextLoss(noteID: UUID?)
     case unsupportedDigestFormat(noteID: UUID?, batchID: UUID, formatVersion: Int)
     case unexpected
 }
@@ -652,6 +653,8 @@ enum SyncConvergenceDrainFailureMapping {
             return .inconsistentIncorporationState
         case .staleAuthoritativeState:
             return .staleAuthoritativeState
+        case .unprovenTextLoss:
+            return .unprovenTextLoss
         case .unsupportedDigestFormat:
             return .unsupportedDigestFormat
         case .unexpected:

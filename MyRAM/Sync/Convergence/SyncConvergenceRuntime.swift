@@ -657,6 +657,8 @@ final class SyncConvergenceRuntime {
             kind = .inconsistentIncorporationState
         case .staleAuthoritativeState:
             kind = .staleAuthoritativeState
+        case .unprovenTextLoss:
+            kind = .unprovenTextLoss
         case .unsupportedDigestFormat:
             kind = .unsupportedDigestFormat
         case .unexpected:
@@ -709,6 +711,12 @@ final class NotesViewModelConvergencePresentationAdapter: SyncConvergencePresent
                 authoritativeBody: request.committedNote.body
             ))
         case .wholeNoteFallback:
+            guard let receipt = request.rewriteSafetyReceipt,
+                  receipt.noteID == request.noteID,
+                  receipt.priorBodyHash == request.expectedPreBodyHash,
+                  receipt.candidateBodyHash == request.committedPostBodyHash else {
+                return .stillPending
+            }
             disposition = .reload(.authoritativeConvergencePresentation)
         case .none:
             disposition = .metadataOnly
@@ -718,7 +726,8 @@ final class NotesViewModelConvergencePresentationAdapter: SyncConvergencePresent
             id: request.incorporationIdentity.batchID,
             noteID: request.noteID,
             metadata: ActiveEditorMetadataUpdate(title: request.committedTitle),
-            disposition: disposition
+            disposition: disposition,
+            expectedPreBodyHash: request.routing == .wholeNoteFallback ? request.expectedPreBodyHash : nil
         )
         return await viewModel.publishConvergencePresentationUpdate(
             update,

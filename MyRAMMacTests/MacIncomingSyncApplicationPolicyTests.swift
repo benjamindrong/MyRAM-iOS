@@ -79,4 +79,32 @@ final class MacIncomingSyncApplicationPolicyTests: XCTestCase {
         XCTAssertTrue(plan.editorActions.isEmpty)
         XCTAssertEqual(plan.reloadSelectedEditorReason, .unsafeIncrementalApply)
     }
+
+    func testMacSelectedEditorPathOnlyPlansIncrementalActionsOrUnsafeIncrementalReload() {
+        let selectedID = UUID()
+        let insertion = AppliedEditorBodyInsertion(noteID: selectedID, utf16Offset: 1, text: "x", modifiedAt: Date())
+        let deletion = AppliedEditorBodyDeletion(
+            noteID: selectedID,
+            range: NSRange(location: 2, length: 1),
+            deletedText: "y",
+            modifiedAt: Date()
+        )
+        let batch = MacAppliedSyncBatch(batchID: UUID(), changes: [.bodyInserted(insertion), .bodyDeleted(deletion)])
+
+        let readyPlan = MacIncomingSyncApplicationPolicy.plan(
+            appliedBatch: batch,
+            selectedNoteID: selectedID,
+            editorState: .ready
+        )
+        XCTAssertEqual(readyPlan.editorActions, [.applyBodyInsertion(insertion), .applyBodyDeletion(deletion)])
+        XCTAssertNil(readyPlan.reloadSelectedEditorReason)
+
+        let unsafePlan = MacIncomingSyncApplicationPolicy.plan(
+            appliedBatch: batch,
+            selectedNoteID: selectedID,
+            editorState: .unsafeForIncrementalApply
+        )
+        XCTAssertTrue(unsafePlan.editorActions.isEmpty)
+        XCTAssertEqual(unsafePlan.reloadSelectedEditorReason, .unsafeIncrementalApply)
+    }
 }

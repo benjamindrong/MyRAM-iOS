@@ -13,17 +13,20 @@ struct ActiveEditorSyncUpdate: Identifiable, Equatable {
     let noteID: UUID
     let metadata: ActiveEditorMetadataUpdate?
     let disposition: ActiveEditorSyncDisposition
+    let expectedPreBodyHash: String?
 
     init(
         id: UUID = UUID(),
         noteID: UUID,
         metadata: ActiveEditorMetadataUpdate? = nil,
-        disposition: ActiveEditorSyncDisposition
+        disposition: ActiveEditorSyncDisposition,
+        expectedPreBodyHash: String? = nil
     ) {
         self.id = id
         self.noteID = noteID
         self.metadata = metadata
         self.disposition = disposition
+        self.expectedPreBodyHash = expectedPreBodyHash
     }
 }
 
@@ -62,6 +65,28 @@ enum ActiveEditorDeferredReason: Equatable {
 enum ActiveEditorIgnoredReason: Equatable {
     case targetNoteIsNotActive
     case supersededByNewerEditorUpdate
+}
+
+enum ActiveEditorWholeNoteFallbackGate {
+    enum Decision: Equatable {
+        case allowReload
+        case stillPending
+    }
+
+    static func decision(
+        reason: ActiveEditorReloadReason,
+        expectedPreBodyHash: String?,
+        currentContent: String
+    ) -> Decision {
+        guard reason == .authoritativeConvergencePresentation,
+              let expectedPreBodyHash else {
+            return .allowReload
+        }
+
+        return SyncBatchContentHash.sha256Hex(for: currentContent) == expectedPreBodyHash
+            ? .allowReload
+            : .stillPending
+    }
 }
 
 enum ActiveEditorApplicationDecision: Equatable {

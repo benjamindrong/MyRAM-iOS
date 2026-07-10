@@ -1483,6 +1483,14 @@ struct NoteEditorView: View {
     }
 
     private func applyRemoteEditorReloadIfSafe(reason: ActiveEditorReloadReason, update: ActiveEditorSyncUpdate) {
+        if ActiveEditorWholeNoteFallbackGate.decision(
+            reason: reason,
+            expectedPreBodyHash: update.expectedPreBodyHash,
+            currentContent: content
+        ) == .stillPending {
+            acknowledgeConvergencePresentation(update, result: .stillPending)
+            return
+        }
         switch activeEditorStateDecision(selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id) {
         case .apply:
             applyRemoteNoteRefresh(reason: reason)
