@@ -11,7 +11,7 @@ struct NearbySyncView: View {
                     LabeledContent("Device", value: syncController.localPeerName)
                     LabeledContent("Status", value: syncController.connectionSummary)
                     LabeledContent("Last Event", value: syncController.lastConnectionEvent)
-                    LabeledContent("Queued Changes", value: "\(syncController.pendingChangeCount)")
+                    pendingStatusRows(syncController.pendingSyncStatus)
                     if let lastSyncAt = syncController.lastSyncAt {
                         LabeledContent("Last Sync", value: lastSyncAt.formatted(date: .abbreviated, time: .standard))
                     }
@@ -59,6 +59,25 @@ struct NearbySyncView: View {
             .padding(16)
         }
         .background(style.appBackgroundColor.ignoresSafeArea())
+    }
+
+    @ViewBuilder
+    private func pendingStatusRows(_ status: PendingSyncStatus) -> some View {
+        LabeledContent("Queued Changes", value: "\(status.totalOutboundItems)")
+        if status.legacyChanges > 0 {
+            LabeledContent("Legacy changes", value: "\(status.legacyChanges)")
+        }
+        if status.unsentBatches > 0 {
+            LabeledContent("Unsent batches", value: "\(status.unsentBatches)")
+        }
+        if status.localConvergenceObligations > 0 {
+            LabeledContent("Pending local batch", value: "\(status.localConvergenceObligations)")
+        }
+        ForEach(Array(status.healthIssues.enumerated()), id: \.offset) { _, issue in
+            Text(issue.description)
+                .font(.footnote)
+                .foregroundStyle(.orange)
+        }
     }
 
     private func section<Content: View>(

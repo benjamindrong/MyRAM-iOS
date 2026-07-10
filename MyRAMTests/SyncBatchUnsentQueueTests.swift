@@ -172,10 +172,17 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         }
 
         XCTAssertEqual(queue.pendingBatches, [first])
+        if case .readFailed = queue.snapshot().health {
+            // Expected; failed queue writes must remain visible for recovery.
+        } else {
+            XCTFail("Expected failed persistence to mark queue health as readFailed")
+        }
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [first])
 
-        try queue.enqueueIncoming(second)
-        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [first, second])
+        XCTAssertThrowsError(try queue.enqueueIncoming(second)) { error in
+            XCTAssertEqual(error as? FileBackedSyncBatchQueue.QueueError, .unhealthyPersistence)
+        }
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [first])
     }
 
     func testFileBackedQueueRemovesOnlySuccessfulIDsFromDisk() {
@@ -260,34 +267,110 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(reloadedQueue.pendingBatches, [second])
     }
 
-    func testFileBackedQueueRecoversFromCorruptJSONAndRemainsUsable() throws {
+    func testFileBackedQueueReportsCorruptJSONAndDoesNotOverwriteIt() throws {
         let fileURL = temporaryQueueFileURL()
         try createDirectory(for: fileURL)
-        try Data("not json".utf8).write(to: fileURL)
+        let corruptData = Data("not json".utf8)
+        try corruptData.write(to: fileURL)
         let batch = makeBatch(idSuffix: 1)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
         XCTAssertTrue(queue.isEmpty)
+        XCTAssertEqual(queue.snapshot().health, .corrupt)
         queue.enqueue(batch)
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        XCTAssertEqual(reloadedQueue.pendingBatches, [batch])
+        XCTAssertEqual(try Data(contentsOf: fileURL), corruptData)
+        XCTAssertEqual(reloadedQueue.snapshot().health, .corrupt)
+        XCTAssertTrue(reloadedQueue.pendingBatches.isEmpty)
     }
 
-    func testFileBackedQueueRecoversFromUnsupportedVersionAndRemainsUsable() throws {
+    func testFileBackedQueueReportsUnsupportedVersionAndDoesNotOverwriteIt() throws {
         let fileURL = temporaryQueueFileURL()
         try createDirectory(for: fileURL)
         let staleBatch = makeBatch(idSuffix: 1)
         let supportedBatch = makeBatch(idSuffix: 2)
         let unsupportedQueue = TestPersistedSyncBatchQueue(version: 999, batches: [staleBatch])
         try JSONEncoder().encode(unsupportedQueue).write(to: fileURL)
+        let originalData = try Data(contentsOf: fileURL)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
         XCTAssertTrue(queue.isEmpty)
+        XCTAssertEqual(queue.snapshot().health, .unsupportedVersion(999))
         queue.enqueue(supportedBatch)
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        XCTAssertEqual(reloadedQueue.pendingBatches, [supportedBatch])
+        XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+        XCTAssertEqual(reloadedQueue.snapshot().health, .unsupportedVersion(999))
+        XCTAssertTrue(reloadedQueue.pendingBatches.isEmpty)
+    }
+
+    func testFileBackedQueueReportsMissingFileHealthAndPendingCount() {
+        let queue = FileBackedSyncBatchQueue(fileURL: temporaryQueueFileURL(), limit: 10)
+
+        XCTAssertEqual(queue.snapshot(), FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .fileMissing))
+        XCTAssertEqual(queue.pendingCount, 0)
+    }
+
+    func testFileBackedQueueReportsHealthyReloadSnapshot() {
+        let fileURL = temporaryQueueFileURL()
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        queue.enqueue(first)
+        queue.enqueue(second)
+        let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        XCTAssertEqual(
+            reloadedQueue.snapshot(),
+            FileBackedSyncBatchQueueSnapshot(pendingBatches: [first, second], health: .healthy)
+        )
+        XCTAssertEqual(reloadedQueue.pendingCount, 2)
+    }
+
+    func testFileBackedQueueReplacePendingBatchesPersistsAtomically() throws {
+        let fileURL = temporaryQueueFileURL()
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+        let replacement = makeBatch(idSuffix: 3)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        queue.enqueue(first)
+        queue.enqueue(second)
+        try queue.replacePendingBatches([replacement])
+
+        let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+        XCTAssertEqual(queue.snapshot().pendingBatches, [replacement])
+        XCTAssertEqual(queue.snapshot().health, .healthy)
+        XCTAssertEqual(reloadedQueue.pendingBatches, [replacement])
+    }
+
+    func testFileBackedQueueReplacePendingBatchesRollsBackOnPersistenceFailure() throws {
+        let fileURL = temporaryQueueFileURL()
+        let first = makeBatch(idSuffix: 1)
+        let replacement = makeBatch(idSuffix: 2)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        queue.enqueue(first)
+        queue.injectPersistenceFailureForNextWrite()
+        XCTAssertThrowsError(try queue.replacePendingBatches([replacement])) { error in
+            XCTAssertEqual(error as? FileBackedSyncBatchQueue.QueueError, .persistenceFailed)
+        }
+
+        XCTAssertEqual(queue.pendingBatches, [first])
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [first])
+    }
+
+    func testFileBackedQueueRejectsReplacementWhenLoadedPersistenceIsUnhealthy() throws {
+        let fileURL = temporaryQueueFileURL()
+        try createDirectory(for: fileURL)
+        try Data("not json".utf8).write(to: fileURL)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        XCTAssertThrowsError(try queue.replacePendingBatches([makeBatch(idSuffix: 1)])) { error in
+            XCTAssertEqual(error as? FileBackedSyncBatchQueue.QueueError, .unhealthyPersistence)
+        }
     }
 
     func testFileBackedQueueCanRunMemoryOnlyWithNilFileURL() {

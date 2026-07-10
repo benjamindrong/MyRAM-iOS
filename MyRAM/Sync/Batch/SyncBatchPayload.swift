@@ -399,7 +399,7 @@ enum SyncBatchDrainFailureClassifier {
             switch queueError {
             case .capacityExceeded:
                 kind = .queueCapacity
-            case .persistenceFailed:
+            case .persistenceFailed, .unhealthyPersistence:
                 kind = .queuePersistence
             }
         } else {

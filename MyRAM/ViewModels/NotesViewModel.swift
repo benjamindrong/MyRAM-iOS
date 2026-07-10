@@ -102,6 +102,14 @@ final class NotesViewModel: ObservableObject {
         self.syncController?.onBatchReceived = { [weak self] batch in
             await self?.applyIncomingSyncBatch(batch)
         }
+        if let statusController = syncController as? MyRAMSyncConvergenceStatusConfiguring {
+            statusController.localConvergencePendingCountProvider = { [weak self] in
+                self?.pendingLocalConvergenceBatches.pendingCount ?? 0
+            }
+            statusController.onFlushLocalConvergenceRequested = { [weak self] in
+                await self?.resumePendingConvergencePresentation()
+            }
+        }
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
             for await batch in stream {

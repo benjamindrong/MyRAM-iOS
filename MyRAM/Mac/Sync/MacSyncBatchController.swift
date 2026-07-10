@@ -1,6 +1,7 @@
 #if os(macOS)
 import Foundation
 @preconcurrency import MultipeerConnectivity
+import NearbySyncCore
 import SwiftData
 
 struct MacSyncDiscoveredPeer: Identifiable, Equatable {
@@ -33,6 +34,7 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     private let unsentBatches: FileBackedSyncBatchQueue
     private let pendingIncomingBatches: FileBackedSyncBatchQueue
     private let applyBatch: (MacSyncBatch) throws -> MacAppliedSyncBatch
+    private let legacyReceiver: MacLegacySyncReceiver
     private var isDrainingPendingIncomingBatches = false
 
     init(
@@ -40,7 +42,8 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         unsentBatchQueueFileURL: URL? = MacSyncBatchController.unsentBatchQueueFileURL(),
         pendingIncomingBatchQueueFileURL: URL? = MacSyncBatchController.pendingIncomingBatchQueueFileURL(),
         startsNetworking: Bool = true,
-        applyBatch: ((MacSyncBatch) throws -> MacAppliedSyncBatch)? = nil
+        applyBatch: ((MacSyncBatch) throws -> MacAppliedSyncBatch)? = nil,
+        legacyReceiver: MacLegacySyncReceiver? = nil
     ) {
         let identity = MacSyncDeviceIdentityProvider().currentIdentity()
         peerID = MCPeerID(displayName: "\(identity.displayName)|\(identity.id.uuidString)")
@@ -54,6 +57,7 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         self.applyBatch = applyBatch ?? { batch in
             try MacSyncBatchApplier(context: context).apply(batch)
         }
+        self.legacyReceiver = legacyReceiver ?? MacLegacySyncReceiver(context: context)
 
         super.init()
 
@@ -201,6 +205,29 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         pendingIncomingBatches.pendingBatches.count
     }
 
+    private func receiveLegacyEnvelope(_ envelope: SyncEnvelope, from peerID: MCPeerID) {
+        do {
+            let result = try legacyReceiver.receive(envelope)
+            guard !result.acknowledgementIDs.isEmpty else { return }
+            try sendLegacyAcknowledgement(ids: result.acknowledgementIDs, to: peerID)
+            lastErrorMessage = nil
+            lastSyncAt = Date()
+        } catch {
+            lastErrorMessage = "Unable to apply nearby legacy changes."
+        }
+    }
+
+    private func sendLegacyAcknowledgement(ids: [UUID], to peerID: MCPeerID) throws {
+        let acknowledgement = SyncEnvelope(
+            senderDeviceID: MacSyncDeviceIdentityProvider().currentIdentity().id.uuidString,
+            changes: [],
+            acknowledgedChangeIDs: ids
+        )
+        let payload = try JSONEncoder().encode(acknowledgement)
+        let data = try MultipeerSyncMessageCoding.encode(kind: .legacySyncEnvelope, payload: payload)
+        try session.send(data, toPeers: [peerID], with: .reliable)
+    }
+
     private func remember(_ peerID: MCPeerID) {
         let identity = MacSyncPeerIdentity(peerID: peerID)
         if !availablePeers.contains(where: { $0.deviceID == identity.deviceID }) {
@@ -245,11 +272,18 @@ extension MacSyncBatchController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
-                  message.canDecodeWithCurrentSchema,
-                  message.kind == .batchSync,
-                  let envelope = try? JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload),
-                  envelope.canDecodeWithCurrentSchema else { return }
-            receive(envelope.batch)
+                  message.canDecodeWithCurrentSchema else { return }
+
+            switch message.kind {
+            case .batchSync:
+                guard let envelope = try? JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload),
+                      envelope.canDecodeWithCurrentSchema else { return }
+                receive(envelope.batch)
+            case .legacySyncEnvelope:
+                guard let envelope = try? JSONDecoder().decode(SyncEnvelope.self, from: message.payload) else { return }
+                receiveLegacyEnvelope(envelope, from: peerID)
+            }
+
             remember(peerID)
             lastConnectionEvent = "Received sync from \(displayName(for: peerID))"
         }

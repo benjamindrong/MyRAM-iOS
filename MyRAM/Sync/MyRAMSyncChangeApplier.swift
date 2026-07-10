@@ -2,7 +2,7 @@ import Foundation
 import NearbySyncCore
 import SwiftData
 
-struct MyRAMSyncApplyResult {
+struct MyRAMSyncApplyResult: Equatable {
     var shouldRefreshActiveNote = false
     var deletedCurrentNoteID: UUID?
     var currentFolderReplacementID: UUID?
@@ -594,7 +594,7 @@ final class MyRAMSyncChangeApplier {
         }
 
         switch SyncThreeWayTextMergePolicy.merge(base: baseline.text, local: localText, remote: remoteText) {
-        case .apply(let text, _):
+        case .apply(let text), .merged(let text):
             return .apply(text)
         case .noOp:
             return .apply(localText)
@@ -714,7 +714,7 @@ final class MyRAMSyncChangeApplier {
         }
 
         switch SyncThreeWayTextMergePolicy.merge(base: baseText, local: localText, remote: resolvedText) {
-        case .apply(let text, _):
+        case .apply(let text), .merged(let text):
             applyResolvedText(text, conflict: conflict)
             return true
         case .noOp:
@@ -739,7 +739,7 @@ final class MyRAMSyncChangeApplier {
             let previousContent = note.content
             note.content = text
             if text == conflict.remoteText {
-                note.richTextContentData = RichTextContentCodec.sanitizedConflictRichTextData(
+                note.richTextContentData = sanitizedConflictRichTextData(
                     conflict.remoteRichTextContentData,
                     plainText: conflict.remoteText
                 )
@@ -799,6 +799,21 @@ final class MyRAMSyncChangeApplier {
                 originDeviceID: nil
             )
         }
+    }
+
+    private func sanitizedConflictRichTextData(_ richTextData: Data?, plainText: String) -> Data? {
+        #if os(iOS)
+        return RichTextContentCodec.sanitizedConflictRichTextData(richTextData, plainText: plainText)
+        #else
+        guard let richTextData,
+              let attributedText = try? NSAttributedString(
+                data: richTextData,
+                options: [.documentType: NSAttributedString.DocumentType.rtf],
+                documentAttributes: nil
+              ),
+              let compatibleText = attributedText.compatibleConflictText(matching: plainText) else { return nil }
+        return RTFCoding.encode(NSMutableAttributedString(attributedString: compatibleText))
+        #endif
     }
 
     private func preserveFolderTitleConflictIfNeeded(folder: Folder, payload: MyRAMFolderSyncPayload) -> Bool {
@@ -1136,6 +1151,33 @@ private extension SyncConflictEntityType {
         case .pinnedThought:
             .marker
         }
+    }
+}
+
+private extension NSAttributedString {
+    func compatibleConflictText(matching plainText: String) -> NSAttributedString? {
+        guard string != plainText else { return self }
+        let nsString = string as NSString
+        let nsPlainLength = (plainText as NSString).length
+        guard nsString.length > nsPlainLength else { return nil }
+        guard nsString.substring(to: nsPlainLength) == plainText else { return nil }
+
+        let extraTrailingText = nsString.substring(from: nsPlainLength)
+        guard extraTrailingText.isDocumentBoundaryWhitespace else { return nil }
+
+        let mutable = NSMutableAttributedString(attributedString: self)
+        mutable.deleteCharacters(
+            in: NSRange(location: nsPlainLength, length: nsString.length - nsPlainLength)
+        )
+        guard mutable.string == plainText else { return nil }
+        return mutable
+    }
+}
+
+private extension String {
+    var isDocumentBoundaryWhitespace: Bool {
+        self == "\n"
+            || (!isEmpty && unicodeScalars.allSatisfy { CharacterSet.whitespaces.contains($0) })
     }
 }
 
