@@ -5,6 +5,9 @@ final class UIKitEditorSyncBridge: ObservableObject {
     weak var textView: UITextView?
     var publishAttributedText: ((NSAttributedString) -> Void)?
     var onMarkedTextEnded: (() -> Void)?
+#if DEBUG
+    var fullDocumentMetrics: EditorRemoteFullDocumentMetrics?
+#endif
 
     private(set) var isApplyingRemoteSync = false
     private var previouslyHadMarkedText = false
@@ -31,6 +34,11 @@ final class UIKitEditorSyncBridge: ObservableObject {
             return EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .requiresReload(.editorUnavailable))
         }
 
+        if batch.mutations.isEmpty {
+#if DEBUG
+            fullDocumentMetrics?.recordAuthoritativeBodyComparison()
+#endif
+        }
         guard textView.text == batch.authoritativeBody || !batch.mutations.isEmpty else {
             return EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .requiresReload(.preApplyBodyMismatch))
         }
@@ -53,6 +61,9 @@ final class UIKitEditorSyncBridge: ObservableObject {
             }
             if appliedCount > 0 {
                 textView.undoManager?.removeAllActions()
+#if DEBUG
+                fullDocumentMetrics?.recordAttributedStringCopy()
+#endif
                 publishAttributedText?(NSAttributedString(attributedString: textView.attributedText))
             }
             isApplyingRemoteSync = false
@@ -118,6 +129,9 @@ final class UIKitEditorSyncBridge: ObservableObject {
             return EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .noApplicableMutations)
         }
 
+#if DEBUG
+        fullDocumentMetrics?.recordAuthoritativeBodyComparison()
+#endif
         guard textView.text == batch.authoritativeBody else {
             return EditorRemoteBatchApplyResult(
                 appliedCount: appliedCount,
@@ -154,19 +168,19 @@ enum UIKitRemoteInsertionAttributePolicy {
         defaultAttributes: [NSAttributedString.Key: Any]
     ) -> [NSAttributedString.Key: Any] {
         guard attributedString.length > 0 else {
-            return filteredEditorBodyAttributes(typingAttributes.isEmpty ? defaultAttributes : typingAttributes)
+            return inheritedEditorBodyAttributes(typingAttributes.isEmpty ? defaultAttributes : typingAttributes)
         }
 
         if offset > 0 {
-            return filteredEditorBodyAttributes(
+            return inheritedEditorBodyAttributes(
                 attributedString.attributes(at: min(offset - 1, attributedString.length - 1), effectiveRange: nil)
             )
         }
 
-        return filteredEditorBodyAttributes(attributedString.attributes(at: 0, effectiveRange: nil))
+        return inheritedEditorBodyAttributes(attributedString.attributes(at: 0, effectiveRange: nil))
     }
 
-    private static func filteredEditorBodyAttributes(
+    private static func inheritedEditorBodyAttributes(
         _ attributes: [NSAttributedString.Key: Any]
     ) -> [NSAttributedString.Key: Any] {
         attributes

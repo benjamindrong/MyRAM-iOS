@@ -8,6 +8,40 @@ enum SyncConvergenceRuntimeOutcome {
     case blocked(SyncBatchDrainFailure)
 }
 
+/// Captures the document-scale work performed while registering one or more local batches.
+final class SyncConvergenceLocalEvidenceMetrics {
+    private(set) var wholeBodyHashCount = 0
+    private(set) var wholeBodyReconstructionCount = 0
+    private(set) var retainedOperationRecordCount = 0
+    private(set) var saveCount = 0
+    private(set) var submittedBodyOperationCount = 0
+
+    func reset() {
+        wholeBodyHashCount = 0
+        wholeBodyReconstructionCount = 0
+        retainedOperationRecordCount = 0
+        saveCount = 0
+        submittedBodyOperationCount = 0
+    }
+
+    fileprivate func recordSubmittedBodyOperations(_ count: Int) { submittedBodyOperationCount += count }
+    fileprivate func recordWholeBodyHash() { wholeBodyHashCount += 1 }
+    fileprivate func recordWholeBodyReconstruction() { wholeBodyReconstructionCount += 1 }
+    fileprivate func recordRetainedOperation() { retainedOperationRecordCount += 1 }
+    fileprivate func recordSave() { saveCount += 1 }
+}
+
+private extension SyncBatchChange {
+    var isBodyTextOperation: Bool {
+        switch self {
+        case .noteBodyTextInserted, .noteBodyTextDeleted:
+            true
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+            false
+        }
+    }
+}
+
 @MainActor
 final class SyncConvergenceRuntime {
     private let context: ModelContext
@@ -25,19 +59,22 @@ final class SyncConvergenceRuntime {
     private lazy var pendingPostCommitSource = SwiftDataSyncConvergencePostCommitStore(context: context)
     private var isDraining = false
     private var drainRequestedWhileActive = false
+    private let localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics?
 
     init(
         context: ModelContext,
         convergenceQueue: FileBackedSyncBatchQueue,
         localObligationQueue: FileBackedSyncBatchQueue,
         localBatchTransportAdapter: SyncConvergenceLocalBatchTransportAdapter?,
-        presentationAdapter: SyncConvergencePresentationAdapter
+        presentationAdapter: SyncConvergencePresentationAdapter,
+        localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics? = nil
     ) {
         self.context = context
         self.convergenceQueue = convergenceQueue
         self.localObligationQueue = localObligationQueue
         self.localBatchTransportAdapter = localBatchTransportAdapter
         self.presentationAdapter = presentationAdapter
+        self.localEvidenceMetrics = localEvidenceMetrics
     }
 
     func submitRemoteBatch(_ batch: SyncBatch) async -> SyncConvergenceRuntimeOutcome {
@@ -92,13 +129,8 @@ final class SyncConvergenceRuntime {
             }
             for request in pendingRequests {
                 let outcome = await postCommitExecutor.execute(request)
-                switch outcome {
-                case .complete:
-                    continue
-                case .pending(let pending):
-                    return .pending(pending)
-                case .failedBeforeWork:
-                    return .blocked(SyncBatchDrainFailure(batchID: request.sourceBatchID, kind: .persistence))
+                if let terminal = Self.terminalOutcome(forPostCommit: outcome, batchID: request.sourceBatchID) {
+                    return terminal
                 }
             }
 
@@ -123,23 +155,13 @@ final class SyncConvergenceRuntime {
                     case .incorporated(let result):
                         appliedBatchIDs.insert(result.batchID)
                         let postCommit = await postCommitExecutor.execute(SyncConvergencePostCommitRequest(result: result))
-                        switch postCommit {
-                        case .complete:
-                            break
-                        case .pending(let pending):
-                            return .pending(pending)
-                        case .failedBeforeWork:
-                            return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
+                        if let terminal = Self.terminalOutcome(forPostCommit: postCommit, batchID: batch.id) {
+                            return terminal
                         }
                     case .alreadyIncorporated(let result):
                         let postCommit = await postCommitExecutor.execute(SyncConvergencePostCommitRequest(result: result))
-                        switch postCommit {
-                        case .complete:
-                            break
-                        case .pending(let pending):
-                            return .pending(pending)
-                        case .failedBeforeWork:
-                            return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
+                        if let terminal = Self.terminalOutcome(forPostCommit: postCommit, batchID: batch.id) {
+                            return terminal
                         }
                     case .failedBeforeCommit(let failure), .failedAndRolledBack(let failure):
                         return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
@@ -151,13 +173,8 @@ final class SyncConvergenceRuntime {
                             switch try pendingPostCommitSource.loadPostCommitStatus(forBatchID: cleanupBatchID) {
                             case .pending(let request), .tombstone(let request):
                                 let outcome = await postCommitExecutor.execute(request)
-                                switch outcome {
-                                case .complete:
-                                    continue
-                                case .pending(let pending):
-                                    return .pending(pending)
-                                case .failedBeforeWork:
-                                    return .blocked(SyncBatchDrainFailure(batchID: cleanupBatchID, kind: .persistence))
+                                if let terminal = Self.terminalOutcome(forPostCommit: outcome, batchID: cleanupBatchID) {
+                                    return terminal
                                 }
                             case .completed:
                                 try convergenceQueue.removeBatches(withIDs: [cleanupBatchID])
@@ -179,6 +196,22 @@ final class SyncConvergenceRuntime {
             }
         } while drainRequestedWhileActive
         return .drained(appliedBatchIDs: appliedBatchIDs)
+    }
+
+    /// Maps a post-commit executor outcome to a terminal `drain()` result, or `nil` when
+    /// draining should continue with the next queued item.
+    private static func terminalOutcome(
+        forPostCommit outcome: SyncConvergencePostCommitOutcome,
+        batchID: UUID?
+    ) -> SyncConvergenceRuntimeOutcome? {
+        switch outcome {
+        case .complete:
+            return nil
+        case .pending(let pending):
+            return .pending(pending)
+        case .failedBeforeWork:
+            return .blocked(SyncBatchDrainFailure(batchID: batchID, kind: .persistence))
+        }
     }
 
     private func satisfyLocalObligations() async throws {
@@ -217,9 +250,15 @@ final class SyncConvergenceRuntime {
 
     private func registerLocalEvidence(for batch: SyncBatch) throws {
         let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
+#if DEBUG
+        localEvidenceMetrics?.recordSubmittedBodyOperations(batch.changes.filter(\.isBodyTextOperation).count)
+#endif
         try registerLocalBodyEvidence(for: batch, transaction: transaction)
         try registerLocalTitleEvidence(for: batch, transaction: transaction)
         try transaction.save()
+#if DEBUG
+        localEvidenceMetrics?.recordSave()
+#endif
     }
 
     private func registerLocalBodyEvidence(
@@ -242,8 +281,17 @@ final class SyncConvergenceRuntime {
             }
             var recordsByIndex: [Int: SyncConvergenceRetainedOperationRecord] = [:]
             for (operationIndex, change) in changes.reversed() {
+#if DEBUG
+                localEvidenceMetrics?.recordWholeBodyHash()
+#endif
                 let resultHash = SyncBatchContentHash.sha256Hex(for: currentBody)
+#if DEBUG
+                localEvidenceMetrics?.recordWholeBodyReconstruction()
+#endif
                 let previousBody = try bodyBeforeApplying(change, currentBody: currentBody)
+#if DEBUG
+                localEvidenceMetrics?.recordWholeBodyHash()
+#endif
                 let baseHash = SyncBatchContentHash.sha256Hex(for: previousBody)
                 try validateLocalBaseHash(change, reconstructedBaseHash: baseHash)
                 recordsByIndex[operationIndex] = try retainedOperationRecord(
@@ -266,6 +314,9 @@ final class SyncConvergenceRuntime {
                     continue
                 }
                 try transaction.insertRetainedOperation(recordsByIndex[operationIndex]!, source: .local)
+#if DEBUG
+                localEvidenceMetrics?.recordRetainedOperation()
+#endif
             }
         }
     }
@@ -526,8 +577,15 @@ final class SyncConvergenceRuntime {
                 predicate: #Predicate { $0.noteID == noteID }
             ))
             let incorporatedBatchIDs = Set(roots.map(\.batchID))
-            let incorporatedRoots = try context.fetch(FetchDescriptor<IncorporatedSyncBatch>())
-                .filter { incorporatedBatchIDs.contains($0.batchID) }
+            let incorporatedRoots = try incorporatedBatchIDs.map { batchID in
+                let descriptor = FetchDescriptor<IncorporatedSyncBatch>(
+                    predicate: #Predicate { $0.batchID == batchID }
+                )
+                guard let root = try context.fetch(descriptor).first else {
+                    throw SyncConvergenceTransactionFailure.corruptHistory(noteID: noteID)
+                }
+                return root
+            }
             for root in incorporatedRoots {
                 let affectedNoteIDs = try SyncConvergenceAffectedNotesPayloadV1
                     .decodeData(root.affectedNotesPayloadData)
@@ -545,8 +603,9 @@ final class SyncConvergenceRuntime {
             let incorporationBlockingReferences = try context.fetch(FetchDescriptor<IncorporationBlockingReference>(
                 predicate: #Predicate { $0.noteID == noteID }
             ))
-            let contradictions = try context.fetch(FetchDescriptor<IncorporationContradictionDiagnostic>())
-                .filter { $0.noteID == noteID }
+            let contradictions = try context.fetch(FetchDescriptor<IncorporationContradictionDiagnostic>(
+                predicate: #Predicate { $0.noteID == noteID }
+            ))
             let compactionStates = try context.fetch(FetchDescriptor<NoteHistoryCompactionState>(
                 predicate: #Predicate { $0.noteID == noteID }
             ))
@@ -584,6 +643,13 @@ final class SyncConvergenceRuntime {
             )
         }
     }
+
+#if DEBUG
+    /// Exposes the production history projection to structural scalability tests.
+    func loadHistoryStatesForTesting(noteIDs: Set<UUID>) throws -> [SyncConvergenceHistoryAccountingProjection] {
+        try loadHistoryStates(noteIDs: noteIDs)
+    }
+#endif
 
     private func fullIncorporationEvidenceBytes(
         roots: [IncorporatedSyncBatch],

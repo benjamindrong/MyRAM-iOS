@@ -1367,10 +1367,8 @@ struct NoteEditorView: View {
             applyRemoteEditorReloadIfSafe(reason: reason, update: update)
         case .deferred:
             acknowledgeConvergencePresentation(update, result: .stillPending)
-            break
         case .ignored:
             acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-            break
         }
     }
 
@@ -1378,7 +1376,10 @@ struct NoteEditorView: View {
         _ metadata: ActiveEditorMetadataUpdate?,
         update: ActiveEditorSyncUpdate
     ) {
-        guard let metadata else { return }
+        guard let metadata else {
+            acknowledgeConvergencePresentation(update, result: .verifiedComplete)
+            return
+        }
 
         let decision = activeEditorStateDecision(selectedNoteMatches: update.noteID == note.id && vm.currentNote?.id == note.id)
 
@@ -1395,7 +1396,6 @@ struct NoteEditorView: View {
             acknowledgeConvergencePresentation(update, result: .stillPending)
         case .ignore:
             acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-            break
         }
     }
 
@@ -1454,17 +1454,19 @@ struct NoteEditorView: View {
                 if editorBufferOwner == .applyingRemoteSync {
                     editorBufferOwner = .idle
                 }
-                applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
-                refreshUndoState()
-                if update.metadata == nil {
+                if update.metadata != nil {
+                    applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
+                } else {
                     acknowledgeConvergencePresentation(update, result: .verifiedComplete)
                 }
+                refreshUndoState()
             case .noApplicableMutations:
                 if editorBufferOwner == .applyingRemoteSync {
                     editorBufferOwner = .idle
                 }
-                applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
-                if update.metadata == nil {
+                if update.metadata != nil {
+                    applyRemoteEditorMetadataIfSafe(update.metadata, update: update)
+                } else {
                     acknowledgeConvergencePresentation(update, result: .verifiedComplete)
                 }
             case .requiresReload(let reason):
@@ -1473,12 +1475,10 @@ struct NoteEditorView: View {
             }
         case .`defer`:
             acknowledgeConvergencePresentation(update, result: .stillPending)
-            break
         case .reload(let reason):
             applyRemoteEditorReloadIfSafe(reason: reason, update: update)
         case .ignore:
             acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-            break
         }
     }
 
@@ -1497,10 +1497,8 @@ struct NoteEditorView: View {
             acknowledgeConvergencePresentation(update, result: .verifiedComplete)
         case .deferUntilReintegration:
             acknowledgeConvergencePresentation(update, result: .stillPending)
-            break
         case .ignore:
             acknowledgeConvergencePresentation(update, result: .verifiedComplete)
-            break
         }
     }
 
@@ -1515,6 +1513,9 @@ struct NoteEditorView: View {
         guard vm.currentNote?.id == note.id,
               let refreshedNote = vm.refreshedNote(withID: note.id) else { return }
         cancelPendingNoteCommit()
+#if DEBUG
+        editorSyncBridge.fullDocumentMetrics?.recordWholeNoteReload()
+#endif
         editorBufferOwner = .applyingRemoteSync
         title = refreshedNote.title
         content = refreshedNote.content
@@ -1536,6 +1537,9 @@ struct NoteEditorView: View {
     private func publishRemoteAttributedText(_ attributedText: NSAttributedString) {
         content = attributedText.string
         pendingRichTextContentEncoder = nil
+#if DEBUG
+        editorSyncBridge.fullDocumentMetrics?.recordRichTextEncode()
+#endif
         richTextContentData = RichTextContentCodec.encode(attributedText)
         lastSnapshot = currentNoteSnapshot()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title

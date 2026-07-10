@@ -156,6 +156,87 @@ final class UIKitEditorSyncBridgeTests: XCTestCase {
         XCTAssertEqual(callbackCount, 1)
     }
 
+    func testLargeTopInsertionPreservesSelectionAndScroll() {
+        let noteID = UUID()
+        let body = String(repeating: "0123456789\n", count: 2_000)
+        let textView = makeTextView(body)
+        textView.frame = CGRect(x: 0, y: 0, width: 320, height: 200)
+        textView.layoutIfNeeded()
+        textView.selectedRange = NSRange(location: body.utf16.count - 20, length: 10)
+        textView.setContentOffset(CGPoint(x: 0, y: 500), animated: false)
+        let originalOffset = textView.contentOffset
+        let bridge = UIKitEditorSyncBridge()
+        bridge.textView = textView
+        var publishCount = 0
+        bridge.publishAttributedText = { _ in publishCount += 1 }
+
+        let result = bridge.apply(
+            AppliedEditorMutationBatch(
+                noteID: noteID,
+                mutations: [.bodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "REMOTE", modifiedAt: Date()))],
+                authoritativeBody: (body as NSString).replacingCharacters(in: NSRange(location: 5, length: 0), with: "REMOTE")
+            ),
+            selectedNoteID: noteID
+        )
+
+        XCTAssertEqual(result.disposition, .applied)
+        XCTAssertEqual(textView.selectedRange, NSRange(location: body.utf16.count - 14, length: 10))
+        XCTAssertEqual(textView.contentOffset, originalOffset)
+        XCTAssertEqual(publishCount, 1)
+    }
+
+    func testSustainedRemoteTypingBatchPublishesOnce() {
+        let noteID = UUID()
+        let textView = makeTextView("base")
+        let bridge = UIKitEditorSyncBridge()
+        bridge.textView = textView
+        let metrics = EditorRemoteFullDocumentMetrics()
+        bridge.fullDocumentMetrics = metrics
+        var publishCount = 0
+        bridge.publishAttributedText = { _ in publishCount += 1 }
+        let insertions = (0..<100).map { index in
+            AppliedEditorMutation.bodyInsertion(
+                AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 4 + index, text: "x", modifiedAt: Date())
+            )
+        }
+
+        let result = bridge.apply(
+            AppliedEditorMutationBatch(
+                noteID: noteID,
+                mutations: insertions,
+                authoritativeBody: "base" + String(repeating: "x", count: 100)
+            ),
+            selectedNoteID: noteID
+        )
+
+        XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 100, disposition: .applied))
+        XCTAssertEqual(textView.text, "base" + String(repeating: "x", count: 100))
+        XCTAssertEqual(publishCount, 1)
+        XCTAssertEqual(metrics.attributedStringCopyCount, 1)
+        XCTAssertEqual(metrics.authoritativeBodyComparisonCount, 1)
+        XCTAssertEqual(metrics.wholeNoteReloadCount, 0)
+    }
+
+    func testDeletionBeforeSelectionMapsBackwardWithoutReload() {
+        let noteID = UUID()
+        let textView = makeTextView("0123456789")
+        textView.selectedRange = NSRange(location: 7, length: 2)
+        let bridge = UIKitEditorSyncBridge()
+        bridge.textView = textView
+
+        let result = bridge.apply(
+            AppliedEditorMutationBatch(
+                noteID: noteID,
+                mutations: [.bodyDeletion(AppliedEditorBodyDeletion(noteID: noteID, range: NSRange(location: 2, length: 2), deletedText: "23", modifiedAt: Date()))],
+                authoritativeBody: "01456789"
+            ),
+            selectedNoteID: noteID
+        )
+
+        XCTAssertEqual(result.disposition, .applied)
+        XCTAssertEqual(textView.selectedRange, NSRange(location: 5, length: 2))
+    }
+
     private func makeTextView(_ string: String) -> UITextView {
         let textView = EditorTextViewFactory.makeEditorTextView(
             backgroundColor: .systemBackground,

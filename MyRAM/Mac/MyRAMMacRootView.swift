@@ -186,8 +186,14 @@ struct MyRAMMacRootView: View {
             return
         }
 
-        guard let selectedNoteID, !plan.editorActions.isEmpty else { return }
-        let result = editorSyncBridge.applyBatch(plan.editorActions, selectedNoteID: selectedNoteID)
+        guard let selectedNoteID,
+              !plan.editorActions.isEmpty,
+              let authoritativeBody = selectedNote?.content else { return }
+        let result = editorSyncBridge.applyBatch(
+            plan.editorActions,
+            selectedNoteID: selectedNoteID,
+            authoritativeBody: authoritativeBody
+        )
         if case .requiresReload = result.disposition {
             reloadSelectedEditor(reason: .unsafeIncrementalApply)
         }

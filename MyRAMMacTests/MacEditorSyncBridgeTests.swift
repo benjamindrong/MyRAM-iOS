@@ -15,7 +15,8 @@ final class MacEditorSyncBridgeTests: XCTestCase {
 
         let result = bridge.applyBatch(
             [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
-            selectedNoteID: noteID
+            selectedNoteID: noteID,
+            authoritativeBody: "Hello!"
         )
 
         XCTAssertEqual(textView.string, "Hello!")
@@ -40,7 +41,8 @@ final class MacEditorSyncBridgeTests: XCTestCase {
                     )
                 )
             ],
-            selectedNoteID: noteID
+            selectedNoteID: noteID,
+            authoritativeBody: "Hlo"
         )
 
         XCTAssertEqual(textView.string, "Hlo")
@@ -64,7 +66,8 @@ final class MacEditorSyncBridgeTests: XCTestCase {
                     )
                 )
             ],
-            selectedNoteID: noteID
+            selectedNoteID: noteID,
+            authoritativeBody: "Hlo"
         )
 
         XCTAssertEqual(textView.string, "Hello")
@@ -80,7 +83,8 @@ final class MacEditorSyncBridgeTests: XCTestCase {
 
         _ = bridge.applyBatch(
             [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 0, text: "Say ", modifiedAt: Date()))],
-            selectedNoteID: noteID
+            selectedNoteID: noteID,
+            authoritativeBody: "Say Hello"
         )
 
         XCTAssertEqual(textView.selectedRange(), NSRange(location: 9, length: 0))
@@ -94,7 +98,8 @@ final class MacEditorSyncBridgeTests: XCTestCase {
 
         let result = bridge.applyBatch(
             [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: UUID(), utf16Offset: 0, text: "x", modifiedAt: Date()))],
-            selectedNoteID: selectedID
+            selectedNoteID: selectedID,
+            authoritativeBody: "Hello"
         )
 
         XCTAssertEqual(textView.string, "Hello")
@@ -117,7 +122,8 @@ final class MacEditorSyncBridgeTests: XCTestCase {
 
         _ = bridge.applyBatch(
             [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
-            selectedNoteID: noteID
+            selectedNoteID: noteID,
+            authoritativeBody: "Hello!"
         )
         _ = bridge.applyBatch(
             [
@@ -130,7 +136,8 @@ final class MacEditorSyncBridgeTests: XCTestCase {
                     )
                 )
             ],
-            selectedNoteID: noteID
+            selectedNoteID: noteID,
+            authoritativeBody: "Hello"
         )
         XCTAssertEqual(changeCount, 0)
 
@@ -153,7 +160,8 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         bridge.textView = textView
         _ = bridge.applyBatch(
             [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
-            selectedNoteID: noteID
+            selectedNoteID: noteID,
+            authoritativeBody: "Hello!"
         )
 
         XCTAssertFalse(undoManager.canUndo)
@@ -170,14 +178,86 @@ final class MacEditorSyncBridgeTests: XCTestCase {
 
         let bridge = MacEditorSyncBridge()
         bridge.textView = textView
-        _ = bridge.applyBatch([], selectedNoteID: UUID())
+        _ = bridge.applyBatch([], selectedNoteID: UUID(), authoritativeBody: "Hello")
 
         XCTAssertTrue(undoManager.canUndo)
+    }
+
+    func testLargeInsertionPreservesSelectionAndScrollOrigin() {
+        let noteID = UUID()
+        let body = String(repeating: "0123456789\n", count: 2_000)
+        let textView = makeScrollableTextView(body)
+        textView.setSelectedRange(NSRange(location: body.utf16.count - 20, length: 10))
+        let originalOrigin = CGPoint(x: 0, y: 600)
+        textView.enclosingScrollView?.contentView.setBoundsOrigin(originalOrigin)
+        let bridge = MacEditorSyncBridge()
+        bridge.textView = textView
+
+        let result = bridge.applyBatch(
+            [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "REMOTE", modifiedAt: Date()))],
+            selectedNoteID: noteID,
+            authoritativeBody: (body as NSString).replacingCharacters(in: NSRange(location: 5, length: 0), with: "REMOTE")
+        )
+
+        XCTAssertEqual(result.disposition, .applied)
+        XCTAssertEqual(textView.selectedRange(), NSRange(location: body.utf16.count - 14, length: 10))
+        XCTAssertEqual(textView.enclosingScrollView?.contentView.bounds.origin, originalOrigin)
+    }
+
+    func testSustainedMutationBatchPublishesOnce() {
+        let noteID = UUID()
+        let textView = makeTextView("abcdef")
+        let bridge = MacEditorSyncBridge()
+        bridge.textView = textView
+        let metrics = EditorRemoteFullDocumentMetrics()
+        bridge.fullDocumentMetrics = metrics
+        var publishCount = 0
+        bridge.publishAttributedText = { _ in publishCount += 1 }
+
+        let result = bridge.applyBatch(
+            [
+                .applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 0, text: "1", modifiedAt: Date())),
+                .applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 7, text: "2", modifiedAt: Date())),
+                .applyBodyDeletion(AppliedEditorBodyDeletion(noteID: noteID, range: NSRange(location: 2, length: 1), deletedText: "b", modifiedAt: Date()))
+            ],
+            selectedNoteID: noteID,
+            authoritativeBody: "1acdef2"
+        )
+
+        XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 3, disposition: .applied))
+        XCTAssertEqual(publishCount, 1)
+        XCTAssertEqual(metrics.attributedStringCopyCount, 1)
+        XCTAssertEqual(metrics.authoritativeBodyComparisonCount, 1)
+        XCTAssertEqual(metrics.wholeNoteReloadCount, 0)
+    }
+
+    func testPostApplyAuthoritativeBodyMismatchRequiresFallback() {
+        let noteID = UUID()
+        let textView = makeTextView("Hello")
+        let bridge = MacEditorSyncBridge()
+        bridge.textView = textView
+
+        let result = bridge.applyBatch(
+            [.applyBodyInsertion(AppliedEditorBodyInsertion(noteID: noteID, utf16Offset: 5, text: "!", modifiedAt: Date()))],
+            selectedNoteID: noteID,
+            authoritativeBody: "different"
+        )
+
+        XCTAssertEqual(result, EditorRemoteBatchApplyResult(appliedCount: 1, disposition: .requiresReload(.postApplyBodyMismatch)))
     }
 
     private func makeTextView(_ string: String) -> NSTextView {
         let textView = NSTextView()
         textView.textStorage?.setAttributedString(NSAttributedString(string: string))
+        return textView
+    }
+
+    private func makeScrollableTextView(_ string: String) -> NSTextView {
+        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 400, height: 200))
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 4_000))
+        scrollView.documentView = textView
+        textView.textStorage?.setAttributedString(NSAttributedString(string: string))
+        textView.layoutManager?.ensureLayout(for: textView.textContainer!)
         return textView
     }
 
