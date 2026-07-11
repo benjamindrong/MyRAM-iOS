@@ -17,6 +17,20 @@ enum NotesListItem: Identifiable {
     }
 }
 
+enum PendingSyncRecoveryStatus: Equatable {
+    case idle
+    case running
+    case succeeded
+    case failed(String)
+
+    var isRunning: Bool {
+        if case .running = self {
+            return true
+        }
+        return false
+    }
+}
+
 @MainActor
 final class NotesViewModel: ObservableObject {
     @Published var notes: [Note] = []
@@ -26,6 +40,7 @@ final class NotesViewModel: ObservableObject {
     @Published private(set) var syncConflicts: [SyncConflictVersion] = []
     @Published private(set) var activeEditorSyncUpdate: ActiveEditorSyncUpdate?
     @Published private(set) var syncBatchErrorMessage: String?
+    @Published private(set) var pendingSyncRecoveryStatus: PendingSyncRecoveryStatus = .idle
     @Published private(set) var hasUndoableAction = false
     @Published private(set) var hasRedoableAction = false
     
@@ -38,6 +53,7 @@ final class NotesViewModel: ObservableObject {
     private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
     private let pendingIncomingBatches: FileBackedSyncBatchQueue
     private let pendingLocalConvergenceBatches: FileBackedSyncBatchQueue
+    private var refreshPendingSyncStatusForLocalConvergenceMutation: (() async -> Void)?
     private let bodyHashCapabilityEnabled: Bool
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
@@ -74,7 +90,8 @@ final class NotesViewModel: ObservableObject {
         pendingLocalConvergenceBatchQueueFileURL: URL? = NotesViewModel.pendingLocalConvergenceBatchQueueFileURL(),
         pendingLocalConvergenceBatchQueueLimit: Int = 100,
         bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
-        syncBatchQuietWindow: TimeInterval = 3
+        syncBatchQuietWindow: TimeInterval = 3,
+        resumesPendingConvergenceOnInit: Bool = true
     ) {
         self.context = context
         self.syncController = syncController
@@ -102,6 +119,17 @@ final class NotesViewModel: ObservableObject {
         self.syncController?.onBatchReceived = { [weak self] batch in
             await self?.applyIncomingSyncBatch(batch)
         }
+        if let statusController = syncController as? MyRAMSyncConvergenceStatusConfiguring {
+            statusController.localConvergencePendingCountProvider = { [weak self] in
+                self?.pendingLocalConvergenceBatches.pendingCount ?? 0
+            }
+            statusController.onFlushLocalConvergenceRequested = { [weak self] in
+                await self?.resumePendingConvergencePresentation()
+            }
+            refreshPendingSyncStatusForLocalConvergenceMutation = { [weak statusController] in
+                await statusController?.refreshPendingSyncStatus()
+            }
+        }
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
             for await batch in stream {
@@ -112,7 +140,9 @@ final class NotesViewModel: ObservableObject {
         purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
-        resumePendingConvergencePresentationIfNeeded()
+        if resumesPendingConvergenceOnInit {
+            resumePendingConvergencePresentationIfNeeded()
+        }
     }
 
     deinit {
@@ -1204,17 +1234,10 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func recordNoteSyncChange(_ note: Note, operation: SyncOperation = .upsert) {
-        let titleBaseline = syncConflictStore.remoteBaseline(entityType: .note, entityID: note.id, field: .noteTitle)
-        let contentBaseline = syncConflictStore.remoteBaseline(entityType: .note, entityID: note.id, field: .noteContent)
         guard !isApplyingRemoteSyncChange,
               !hasActiveNoteTextConflict(note),
               let payload = try? MyRAMSyncPayloadCoding.encode(
-                MyRAMNoteSyncPayload(
-                    note: note,
-                    baseTitle: titleBaseline?.text,
-                    baseContent: contentBaseline?.text,
-                    baseRichTextContentData: contentBaseline?.richTextContentData
-                )
+                MyRAMLegacySyncPayloadBuilder.notePayload(note: note, conflictStore: syncConflictStore)
               ) else { return }
 
         syncController?.recordLocalChange(
@@ -1282,11 +1305,13 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func recordPinnedThoughtSyncChange(_ thought: PinnedThought) {
-        let baseline = syncConflictStore.remoteBaseline(entityType: .pinnedThought, entityID: thought.id, field: .pinnedText)
         guard !isApplyingRemoteSyncChange,
               !hasActivePinnedTextConflict(thought),
               let payload = try? MyRAMSyncPayloadCoding.encode(
-                MyRAMPinnedThoughtSyncPayload(thought: thought, baseText: baseline?.text)
+                MyRAMLegacySyncPayloadBuilder.pinnedThoughtPayload(
+                    thought: thought,
+                    conflictStore: syncConflictStore
+                )
               ) else { return }
         syncController?.recordLocalChange(
             entityType: .marker,
@@ -1489,12 +1514,122 @@ final class NotesViewModel: ObservableObject {
     func applyIncomingSyncBatch(_ batch: SyncBatch) async {
         guard !batch.changes.isEmpty else { return }
         let outcome = await syncConvergenceRuntime.submitRemoteBatch(batch)
-        handleConvergenceRuntimeOutcome(outcome)
+        await handleConvergenceRuntimeOutcome(outcome)
+    }
+
+    func localConvergenceQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot {
+        pendingLocalConvergenceBatches.snapshot()
+    }
+
+    var hasMountedActiveEditor: Bool {
+        mountedActiveEditorNoteID != nil
+    }
+
+    func replaceLocalConvergenceBatches(_ batches: [SyncBatch]) async throws {
+        try pendingLocalConvergenceBatches.replacePendingBatches(batches)
+        await refreshPendingSyncStatusForLocalConvergenceMutation?()
+    }
+
+    func capturePendingLocalBatchForRecovery() async -> SyncBatchID? {
+        guard let batch = await syncBatchAccumulator.takePendingBatchNow() else {
+            await resumePendingConvergencePresentation()
+            return nil
+        }
+        let outcome = await syncConvergenceRuntime.submitLocalBatch(batch)
+        await handleConvergenceRuntimeOutcome(outcome)
+        await resumePendingConvergencePresentation()
+        return batch.id
+    }
+
+    func resetPendingSync(
+        syncController: MyRAMSyncController,
+        prepareEditorState: @escaping () throws -> Void
+    ) async {
+        guard !pendingSyncRecoveryStatus.isRunning else { return }
+        pendingSyncRecoveryStatus = .running
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: syncController,
+            localQueueSnapshot: { [weak self] in
+                self?.localConvergenceQueueSnapshot()
+                    ?? FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .fileMissing)
+            },
+            replaceLocalBatches: { [weak self] batches in
+                try await self?.replaceLocalConvergenceBatches(batches)
+            },
+            flushReadyLocalBatch: { [weak self] in
+                await self?.capturePendingLocalBatchForRecovery()
+            }
+        )
+
+        do {
+            try await coordinator.resetPendingSync(
+                prepareDurableState: {
+                    try prepareEditorState()
+                    try context.save()
+                },
+                buildReplacement: { legacy, unsent, local, recoveryTimestamp in
+                    try SyncRecoveryStateBuilder.build(
+                        context: context,
+                        conflictStore: syncConflictStore,
+                        legacySnapshot: legacy,
+                        unsentBatches: unsent,
+                        localConvergenceBatches: local,
+                        currentDeviceID: syncController.currentDeviceID,
+                        recoveryTimestamp: recoveryTimestamp
+                    )
+                }
+            )
+            pendingSyncRecoveryStatus = .succeeded
+        } catch {
+            pendingSyncRecoveryStatus = .failed(Self.recoveryMessage(for: error))
+        }
+    }
+
+    func rollbackIfNeededOnLaunch(syncController: MyRAMSyncController) async throws {
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: syncController,
+            localQueueSnapshot: { [weak self] in
+                self?.localConvergenceQueueSnapshot()
+                    ?? FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .fileMissing)
+            },
+            replaceLocalBatches: { [weak self] batches in
+                try await self?.replaceLocalConvergenceBatches(batches)
+            },
+            flushReadyLocalBatch: { nil }
+        )
+        try await coordinator.rollbackIfNeededOnLaunch()
+    }
+
+    private static func recoveryMessage(for error: Error) -> String {
+        switch error {
+        case PendingSyncRecoveryCoordinator.RecoveryError.unhealthyLegacyQueue:
+            return "Reset is blocked because the legacy pending queue is unreadable."
+        case PendingSyncRecoveryCoordinator.RecoveryError.unhealthyUnsentBatchQueue:
+            return "Reset is blocked because the unsent batch queue is unreadable."
+        case PendingSyncRecoveryCoordinator.RecoveryError.unhealthyLocalObligationQueue:
+            return "Reset is blocked because the pending local batch queue is unreadable."
+        case SyncRecoveryStateBuilderError.activeConflict:
+            return "Resolve the active sync conflict before resetting pending sync."
+        case SyncRecoveryStateBuilderError.unsupportedPendingLegacyConflictMetadata:
+            return "Resolve the active sync conflict before resetting pending sync."
+        case SyncRecoveryStateBuilderError.missingCurrentNoteReferencedByUnsentBatch,
+             SyncRecoveryStateBuilderError.missingCurrentNoteReferencedByLocalObligation,
+             SyncRecoveryStateBuilderError.missingCurrentEntity,
+             SyncRecoveryStateBuilderError.invalidLegacyEntityID,
+             SyncRecoveryStateBuilderError.targetCoverageMismatch:
+            return "Reset is blocked because some queued sync work cannot be safely represented."
+        case PendingSyncRecoveryCoordinator.RecoveryError.capturedBatchNotDurable:
+            return "Reset is blocked because the latest edit was not saved into the pending sync queue."
+        case PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed:
+            return "Reset failed and rollback could not finish. Restart MyRAM before syncing again."
+        default:
+            return "Reset Pending Sync failed without changing local notes."
+        }
     }
 
     private func handleReadyLocalBatch(_ batch: SyncBatch) async {
         let outcome = await syncConvergenceRuntime.submitLocalBatch(batch)
-        handleConvergenceRuntimeOutcome(outcome)
+        await handleConvergenceRuntimeOutcome(outcome)
     }
 
     func resumePendingConvergencePresentationIfNeeded() {
@@ -1509,10 +1644,10 @@ final class NotesViewModel: ObservableObject {
 
     private func resumePendingConvergencePresentation() async {
         let outcome = await syncConvergenceRuntime.resumePendingWork()
-        handleConvergenceRuntimeOutcome(outcome)
+        await handleConvergenceRuntimeOutcome(outcome)
     }
 
-    private func handleConvergenceRuntimeOutcome(_ outcome: SyncConvergenceRuntimeOutcome) {
+    private func handleConvergenceRuntimeOutcome(_ outcome: SyncConvergenceRuntimeOutcome) async {
         switch outcome {
         case .drained:
             syncBatchErrorMessage = nil
@@ -1523,6 +1658,7 @@ final class NotesViewModel: ObservableObject {
         case .blocked(let failure):
             syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
         }
+        await refreshPendingSyncStatusForLocalConvergenceMutation?()
     }
 
     func acknowledgeActiveEditorSyncUpdate(

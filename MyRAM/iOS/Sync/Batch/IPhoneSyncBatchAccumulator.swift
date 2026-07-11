@@ -88,14 +88,23 @@ actor IPhoneSyncBatchAccumulator {
     }
 
     func takeReadyBatch(at date: Date = .now) -> SyncBatch? {
-        readyBatchIfAvailable(at: date)
+        extractPendingBatch { pendingBatch in
+            date >= pendingBatch.readyAt
+        }
     }
 
     private func readyBatchIfAvailable(at date: Date) -> SyncBatch? {
-        guard let pendingBatch, date >= pendingBatch.readyAt else {
-            return nil
+        extractPendingBatch { pendingBatch in
+            date >= pendingBatch.readyAt
         }
+    }
 
+    func takePendingBatchNow() -> SyncBatch? {
+        extractPendingBatch { _ in true }
+    }
+
+    private func extractPendingBatch(when shouldExtract: (PendingBatch) -> Bool) -> SyncBatch? {
+        guard let pendingBatch, shouldExtract(pendingBatch) else { return nil }
         readinessTask?.cancel()
         readinessTask = nil
         self.pendingBatch = nil

@@ -2,11 +2,42 @@ import Foundation
 import NearbySyncCore
 import SwiftData
 
-struct MyRAMSyncApplyResult {
+struct MyRAMSyncApplyResult: Equatable {
     var shouldRefreshActiveNote = false
     var deletedCurrentNoteID: UUID?
     var currentFolderReplacementID: UUID?
     var preservedConflicts: [SyncConflictVersion] = []
+    var outcomes: [MyRAMSyncChangeOutcome] = []
+
+    mutating func merge(_ other: MyRAMSyncApplyResult) {
+        shouldRefreshActiveNote = shouldRefreshActiveNote || other.shouldRefreshActiveNote
+        deletedCurrentNoteID = deletedCurrentNoteID ?? other.deletedCurrentNoteID
+        currentFolderReplacementID = currentFolderReplacementID ?? other.currentFolderReplacementID
+        preservedConflicts.append(contentsOf: other.preservedConflicts)
+        outcomes.append(contentsOf: other.outcomes)
+    }
+}
+
+enum MyRAMSyncChangeDisposition: Equatable {
+    case applied
+    case alreadySatisfiedOrSuperseded
+    case preservedForReview
+    case deferredMissingDependency
+    case rejectedInvalidState
+}
+
+struct MyRAMSyncChangeOutcome: Equatable {
+    let changeID: UUID
+    let disposition: MyRAMSyncChangeDisposition
+
+    var shouldAcknowledge: Bool {
+        switch disposition {
+        case .applied, .alreadySatisfiedOrSuperseded, .preservedForReview:
+            true
+        case .deferredMissingDependency, .rejectedInvalidState:
+            false
+        }
+    }
 }
 
 @MainActor
@@ -41,34 +72,193 @@ final class MyRAMSyncChangeApplier {
         refreshConflicts()
         newlyPreservedConflicts = []
         var result = MyRAMSyncApplyResult()
+        var pendingChanges = changes.sorted(by: syncApplyOrder)
 
-        for change in changes.sorted(by: syncApplyOrder) {
-            switch change.entityType {
-            case .collection:
-                result.currentFolderReplacementID = result.currentFolderReplacementID
-                    ?? applyIncomingFolderChange(change, currentFolderID: currentFolderID)
-            case .item:
-                let noteResult = applyIncomingNoteChange(change, activeNoteID: activeNoteID, currentNoteID: currentNoteID)
-                result.shouldRefreshActiveNote = result.shouldRefreshActiveNote || noteResult.shouldRefreshActiveNote
-                result.deletedCurrentNoteID = result.deletedCurrentNoteID ?? noteResult.deletedCurrentNoteID
-            case .marker:
-                if applyIncomingPinnedThoughtChange(change, activeNoteID: activeNoteID) {
-                    result.shouldRefreshActiveNote = true
-                }
-            case .attachment:
-                if applyIncomingPhotoAttachmentChange(change, activeNoteID: activeNoteID) {
-                    result.shouldRefreshActiveNote = true
-                }
-            case .conflict:
-                if applyIncomingConflictChange(change) {
-                    result.shouldRefreshActiveNote = true
+        while !pendingChanges.isEmpty {
+            var deferredChanges: [SyncChange] = []
+            var madeProgress = false
+
+            for change in pendingChanges {
+                let changeResult = apply(
+                    change,
+                    activeNoteID: activeNoteID,
+                    currentNoteID: currentNoteID,
+                    currentFolderID: currentFolderID
+                )
+                if changeResult.disposition == .deferredMissingDependency {
+                    deferredChanges.append(change)
+                } else {
+                    madeProgress = true
+                    result.merge(changeResult.result)
+                    result.outcomes.append(MyRAMSyncChangeOutcome(
+                        changeID: change.id,
+                        disposition: changeResult.disposition
+                    ))
                 }
             }
+
+            guard madeProgress, !deferredChanges.isEmpty else {
+                result.outcomes.append(contentsOf: deferredChanges.map {
+                    MyRAMSyncChangeOutcome(changeID: $0.id, disposition: .deferredMissingDependency)
+                })
+                break
+            }
+            pendingChanges = deferredChanges
         }
 
         result.preservedConflicts = newlyPreservedConflicts
 
         return result
+    }
+
+    private func dependencyDisposition(for change: SyncChange) -> MyRAMSyncChangeDisposition? {
+        switch change.entityType {
+        case .collection:
+            guard change.operation != .delete,
+                  let payload = try? MyRAMSyncPayloadCoding.decodeFolder(from: change.payload),
+                  let parentFolderID = payload.parentFolderID,
+                  fetchFolder(withID: parentFolderID) == nil else { return nil }
+            return .deferredMissingDependency
+
+        case .item:
+            guard change.operation != .delete,
+                  let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload),
+                  let folderID = payload.folderID,
+                  fetchFolder(withID: folderID) == nil else { return nil }
+            return .deferredMissingDependency
+
+        case .marker:
+            guard change.operation != .delete,
+                  let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) else { return nil }
+            guard let noteID = payload.noteID else { return .deferredMissingDependency }
+            return fetchNote(withID: noteID) == nil ? .deferredMissingDependency : nil
+
+        case .attachment:
+            guard change.operation != .delete,
+                  let payload = try? MyRAMSyncPayloadCoding.decodePhotoAttachment(from: change.payload) else { return nil }
+            guard let noteID = payload.noteID else { return .deferredMissingDependency }
+            return fetchNote(withID: noteID) == nil ? .deferredMissingDependency : nil
+
+        case .conflict:
+            return nil
+        }
+    }
+
+    private func noteDisposition(for change: SyncChange) -> MyRAMSyncChangeDisposition {
+        guard let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload) else {
+            return .rejectedInvalidState
+        }
+        guard let existingNote = fetchNote(withID: payload.id) else {
+            return change.operation == .delete ? .alreadySatisfiedOrSuperseded : .applied
+        }
+        if change.operation == .delete {
+            return payload.deletedAt == nil || existingNote.modifiedAt > payload.modifiedAt
+                ? .alreadySatisfiedOrSuperseded
+                : .applied
+        }
+        return existingNote.modifiedAt > payload.modifiedAt ? .alreadySatisfiedOrSuperseded : .applied
+    }
+
+    private func folderDisposition(for change: SyncChange) -> MyRAMSyncChangeDisposition {
+        guard let payload = try? MyRAMSyncPayloadCoding.decodeFolder(from: change.payload) else {
+            return .rejectedInvalidState
+        }
+        guard let existingFolder = fetchFolder(withID: payload.id) else {
+            return change.operation == .delete && payload.isDeleted ? .alreadySatisfiedOrSuperseded : .applied
+        }
+        if change.operation == .delete && payload.isDeleted {
+            return existingFolder.modifiedAt > payload.modifiedAt ? .alreadySatisfiedOrSuperseded : .applied
+        }
+        return existingFolder.modifiedAt > payload.modifiedAt ? .alreadySatisfiedOrSuperseded : .applied
+    }
+
+    private func pinnedThoughtDisposition(for change: SyncChange) -> MyRAMSyncChangeDisposition {
+        guard let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) else {
+            return .rejectedInvalidState
+        }
+        guard let existingThought = fetchPinnedThought(withID: payload.id) else {
+            return change.operation == .delete && payload.isDeleted ? .alreadySatisfiedOrSuperseded : .applied
+        }
+        if change.operation == .delete && payload.isDeleted {
+            return existingThought.modifiedAt > payload.modifiedAt ? .alreadySatisfiedOrSuperseded : .applied
+        }
+        return existingThought.modifiedAt > payload.modifiedAt ? .alreadySatisfiedOrSuperseded : .applied
+    }
+
+    private func photoAttachmentDisposition(for change: SyncChange) -> MyRAMSyncChangeDisposition {
+        guard let payload = try? MyRAMSyncPayloadCoding.decodePhotoAttachment(from: change.payload) else {
+            return .rejectedInvalidState
+        }
+        guard fetchPhotoAttachment(withID: payload.id) != nil else {
+            return (change.operation == .delete || payload.isDeleted) ? .alreadySatisfiedOrSuperseded : .applied
+        }
+        return .applied
+    }
+
+    private func conflictDisposition(for change: SyncChange) -> MyRAMSyncChangeDisposition {
+        guard let payload = try? MyRAMSyncPayloadCoding.decodeSyncConflict(from: change.payload) else {
+            return .rejectedInvalidState
+        }
+        switch payload.action {
+        case .preserved:
+            return payload.conflict == nil ? .rejectedInvalidState : .preservedForReview
+        case .resolved:
+            return .applied
+        }
+    }
+
+    private func apply(
+        _ change: SyncChange,
+        activeNoteID: UUID?,
+        currentNoteID: UUID?,
+        currentFolderID: UUID?
+    ) -> (result: MyRAMSyncApplyResult, disposition: MyRAMSyncChangeDisposition) {
+        // A contradictory operation/payload pair (e.g. operation == .delete but the
+        // payload's deletion flag disagrees) must never reach a mutation function below,
+        // not just be reported as rejected after the fact — those functions apply first
+        // and compute disposition separately, so gating here is the only way to guarantee
+        // "rejected" also means "not mutated".
+        if case .invalid = MyRAMLegacySyncChangeValidator.validate(change) {
+            return (MyRAMSyncApplyResult(), .rejectedInvalidState)
+        }
+
+        if let dependencyDisposition = dependencyDisposition(for: change) {
+            return (MyRAMSyncApplyResult(), dependencyDisposition)
+        }
+
+        switch change.entityType {
+        case .collection:
+            return (
+                MyRAMSyncApplyResult(currentFolderReplacementID: applyIncomingFolderChange(
+                    change,
+                    currentFolderID: currentFolderID
+                )),
+                folderDisposition(for: change)
+            )
+        case .item:
+            return (
+                applyIncomingNoteChange(change, activeNoteID: activeNoteID, currentNoteID: currentNoteID),
+                noteDisposition(for: change)
+            )
+        case .marker:
+            let shouldRefresh = applyIncomingPinnedThoughtChange(change, activeNoteID: activeNoteID)
+            return (
+                MyRAMSyncApplyResult(shouldRefreshActiveNote: shouldRefresh),
+                pinnedThoughtDisposition(for: change)
+            )
+        case .attachment:
+            let shouldRefresh = applyIncomingPhotoAttachmentChange(change, activeNoteID: activeNoteID)
+            return (
+                MyRAMSyncApplyResult(shouldRefreshActiveNote: shouldRefresh),
+                photoAttachmentDisposition(for: change)
+            )
+        case .conflict:
+            let shouldRefresh = applyIncomingConflictChange(change)
+            return (
+                MyRAMSyncApplyResult(shouldRefreshActiveNote: shouldRefresh),
+                conflictDisposition(for: change)
+            )
+        }
     }
 
     private func syncApplyOrder(_ lhs: SyncChange, _ rhs: SyncChange) -> Bool {
@@ -594,7 +784,7 @@ final class MyRAMSyncChangeApplier {
         }
 
         switch SyncThreeWayTextMergePolicy.merge(base: baseline.text, local: localText, remote: remoteText) {
-        case .apply(let text, _):
+        case .apply(let text), .merged(let text):
             return .apply(text)
         case .noOp:
             return .apply(localText)
@@ -714,7 +904,7 @@ final class MyRAMSyncChangeApplier {
         }
 
         switch SyncThreeWayTextMergePolicy.merge(base: baseText, local: localText, remote: resolvedText) {
-        case .apply(let text, _):
+        case .apply(let text), .merged(let text):
             applyResolvedText(text, conflict: conflict)
             return true
         case .noOp:
@@ -739,7 +929,7 @@ final class MyRAMSyncChangeApplier {
             let previousContent = note.content
             note.content = text
             if text == conflict.remoteText {
-                note.richTextContentData = RichTextContentCodec.sanitizedConflictRichTextData(
+                note.richTextContentData = sanitizedConflictRichTextData(
                     conflict.remoteRichTextContentData,
                     plainText: conflict.remoteText
                 )
@@ -799,6 +989,21 @@ final class MyRAMSyncChangeApplier {
                 originDeviceID: nil
             )
         }
+    }
+
+    private func sanitizedConflictRichTextData(_ richTextData: Data?, plainText: String) -> Data? {
+        #if os(iOS)
+        return RichTextContentCodec.sanitizedConflictRichTextData(richTextData, plainText: plainText)
+        #else
+        guard let richTextData,
+              let attributedText = try? NSAttributedString(
+                data: richTextData,
+                options: [.documentType: NSAttributedString.DocumentType.rtf],
+                documentAttributes: nil
+              ),
+              let compatibleText = attributedText.compatibleConflictText(matching: plainText) else { return nil }
+        return RTFCoding.encode(NSMutableAttributedString(attributedString: compatibleText))
+        #endif
     }
 
     private func preserveFolderTitleConflictIfNeeded(folder: Folder, payload: MyRAMFolderSyncPayload) -> Bool {
@@ -1136,6 +1341,33 @@ private extension SyncConflictEntityType {
         case .pinnedThought:
             .marker
         }
+    }
+}
+
+private extension NSAttributedString {
+    func compatibleConflictText(matching plainText: String) -> NSAttributedString? {
+        guard string != plainText else { return self }
+        let nsString = string as NSString
+        let nsPlainLength = (plainText as NSString).length
+        guard nsString.length > nsPlainLength else { return nil }
+        guard nsString.substring(to: nsPlainLength) == plainText else { return nil }
+
+        let extraTrailingText = nsString.substring(from: nsPlainLength)
+        guard extraTrailingText.isDocumentBoundaryWhitespace else { return nil }
+
+        let mutable = NSMutableAttributedString(attributedString: self)
+        mutable.deleteCharacters(
+            in: NSRange(location: nsPlainLength, length: nsString.length - nsPlainLength)
+        )
+        guard mutable.string == plainText else { return nil }
+        return mutable
+    }
+}
+
+private extension String {
+    var isDocumentBoundaryWhitespace: Bool {
+        self == "\n"
+            || (!isEmpty && unicodeScalars.allSatisfy { CharacterSet.whitespaces.contains($0) })
     }
 }
 

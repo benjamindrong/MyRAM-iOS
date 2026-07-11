@@ -4,16 +4,20 @@ final class FileBackedSyncBatchQueue {
     enum QueueError: Error, Equatable {
         case capacityExceeded
         case persistenceFailed
+        case unhealthyPersistence
     }
 
     private let fileURL: URL?
     private var queue: SyncBatchUnsentQueue
+    private var health: PersistedQueueHealth = .healthy
     private var shouldFailNextPersistence = false
 
     init(fileURL: URL?, limit: Int = 100) {
         self.fileURL = fileURL
         queue = SyncBatchUnsentQueue(limit: limit)
-        loadPersistedQueue()
+        let snapshot = loadPersistedQueue()
+        queue.replacePendingBatches(snapshot.pendingBatches)
+        health = snapshot.health
     }
 
     var isEmpty: Bool {
@@ -24,8 +28,16 @@ final class FileBackedSyncBatchQueue {
         queue.pendingBatches
     }
 
+    var pendingCount: Int {
+        queue.pendingBatches.count
+    }
+
     var first: SyncBatch? {
         queue.first
+    }
+
+    func snapshot() -> FileBackedSyncBatchQueueSnapshot {
+        FileBackedSyncBatchQueueSnapshot(pendingBatches: queue.pendingBatches, health: health)
     }
 
     func contains(_ batchID: SyncBatchID) -> Bool {
@@ -40,6 +52,11 @@ final class FileBackedSyncBatchQueue {
     }
 
     func enqueueIncoming(_ batch: SyncBatch) throws {
+        try enqueueDurably(batch)
+    }
+
+    func enqueueDurably(_ batch: SyncBatch) throws {
+        guard canPersistCurrentQueue else { throw QueueError.unhealthyPersistence }
         let originalBatches = queue.pendingBatches
         do {
             let didChange = try queue.enqueuePreservingExisting(batch)
@@ -66,6 +83,7 @@ final class FileBackedSyncBatchQueue {
     }
 
     func removeBatches(withIDs ids: Set<SyncBatchID>) throws {
+        guard canPersistCurrentQueue else { throw QueueError.unhealthyPersistence }
         let originalBatches = queue.pendingBatches
         let didChange = queue.removeAll(withIDs: ids)
         guard didChange else { return }
@@ -85,20 +103,62 @@ final class FileBackedSyncBatchQueue {
         }
     }
 
-    private func loadPersistedQueue() {
-        guard let fileURL else { return }
+    func replacePendingBatches(_ replacement: [SyncBatch]) throws {
+        guard canReplaceQueue else { throw QueueError.unhealthyPersistence }
+
+        let originalBatches = queue.pendingBatches
+        queue.replacePendingBatches(replacement)
+        do {
+            try persistQueueThrowing(allowUnhealthyReplacement: true)
+            health = .healthy
+        } catch {
+            queue.replacePendingBatches(originalBatches)
+            throw QueueError.persistenceFailed
+        }
+    }
+
+    private var canPersistCurrentQueue: Bool {
+        switch health {
+        case .healthy, .fileMissing:
+            return true
+        case .corrupt, .unsupportedVersion, .readFailed:
+            return false
+        }
+    }
+
+    private var canReplaceQueue: Bool {
+        canPersistCurrentQueue
+    }
+
+    private func loadPersistedQueue() -> FileBackedSyncBatchQueueSnapshot {
+        guard let fileURL else {
+            return FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .healthy)
+        }
+
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            return FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .fileMissing)
+        }
 
         do {
             let data = try Data(contentsOf: fileURL)
             let persistedQueue = try JSONDecoder().decode(PersistedSyncBatchQueue.self, from: data)
-            guard persistedQueue.version == PersistedSyncBatchQueue.currentVersion else { return }
-            for batch in persistedQueue.batches {
-                queue.enqueue(batch)
+            guard persistedQueue.version == PersistedSyncBatchQueue.currentVersion else {
+                return FileBackedSyncBatchQueueSnapshot(
+                    pendingBatches: [],
+                    health: .unsupportedVersion(persistedQueue.version)
+                )
             }
-        } catch let error as NSError where error.domain == NSCocoaErrorDomain && error.code == NSFileReadNoSuchFileError {
-            return
+            return FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: persistedQueue.batches,
+                health: .healthy
+            )
+        } catch _ as DecodingError {
+            return FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .corrupt)
         } catch {
-            return
+            return FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [],
+                health: .readFailed(String(describing: error))
+            )
         }
     }
 
@@ -106,24 +166,47 @@ final class FileBackedSyncBatchQueue {
         try? persistQueueThrowing()
     }
 
-    private func persistQueueThrowing() throws {
+    private func persistQueueThrowing(allowUnhealthyReplacement: Bool = false) throws {
         guard let fileURL else { return }
+        guard allowUnhealthyReplacement || canPersistCurrentQueue else {
+            throw QueueError.unhealthyPersistence
+        }
         if shouldFailNextPersistence {
             shouldFailNextPersistence = false
+            health = .readFailed("Injected persistence failure")
             throw QueueError.persistenceFailed
         }
 
-        try FileManager.default.createDirectory(
-            at: fileURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        let persistedQueue = PersistedSyncBatchQueue(
-            version: PersistedSyncBatchQueue.currentVersion,
-            batches: queue.pendingBatches
-        )
-        let data = try JSONEncoder().encode(persistedQueue)
-        try data.write(to: fileURL, options: .atomic)
+        do {
+            try FileManager.default.createDirectory(
+                at: fileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            let persistedQueue = PersistedSyncBatchQueue(
+                version: PersistedSyncBatchQueue.currentVersion,
+                batches: queue.pendingBatches
+            )
+            let data = try JSONEncoder().encode(persistedQueue)
+            try data.write(to: fileURL, options: .atomic)
+            health = .healthy
+        } catch {
+            health = .readFailed(String(describing: error))
+            throw error
+        }
     }
+}
+
+enum PersistedQueueHealth: Equatable {
+    case healthy
+    case fileMissing
+    case corrupt
+    case unsupportedVersion(Int)
+    case readFailed(String)
+}
+
+struct FileBackedSyncBatchQueueSnapshot: Equatable {
+    let pendingBatches: [SyncBatch]
+    let health: PersistedQueueHealth
 }
 
 private struct PersistedSyncBatchQueue: Codable {

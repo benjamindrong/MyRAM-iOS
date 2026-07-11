@@ -1,8 +1,19 @@
 import SwiftUI
 
 struct NearbySyncView: View {
+    struct ResetAvailability: Equatable {
+        let isAvailable: Bool
+        let unavailableReason: String?
+
+        static let available = ResetAvailability(isAvailable: true, unavailableReason: nil)
+    }
+
     @ObservedObject var syncController: MyRAMSyncController
+    @ObservedObject var notesViewModel: NotesViewModel
     let style: EditorChromeStyle
+    let resetAvailability: ResetAvailability
+    let prepareEditorState: () throws -> Void
+    @State private var showingResetConfirmation = false
 
     var body: some View {
         ScrollView {
@@ -11,7 +22,7 @@ struct NearbySyncView: View {
                     LabeledContent("Device", value: syncController.localPeerName)
                     LabeledContent("Status", value: syncController.connectionSummary)
                     LabeledContent("Last Event", value: syncController.lastConnectionEvent)
-                    LabeledContent("Queued Changes", value: "\(syncController.pendingChangeCount)")
+                    pendingStatusRows(syncController.pendingSyncStatus)
                     if let lastSyncAt = syncController.lastSyncAt {
                         LabeledContent("Last Sync", value: lastSyncAt.formatted(date: .abbreviated, time: .standard))
                     }
@@ -21,6 +32,35 @@ struct NearbySyncView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!syncController.hasConnectedPeers)
+                }
+
+                section("Advanced") {
+                    Button("Reset Pending Sync") {
+                        showingResetConfirmation = true
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isResetDisabled)
+
+                    if let unavailableReason = resetAvailability.unavailableReason {
+                        Text(unavailableReason)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    switch notesViewModel.pendingSyncRecoveryStatus {
+                    case .idle:
+                        EmptyView()
+                    case .running:
+                        ProgressView()
+                    case .succeeded:
+                        Text("Replacement changes will drain after a connected peer acknowledges them.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    case .failed(let message):
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
                 }
 
                 section("Nearby Devices") {
@@ -59,6 +99,54 @@ struct NearbySyncView: View {
             .padding(16)
         }
         .background(style.appBackgroundColor.ignoresSafeArea())
+        .alert("Reset Pending Sync?", isPresented: $showingResetConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset and Resync", role: .destructive) {
+                Task {
+                    await notesViewModel.resetPendingSync(
+                        syncController: syncController,
+                        prepareEditorState: prepareEditorState
+                    )
+                }
+            }
+        } message: {
+            Text(resetConfirmationMessage)
+        }
+    }
+
+    private var isResetDisabled: Bool {
+        syncController.pendingSyncStatus.totalOutboundItems == 0
+            || !syncController.pendingSyncStatus.healthIssues.isEmpty
+            || notesViewModel.pendingSyncRecoveryStatus.isRunning
+            || !resetAvailability.isAvailable
+    }
+
+    private var resetConfirmationMessage: String {
+        let status = syncController.pendingSyncStatus
+        return """
+        This will replace \(status.legacyChanges) legacy changes, \(status.unsentBatches) unsent batches, and \(status.localConvergenceObligations) pending local batch with a fresh synchronization of this device's current notes and related data.
+
+        Your current local notes, folders, pinned content, attachments, and deletion state will remain on this device.
+        """
+    }
+
+    @ViewBuilder
+    private func pendingStatusRows(_ status: PendingSyncStatus) -> some View {
+        LabeledContent("Queued Changes", value: "\(status.totalOutboundItems)")
+        if status.legacyChanges > 0 {
+            LabeledContent("Legacy changes", value: "\(status.legacyChanges)")
+        }
+        if status.unsentBatches > 0 {
+            LabeledContent("Unsent batches", value: "\(status.unsentBatches)")
+        }
+        if status.localConvergenceObligations > 0 {
+            LabeledContent("Pending local batch", value: "\(status.localConvergenceObligations)")
+        }
+        ForEach(Array(status.healthIssues.enumerated()), id: \.offset) { _, issue in
+            Text(issue.description)
+                .font(.footnote)
+                .foregroundStyle(.orange)
+        }
     }
 
     private func section<Content: View>(

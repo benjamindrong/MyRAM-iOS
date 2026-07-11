@@ -34,8 +34,14 @@ struct TrustedPeerReconnectTracker {
     }
 }
 
+protocol MyRAMSyncTransporting: AnyObject {
+    func invite(_ peerID: MCPeerID, timeout: TimeInterval)
+    func connectedPeers() async -> [MCPeerID]
+    func send(_ data: Data, toPeers peers: [MCPeerID], mode: MCSessionSendDataMode) async throws
+}
+
 // Runs potentially blocking Multipeer operations away from SwiftUI's main actor.
-private final class MyRAMMultipeerTransport {
+private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
     private let browser: MCNearbyServiceBrowser
     private let session: MCSession
     private let queue = DispatchQueue(label: "com.myram.nearby-sync.transport")
@@ -90,6 +96,30 @@ protocol MyRAMSyncControlling: AnyObject {
     func acceptLocalBatch(_ batch: SyncBatch) async throws
 }
 
+@MainActor
+protocol MyRAMSyncConvergenceStatusConfiguring: AnyObject {
+    var onFlushLocalConvergenceRequested: (() async -> Void)? { get set }
+    var localConvergencePendingCountProvider: (() -> Int)? { get set }
+
+    func refreshPendingSyncStatus() async
+}
+
+@MainActor
+protocol PendingSyncQueueAdministrating: AnyObject {
+    func suspendOutboundForRecovery()
+    func resumeOutboundAfterRecovery()
+
+    func legacyQueueSnapshot() async -> SyncQueueSnapshot
+    func legacyQueueHealth() async -> SyncQueuePersistenceHealth
+    func replaceLegacyQueueSnapshot(_ snapshot: SyncQueueSnapshot) async throws
+
+    func unsentBatchQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot
+    func replaceUnsentBatches(_ batches: [SyncBatch]) async throws
+
+    func refreshPendingSyncStatus() async
+    func flushAllOutboundWork()
+}
+
 extension MyRAMSyncControlling {
     func recordLocalChange(
         entityType: SyncEntityType,
@@ -112,6 +142,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     @Published private(set) var availablePeers: [MyRAMDiscoveredPeer] = []
     @Published private(set) var connectedPeers: [String] = []
     @Published private(set) var pendingChangeCount = 0
+    @Published private(set) var pendingSyncStatus = PendingSyncStatus.empty
     @Published private(set) var lastSyncAt: Date?
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var lastConnectionEvent = "Browsing for nearby MyRAM devices"
@@ -120,6 +151,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var onChangesReceived: (([SyncChange]) async -> Void)?
     var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
     var onBatchReceived: ((SyncBatch) async -> Void)?
+    var onFlushLocalConvergenceRequested: (() async -> Void)?
+    var localConvergencePendingCountProvider: (() -> Int)?
 
     private let serviceType = "myram-sync"
     private let peerID: MCPeerID
@@ -129,14 +162,24 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private let session: MCSession
     private let advertiser: MCNearbyServiceAdvertiser
     private let browser: MCNearbyServiceBrowser
-    private lazy var transport = MyRAMMultipeerTransport(browser: browser, session: session)
+    private let transport: MyRAMSyncTransporting
     private var reconnectTracker = TrustedPeerReconnectTracker()
     private lazy var debouncedSender = DebouncedChangeSender { [weak self] in
-        await self?.sendPendingChanges()
+        await self?.requestLegacyFlush()
     }
     private let unsentBatches: FileBackedSyncBatchQueue
+    private var isFlushingLegacy = false
+    private var pendingLegacyFlushAfterActiveSend = false
+    private var outboundFlushRequestedWhileRecoverySuspended = false
+    private var isOutboundSuspendedForRecovery = false
+    private var hasStartedNetworking = false
 
-    init(unsentBatchQueueFileURL: URL? = MyRAMSyncController.unsentBatchQueueFileURL()) {
+    init(
+        unsentBatchQueueFileURL: URL? = MyRAMSyncController.unsentBatchQueueFileURL(),
+        pendingChangesFileURL: URL? = nil,
+        startsNetworking: Bool = true,
+        transport: MyRAMSyncTransporting? = nil
+    ) {
         let deviceName = MyRAMDeviceIdentity.currentDisplayName()
         let storedDeviceID = MyRAMDeviceIdentity.currentDeviceID()
         let peer = MCPeerID(displayName: "\(deviceName)|\(storedDeviceID)")
@@ -146,24 +189,36 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         syncEngine = SyncEngine(
             deviceID: storedDeviceID,
             store: syncStore,
-            queue: SyncQueue(persistence: FileBackedSyncQueuePersistence(fileURL: Self.pendingChangesFileURL()))
+            queue: SyncQueue(persistence: FileBackedSyncQueuePersistence(
+                fileURL: pendingChangesFileURL ?? Self.pendingChangesFileURL()
+            ))
         )
         session = MCSession(peer: peer, securityIdentity: nil, encryptionPreference: .required)
         advertiser = MCNearbyServiceAdvertiser(peer: peer, discoveryInfo: nil, serviceType: serviceType)
         browser = MCNearbyServiceBrowser(peer: peer, serviceType: serviceType)
         unsentBatches = FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
+        self.transport = transport ?? MyRAMMultipeerTransport(browser: browser, session: session)
 
         super.init()
 
         session.delegate = self
         advertiser.delegate = self
         browser.delegate = self
+
+        if startsNetworking {
+            startNetworkingIfNeeded()
+        }
+    }
+
+    func startNetworkingIfNeeded() {
+        guard !hasStartedNetworking else { return }
+        hasStartedNetworking = true
         advertiser.startAdvertisingPeer()
         browser.startBrowsingForPeers()
 
         Task {
             await updatePendingCount()
-            await sendPendingChanges()
+            await requestLegacyFlush()
         }
     }
 
@@ -179,6 +234,10 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     var hasConnectedPeers: Bool {
         !session.connectedPeers.isEmpty
+    }
+
+    var currentDeviceID: String {
+        syncEngine.deviceID
     }
 
     func invite(_ peer: MyRAMDiscoveredPeer) {
@@ -211,21 +270,49 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func flushPendingChanges() {
+        flushAllOutboundWork()
+    }
+
+    func flushAllOutboundWork() {
         Task {
+            // debouncedSender.flushNow() cancels any scheduled debounce and fires
+            // its send closure (requestLegacyFlush()) via its own Task. Calling
+            // requestLegacyFlush() again here as well would race that fire-and-forget
+            // call: the loser would see isFlushingLegacy already true and schedule an
+            // immediate follow-up flush of the same not-yet-acknowledged page, instead
+            // of the acknowledgement-driven continuation in receiveLegacyEnvelope(_:from:).
             await debouncedSender.flushNow()
+            await onFlushLocalConvergenceRequested?()
             await flushUnsentBatches()
+            await updatePendingCount()
         }
     }
 
-    private func sendPendingChanges() async {
+    private func requestLegacyFlush() async {
+        if isOutboundSuspendedForRecovery {
+            outboundFlushRequestedWhileRecoverySuspended = true
+            await updatePendingCount()
+            return
+        }
+
+        if isFlushingLegacy {
+            pendingLegacyFlushAfterActiveSend = true
+            return
+        }
+
+        isFlushingLegacy = true
+        pendingLegacyFlushAfterActiveSend = false
+
         let peers = await transport.connectedPeers()
         guard !peers.isEmpty else {
             await updatePendingCount()
+            finishLegacyFlushAndSchedulePendingIfNeeded()
             return
         }
 
         guard let envelope = await syncEngine.nextEnvelope() else {
             await updatePendingCount()
+            finishLegacyFlushAndSchedulePendingIfNeeded()
             return
         }
 
@@ -240,6 +327,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
 
         await updatePendingCount()
+        finishLegacyFlushAndSchedulePendingIfNeeded()
     }
 
     func acceptLocalBatch(_ batch: SyncBatch) async throws {
@@ -247,7 +335,41 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func updatePendingCount() async {
-        pendingChangeCount = await syncEngine.pendingChangeCount()
+        let legacyCount = await syncEngine.pendingChangeCount()
+        let unsentSnapshot = unsentBatches.snapshot()
+        let localConvergenceCount = localConvergencePendingCountProvider?() ?? 0
+        let healthIssues = await pendingSyncHealthIssues(unsentHealth: unsentSnapshot.health)
+        pendingSyncStatus = PendingSyncStatus(
+            legacyChanges: legacyCount,
+            unsentBatches: unsentSnapshot.pendingBatches.count,
+            localConvergenceObligations: localConvergenceCount,
+            healthIssues: healthIssues
+        )
+        pendingChangeCount = pendingSyncStatus.totalOutboundItems
+    }
+
+    private func pendingSyncHealthIssues(unsentHealth: PersistedQueueHealth) async -> [PendingSyncHealthIssue] {
+        var issues: [PendingSyncHealthIssue] = []
+        switch await syncEngine.queuePersistenceHealth() {
+        case .healthy, .fileMissing:
+            break
+        case .corrupt:
+            issues.append(PendingSyncHealthIssue(domain: .legacy, description: "Legacy pending queue is unreadable."))
+        case .readFailed:
+            issues.append(PendingSyncHealthIssue(domain: .legacy, description: "Legacy pending queue could not be read or saved."))
+        }
+
+        switch unsentHealth {
+        case .healthy, .fileMissing:
+            break
+        case .corrupt:
+            issues.append(PendingSyncHealthIssue(domain: .unsentBatches, description: "Unsent batch queue is unreadable."))
+        case .unsupportedVersion:
+            issues.append(PendingSyncHealthIssue(domain: .unsentBatches, description: "Unsent batch queue needs a newer app version."))
+        case .readFailed:
+            issues.append(PendingSyncHealthIssue(domain: .unsentBatches, description: "Unsent batch queue could not be read or saved."))
+        }
+        return issues
     }
 
     private func clearConnectingStateAfterInviteTimeout(
@@ -290,14 +412,35 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func sendBatch(_ batch: SyncBatch) async throws {
+        if isOutboundSuspendedForRecovery {
+            do {
+                try enqueueUnsentBatchDurably(batch)
+                outboundFlushRequestedWhileRecoverySuspended = true
+                await updatePendingCount()
+            } catch {
+                await updatePendingCount()
+                throw error
+            }
+            return
+        }
+
         let sent = await sendQueuedBatch(batch)
         if sent {
-            unsentBatches.removeAll(withIDs: [batch.id])
+            do {
+                try unsentBatches.removeBatches(withIDs: [batch.id])
+                await updatePendingCount()
+            } catch {
+                await updatePendingCount()
+                throw error
+            }
         } else {
-            enqueueUnsentBatch(batch)
-        }
-        guard sent || unsentBatches.contains(batch.id) else {
-            throw SyncConvergenceLocalBatchTransportError.acceptanceNotDurable(batchID: batch.id)
+            do {
+                try enqueueUnsentBatchDurably(batch)
+                await updatePendingCount()
+            } catch {
+                await updatePendingCount()
+                throw error
+            }
         }
     }
 
@@ -320,18 +463,51 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func flushUnsentBatches() async {
+        if isOutboundSuspendedForRecovery {
+            outboundFlushRequestedWhileRecoverySuspended = true
+            await updatePendingCount()
+            return
+        }
+
         guard !(await transport.connectedPeers()).isEmpty, !unsentBatches.isEmpty else { return }
 
         for batch in unsentBatches.pendingBatches {
             let sent = await sendQueuedBatch(batch)
             if sent {
-                unsentBatches.removeAll(withIDs: [batch.id])
+                do {
+                    try unsentBatches.removeBatches(withIDs: [batch.id])
+                    await updatePendingCount()
+                } catch {
+                    lastErrorMessage = "Unable to update the unsent batch queue."
+                    await updatePendingCount()
+                    return
+                }
             }
         }
     }
 
-    private func enqueueUnsentBatch(_ batch: SyncBatch) {
-        unsentBatches.enqueue(batch)
+    private func enqueueUnsentBatchDurably(_ batch: SyncBatch) throws {
+        do {
+            try unsentBatches.enqueueDurably(batch)
+        } catch {
+            lastErrorMessage = "Unable to update the unsent batch queue."
+            throw error
+        }
+    }
+
+    private func finishLegacyFlushAndSchedulePendingIfNeeded() {
+        isFlushingLegacy = false
+        let shouldFlushLegacyAgain = pendingLegacyFlushAfterActiveSend
+        pendingLegacyFlushAfterActiveSend = false
+
+        guard shouldFlushLegacyAgain else { return }
+        if isOutboundSuspendedForRecovery {
+            outboundFlushRequestedWhileRecoverySuspended = true
+        } else {
+            Task { [weak self] in
+                await self?.requestLegacyFlush()
+            }
+        }
     }
 
     private static func pendingChangesFileURL() -> URL {
@@ -400,6 +576,55 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
 extension MyRAMSyncController: MyRAMSyncControlling {}
 
+extension MyRAMSyncController: MyRAMSyncConvergenceStatusConfiguring {}
+
+extension MyRAMSyncController: PendingSyncQueueAdministrating {
+    func suspendOutboundForRecovery() {
+        isOutboundSuspendedForRecovery = true
+    }
+
+    func resumeOutboundAfterRecovery() {
+        let shouldFlush = outboundFlushRequestedWhileRecoverySuspended
+        isOutboundSuspendedForRecovery = false
+        outboundFlushRequestedWhileRecoverySuspended = false
+        if shouldFlush {
+            flushAllOutboundWork()
+        }
+    }
+
+    func legacyQueueSnapshot() async -> SyncQueueSnapshot {
+        await syncEngine.queueSnapshot()
+    }
+
+    func legacyQueueHealth() async -> SyncQueuePersistenceHealth {
+        await syncEngine.queuePersistenceHealth()
+    }
+
+    func replaceLegacyQueueSnapshot(_ snapshot: SyncQueueSnapshot) async throws {
+        try await syncEngine.replaceQueueSnapshot(snapshot)
+        await updatePendingCount()
+    }
+
+    func unsentBatchQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot {
+        unsentBatches.snapshot()
+    }
+
+    func replaceUnsentBatches(_ batches: [SyncBatch]) async throws {
+        try unsentBatches.replacePendingBatches(batches)
+        await updatePendingCount()
+    }
+
+    func refreshPendingSyncStatus() async {
+        await updatePendingCount()
+    }
+
+#if DEBUG
+    func injectUnsentBatchPersistenceFailureForNextWrite() {
+        unsentBatches.injectPersistenceFailureForNextWrite()
+    }
+#endif
+}
+
 extension MyRAMSyncController: SyncConvergenceLocalBatchTransportAdapter {}
 
 extension MyRAMSyncController: MCSessionDelegate {
@@ -414,10 +639,7 @@ extension MyRAMSyncController: MCSessionDelegate {
 
             if state == .connected {
                 rememberTrustedPeer(peerID)
-                Task {
-                    await sendPendingChanges()
-                    await flushUnsentBatches()
-                }
+                flushAllOutboundWork()
             }
         }
     }
@@ -455,6 +677,12 @@ extension MyRAMSyncController: MCSessionDelegate {
         await onChangesReceived?(appliedChanges)
         await sendAcknowledgement(for: envelope.changes, to: peerID)
         lastSyncAt = envelope.sentAt
+        await updatePendingCount()
+        if !isOutboundSuspendedForRecovery,
+           !(await transport.connectedPeers()).isEmpty,
+           await syncEngine.pendingChangeCount() > 0 {
+            await requestLegacyFlush()
+        }
     }
 
     nonisolated func session(

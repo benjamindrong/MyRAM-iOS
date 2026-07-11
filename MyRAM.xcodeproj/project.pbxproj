@@ -9,6 +9,10 @@
 /* Begin PBXBuildFile section */
 		BC24E3042FDF8F94004694D1 /* SyncConflictStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */; };
 		BC24E3052FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */; };
+		C07100362FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */; };
+		C07100382FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */; };
+		BC24E3102FDF8F94004694D1 /* SyncConflictStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */; };
+		BC24E3112FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */; };
 		BC24E3072FDF8F94004694D1 /* SyncStatusIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */; };
 		BC24E3092FDF8F94004694D1 /* SyncConflictViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E30A2FDF8F94004694D1 /* SyncConflictViews.swift */; };
 		BC24E30B2FDF8F94004694D1 /* MyRAMSyncConflictService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */; };
@@ -58,6 +62,7 @@
 		BCA153010000000000000008 /* MacExplicitDeleteProvenanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000005 /* MacExplicitDeleteProvenanceTests.swift */; };
 		BCA12201000000000000000A /* MacAppliedSyncBatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA12202000000000000000A /* MacAppliedSyncBatch.swift */; };
 		BCA12201000000000000000B /* MacSyncBatchControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */; };
+		C07100342FF1600000000001 /* MacLegacySyncReceiverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100352FF1600000000001 /* MacLegacySyncReceiverTests.swift */; };
 		BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000001 /* SyncBatchPayload.swift */; };
 		BCA123010000000000000002 /* SyncBatchEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000002 /* SyncBatchEnvelope.swift */; };
 		BCA123010000000000000003 /* MultipeerSyncMessageEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000003 /* MultipeerSyncMessageEnvelope.swift */; };
@@ -177,10 +182,20 @@
 		C097F01092FF000000000009 /* EditorTextViewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00092FF000000000009 /* EditorTextViewFactory.swift */; };
 		C097F010A2FF00000000000A /* EditorTimingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000A2FF00000000000A /* EditorTimingPolicy.swift */; };
 		C07100072FF0000000000001 /* MyRAMSyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100172FF0000000000001 /* MyRAMSyncModels.swift */; };
+		C071000D2FF0000000000001 /* MyRAMSyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100172FF0000000000001 /* MyRAMSyncModels.swift */; };
 		C07100082FF0000000000001 /* MyRAMDeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */; };
 		C07100092FF0000000000001 /* MyRAMSyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100192FF0000000000001 /* MyRAMSyncController.swift */; };
 		C071000A2FF0000000000001 /* NearbySyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001A2FF0000000000001 /* NearbySyncView.swift */; };
+		C071000C2FF0000000000001 /* MacLegacySyncReceiver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001C2FF0000000000001 /* MacLegacySyncReceiver.swift */; };
+		C071000F2FF0000000000001 /* PendingSyncStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001F2FF0000000000001 /* PendingSyncStatus.swift */; };
+		C07100102FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001E2FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift */; };
+		C07100202FF1600000000001 /* PendingSyncRecoveryJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100222FF1600000000001 /* PendingSyncRecoveryJournal.swift */; };
+		C07100242FF1600000000001 /* PendingSyncRecoveryCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100262FF1600000000001 /* PendingSyncRecoveryCoordinator.swift */; };
+		C07100252FF1600000000001 /* SyncRecoveryStateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100272FF1600000000001 /* SyncRecoveryStateBuilder.swift */; };
+		C07100282FF1600000000001 /* PendingSyncRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100292FF1600000000001 /* PendingSyncRecoveryTests.swift */; };
+		C07100322FF1600000000001 /* MyRAMSyncControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100332FF1600000000001 /* MyRAMSyncControllerTests.swift */; };
 		C071000B2FF0000000000001 /* NearbySyncCore in Frameworks */ = {isa = PBXBuildFile; productRef = C07100302FF0000000000001 /* NearbySyncCore */; };
+		C071000E2FF0000000000001 /* NearbySyncCore in Frameworks */ = {isa = PBXBuildFile; productRef = C07100302FF0000000000001 /* NearbySyncCore */; };
 		C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */; };
 /* End PBXBuildFile section */
 
@@ -211,6 +226,7 @@
 /* Begin PBXFileReference section */
 		BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConflictStore.swift; sourceTree = "<group>"; };
 		BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncChangeApplier.swift; sourceTree = "<group>"; };
+		C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMLegacySyncChangeValidator.swift; sourceTree = "<group>"; };
 		BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusIndicator.swift; sourceTree = "<group>"; };
 		BC24E30A2FDF8F94004694D1 /* SyncConflictViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConflictViews.swift; sourceTree = "<group>"; };
 		BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncConflictService.swift; sourceTree = "<group>"; };
@@ -259,6 +275,7 @@
 		BCA153020000000000000005 /* MacExplicitDeleteProvenanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacExplicitDeleteProvenanceTests.swift; sourceTree = "<group>"; };
 		BCA12202000000000000000A /* MacAppliedSyncBatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppliedSyncBatch.swift; sourceTree = "<group>"; };
 		BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchControllerTests.swift; sourceTree = "<group>"; };
+		C07100352FF1600000000001 /* MacLegacySyncReceiverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLegacySyncReceiverTests.swift; sourceTree = "<group>"; };
 		BCA123020000000000000001 /* SyncBatchPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchPayload.swift; sourceTree = "<group>"; };
 		BCA123020000000000000002 /* SyncBatchEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchEnvelope.swift; sourceTree = "<group>"; };
 		BCA123020000000000000003 /* MultipeerSyncMessageEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipeerSyncMessageEnvelope.swift; sourceTree = "<group>"; };
@@ -349,6 +366,14 @@
 		C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMDeviceIdentity.swift; sourceTree = "<group>"; };
 		C07100192FF0000000000001 /* MyRAMSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncController.swift; sourceTree = "<group>"; };
 		C071001A2FF0000000000001 /* NearbySyncView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NearbySyncView.swift; sourceTree = "<group>"; };
+		C071001C2FF0000000000001 /* MacLegacySyncReceiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLegacySyncReceiver.swift; sourceTree = "<group>"; };
+		C071001E2FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMLegacySyncPayloadBuilder.swift; sourceTree = "<group>"; };
+		C071001F2FF0000000000001 /* PendingSyncStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingSyncStatus.swift; sourceTree = "<group>"; };
+		C07100222FF1600000000001 /* PendingSyncRecoveryJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingSyncRecoveryJournal.swift; sourceTree = "<group>"; };
+		C07100262FF1600000000001 /* PendingSyncRecoveryCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingSyncRecoveryCoordinator.swift; sourceTree = "<group>"; };
+		C07100272FF1600000000001 /* SyncRecoveryStateBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRecoveryStateBuilder.swift; sourceTree = "<group>"; };
+		C07100292FF1600000000001 /* PendingSyncRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingSyncRecoveryTests.swift; sourceTree = "<group>"; };
+		C07100332FF1600000000001 /* MyRAMSyncControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncControllerTests.swift; sourceTree = "<group>"; };
 		C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteIntelligence.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -379,6 +404,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C071000E2FF0000000000001 /* NearbySyncCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -486,6 +512,7 @@
 				BCA122020000000000000005 /* MacSyncBatchApplier.swift */,
 				BCA12202000000000000000A /* MacAppliedSyncBatch.swift */,
 				BCA123020000000000000013 /* MacSyncBatchController.swift */,
+				C071001C2FF0000000000001 /* MacLegacySyncReceiver.swift */,
 			);
 			path = Sync;
 			sourceTree = "<group>";
@@ -567,6 +594,8 @@
 				BCA135020000000000000001 /* SyncConvergenceIdentityTestSupport.swift */,
 				BCA152020000000000000003 /* IncrementalEditIntegrationTests.swift */,
 				BCA153020000000000000004 /* ExplicitDeleteProvenanceTests.swift */,
+				C07100292FF1600000000001 /* PendingSyncRecoveryTests.swift */,
+				C07100332FF1600000000001 /* MyRAMSyncControllerTests.swift */,
 				BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */,
 				BCA123020000000000000010 /* IPhoneSyncBatchAccumulatorTests.swift */,
 				BCA123020000000000000011 /* IPhoneSyncBatchApplierTests.swift */,
@@ -607,6 +636,7 @@
 				BCA122020000000000000009 /* MacSyncBatchApplierTests.swift */,
 				BCA153020000000000000005 /* MacExplicitDeleteProvenanceTests.swift */,
 				BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */,
+				C07100352FF1600000000001 /* MacLegacySyncReceiverTests.swift */,
 				BCA132020000000000000014 /* SyncConvergenceIncorporationTests.swift */,
 				BCA132020000000000000055 /* SyncConvergencePostCommitTests.swift */,
 				BCA137020000000000000002 /* SyncConvergencePostCommitTestDoubles.swift */,
@@ -685,16 +715,38 @@
 				BCA123030000000000000001 /* Batch */,
 				BCA132030000000000000001 /* Convergence */,
 				BCA154030000000000000001 /* EditorApplication */,
+				C07100232FF1600000000001 /* Recovery */,
+				C07100392FF1600000000001 /* Legacy */,
 				BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */,
 				BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */,
 				BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */,
 				C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */,
+				C071001E2FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift */,
 				C07100192FF0000000000001 /* MyRAMSyncController.swift */,
 				C07100172FF0000000000001 /* MyRAMSyncModels.swift */,
+				C071001F2FF0000000000001 /* PendingSyncStatus.swift */,
 			);
 			path = Sync;
 			sourceTree = "<group>";
 		};
+		C07100232FF1600000000001 /* Recovery */ = {
+			isa = PBXGroup;
+			children = (
+				C07100262FF1600000000001 /* PendingSyncRecoveryCoordinator.swift */,
+				C07100222FF1600000000001 /* PendingSyncRecoveryJournal.swift */,
+				C07100272FF1600000000001 /* SyncRecoveryStateBuilder.swift */,
+			);
+			path = Recovery;
+			sourceTree = "<group>";
+		};
+			C07100392FF1600000000001 /* Legacy */ = {
+				isa = PBXGroup;
+				children = (
+					C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */,
+				);
+				path = Legacy;
+				sourceTree = "<group>";
+			};
 		BCA154030000000000000001 /* EditorApplication */ = {
 			isa = PBXGroup;
 			children = (
@@ -780,6 +832,7 @@
 			);
 			name = MyRAMMac;
 			packageProductDependencies = (
+				C07100302FF0000000000001 /* NearbySyncCore */,
 			);
 			productName = MyRAMMac;
 			productReference = BCA105020000000000000001 /* MyRAMMac.app */;
@@ -938,10 +991,16 @@
 				BC7009FE2FBF928500F513B4 /* MyRAMSchema.swift in Sources */,
 				BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */,
 				BC24E3052FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */,
+				C07100362FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */,
 				BC24E30B2FDF8F94004694D1 /* MyRAMSyncConflictService.swift in Sources */,
 				BC24E3042FDF8F94004694D1 /* SyncConflictStore.swift in Sources */,
 				BCE65D222EA6000000F2D0AA /* Folder.swift in Sources */,
 				C07100082FF0000000000001 /* MyRAMDeviceIdentity.swift in Sources */,
+				C07100102FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift in Sources */,
+				C071000F2FF0000000000001 /* PendingSyncStatus.swift in Sources */,
+				C07100242FF1600000000001 /* PendingSyncRecoveryCoordinator.swift in Sources */,
+				C07100202FF1600000000001 /* PendingSyncRecoveryJournal.swift in Sources */,
+				C07100252FF1600000000001 /* SyncRecoveryStateBuilder.swift in Sources */,
 				C097F01082FF000000000008 /* EditorTextPlacementResolver.swift in Sources */,
 				C071000A2FF0000000000001 /* NearbySyncView.swift in Sources */,
 				BC24E3092FDF8F94004694D1 /* SyncConflictViews.swift in Sources */,
@@ -996,6 +1055,8 @@
 				BCA135010000000000000001 /* SyncConvergenceIdentityTestSupport.swift in Sources */,
 				BCA152010000000000000005 /* IncrementalEditIntegrationTests.swift in Sources */,
 				BCA153010000000000000007 /* ExplicitDeleteProvenanceTests.swift in Sources */,
+				C07100282FF1600000000001 /* PendingSyncRecoveryTests.swift in Sources */,
+				C07100322FF1600000000001 /* MyRAMSyncControllerTests.swift in Sources */,
 				BCA123010000000000000022 /* SyncBatchUnsentQueueTests.swift in Sources */,
 				BCA123010000000000000015 /* IPhoneSyncBatchAccumulatorTests.swift in Sources */,
 				BCA123010000000000000016 /* IPhoneSyncBatchApplierTests.swift in Sources */,
@@ -1064,6 +1125,10 @@
 				BCA132010000000000000071 /* SyncConvergenceRuntime.swift in Sources */,
 				BCA123010000000000000021 /* SyncBatchUnsentQueue.swift in Sources */,
 				BCA123010000000000000024 /* FileBackedSyncBatchQueue.swift in Sources */,
+				C071000D2FF0000000000001 /* MyRAMSyncModels.swift in Sources */,
+				BC24E3102FDF8F94004694D1 /* SyncConflictStore.swift in Sources */,
+				BC24E3112FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */,
+				C07100382FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */,
 				BCA154010000000000000002 /* AppliedEditorMutation.swift in Sources */,
 				BCA154010000000000000004 /* ActiveEditorApplicationPolicy.swift in Sources */,
 				BCA15401000000000000000E /* ActiveEditorSyncUpdateHandler.swift in Sources */,
@@ -1076,6 +1141,7 @@
 				BCA122010000000000000005 /* MacSyncBatchApplier.swift in Sources */,
 				BCA12201000000000000000A /* MacAppliedSyncBatch.swift in Sources */,
 				BCA123010000000000000019 /* MacSyncBatchController.swift in Sources */,
+				C071000C2FF0000000000001 /* MacLegacySyncReceiver.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1096,6 +1162,7 @@
 				BCA122010000000000000009 /* MacSyncBatchApplierTests.swift in Sources */,
 				BCA153010000000000000008 /* MacExplicitDeleteProvenanceTests.swift in Sources */,
 				BCA12201000000000000000B /* MacSyncBatchControllerTests.swift in Sources */,
+				C07100342FF1600000000001 /* MacLegacySyncReceiverTests.swift in Sources */,
 				BCA123010000000000000025 /* SyncBatchUnsentQueueTests.swift in Sources */,
 				BCA132010000000000000015 /* SyncConvergencePlanningTests.swift in Sources */,
 				BCA155010000000000000004 /* SyncConvergenceRewriteSafetyPolicyTests.swift in Sources */,

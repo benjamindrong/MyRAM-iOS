@@ -126,6 +126,43 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertEqual(batch?.batchSequence, 42)
     }
 
+    func testTakePendingBatchNowCapturesBeforeQuietWindowAndPreservesIdentity() async {
+        let accumulator = IPhoneSyncBatchAccumulator(
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000124106")!,
+            quietWindow: 3,
+            batchIDProvider: { UUID(uuidString: "00000000-0000-0000-0000-000000124107")! },
+            batchSequenceProvider: { .reserved(43) }
+        )
+        let start = Date(timeIntervalSince1970: 600)
+        let firstChange = titleChange("First")
+        let secondChange = titleChange("Second")
+
+        await accumulator.record(firstChange, at: start)
+        await accumulator.record(secondChange, at: start.addingTimeInterval(1))
+
+        let batch = await accumulator.takePendingBatchNow()
+
+        XCTAssertEqual(batch?.id, UUID(uuidString: "00000000-0000-0000-0000-000000124107")!)
+        XCTAssertEqual(batch?.createdAt, start)
+        XCTAssertEqual(batch?.batchSequence, 43)
+        XCTAssertEqual(batch?.changes, [firstChange, secondChange])
+        let pendingBatchID = await accumulator.pendingBatchID()
+        XCTAssertNil(pendingBatchID)
+    }
+
+    func testTakePendingBatchNowClearsBatchSoReadyEmissionCannotReplayIt() async {
+        let accumulator = makeAccumulator()
+        let start = Date(timeIntervalSince1970: 700)
+
+        await accumulator.record(titleChange("First"), at: start)
+        let captured = await accumulator.takePendingBatchNow()
+        await accumulator.emitReadyBatches(at: start.addingTimeInterval(5))
+        let replayed = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+
+        XCTAssertNotNil(captured)
+        XCTAssertNil(replayed)
+    }
+
     func testAmbiguousReplacementIsSkipped() {
         XCTAssertNil(
             IPhoneSyncBatchCaptureHook.bodyTextChanged(
