@@ -185,6 +185,7 @@
 		C071000A2FF0000000000001 /* NearbySyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001A2FF0000000000001 /* NearbySyncView.swift */; };
 		C071000C2FF0000000000001 /* MacLegacySyncReceiver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001C2FF0000000000001 /* MacLegacySyncReceiver.swift */; };
 		C071000F2FF0000000000001 /* PendingSyncStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001F2FF0000000000001 /* PendingSyncStatus.swift */; };
+		C07100102FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001E2FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift */; };
 		C07100202FF1600000000001 /* PendingSyncRecoveryJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100222FF1600000000001 /* PendingSyncRecoveryJournal.swift */; };
 		C07100242FF1600000000001 /* PendingSyncRecoveryCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100262FF1600000000001 /* PendingSyncRecoveryCoordinator.swift */; };
 		C07100252FF1600000000001 /* SyncRecoveryStateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100272FF1600000000001 /* SyncRecoveryStateBuilder.swift */; };
@@ -360,6 +361,7 @@
 		C07100192FF0000000000001 /* MyRAMSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncController.swift; sourceTree = "<group>"; };
 		C071001A2FF0000000000001 /* NearbySyncView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NearbySyncView.swift; sourceTree = "<group>"; };
 		C071001C2FF0000000000001 /* MacLegacySyncReceiver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLegacySyncReceiver.swift; sourceTree = "<group>"; };
+		C071001E2FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMLegacySyncPayloadBuilder.swift; sourceTree = "<group>"; };
 		C071001F2FF0000000000001 /* PendingSyncStatus.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingSyncStatus.swift; sourceTree = "<group>"; };
 		C07100222FF1600000000001 /* PendingSyncRecoveryJournal.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingSyncRecoveryJournal.swift; sourceTree = "<group>"; };
 		C07100262FF1600000000001 /* PendingSyncRecoveryCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingSyncRecoveryCoordinator.swift; sourceTree = "<group>"; };
@@ -709,6 +711,7 @@
 				BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */,
 				BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */,
 				C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */,
+				C071001E2FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift */,
 				C07100192FF0000000000001 /* MyRAMSyncController.swift */,
 				C07100172FF0000000000001 /* MyRAMSyncModels.swift */,
 				C071001F2FF0000000000001 /* PendingSyncStatus.swift */,
@@ -974,6 +977,7 @@
 				BC24E3042FDF8F94004694D1 /* SyncConflictStore.swift in Sources */,
 				BCE65D222EA6000000F2D0AA /* Folder.swift in Sources */,
 				C07100082FF0000000000001 /* MyRAMDeviceIdentity.swift in Sources */,
+				C07100102FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift in Sources */,
 				C071000F2FF0000000000001 /* PendingSyncStatus.swift in Sources */,
 				C07100242FF1600000000001 /* PendingSyncRecoveryCoordinator.swift in Sources */,
 				C07100202FF1600000000001 /* PendingSyncRecoveryJournal.swift in Sources */,

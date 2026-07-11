@@ -1212,17 +1212,10 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func recordNoteSyncChange(_ note: Note, operation: SyncOperation = .upsert) {
-        let titleBaseline = syncConflictStore.remoteBaseline(entityType: .note, entityID: note.id, field: .noteTitle)
-        let contentBaseline = syncConflictStore.remoteBaseline(entityType: .note, entityID: note.id, field: .noteContent)
         guard !isApplyingRemoteSyncChange,
               !hasActiveNoteTextConflict(note),
               let payload = try? MyRAMSyncPayloadCoding.encode(
-                MyRAMNoteSyncPayload(
-                    note: note,
-                    baseTitle: titleBaseline?.text,
-                    baseContent: contentBaseline?.text,
-                    baseRichTextContentData: contentBaseline?.richTextContentData
-                )
+                MyRAMLegacySyncPayloadBuilder.notePayload(note: note, conflictStore: syncConflictStore)
               ) else { return }
 
         syncController?.recordLocalChange(
@@ -1290,11 +1283,13 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func recordPinnedThoughtSyncChange(_ thought: PinnedThought) {
-        let baseline = syncConflictStore.remoteBaseline(entityType: .pinnedThought, entityID: thought.id, field: .pinnedText)
         guard !isApplyingRemoteSyncChange,
               !hasActivePinnedTextConflict(thought),
               let payload = try? MyRAMSyncPayloadCoding.encode(
-                MyRAMPinnedThoughtSyncPayload(thought: thought, baseText: baseline?.text)
+                MyRAMLegacySyncPayloadBuilder.pinnedThoughtPayload(
+                    thought: thought,
+                    conflictStore: syncConflictStore
+                )
               ) else { return }
         syncController?.recordLocalChange(
             entityType: .marker,

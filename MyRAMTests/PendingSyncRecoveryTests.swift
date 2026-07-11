@@ -1,9 +1,219 @@
 import XCTest
 import NearbySyncCore
+import SwiftData
 @testable import MyRAM
 
 @MainActor
 final class PendingSyncRecoveryTests: XCTestCase {
+    func testStateBuilderReplacesQueuesWithCurrentSwiftDataState() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let conflictFileURL = temporaryConflictURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let parentFolder = Folder(name: "Projects")
+        parentFolder.id = UUID(uuidString: "00000000-0000-0000-0000-000000160101")!
+        parentFolder.modifiedAt = Date(timeIntervalSince1970: 10)
+        let childFolder = Folder(name: "MYR")
+        childFolder.id = UUID(uuidString: "00000000-0000-0000-0000-000000160102")!
+        childFolder.parentFolder = parentFolder
+        childFolder.modifiedAt = Date(timeIntervalSince1970: 11)
+        let note = Note(title: "Recovered", content: "Current body", folder: childFolder)
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-000000160103")!
+        note.modifiedAt = Date(timeIntervalSince1970: 12)
+        let thought = PinnedThought(text: "Pinned text", order: 0, note: note)
+        thought.id = UUID(uuidString: "00000000-0000-0000-0000-000000160104")!
+        thought.modifiedAt = Date(timeIntervalSince1970: 13)
+        let attachment = NotePhotoAttachment(imageData: Data([1, 2, 3]), note: note)
+        attachment.id = UUID(uuidString: "00000000-0000-0000-0000-000000160105")!
+        attachment.createdAt = Date(timeIntervalSince1970: 14)
+        note.pinnedThoughts.append(thought)
+        note.photoAttachments.append(attachment)
+        childFolder.notes.append(note)
+        parentFolder.childFolders.append(childFolder)
+        context.insert(parentFolder)
+        context.insert(childFolder)
+        context.insert(note)
+        context.insert(thought)
+        context.insert(attachment)
+        try context.save()
+        let staleChange = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160106")!,
+            entityType: .item,
+            entityID: note.id.uuidString,
+            operation: .upsert,
+            payload: Data("stale".utf8),
+            updatedAt: Date(timeIntervalSince1970: 1),
+            originDeviceID: "old-device"
+        )
+        let appliedID = UUID(uuidString: "00000000-0000-0000-0000-000000160107")!
+        let pendingAckID = UUID(uuidString: "00000000-0000-0000-0000-000000160108")!
+        let recoveryTimestamp = Date(timeIntervalSince1970: 200)
+
+        let replacement = try SyncRecoveryStateBuilder.build(
+            context: context,
+            conflictStore: conflictStore,
+            legacySnapshot: SyncQueueSnapshot(
+                pendingChanges: [staleChange],
+                appliedChangeIDs: [appliedID],
+                pendingAcknowledgementIDs: [pendingAckID]
+            ),
+            unsentBatches: [makeBatch(idSuffix: 11, noteID: note.id)],
+            localConvergenceBatches: [makeBatch(idSuffix: 12, noteID: note.id)],
+            currentDeviceID: "current-device",
+            recoveryTimestamp: recoveryTimestamp
+        )
+
+        XCTAssertEqual(replacement.unsentBatches, [])
+        XCTAssertEqual(replacement.localConvergenceBatches, [])
+        XCTAssertEqual(replacement.replacedLegacyCount, 1)
+        XCTAssertEqual(replacement.replacedUnsentBatchCount, 1)
+        XCTAssertEqual(replacement.replacedLocalObligationCount, 1)
+        XCTAssertEqual(replacement.legacySnapshot.appliedChangeIDs, [appliedID])
+        XCTAssertEqual(replacement.legacySnapshot.pendingAcknowledgementIDs, [pendingAckID])
+        XCTAssertEqual(
+            replacement.legacySnapshot.pendingChanges.map { "\($0.entityType.rawValue):\($0.entityID)" },
+            [
+                "collection:\(parentFolder.id.uuidString)",
+                "collection:\(childFolder.id.uuidString)",
+                "item:\(note.id.uuidString)",
+                "marker:\(thought.id.uuidString)",
+                "attachment:\(attachment.id.uuidString)"
+            ]
+        )
+        XCTAssertTrue(replacement.legacySnapshot.pendingChanges.allSatisfy { $0.originDeviceID == "current-device" })
+        XCTAssertTrue(replacement.legacySnapshot.pendingChanges.allSatisfy { $0.updatedAt == recoveryTimestamp })
+        XCTAssertFalse(replacement.legacySnapshot.pendingChanges.contains { $0.id == staleChange.id })
+
+        let noteChange = try XCTUnwrap(replacement.legacySnapshot.pendingChanges.first { $0.entityType == .item })
+        let notePayload = try MyRAMSyncPayloadCoding.decodeNote(from: noteChange.payload)
+        XCTAssertEqual(notePayload.title, "Recovered")
+        XCTAssertEqual(notePayload.content, "Current body")
+        XCTAssertEqual(notePayload.folderID, childFolder.id)
+    }
+
+    func testStateBuilderFailsWhenAffectedNoteHasActiveConflict() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let conflictFileURL = temporaryConflictURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Local", content: "Conflict body")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-000000160201")!
+        context.insert(note)
+        try context.save()
+        _ = conflictStore.preserve(
+            SyncConflictVersion(
+                entityType: .note,
+                entityID: note.id,
+                noteID: note.id,
+                field: .noteContent,
+                localText: "Conflict body",
+                remoteText: "Remote body",
+                remoteModifiedAt: Date(timeIntervalSince1970: 10),
+                preservedAt: Date(),
+                expiresAt: Date().addingTimeInterval(1_000)
+            )
+        )
+
+        XCTAssertThrowsError(
+            try SyncRecoveryStateBuilder.build(
+                context: context,
+                conflictStore: conflictStore,
+                legacySnapshot: SyncQueueSnapshot(),
+                unsentBatches: [makeBatch(idSuffix: 21, noteID: note.id)],
+                localConvergenceBatches: [],
+                currentDeviceID: "current-device",
+                recoveryTimestamp: Date(timeIntervalSince1970: 200)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecoveryStateBuilderError,
+                .activeConflict(entityType: .note, entityID: note.id)
+            )
+        }
+    }
+
+    func testStateBuilderRebuildsCurrentNoteForLegacyMarkerTarget() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let conflictFileURL = temporaryConflictURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let note = Note(title: "Marker note", content: "")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-000000160251")!
+        let thought = PinnedThought(text: "Current pinned text", order: 0, note: note)
+        thought.id = UUID(uuidString: "00000000-0000-0000-0000-000000160252")!
+        note.pinnedThoughts.append(thought)
+        context.insert(note)
+        context.insert(thought)
+        try context.save()
+        let staleMarker = SyncChange(
+            entityType: .marker,
+            entityID: thought.id.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMPinnedThoughtSyncPayload(thought: thought)),
+            updatedAt: Date(timeIntervalSince1970: 10),
+            originDeviceID: "old-device"
+        )
+
+        let replacement = try SyncRecoveryStateBuilder.build(
+            context: context,
+            conflictStore: conflictStore,
+            legacySnapshot: SyncQueueSnapshot(pendingChanges: [staleMarker]),
+            unsentBatches: [],
+            localConvergenceBatches: [],
+            currentDeviceID: "current-device",
+            recoveryTimestamp: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(replacement.legacySnapshot.pendingChanges.map(\.entityType), [.item, .marker])
+        let markerChange = try XCTUnwrap(replacement.legacySnapshot.pendingChanges.first { $0.entityType == .marker })
+        let markerPayload = try MyRAMSyncPayloadCoding.decodePinnedThought(from: markerChange.payload)
+        XCTAssertEqual(markerPayload.noteID, note.id)
+        XCTAssertEqual(markerPayload.text, "Current pinned text")
+    }
+
+    func testStateBuilderRetainsNewestLegacyOnlyDeletionTombstone() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let conflictFileURL = temporaryConflictURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let deletedNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000160301")!
+        let older = try makeDeletedNoteChange(
+            noteID: deletedNoteID,
+            title: "Older",
+            updatedAt: Date(timeIntervalSince1970: 10)
+        )
+        let newer = try makeDeletedNoteChange(
+            noteID: deletedNoteID,
+            title: "Newer",
+            updatedAt: Date(timeIntervalSince1970: 20)
+        )
+        let recoveryTimestamp = Date(timeIntervalSince1970: 200)
+
+        let replacement = try SyncRecoveryStateBuilder.build(
+            context: context,
+            conflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            legacySnapshot: SyncQueueSnapshot(pendingChanges: [older, newer]),
+            unsentBatches: [],
+            localConvergenceBatches: [],
+            currentDeviceID: "current-device",
+            recoveryTimestamp: recoveryTimestamp
+        )
+
+        XCTAssertEqual(replacement.legacySnapshot.pendingChanges.count, 1)
+        let retained = try XCTUnwrap(replacement.legacySnapshot.pendingChanges.first)
+        XCTAssertEqual(retained.entityID, deletedNoteID.uuidString)
+        XCTAssertEqual(retained.operation, .delete)
+        XCTAssertEqual(retained.updatedAt, recoveryTimestamp)
+        XCTAssertEqual(retained.originDeviceID, "current-device")
+        XCTAssertNotEqual(retained.id, newer.id)
+        let payload = try MyRAMSyncPayloadCoding.decodeNote(from: retained.payload)
+        XCTAssertEqual(payload.title, "Newer")
+        XCTAssertNotNil(payload.deletedAt)
+    }
+
     func testJournalStorePersistsPhaseUpdatesAndDeletes() throws {
         let fileURL = temporaryJournalURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
@@ -80,6 +290,22 @@ final class PendingSyncRecoveryTests: XCTestCase {
             .appendingPathComponent("pending-sync-recovery-journal.json")
     }
 
+    private func temporaryConflictURL() -> URL {
+        FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("sync-conflicts.json")
+    }
+
+    private func makeContainer() throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "PendingSyncRecoveryTests-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
+    }
+
     private func makeJournal() -> PendingSyncRecoveryJournal {
         PendingSyncRecoveryJournal(
             transactionID: UUID(uuidString: "00000000-0000-0000-0000-000000160000")!,
@@ -104,12 +330,36 @@ final class PendingSyncRecoveryTests: XCTestCase {
         )
     }
 
-    private func makeBatch(idSuffix: Int) -> SyncBatch {
+    private func makeBatch(idSuffix: Int, noteID: UUID = UUID()) -> SyncBatch {
         SyncBatch(
             id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", idSuffix))!,
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000160999")!,
             createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
-            changes: []
+            changes: [
+                .noteTitleChanged(
+                    SyncBatchNoteTitleChangedChange(
+                        noteID: noteID,
+                        title: "Queued title \(idSuffix)",
+                        modifiedAt: Date(timeIntervalSince1970: TimeInterval(idSuffix))
+                    )
+                )
+            ]
+        )
+    }
+
+    private func makeDeletedNoteChange(noteID: UUID, title: String, updatedAt: Date) throws -> SyncChange {
+        let note = Note(title: title, content: "")
+        note.id = noteID
+        note.modifiedAt = updatedAt
+        note.deletedAt = updatedAt
+        return SyncChange(
+            id: UUID(),
+            entityType: .item,
+            entityID: noteID.uuidString,
+            operation: .delete,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: note)),
+            updatedAt: updatedAt,
+            originDeviceID: "old-device"
         )
     }
 }
