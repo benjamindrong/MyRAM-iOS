@@ -213,6 +213,15 @@ final class MyRAMSyncChangeApplier {
         currentNoteID: UUID?,
         currentFolderID: UUID?
     ) -> (result: MyRAMSyncApplyResult, disposition: MyRAMSyncChangeDisposition) {
+        // A contradictory operation/payload pair (e.g. operation == .delete but the
+        // payload's deletion flag disagrees) must never reach a mutation function below,
+        // not just be reported as rejected after the fact — those functions apply first
+        // and compute disposition separately, so gating here is the only way to guarantee
+        // "rejected" also means "not mutated".
+        if case .invalid = MyRAMLegacySyncChangeValidator.validate(change) {
+            return (MyRAMSyncApplyResult(), .rejectedInvalidState)
+        }
+
         if let dependencyDisposition = dependencyDisposition(for: change) {
             return (MyRAMSyncApplyResult(), dependencyDisposition)
         }

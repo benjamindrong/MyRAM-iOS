@@ -9,6 +9,8 @@
 /* Begin PBXBuildFile section */
 		BC24E3042FDF8F94004694D1 /* SyncConflictStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */; };
 		BC24E3052FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */; };
+		C07100362FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */; };
+		C07100382FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */; };
 		BC24E3102FDF8F94004694D1 /* SyncConflictStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */; };
 		BC24E3112FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */; };
 		BC24E3072FDF8F94004694D1 /* SyncStatusIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */; };
@@ -224,6 +226,7 @@
 /* Begin PBXFileReference section */
 		BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConflictStore.swift; sourceTree = "<group>"; };
 		BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncChangeApplier.swift; sourceTree = "<group>"; };
+		C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMLegacySyncChangeValidator.swift; sourceTree = "<group>"; };
 		BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusIndicator.swift; sourceTree = "<group>"; };
 		BC24E30A2FDF8F94004694D1 /* SyncConflictViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConflictViews.swift; sourceTree = "<group>"; };
 		BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncConflictService.swift; sourceTree = "<group>"; };
@@ -713,6 +716,7 @@
 				BCA132030000000000000001 /* Convergence */,
 				BCA154030000000000000001 /* EditorApplication */,
 				C07100232FF1600000000001 /* Recovery */,
+				C07100392FF1600000000001 /* Legacy */,
 				BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */,
 				BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */,
 				BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */,
@@ -735,6 +739,14 @@
 			path = Recovery;
 			sourceTree = "<group>";
 		};
+			C07100392FF1600000000001 /* Legacy */ = {
+				isa = PBXGroup;
+				children = (
+					C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */,
+				);
+				path = Legacy;
+				sourceTree = "<group>";
+			};
 		BCA154030000000000000001 /* EditorApplication */ = {
 			isa = PBXGroup;
 			children = (
@@ -979,6 +991,7 @@
 				BC7009FE2FBF928500F513B4 /* MyRAMSchema.swift in Sources */,
 				BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */,
 				BC24E3052FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */,
+				C07100362FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */,
 				BC24E30B2FDF8F94004694D1 /* MyRAMSyncConflictService.swift in Sources */,
 				BC24E3042FDF8F94004694D1 /* SyncConflictStore.swift in Sources */,
 				BCE65D222EA6000000F2D0AA /* Folder.swift in Sources */,
@@ -1115,6 +1128,7 @@
 				C071000D2FF0000000000001 /* MyRAMSyncModels.swift in Sources */,
 				BC24E3102FDF8F94004694D1 /* SyncConflictStore.swift in Sources */,
 				BC24E3112FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */,
+				C07100382FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */,
 				BCA154010000000000000002 /* AppliedEditorMutation.swift in Sources */,
 				BCA154010000000000000004 /* ActiveEditorApplicationPolicy.swift in Sources */,
 				BCA15401000000000000000E /* ActiveEditorSyncUpdateHandler.swift in Sources */,

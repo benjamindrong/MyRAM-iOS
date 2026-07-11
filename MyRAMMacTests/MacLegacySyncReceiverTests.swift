@@ -351,6 +351,211 @@ final class MacLegacySyncReceiverTests: XCTestCase {
         XCTAssertTrue(appliedStore.recordedIDs.isEmpty)
     }
 
+    func testNoteDeleteWithNilDeletedAtIsRejectedNotAppliedOrAcknowledged() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000160225")!
+        let change = try makeContradictoryNoteChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160226")!,
+            noteID: noteID,
+            operation: .delete,
+            markPayloadDeleted: false
+        )
+
+        let result = try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [change]))
+
+        XCTAssertEqual(result.rejectedChangeIDs, [change.id])
+        XCTAssertTrue(result.acknowledgementIDs.isEmpty)
+        XCTAssertTrue(appliedStore.recordedIDs.isEmpty)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })).count, 0)
+    }
+
+    func testNoteUpsertWithDeletedPayloadStateIsRejected() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000160227")!
+        let change = try makeContradictoryNoteChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160228")!,
+            noteID: noteID,
+            operation: .upsert,
+            markPayloadDeleted: true
+        )
+
+        let result = try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [change]))
+
+        XCTAssertEqual(result.rejectedChangeIDs, [change.id])
+        XCTAssertTrue(result.acknowledgementIDs.isEmpty)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })).count, 0)
+    }
+
+    func testFolderDeleteWithIsDeletedFalseIsRejectedNotTreatedAsUpsert() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+        let folderID = UUID(uuidString: "00000000-0000-0000-0000-000000160229")!
+        let change = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000016022A")!,
+            entityType: .collection,
+            entityID: folderID.uuidString,
+            operation: .delete,
+            payload: try MyRAMSyncPayloadCoding.encode(makeFolderPayload(id: folderID, name: "Not Actually Deleted")),
+            updatedAt: Date(timeIntervalSince1970: 1),
+            originDeviceID: "iphone"
+        )
+
+        let result = try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [change]))
+
+        XCTAssertEqual(result.rejectedChangeIDs, [change.id])
+        XCTAssertTrue(result.acknowledgementIDs.isEmpty)
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<Folder>(predicate: #Predicate { $0.id == folderID })).count,
+            0,
+            "a contradictory delete must not be silently applied as an upsert"
+        )
+    }
+
+    func testPinnedThoughtDeleteWithIsDeletedFalseIsRejectedNotTreatedAsUpsert() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-00000016022B")!
+        let thoughtID = UUID(uuidString: "00000000-0000-0000-0000-00000016022C")!
+        let change = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000016022D")!,
+            entityType: .marker,
+            entityID: thoughtID.uuidString,
+            operation: .delete,
+            payload: try MyRAMSyncPayloadCoding.encode(makePinnedThoughtPayload(id: thoughtID, noteID: noteID, text: "Not Deleted")),
+            updatedAt: Date(timeIntervalSince1970: 1),
+            originDeviceID: "iphone"
+        )
+
+        let result = try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [change]))
+
+        XCTAssertEqual(result.rejectedChangeIDs, [change.id])
+        XCTAssertTrue(result.acknowledgementIDs.isEmpty)
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<PinnedThought>(predicate: #Predicate { $0.id == thoughtID })).count,
+            0
+        )
+    }
+
+    func testAttachmentDeleteWithIsDeletedFalseIsRejected() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-00000016022E")!
+        let attachmentID = UUID(uuidString: "00000000-0000-0000-0000-00000016022F")!
+        let change = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160230")!,
+            entityType: .attachment,
+            entityID: attachmentID.uuidString,
+            operation: .delete,
+            payload: try MyRAMSyncPayloadCoding.encode(makeAttachmentPayload(id: attachmentID, noteID: noteID)),
+            updatedAt: Date(timeIntervalSince1970: 1),
+            originDeviceID: "iphone"
+        )
+
+        let result = try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [change]))
+
+        XCTAssertEqual(result.rejectedChangeIDs, [change.id])
+        XCTAssertTrue(result.acknowledgementIDs.isEmpty)
+    }
+
+    func testPayloadIDDifferentFromEntityIDIsRejected() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000160231")!
+        let mismatchedEntityID = UUID(uuidString: "00000000-0000-0000-0000-000000160232")!
+        let sourceNote = Note(title: "Mismatched", content: "Body")
+        sourceNote.id = noteID
+        sourceNote.modifiedAt = Date(timeIntervalSince1970: 5)
+        let change = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160233")!,
+            entityType: .item,
+            entityID: mismatchedEntityID.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: sourceNote)),
+            updatedAt: sourceNote.modifiedAt,
+            originDeviceID: "iphone"
+        )
+
+        let result = try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [change]))
+
+        XCTAssertEqual(result.rejectedChangeIDs, [change.id])
+        XCTAssertTrue(result.acknowledgementIDs.isEmpty)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })).count, 0)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == mismatchedEntityID })).count, 0)
+    }
+
+    func testValidStaleDeleteAgainstNewerLocalStateIsSafelyAcknowledgedAsSuperseded() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000160234")!
+        let existingNote = Note(title: "Newer Local State", content: "Body")
+        existingNote.id = noteID
+        existingNote.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(existingNote)
+        try context.save()
+
+        let staleDeleteSource = Note(title: "Stale", content: "Stale")
+        staleDeleteSource.id = noteID
+        staleDeleteSource.modifiedAt = Date(timeIntervalSince1970: 5)
+        staleDeleteSource.deletedAt = Date(timeIntervalSince1970: 5)
+        let change = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160235")!,
+            entityType: .item,
+            entityID: noteID.uuidString,
+            operation: .delete,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(note: staleDeleteSource)),
+            updatedAt: staleDeleteSource.modifiedAt,
+            originDeviceID: "iphone"
+        )
+
+        let result = try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [change]))
+
+        XCTAssertEqual(result.acknowledgementIDs, [change.id])
+        XCTAssertEqual(appliedStore.recordedIDs, [change.id])
+        XCTAssertEqual(result.applyResult.outcomes, [
+            MyRAMSyncChangeOutcome(changeID: change.id, disposition: .alreadySatisfiedOrSuperseded)
+        ])
+        XCTAssertEqual(
+            try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })).first?.title,
+            "Newer Local State",
+            "a stale delete must not overwrite newer local state"
+        )
+    }
+
+    func testMixedEnvelopeAcknowledgesOnlySemanticallyValidTerminalChanges() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+        let validNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000160236")!
+        let contradictoryNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000160237")!
+        let validChange = try makeNoteChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160238")!,
+            noteID: validNoteID,
+            title: "Valid"
+        )
+        let contradictoryChange = try makeContradictoryNoteChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160239")!,
+            noteID: contradictoryNoteID,
+            operation: .delete,
+            markPayloadDeleted: false
+        )
+
+        let result = try receiver.receive(
+            SyncEnvelope(senderDeviceID: "iphone", changes: [validChange, contradictoryChange])
+        )
+
+        XCTAssertEqual(result.acknowledgementIDs, [validChange.id])
+        XCTAssertEqual(result.rejectedChangeIDs, [contradictoryChange.id])
+    }
+
     // MARK: - Helpers
 
     // Retained for the lifetime of the test case: the returned ModelContext does not keep
@@ -404,6 +609,30 @@ final class MacLegacySyncReceiverTests: XCTestCase {
             entityType: .item,
             entityID: noteID.uuidString,
             operation: .delete,
+            payload: try MyRAMSyncPayloadCoding.encode(payload),
+            updatedAt: sourceNote.modifiedAt,
+            originDeviceID: "iphone"
+        )
+    }
+
+    private func makeContradictoryNoteChange(
+        id: UUID,
+        noteID: UUID,
+        operation: SyncOperation,
+        markPayloadDeleted: Bool
+    ) throws -> SyncChange {
+        let sourceNote = Note(title: "Contradictory", content: "Body")
+        sourceNote.id = noteID
+        sourceNote.modifiedAt = Date(timeIntervalSince1970: 5)
+        if markPayloadDeleted {
+            sourceNote.deletedAt = Date(timeIntervalSince1970: 5)
+        }
+        let payload = MyRAMNoteSyncPayload(note: sourceNote)
+        return SyncChange(
+            id: id,
+            entityType: .item,
+            entityID: noteID.uuidString,
+            operation: operation,
             payload: try MyRAMSyncPayloadCoding.encode(payload),
             updatedAt: sourceNote.modifiedAt,
             originDeviceID: "iphone"

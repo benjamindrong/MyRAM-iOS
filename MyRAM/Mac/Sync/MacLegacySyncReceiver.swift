@@ -53,7 +53,7 @@ final class MacLegacySyncReceiver {
         var rejectedChangeIDs: [UUID] = []
 
         for change in envelope.changes {
-            guard Self.hasValidPayload(change) else {
+            guard case .valid = MyRAMLegacySyncChangeValidator.validate(change) else {
                 rejectedChangeIDs.append(change.id)
                 continue
             }
@@ -100,25 +100,6 @@ final class MacLegacySyncReceiver {
         )
     }
 
-    private static func hasValidPayload(_ change: SyncChange) -> Bool {
-        do {
-            switch change.entityType {
-            case .collection:
-                _ = try MyRAMSyncPayloadCoding.decodeFolder(from: change.payload)
-            case .item:
-                _ = try MyRAMSyncPayloadCoding.decodeNote(from: change.payload)
-            case .marker:
-                _ = try MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload)
-            case .attachment:
-                _ = try MyRAMSyncPayloadCoding.decodePhotoAttachment(from: change.payload)
-            case .conflict:
-                _ = try MyRAMSyncPayloadCoding.decodeSyncConflict(from: change.payload)
-            }
-            return true
-        } catch {
-            return false
-        }
-    }
 }
 
 final class FileBackedMacLegacyAppliedChangeStore: MacLegacyAppliedChangeStoring {
