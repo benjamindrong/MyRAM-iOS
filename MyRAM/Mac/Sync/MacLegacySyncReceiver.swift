@@ -15,6 +15,7 @@ struct MacLegacyReceiveResult: Equatable {
 }
 
 enum MacLegacySyncReceiverError: Error, Equatable {
+    case preExistingModelSaveFailed
     case modelSaveFailed
     case appliedLedgerPersistenceFailed
 }
@@ -63,27 +64,37 @@ final class MacLegacySyncReceiver {
             }
         }
 
+        if context.hasChanges {
+            do {
+                try performSave()
+            } catch {
+                throw MacLegacySyncReceiverError.preExistingModelSaveFailed
+            }
+        }
+
         let applyResult = applier.apply(
             newValidChanges,
             activeNoteID: nil,
             currentNoteID: nil,
             currentFolderID: nil
         )
+        let terminalChangeIDs = Set(applyResult.outcomes.filter(\.shouldAcknowledge).map(\.changeID))
 
         do {
             try performSave()
         } catch {
+            context.rollback()
             throw MacLegacySyncReceiverError.modelSaveFailed
         }
 
         do {
-            try appliedStore.insert(Set(newValidChanges.map(\.id)))
+            try appliedStore.insert(terminalChangeIDs)
         } catch {
             throw MacLegacySyncReceiverError.appliedLedgerPersistenceFailed
         }
 
         return MacLegacyReceiveResult(
-            acknowledgementIDs: duplicateAcknowledgements + newValidChanges.map(\.id),
+            acknowledgementIDs: duplicateAcknowledgements + newValidChanges.map(\.id).filter(terminalChangeIDs.contains),
             rejectedChangeIDs: rejectedChangeIDs,
             applyResult: applyResult
         )

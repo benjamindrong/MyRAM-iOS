@@ -76,6 +76,7 @@ final class MacLegacySyncReceiverTests: XCTestCase {
             XCTAssertEqual(error as? MacLegacySyncReceiverError, .modelSaveFailed)
         }
         XCTAssertTrue(appliedStore.recordedIDs.isEmpty, "no ID may be acknowledged when the save that would make it durable failed")
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })).count, 0)
     }
 
     func testAppliedLedgerPersistenceFailureAcknowledgesNoNewIDs() throws {
@@ -89,6 +90,14 @@ final class MacLegacySyncReceiverTests: XCTestCase {
         XCTAssertThrowsError(try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [change]))) { error in
             XCTAssertEqual(error as? MacLegacySyncReceiverError, .appliedLedgerPersistenceFailed)
         }
+        XCTAssertTrue(appliedStore.recordedIDs.isEmpty)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })).first?.title, "Ledger fails")
+
+        appliedStore.insertShouldThrow = false
+        let replayResult = try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [change]))
+
+        XCTAssertEqual(replayResult.acknowledgementIDs, [change.id])
+        XCTAssertEqual(appliedStore.recordedIDs, [change.id])
     }
 
     func testAckOnlyEnvelopeProducesNoAcknowledgementIDsOrSideEffects() throws {
@@ -169,6 +178,179 @@ final class MacLegacySyncReceiverTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<NotePhotoAttachment>(predicate: #Predicate { $0.id == attachmentID })).count, 1)
     }
 
+    func testAttachmentUpsertWithMissingNoteIsNotLedgeredOrAcknowledged() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000160212")!
+        let attachmentID = UUID(uuidString: "00000000-0000-0000-0000-000000160213")!
+        let change = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160214")!,
+            entityType: .attachment,
+            entityID: attachmentID.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(makeAttachmentPayload(id: attachmentID, noteID: noteID)),
+            updatedAt: Date(timeIntervalSince1970: 1),
+            originDeviceID: "iphone"
+        )
+
+        let result = try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [change]))
+
+        XCTAssertTrue(result.acknowledgementIDs.isEmpty)
+        XCTAssertTrue(appliedStore.recordedIDs.isEmpty)
+        XCTAssertEqual(result.applyResult.outcomes, [
+            MyRAMSyncChangeOutcome(changeID: change.id, disposition: .deferredMissingDependency)
+        ])
+    }
+
+    func testMixedEnvelopeAcknowledgesOnlyTerminalDispositions() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+        let validNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000160220")!
+        let missingNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000160221")!
+        let attachmentID = UUID(uuidString: "00000000-0000-0000-0000-000000160222")!
+        let terminalChange = try makeNoteChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160223")!,
+            noteID: validNoteID,
+            title: "Terminal"
+        )
+        let deferredChange = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160224")!,
+            entityType: .attachment,
+            entityID: attachmentID.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(makeAttachmentPayload(id: attachmentID, noteID: missingNoteID)),
+            updatedAt: Date(timeIntervalSince1970: 1),
+            originDeviceID: "iphone"
+        )
+
+        let result = try receiver.receive(
+            SyncEnvelope(senderDeviceID: "iphone", changes: [terminalChange, deferredChange])
+        )
+
+        XCTAssertEqual(result.acknowledgementIDs, [terminalChange.id])
+        XCTAssertEqual(appliedStore.recordedIDs, [terminalChange.id])
+        XCTAssertEqual(result.applyResult.outcomes.first {
+            $0.changeID == deferredChange.id
+        }?.disposition, .deferredMissingDependency)
+    }
+
+    func testParentDependenciesAreDeferredUntilAvailable() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+
+        let folderID = UUID(uuidString: "00000000-0000-0000-0000-000000160215")!
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000160216")!
+        let pinnedThoughtID = UUID(uuidString: "00000000-0000-0000-0000-000000160217")!
+        let missingFolderNote = try makeNoteChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160218")!,
+            noteID: noteID,
+            title: "Missing Folder",
+            folderID: folderID
+        )
+        let missingNotePinnedThought = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000160219")!,
+            entityType: .marker,
+            entityID: pinnedThoughtID.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(makePinnedThoughtPayload(
+                id: pinnedThoughtID,
+                noteID: noteID,
+                text: "Pinned"
+            )),
+            updatedAt: Date(timeIntervalSince1970: 2),
+            originDeviceID: "iphone"
+        )
+
+        let deferredResult = try receiver.receive(
+            SyncEnvelope(senderDeviceID: "iphone", changes: [missingFolderNote, missingNotePinnedThought])
+        )
+
+        XCTAssertTrue(deferredResult.acknowledgementIDs.isEmpty)
+        XCTAssertTrue(appliedStore.recordedIDs.isEmpty)
+
+        let folderChange = SyncChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000016021A")!,
+            entityType: .collection,
+            entityID: folderID.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(makeFolderPayload(id: folderID, name: "Parent")),
+            updatedAt: Date(timeIntervalSince1970: 3),
+            originDeviceID: "iphone"
+        )
+        let convergedResult = try receiver.receive(
+            SyncEnvelope(senderDeviceID: "iphone", changes: [missingNotePinnedThought, missingFolderNote, folderChange])
+        )
+
+        XCTAssertEqual(
+            Set(convergedResult.acknowledgementIDs),
+            Set([folderChange.id, missingFolderNote.id, missingNotePinnedThought.id])
+        )
+        XCTAssertEqual(appliedStore.recordedIDs, Set([folderChange.id, missingFolderNote.id, missingNotePinnedThought.id]))
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Folder>(predicate: #Predicate { $0.id == folderID })).count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })).first?.folder?.id, folderID)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<PinnedThought>(predicate: #Predicate { $0.id == pinnedThoughtID })).first?.note?.id, noteID)
+    }
+
+    func testMissingEntityDeleteIsAcknowledgedAsIdempotentTerminalOutcome() throws {
+        let context = try makeContext()
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(context: context, appliedStore: appliedStore)
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-00000016021B")!
+        let change = try makeNoteDeleteChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000016021C")!,
+            noteID: noteID
+        )
+
+        let result = try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [change]))
+
+        XCTAssertEqual(result.acknowledgementIDs, [change.id])
+        XCTAssertEqual(appliedStore.recordedIDs, [change.id])
+        XCTAssertEqual(result.applyResult.outcomes, [
+            MyRAMSyncChangeOutcome(changeID: change.id, disposition: .alreadySatisfiedOrSuperseded)
+        ])
+    }
+
+    func testPreExistingUnsavedMutationSurvivesLaterRemoteSaveFailure() throws {
+        let context = try makeContext()
+        let localNoteID = UUID(uuidString: "00000000-0000-0000-0000-00000016021D")!
+        let localNote = Note(title: "Local Unsaved", content: "Local")
+        localNote.id = localNoteID
+        context.insert(localNote)
+
+        var saveCallCount = 0
+        let appliedStore = FakeMacLegacyAppliedChangeStore()
+        let receiver = MacLegacySyncReceiver(
+            context: context,
+            appliedStore: appliedStore,
+            performSave: {
+                saveCallCount += 1
+                if saveCallCount == 1 {
+                    try context.save()
+                } else {
+                    throw TestSaveError.failed
+                }
+            }
+        )
+        let remoteNoteID = UUID(uuidString: "00000000-0000-0000-0000-00000016021E")!
+        let remoteChange = try makeNoteChange(
+            id: UUID(uuidString: "00000000-0000-0000-0000-00000016021F")!,
+            noteID: remoteNoteID,
+            title: "Remote Should Roll Back"
+        )
+
+        XCTAssertThrowsError(try receiver.receive(SyncEnvelope(senderDeviceID: "iphone", changes: [remoteChange]))) { error in
+            XCTAssertEqual(error as? MacLegacySyncReceiverError, .modelSaveFailed)
+        }
+
+        XCTAssertEqual(saveCallCount, 2)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == localNoteID })).first?.title, "Local Unsaved")
+        XCTAssertEqual(try context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == remoteNoteID })).count, 0)
+        XCTAssertTrue(appliedStore.recordedIDs.isEmpty)
+    }
+
     // MARK: - Helpers
 
     // Retained for the lifetime of the test case: the returned ModelContext does not keep
@@ -190,16 +372,38 @@ final class MacLegacySyncReceiverTests: XCTestCase {
         return container.mainContext
     }
 
-    private func makeNoteChange(id: UUID, noteID: UUID, title: String) throws -> SyncChange {
+    private func makeNoteChange(id: UUID, noteID: UUID, title: String, folderID: UUID? = nil) throws -> SyncChange {
         let sourceNote = Note(title: title, content: "Body for \(title)")
         sourceNote.id = noteID
         sourceNote.modifiedAt = Date(timeIntervalSince1970: 5)
+        if let folderID {
+            let folder = Folder(name: "Parent")
+            folder.id = folderID
+            sourceNote.folder = folder
+        }
         let payload = MyRAMNoteSyncPayload(note: sourceNote)
         return SyncChange(
             id: id,
             entityType: .item,
             entityID: noteID.uuidString,
             operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(payload),
+            updatedAt: sourceNote.modifiedAt,
+            originDeviceID: "iphone"
+        )
+    }
+
+    private func makeNoteDeleteChange(id: UUID, noteID: UUID) throws -> SyncChange {
+        let sourceNote = Note(title: "Deleted", content: "Deleted")
+        sourceNote.id = noteID
+        sourceNote.modifiedAt = Date(timeIntervalSince1970: 5)
+        sourceNote.deletedAt = Date(timeIntervalSince1970: 6)
+        let payload = MyRAMNoteSyncPayload(note: sourceNote)
+        return SyncChange(
+            id: id,
+            entityType: .item,
+            entityID: noteID.uuidString,
+            operation: .delete,
             payload: try MyRAMSyncPayloadCoding.encode(payload),
             updatedAt: sourceNote.modifiedAt,
             originDeviceID: "iphone"
@@ -218,6 +422,14 @@ final class MacLegacySyncReceiverTests: XCTestCase {
         let attachment = NotePhotoAttachment(imageData: Data([1, 2, 3]), note: note)
         attachment.id = id
         return MyRAMPhotoAttachmentSyncPayload(attachment: attachment)
+    }
+
+    private func makePinnedThoughtPayload(id: UUID, noteID: UUID, text: String) -> MyRAMPinnedThoughtSyncPayload {
+        let note = Note(title: "placeholder")
+        note.id = noteID
+        let thought = PinnedThought(text: text, order: 0, note: note)
+        thought.id = id
+        return MyRAMPinnedThoughtSyncPayload(thought: thought)
     }
 }
 
