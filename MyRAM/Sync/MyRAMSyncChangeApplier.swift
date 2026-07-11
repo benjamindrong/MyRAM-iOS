@@ -784,7 +784,7 @@ final class MyRAMSyncChangeApplier {
         }
 
         switch SyncThreeWayTextMergePolicy.merge(base: baseline.text, local: localText, remote: remoteText) {
-        case .apply(let text), .merged(let text):
+        case .apply(let text, _):
             return .apply(text)
         case .noOp:
             return .apply(localText)
@@ -904,7 +904,7 @@ final class MyRAMSyncChangeApplier {
         }
 
         switch SyncThreeWayTextMergePolicy.merge(base: baseText, local: localText, remote: resolvedText) {
-        case .apply(let text), .merged(let text):
+        case .apply(let text, _):
             applyResolvedText(text, conflict: conflict)
             return true
         case .noOp:

@@ -52,7 +52,7 @@ final class NotesViewModel: ObservableObject {
     private let syncConflictService: MyRAMSyncConflictService
     private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
     private let pendingIncomingBatches: FileBackedSyncBatchQueue
-    private let pendingLocalConvergenceBatches: FileBackedSyncBatchQueue
+    private let pendingLocalConvergenceBatches: FileBackedSyncConvergenceLocalObligationQueue
     private var refreshPendingSyncStatusForLocalConvergenceMutation: (() async -> Void)?
     private let bodyHashCapabilityEnabled: Bool
     private let noteIntelligenceService = NoteIntelligenceService()
@@ -100,7 +100,7 @@ final class NotesViewModel: ObservableObject {
             fileURL: pendingIncomingBatchQueueFileURL,
             limit: pendingIncomingBatchQueueLimit
         )
-        pendingLocalConvergenceBatches = FileBackedSyncBatchQueue(
+        pendingLocalConvergenceBatches = FileBackedSyncConvergenceLocalObligationQueue(
             fileURL: pendingLocalConvergenceBatchQueueFileURL,
             limit: pendingLocalConvergenceBatchQueueLimit
         )
@@ -132,8 +132,8 @@ final class NotesViewModel: ObservableObject {
         }
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
-            for await batch in stream {
-                await self?.handleReadyLocalBatch(batch)
+            for await obligation in stream {
+                await self?.handleReadyLocalBatch(obligation)
             }
         }
         syncConflicts = syncConflictService.activeConflicts()
@@ -282,7 +282,10 @@ final class NotesViewModel: ObservableObject {
         context.insert(note)
         currentFolder?.modifiedAt = .now
         try? context.save()
-        recordSyncBatchChange(IPhoneSyncBatchCaptureHook.noteCreated(note))
+        recordSyncBatchChange(SyncConvergenceCapturedLocalChange(
+            change: IPhoneSyncBatchCaptureHook.noteCreated(note),
+            evidence: nil
+        ))
         if let currentFolder {
             recordFolderSyncChange(currentFolder)
         }
@@ -342,7 +345,7 @@ final class NotesViewModel: ObservableObject {
             newTitle: trimmedTitle,
             modifiedAt: note.modifiedAt
         ) {
-            recordSyncBatchChange(change)
+            recordSyncBatchChange(SyncConvergenceCapturedLocalChange(change: change, evidence: nil))
         }
         if let folder = note.folder {
             recordFolderSyncChange(folder)
@@ -1256,7 +1259,7 @@ final class NotesViewModel: ObservableObject {
             newTitle: note.title,
             modifiedAt: note.modifiedAt
         ) {
-            recordSyncBatchChange(change)
+            recordSyncBatchChange(SyncConvergenceCapturedLocalChange(change: change, evidence: nil))
         }
 
         if let change = IPhoneSyncBatchCaptureHook.bodyTextChanged(
@@ -1265,14 +1268,23 @@ final class NotesViewModel: ObservableObject {
             newBody: note.content,
             modifiedAt: note.modifiedAt
         ) {
-            recordSyncBatchChange(change)
+            do {
+                let capturedChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+                    for: change,
+                    preBody: oldContent,
+                    postBody: note.content
+                )
+                recordSyncBatchChange(capturedChange)
+            } catch {
+                syncBatchErrorMessage = "Unable to capture local sync evidence for the latest edit."
+            }
         }
     }
 
-    private func recordSyncBatchChange(_ change: SyncBatchChange) {
+    private func recordSyncBatchChange(_ capturedChange: SyncConvergenceCapturedLocalChange) {
         guard !isApplyingRemoteSyncChange else { return }
         Task {
-            await syncBatchAccumulator.record(change)
+            await syncBatchAccumulator.record(capturedChange)
             if let issue = await syncBatchAccumulator.takeLastSequenceReservationIssue() {
                 syncBatchErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
             }
@@ -1531,14 +1543,14 @@ final class NotesViewModel: ObservableObject {
     }
 
     func capturePendingLocalBatchForRecovery() async -> SyncBatchID? {
-        guard let batch = await syncBatchAccumulator.takePendingBatchNow() else {
+        guard let obligation = await syncBatchAccumulator.takePendingBatchNow() else {
             await resumePendingConvergencePresentation()
             return nil
         }
-        let outcome = await syncConvergenceRuntime.submitLocalBatch(batch)
+        let outcome = await syncConvergenceRuntime.submitLocalObligation(obligation)
         await handleConvergenceRuntimeOutcome(outcome)
         await resumePendingConvergencePresentation()
-        return batch.id
+        return obligation.id
     }
 
     func resetPendingSync(
@@ -1627,8 +1639,8 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func handleReadyLocalBatch(_ batch: SyncBatch) async {
-        let outcome = await syncConvergenceRuntime.submitLocalBatch(batch)
+    private func handleReadyLocalBatch(_ obligation: SyncConvergenceLocalObligation) async {
+        let outcome = await syncConvergenceRuntime.submitLocalObligation(obligation)
         await handleConvergenceRuntimeOutcome(outcome)
     }
 
@@ -1652,6 +1664,8 @@ final class NotesViewModel: ObservableObject {
         case .drained:
             syncBatchErrorMessage = nil
         case .pending:
+            break
+        case .deferred:
             break
         case .alreadyDraining:
             break

@@ -9,7 +9,7 @@ actor IPhoneSyncBatchAccumulator {
     private var pendingBatch: PendingBatch?
     private var lastSequenceReservationIssue: SyncBatchSequenceReservation.SequenceIssue?
     private var readinessTask: Task<Void, Never>?
-    private var continuations: [UUID: AsyncStream<SyncBatch>.Continuation] = [:]
+    private var continuations: [UUID: AsyncStream<SyncConvergenceLocalObligation>.Continuation] = [:]
 
     init(
         originDeviceID: SyncBatchDeviceID,
@@ -30,9 +30,9 @@ actor IPhoneSyncBatchAccumulator {
         self.sleep = sleep
     }
 
-    func readyBatches() -> AsyncStream<SyncBatch> {
+    func readyBatches() -> AsyncStream<SyncConvergenceLocalObligation> {
         let streamID = UUID()
-        let (stream, continuation) = AsyncStream.makeStream(of: SyncBatch.self)
+        let (stream, continuation) = AsyncStream.makeStream(of: SyncConvergenceLocalObligation.self)
         continuations[streamID] = continuation
         continuation.onTermination = { [weak self] _ in
             Task { await self?.removeContinuation(id: streamID) }
@@ -41,6 +41,10 @@ actor IPhoneSyncBatchAccumulator {
     }
 
     func record(_ change: SyncBatchChange, at date: Date = .now) {
+        record(SyncConvergenceCapturedLocalChange(change: change, evidence: nil), at: date)
+    }
+
+    func record(_ capturedChange: SyncConvergenceCapturedLocalChange, at date: Date = .now) {
         if pendingBatch == nil {
             let reservation = batchSequenceProvider()
             let batchSequence: UInt64?
@@ -57,12 +61,12 @@ actor IPhoneSyncBatchAccumulator {
                 id: batchIDProvider(),
                 createdAt: date,
                 batchSequence: batchSequence,
-                changes: [],
+                capturedChanges: [],
                 readyAt: date.addingTimeInterval(quietWindow)
             )
         }
 
-        pendingBatch?.changes.append(change)
+        pendingBatch?.capturedChanges.append(capturedChange)
         pendingBatch?.readyAt = date.addingTimeInterval(quietWindow)
         scheduleReadyEmission(batchID: pendingBatch?.id, readyAt: pendingBatch?.readyAt)
     }
@@ -87,34 +91,35 @@ actor IPhoneSyncBatchAccumulator {
         }
     }
 
-    func takeReadyBatch(at date: Date = .now) -> SyncBatch? {
+    func takeReadyBatch(at date: Date = .now) -> SyncConvergenceLocalObligation? {
         extractPendingBatch { pendingBatch in
             date >= pendingBatch.readyAt
         }
     }
 
-    private func readyBatchIfAvailable(at date: Date) -> SyncBatch? {
+    private func readyBatchIfAvailable(at date: Date) -> SyncConvergenceLocalObligation? {
         extractPendingBatch { pendingBatch in
             date >= pendingBatch.readyAt
         }
     }
 
-    func takePendingBatchNow() -> SyncBatch? {
+    func takePendingBatchNow() -> SyncConvergenceLocalObligation? {
         extractPendingBatch { _ in true }
     }
 
-    private func extractPendingBatch(when shouldExtract: (PendingBatch) -> Bool) -> SyncBatch? {
+    private func extractPendingBatch(when shouldExtract: (PendingBatch) -> Bool) -> SyncConvergenceLocalObligation? {
         guard let pendingBatch, shouldExtract(pendingBatch) else { return nil }
         readinessTask?.cancel()
         readinessTask = nil
         self.pendingBatch = nil
-        return SyncBatch(
+        let batch = SyncBatch(
             id: pendingBatch.id,
             originDeviceID: originDeviceID,
             createdAt: pendingBatch.createdAt,
             batchSequence: pendingBatch.batchSequence,
-            changes: pendingBatch.changes
+            changes: pendingBatch.capturedChanges.map(\.change)
         )
+        return SyncConvergenceLocalObligation(batch: batch, capturedChanges: pendingBatch.capturedChanges)
     }
 
     private func removeContinuation(id: UUID) {
@@ -142,6 +147,6 @@ private struct PendingBatch {
     let id: SyncBatchID
     let createdAt: Date
     let batchSequence: UInt64?
-    var changes: [SyncBatchChange]
+    var capturedChanges: [SyncConvergenceCapturedLocalChange]
     var readyAt: Date
 }

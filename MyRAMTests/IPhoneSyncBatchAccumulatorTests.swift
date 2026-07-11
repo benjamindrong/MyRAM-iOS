@@ -15,6 +15,35 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertEqual(batch?.changes, [firstChange, secondChange])
     }
 
+    func testCapturedBodyEvidenceSurvivesPendingBatchEmission() async throws {
+        let accumulator = makeAccumulator()
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000124201")!
+        let change = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+            noteID: noteID,
+            utf16Offset: "Hello".utf16.count,
+            text: " world",
+            modifiedAt: Date(timeIntervalSince1970: 20),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello")
+        ))
+        let capturedChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+            for: change,
+            preBody: "Hello",
+            postBody: "Hello world"
+        )
+        let start = Date(timeIntervalSince1970: 120)
+
+        await accumulator.record(capturedChange, at: start)
+        let obligation = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+
+        XCTAssertEqual(obligation?.batch.changes, [change])
+        guard case .captured(let capturedChanges) = obligation?.evidence else {
+            return XCTFail("Expected captured local evidence")
+        }
+        XCTAssertEqual(capturedChanges, [capturedChange])
+        XCTAssertEqual(capturedChanges.first?.evidence?.preBodyHash, SyncBatchContentHash.sha256Hex(for: "Hello"))
+        XCTAssertEqual(capturedChanges.first?.evidence?.postBodyHash, SyncBatchContentHash.sha256Hex(for: "Hello world"))
+    }
+
     func testQuietWindowRearmsAndBatchIDStaysStable() async {
         let accumulator = makeAccumulator()
         let start = Date(timeIntervalSince1970: 200)

@@ -402,6 +402,13 @@ enum SyncBatchDrainFailureClassifier {
             case .persistenceFailed, .unhealthyPersistence:
                 kind = .queuePersistence
             }
+        } else if let queueError = error as? FileBackedSyncConvergenceLocalObligationQueue.QueueError {
+            switch queueError {
+            case .capacityExceeded:
+                kind = .queueCapacity
+            case .persistenceFailed, .unhealthyPersistence:
+                kind = .queuePersistence
+            }
         } else {
             kind = .persistence
         }
