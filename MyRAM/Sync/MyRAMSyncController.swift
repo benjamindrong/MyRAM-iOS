@@ -275,9 +275,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     func flushAllOutboundWork() {
         Task {
+            // debouncedSender.flushNow() cancels any scheduled debounce and fires
+            // its send closure (requestLegacyFlush()) via its own Task. Calling
+            // requestLegacyFlush() again here as well would race that fire-and-forget
+            // call: the loser would see isFlushingLegacy already true and schedule an
+            // immediate follow-up flush of the same not-yet-acknowledged page, instead
+            // of the acknowledgement-driven continuation in receiveLegacyEnvelope(_:from:).
             await debouncedSender.flushNow()
             await onFlushLocalConvergenceRequested?()
-            await requestLegacyFlush()
             await flushUnsentBatches()
             await updatePendingCount()
         }
