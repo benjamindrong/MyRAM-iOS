@@ -770,7 +770,7 @@ private final class FakePendingSyncQueueAdmin: PendingSyncQueueAdministrating {
         unsentSnapshot
     }
 
-    func replaceUnsentBatches(_ batches: [SyncBatch]) throws {
+    func replaceUnsentBatches(_ batches: [SyncBatch]) async throws {
         if failNextUnsentReplacement {
             failNextUnsentReplacement = false
             throw FileBackedSyncBatchQueue.QueueError.persistenceFailed

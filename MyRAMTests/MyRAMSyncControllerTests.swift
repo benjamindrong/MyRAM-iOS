@@ -1,5 +1,6 @@
 import MultipeerConnectivity
 import NearbySyncCore
+import SwiftData
 import XCTest
 @testable import MyRAM
 
@@ -156,6 +157,64 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertEqual(transport.sentLegacyEnvelopes.first?.changes.map(\.entityID), ["note-1"])
     }
 
+    func testLegacyFlushRequestedDuringActiveSendRunsFollowUpWithoutOverlap() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        transport.suspendLegacySends = true
+        let controller = try makeController(transport: transport)
+
+        controller.recordLocalChange(
+            entityType: .item,
+            entityID: "note-1",
+            payload: Data("payload-1".utf8),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        await waitUntil { controller.pendingChangeCount == 1 }
+        controller.flushPendingChanges()
+        await waitUntil { transport.hasSuspendedLegacySend }
+
+        controller.recordLocalChange(
+            entityType: .item,
+            entityID: "note-2",
+            payload: Data("payload-2".utf8),
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        await waitUntil { controller.pendingChangeCount == 2 }
+        controller.flushPendingChanges()
+
+        XCTAssertEqual(transport.maximumConcurrentLegacySends, 1)
+
+        transport.suspendLegacySends = false
+        transport.resumeNextLegacySend()
+        await waitUntil { transport.sentLegacyEnvelopes.count == 2 }
+
+        XCTAssertEqual(transport.maximumConcurrentLegacySends, 1)
+        XCTAssertTrue(
+            transport.sentLegacyEnvelopes.last?.changes.contains(where: { $0.entityID == "note-2" }) == true,
+            "the request remembered during the active send should produce a follow-up envelope"
+        )
+    }
+
+    func testRecoverySuspendedBatchRequestFlushesOnceOnResume() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(),
+            transport: transport
+        )
+        let batch = makeBatch(idSuffix: 199)
+
+        controller.suspendOutboundForRecovery()
+        try await controller.acceptLocalBatch(batch)
+
+        XCTAssertTrue(transport.sentBatchEnvelopes.isEmpty)
+        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 1)
+
+        controller.resumeOutboundAfterRecovery()
+        await waitUntil { transport.sentBatchEnvelopes.count == 1 }
+
+        XCTAssertEqual(transport.sentBatchEnvelopes.map(\.batch), [batch])
+        await waitUntil { controller.pendingSyncStatus.unsentBatches == 0 }
+    }
+
     func testManualSyncFlushesUnsentBatchQueue() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(transport: transport)
@@ -163,12 +222,28 @@ final class MyRAMSyncControllerTests: XCTestCase {
 
         try await controller.acceptLocalBatch(batch)
         XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
+        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 1)
 
         transport.connectedPeers = [Self.remotePeerID]
         controller.flushPendingChanges()
 
         await waitUntil { controller.unsentBatchQueueSnapshot().pendingBatches.isEmpty }
+        await waitUntil { controller.pendingSyncStatus.unsentBatches == 0 }
         XCTAssertEqual(transport.sentBatchEnvelopes.map(\.batch), [batch])
+    }
+
+    func testDisconnectedAcceptLocalBatchRefreshesUnsentStatusBeforeReturning() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(),
+            transport: transport
+        )
+        let batch = makeBatch(idSuffix: 204)
+
+        try await controller.acceptLocalBatch(batch)
+
+        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 1)
+        XCTAssertEqual(controller.pendingSyncStatus.totalOutboundItems, 1)
     }
 
     func testRecoverySuspendedAcceptLocalBatchThrowsWhenDurableEnqueueFails() async throws {
@@ -190,6 +265,12 @@ final class MyRAMSyncControllerTests: XCTestCase {
         }
 
         XCTAssertTrue(controller.unsentBatchQueueSnapshot().pendingBatches.isEmpty)
+        XCTAssertTrue(
+            controller.pendingSyncStatus.healthIssues.contains {
+                $0.domain == .unsentBatches
+            },
+            "unsent queue persistence failures should surface in aggregate status immediately"
+        )
     }
 
     func testSuccessfulTransportFollowedByFailedDurableRemovalKeepsUnsentBatch() async throws {
@@ -215,6 +296,37 @@ final class MyRAMSyncControllerTests: XCTestCase {
 
         XCTAssertEqual(transport.sentBatchEnvelopes.map(\.batch), [batch])
         XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
+        XCTAssertTrue(
+            controller.pendingSyncStatus.healthIssues.contains {
+                $0.domain == .unsentBatches
+            }
+        )
+    }
+
+    func testLocalConvergenceReplacementRefreshesAggregateStatusImmediately() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(),
+            transport: transport
+        )
+        let container = try makeContainer()
+        let viewModel = NotesViewModel(
+            context: container.mainContext,
+            syncController: controller,
+            pendingIncomingBatchQueueFileURL: temporaryQueueFileURL(),
+            pendingLocalConvergenceBatchQueueFileURL: temporaryQueueFileURL(),
+            resumesPendingConvergenceOnInit: false
+        )
+
+        try await viewModel.replaceLocalConvergenceBatches([makeBatch(idSuffix: 205)])
+
+        XCTAssertEqual(controller.pendingSyncStatus.localConvergenceObligations, 1)
+        XCTAssertEqual(controller.pendingSyncStatus.totalOutboundItems, 1)
+
+        try await viewModel.replaceLocalConvergenceBatches([])
+
+        XCTAssertEqual(controller.pendingSyncStatus.localConvergenceObligations, 0)
+        XCTAssertEqual(controller.pendingSyncStatus.totalOutboundItems, 0)
     }
 
     // MARK: - Helpers
@@ -268,6 +380,16 @@ final class MyRAMSyncControllerTests: XCTestCase {
             .appendingPathComponent("sync-pending-changes.json")
     }
 
+    private func makeContainer() throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MyRAMSyncControllerTests-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
+    }
+
     private func waitUntil(
         timeout: TimeInterval = 2,
         _ condition: () -> Bool
@@ -281,8 +403,16 @@ final class MyRAMSyncControllerTests: XCTestCase {
 
 private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     var connectedPeers: [MCPeerID]
+    var suspendLegacySends = false
     private(set) var sentLegacyEnvelopes: [SyncEnvelope] = []
     private(set) var sentBatchEnvelopes: [SyncBatchEnvelope] = []
+    private(set) var activeLegacySendCount = 0
+    private(set) var maximumConcurrentLegacySends = 0
+    private var suspendedLegacySendContinuations: [CheckedContinuation<Void, Never>] = []
+
+    var hasSuspendedLegacySend: Bool {
+        !suspendedLegacySendContinuations.isEmpty
+    }
 
     init(connectedPeers: [MCPeerID]) {
         self.connectedPeers = connectedPeers
@@ -298,9 +428,22 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
         let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
         switch message.kind {
         case .legacySyncEnvelope:
+            activeLegacySendCount += 1
+            maximumConcurrentLegacySends = max(maximumConcurrentLegacySends, activeLegacySendCount)
             sentLegacyEnvelopes.append(try JSONDecoder().decode(SyncEnvelope.self, from: message.payload))
+            if suspendLegacySends {
+                await withCheckedContinuation { continuation in
+                    suspendedLegacySendContinuations.append(continuation)
+                }
+            }
+            activeLegacySendCount -= 1
         case .batchSync:
             sentBatchEnvelopes.append(try JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload))
         }
+    }
+
+    func resumeNextLegacySend() {
+        guard !suspendedLegacySendContinuations.isEmpty else { return }
+        suspendedLegacySendContinuations.removeFirst().resume()
     }
 }

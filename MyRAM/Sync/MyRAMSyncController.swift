@@ -100,6 +100,8 @@ protocol MyRAMSyncControlling: AnyObject {
 protocol MyRAMSyncConvergenceStatusConfiguring: AnyObject {
     var onFlushLocalConvergenceRequested: (() async -> Void)? { get set }
     var localConvergencePendingCountProvider: (() -> Int)? { get set }
+
+    func refreshPendingSyncStatus() async
 }
 
 @MainActor
@@ -112,7 +114,7 @@ protocol PendingSyncQueueAdministrating: AnyObject {
     func replaceLegacyQueueSnapshot(_ snapshot: SyncQueueSnapshot) async throws
 
     func unsentBatchQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot
-    func replaceUnsentBatches(_ batches: [SyncBatch]) throws
+    func replaceUnsentBatches(_ batches: [SyncBatch]) async throws
 
     func refreshPendingSyncStatus() async
     func flushAllOutboundWork()
@@ -167,7 +169,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
     private let unsentBatches: FileBackedSyncBatchQueue
     private var isFlushingLegacy = false
-    private var legacyFlushRequestedWhileActive = false
+    private var pendingLegacyFlushAfterActiveSend = false
+    private var outboundFlushRequestedWhileRecoverySuspended = false
     private var isOutboundSuspendedForRecovery = false
     private var hasStartedNetworking = false
 
@@ -282,30 +285,29 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     private func requestLegacyFlush() async {
         if isOutboundSuspendedForRecovery {
-            legacyFlushRequestedWhileActive = true
+            outboundFlushRequestedWhileRecoverySuspended = true
             await updatePendingCount()
             return
         }
 
         if isFlushingLegacy {
-            legacyFlushRequestedWhileActive = true
+            pendingLegacyFlushAfterActiveSend = true
             return
         }
 
         isFlushingLegacy = true
-        legacyFlushRequestedWhileActive = false
-        defer {
-            isFlushingLegacy = false
-        }
+        pendingLegacyFlushAfterActiveSend = false
 
         let peers = await transport.connectedPeers()
         guard !peers.isEmpty else {
             await updatePendingCount()
+            finishLegacyFlushAndSchedulePendingIfNeeded()
             return
         }
 
         guard let envelope = await syncEngine.nextEnvelope() else {
             await updatePendingCount()
+            finishLegacyFlushAndSchedulePendingIfNeeded()
             return
         }
 
@@ -320,6 +322,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
 
         await updatePendingCount()
+        finishLegacyFlushAndSchedulePendingIfNeeded()
     }
 
     func acceptLocalBatch(_ batch: SyncBatch) async throws {
@@ -405,17 +408,34 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     private func sendBatch(_ batch: SyncBatch) async throws {
         if isOutboundSuspendedForRecovery {
-            try enqueueUnsentBatchDurably(batch)
-            legacyFlushRequestedWhileActive = true
-            await updatePendingCount()
+            do {
+                try enqueueUnsentBatchDurably(batch)
+                outboundFlushRequestedWhileRecoverySuspended = true
+                await updatePendingCount()
+            } catch {
+                await updatePendingCount()
+                throw error
+            }
             return
         }
 
         let sent = await sendQueuedBatch(batch)
         if sent {
-            try unsentBatches.removeBatches(withIDs: [batch.id])
+            do {
+                try unsentBatches.removeBatches(withIDs: [batch.id])
+                await updatePendingCount()
+            } catch {
+                await updatePendingCount()
+                throw error
+            }
         } else {
-            try enqueueUnsentBatchDurably(batch)
+            do {
+                try enqueueUnsentBatchDurably(batch)
+                await updatePendingCount()
+            } catch {
+                await updatePendingCount()
+                throw error
+            }
         }
     }
 
@@ -439,7 +459,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     private func flushUnsentBatches() async {
         if isOutboundSuspendedForRecovery {
-            legacyFlushRequestedWhileActive = true
+            outboundFlushRequestedWhileRecoverySuspended = true
             await updatePendingCount()
             return
         }
@@ -467,6 +487,21 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         } catch {
             lastErrorMessage = "Unable to update the unsent batch queue."
             throw error
+        }
+    }
+
+    private func finishLegacyFlushAndSchedulePendingIfNeeded() {
+        isFlushingLegacy = false
+        let shouldFlushLegacyAgain = pendingLegacyFlushAfterActiveSend
+        pendingLegacyFlushAfterActiveSend = false
+
+        guard shouldFlushLegacyAgain else { return }
+        if isOutboundSuspendedForRecovery {
+            outboundFlushRequestedWhileRecoverySuspended = true
+        } else {
+            Task { [weak self] in
+                await self?.requestLegacyFlush()
+            }
         }
     }
 
@@ -544,9 +579,9 @@ extension MyRAMSyncController: PendingSyncQueueAdministrating {
     }
 
     func resumeOutboundAfterRecovery() {
-        let shouldFlush = legacyFlushRequestedWhileActive
+        let shouldFlush = outboundFlushRequestedWhileRecoverySuspended
         isOutboundSuspendedForRecovery = false
-        legacyFlushRequestedWhileActive = false
+        outboundFlushRequestedWhileRecoverySuspended = false
         if shouldFlush {
             flushAllOutboundWork()
         }
@@ -569,8 +604,9 @@ extension MyRAMSyncController: PendingSyncQueueAdministrating {
         unsentBatches.snapshot()
     }
 
-    func replaceUnsentBatches(_ batches: [SyncBatch]) throws {
+    func replaceUnsentBatches(_ batches: [SyncBatch]) async throws {
         try unsentBatches.replacePendingBatches(batches)
+        await updatePendingCount()
     }
 
     func refreshPendingSyncStatus() async {

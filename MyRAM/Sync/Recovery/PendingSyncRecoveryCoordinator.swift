@@ -15,7 +15,7 @@ final class PendingSyncRecoveryCoordinator {
 
     private let queueAdmin: PendingSyncQueueAdministrating
     private let localQueueSnapshot: () -> FileBackedSyncBatchQueueSnapshot
-    private let replaceLocalBatches: ([SyncBatch]) throws -> Void
+    private let replaceLocalBatches: ([SyncBatch]) async throws -> Void
     private let flushReadyLocalBatch: () async throws -> SyncBatchID?
     private let journalStore: PendingSyncRecoveryJournalStore
     private let now: () -> Date
@@ -24,7 +24,7 @@ final class PendingSyncRecoveryCoordinator {
     init(
         queueAdmin: PendingSyncQueueAdministrating,
         localQueueSnapshot: @escaping () -> FileBackedSyncBatchQueueSnapshot,
-        replaceLocalBatches: @escaping ([SyncBatch]) throws -> Void,
+        replaceLocalBatches: @escaping ([SyncBatch]) async throws -> Void,
         flushReadyLocalBatch: @escaping () async throws -> SyncBatchID?,
         journalStore: PendingSyncRecoveryJournalStore = PendingSyncRecoveryJournalStore(),
         now: @escaping () -> Date = Date.init,
@@ -107,9 +107,9 @@ final class PendingSyncRecoveryCoordinator {
             try journalStore.save(journal)
             try await queueAdmin.replaceLegacyQueueSnapshot(replacement.legacySnapshot)
             _ = try journalStore.updatePhase(.legacyReplaced)
-            try queueAdmin.replaceUnsentBatches(replacement.unsentBatches)
+            try await queueAdmin.replaceUnsentBatches(replacement.unsentBatches)
             _ = try journalStore.updatePhase(.unsentBatchesReplaced)
-            try replaceLocalBatches(replacement.localConvergenceBatches)
+            try await replaceLocalBatches(replacement.localConvergenceBatches)
             _ = try journalStore.updatePhase(.localObligationsReplaced)
             await queueAdmin.refreshPendingSyncStatus()
             _ = try journalStore.updatePhase(.committed)
@@ -185,9 +185,9 @@ final class PendingSyncRecoveryCoordinator {
             try journalStore.save(journal)
             try await queueAdmin.replaceLegacyQueueSnapshot(replacement.legacySnapshot)
             _ = try journalStore.updatePhase(.legacyReplaced)
-            try queueAdmin.replaceUnsentBatches(replacement.unsentBatches)
+            try await queueAdmin.replaceUnsentBatches(replacement.unsentBatches)
             _ = try journalStore.updatePhase(.unsentBatchesReplaced)
-            try replaceLocalBatches(replacement.localConvergenceBatches)
+            try await replaceLocalBatches(replacement.localConvergenceBatches)
             _ = try journalStore.updatePhase(.localObligationsReplaced)
             await queueAdmin.refreshPendingSyncStatus()
             _ = try journalStore.updatePhase(.committed)
@@ -213,8 +213,8 @@ final class PendingSyncRecoveryCoordinator {
     private func rollback(journal: PendingSyncRecoveryJournal, resumeOutbound: Bool) async throws {
         do {
             try await queueAdmin.replaceLegacyQueueSnapshot(journal.originalLegacySnapshot)
-            try queueAdmin.replaceUnsentBatches(journal.originalUnsentBatches)
-            try replaceLocalBatches(journal.originalLocalObligations)
+            try await queueAdmin.replaceUnsentBatches(journal.originalUnsentBatches)
+            try await replaceLocalBatches(journal.originalLocalObligations)
             await queueAdmin.refreshPendingSyncStatus()
             try journalStore.delete()
             if resumeOutbound {

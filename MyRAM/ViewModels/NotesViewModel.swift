@@ -53,6 +53,7 @@ final class NotesViewModel: ObservableObject {
     private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
     private let pendingIncomingBatches: FileBackedSyncBatchQueue
     private let pendingLocalConvergenceBatches: FileBackedSyncBatchQueue
+    private var refreshPendingSyncStatusForLocalConvergenceMutation: (() async -> Void)?
     private let bodyHashCapabilityEnabled: Bool
     private let noteIntelligenceService = NoteIntelligenceService()
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
@@ -124,6 +125,9 @@ final class NotesViewModel: ObservableObject {
             }
             statusController.onFlushLocalConvergenceRequested = { [weak self] in
                 await self?.resumePendingConvergencePresentation()
+            }
+            refreshPendingSyncStatusForLocalConvergenceMutation = { [weak statusController] in
+                await statusController?.refreshPendingSyncStatus()
             }
         }
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
@@ -1510,7 +1514,7 @@ final class NotesViewModel: ObservableObject {
     func applyIncomingSyncBatch(_ batch: SyncBatch) async {
         guard !batch.changes.isEmpty else { return }
         let outcome = await syncConvergenceRuntime.submitRemoteBatch(batch)
-        handleConvergenceRuntimeOutcome(outcome)
+        await handleConvergenceRuntimeOutcome(outcome)
     }
 
     func localConvergenceQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot {
@@ -1521,8 +1525,9 @@ final class NotesViewModel: ObservableObject {
         mountedActiveEditorNoteID != nil
     }
 
-    func replaceLocalConvergenceBatches(_ batches: [SyncBatch]) throws {
+    func replaceLocalConvergenceBatches(_ batches: [SyncBatch]) async throws {
         try pendingLocalConvergenceBatches.replacePendingBatches(batches)
+        await refreshPendingSyncStatusForLocalConvergenceMutation?()
     }
 
     func capturePendingLocalBatchForRecovery() async -> SyncBatchID? {
@@ -1531,7 +1536,7 @@ final class NotesViewModel: ObservableObject {
             return nil
         }
         let outcome = await syncConvergenceRuntime.submitLocalBatch(batch)
-        handleConvergenceRuntimeOutcome(outcome)
+        await handleConvergenceRuntimeOutcome(outcome)
         await resumePendingConvergencePresentation()
         return batch.id
     }
@@ -1549,7 +1554,7 @@ final class NotesViewModel: ObservableObject {
                     ?? FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .fileMissing)
             },
             replaceLocalBatches: { [weak self] batches in
-                try self?.replaceLocalConvergenceBatches(batches)
+                try await self?.replaceLocalConvergenceBatches(batches)
             },
             flushReadyLocalBatch: { [weak self] in
                 await self?.capturePendingLocalBatchForRecovery()
@@ -1588,7 +1593,7 @@ final class NotesViewModel: ObservableObject {
                     ?? FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .fileMissing)
             },
             replaceLocalBatches: { [weak self] batches in
-                try self?.replaceLocalConvergenceBatches(batches)
+                try await self?.replaceLocalConvergenceBatches(batches)
             },
             flushReadyLocalBatch: { nil }
         )
@@ -1624,7 +1629,7 @@ final class NotesViewModel: ObservableObject {
 
     private func handleReadyLocalBatch(_ batch: SyncBatch) async {
         let outcome = await syncConvergenceRuntime.submitLocalBatch(batch)
-        handleConvergenceRuntimeOutcome(outcome)
+        await handleConvergenceRuntimeOutcome(outcome)
     }
 
     func resumePendingConvergencePresentationIfNeeded() {
@@ -1639,10 +1644,10 @@ final class NotesViewModel: ObservableObject {
 
     private func resumePendingConvergencePresentation() async {
         let outcome = await syncConvergenceRuntime.resumePendingWork()
-        handleConvergenceRuntimeOutcome(outcome)
+        await handleConvergenceRuntimeOutcome(outcome)
     }
 
-    private func handleConvergenceRuntimeOutcome(_ outcome: SyncConvergenceRuntimeOutcome) {
+    private func handleConvergenceRuntimeOutcome(_ outcome: SyncConvergenceRuntimeOutcome) async {
         switch outcome {
         case .drained:
             syncBatchErrorMessage = nil
@@ -1653,6 +1658,7 @@ final class NotesViewModel: ObservableObject {
         case .blocked(let failure):
             syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
         }
+        await refreshPendingSyncStatusForLocalConvergenceMutation?()
     }
 
     func acknowledgeActiveEditorSyncUpdate(
