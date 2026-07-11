@@ -89,7 +89,8 @@ final class NotesViewModel: ObservableObject {
         pendingLocalConvergenceBatchQueueFileURL: URL? = NotesViewModel.pendingLocalConvergenceBatchQueueFileURL(),
         pendingLocalConvergenceBatchQueueLimit: Int = 100,
         bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
-        syncBatchQuietWindow: TimeInterval = 3
+        syncBatchQuietWindow: TimeInterval = 3,
+        resumesPendingConvergenceOnInit: Bool = true
     ) {
         self.context = context
         self.syncController = syncController
@@ -135,7 +136,9 @@ final class NotesViewModel: ObservableObject {
         purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
-        resumePendingConvergencePresentationIfNeeded()
+        if resumesPendingConvergenceOnInit {
+            resumePendingConvergencePresentationIfNeeded()
+        }
     }
 
     deinit {

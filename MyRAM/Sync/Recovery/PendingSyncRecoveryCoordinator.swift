@@ -117,7 +117,7 @@ final class PendingSyncRecoveryCoordinator {
             queueAdmin.resumeOutboundAfterRecovery()
             queueAdmin.flushAllOutboundWork()
         } catch {
-            try await rollback(journal: journal)
+            try await rollback(journal: journal, resumeOutbound: true)
             throw RecoveryError.replacementFailed
         }
     }
@@ -195,7 +195,7 @@ final class PendingSyncRecoveryCoordinator {
             queueAdmin.resumeOutboundAfterRecovery()
             queueAdmin.flushAllOutboundWork()
         } catch {
-            try await rollback(journal: journal)
+            try await rollback(journal: journal, resumeOutbound: true)
             throw RecoveryError.replacementFailed
         }
     }
@@ -207,17 +207,19 @@ final class PendingSyncRecoveryCoordinator {
             return
         }
         queueAdmin.suspendOutboundForRecovery()
-        try await rollback(journal: journal)
+        try await rollback(journal: journal, resumeOutbound: false)
     }
 
-    private func rollback(journal: PendingSyncRecoveryJournal) async throws {
+    private func rollback(journal: PendingSyncRecoveryJournal, resumeOutbound: Bool) async throws {
         do {
             try await queueAdmin.replaceLegacyQueueSnapshot(journal.originalLegacySnapshot)
             try queueAdmin.replaceUnsentBatches(journal.originalUnsentBatches)
             try replaceLocalBatches(journal.originalLocalObligations)
             await queueAdmin.refreshPendingSyncStatus()
             try journalStore.delete()
-            queueAdmin.resumeOutboundAfterRecovery()
+            if resumeOutbound {
+                queueAdmin.resumeOutboundAfterRecovery()
+            }
         } catch {
             throw RecoveryError.rollbackFailed
         }

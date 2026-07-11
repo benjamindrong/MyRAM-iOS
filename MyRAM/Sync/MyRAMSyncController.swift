@@ -169,6 +169,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private var isFlushingLegacy = false
     private var legacyFlushRequestedWhileActive = false
     private var isOutboundSuspendedForRecovery = false
+    private var hasStartedNetworking = false
 
     init(
         unsentBatchQueueFileURL: URL? = MyRAMSyncController.unsentBatchQueueFileURL(),
@@ -201,8 +202,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         advertiser.delegate = self
         browser.delegate = self
 
-        guard startsNetworking else { return }
+        if startsNetworking {
+            startNetworkingIfNeeded()
+        }
+    }
 
+    func startNetworkingIfNeeded() {
+        guard !hasStartedNetworking else { return }
+        hasStartedNetworking = true
         advertiser.startAdvertisingPeer()
         browser.startBrowsingForPeers()
 
