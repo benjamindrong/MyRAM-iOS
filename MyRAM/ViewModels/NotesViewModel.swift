@@ -1500,6 +1500,21 @@ final class NotesViewModel: ObservableObject {
         handleConvergenceRuntimeOutcome(outcome)
     }
 
+    func localConvergenceQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot {
+        pendingLocalConvergenceBatches.snapshot()
+    }
+
+    func replaceLocalConvergenceBatches(_ batches: [SyncBatch]) throws {
+        try pendingLocalConvergenceBatches.replacePendingBatches(batches)
+    }
+
+    func flushReadyLocalBatchForRecovery() async {
+        if let batch = await syncBatchAccumulator.takeReadyBatch(at: .now) {
+            await handleReadyLocalBatch(batch)
+        }
+        await resumePendingConvergencePresentation()
+    }
+
     private func handleReadyLocalBatch(_ batch: SyncBatch) async {
         let outcome = await syncConvergenceRuntime.submitLocalBatch(batch)
         handleConvergenceRuntimeOutcome(outcome)

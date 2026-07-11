@@ -96,6 +96,22 @@ protocol MyRAMSyncConvergenceStatusConfiguring: AnyObject {
     var localConvergencePendingCountProvider: (() -> Int)? { get set }
 }
 
+@MainActor
+protocol PendingSyncQueueAdministrating: AnyObject {
+    func suspendOutboundForRecovery()
+    func resumeOutboundAfterRecovery()
+
+    func legacyQueueSnapshot() async -> SyncQueueSnapshot
+    func legacyQueueHealth() async -> SyncQueuePersistenceHealth
+    func replaceLegacyQueueSnapshot(_ snapshot: SyncQueueSnapshot) async throws
+
+    func unsentBatchQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot
+    func replaceUnsentBatches(_ batches: [SyncBatch]) throws
+
+    func refreshPendingSyncStatus() async
+    func flushAllOutboundWork()
+}
+
 extension MyRAMSyncControlling {
     func recordLocalChange(
         entityType: SyncEntityType,
@@ -360,6 +376,13 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func sendBatch(_ batch: SyncBatch) async throws {
+        if isOutboundSuspendedForRecovery {
+            enqueueUnsentBatch(batch)
+            legacyFlushRequestedWhileActive = true
+            await updatePendingCount()
+            return
+        }
+
         let sent = await sendQueuedBatch(batch)
         if sent {
             unsentBatches.removeAll(withIDs: [batch.id])
@@ -390,6 +413,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func flushUnsentBatches() async {
+        if isOutboundSuspendedForRecovery {
+            legacyFlushRequestedWhileActive = true
+            await updatePendingCount()
+            return
+        }
+
         guard !(await transport.connectedPeers()).isEmpty, !unsentBatches.isEmpty else { return }
 
         for batch in unsentBatches.pendingBatches {
@@ -471,6 +500,46 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 extension MyRAMSyncController: MyRAMSyncControlling {}
 
 extension MyRAMSyncController: MyRAMSyncConvergenceStatusConfiguring {}
+
+extension MyRAMSyncController: PendingSyncQueueAdministrating {
+    func suspendOutboundForRecovery() {
+        isOutboundSuspendedForRecovery = true
+    }
+
+    func resumeOutboundAfterRecovery() {
+        let shouldFlush = legacyFlushRequestedWhileActive
+        isOutboundSuspendedForRecovery = false
+        legacyFlushRequestedWhileActive = false
+        if shouldFlush {
+            flushAllOutboundWork()
+        }
+    }
+
+    func legacyQueueSnapshot() async -> SyncQueueSnapshot {
+        await syncEngine.queueSnapshot()
+    }
+
+    func legacyQueueHealth() async -> SyncQueuePersistenceHealth {
+        await syncEngine.queuePersistenceHealth()
+    }
+
+    func replaceLegacyQueueSnapshot(_ snapshot: SyncQueueSnapshot) async throws {
+        try await syncEngine.replaceQueueSnapshot(snapshot)
+        await updatePendingCount()
+    }
+
+    func unsentBatchQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot {
+        unsentBatches.snapshot()
+    }
+
+    func replaceUnsentBatches(_ batches: [SyncBatch]) throws {
+        try unsentBatches.replacePendingBatches(batches)
+    }
+
+    func refreshPendingSyncStatus() async {
+        await updatePendingCount()
+    }
+}
 
 extension MyRAMSyncController: SyncConvergenceLocalBatchTransportAdapter {}
 

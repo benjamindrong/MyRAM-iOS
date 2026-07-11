@@ -1,0 +1,162 @@
+import Foundation
+import NearbySyncCore
+
+@MainActor
+final class PendingSyncRecoveryCoordinator {
+    enum RecoveryError: Error, Equatable {
+        case unhealthyLegacyQueue
+        case unhealthyUnsentBatchQueue
+        case unhealthyLocalObligationQueue
+        case journalWriteFailed
+        case replacementFailed
+        case rollbackFailed
+    }
+
+    private let queueAdmin: PendingSyncQueueAdministrating
+    private let localQueueSnapshot: () -> FileBackedSyncBatchQueueSnapshot
+    private let replaceLocalBatches: ([SyncBatch]) throws -> Void
+    private let flushReadyLocalBatch: () async -> Void
+    private let journalStore: PendingSyncRecoveryJournalStore
+    private let now: () -> Date
+    private let transactionID: () -> UUID
+
+    init(
+        queueAdmin: PendingSyncQueueAdministrating,
+        localQueueSnapshot: @escaping () -> FileBackedSyncBatchQueueSnapshot,
+        replaceLocalBatches: @escaping ([SyncBatch]) throws -> Void,
+        flushReadyLocalBatch: @escaping () async -> Void,
+        journalStore: PendingSyncRecoveryJournalStore = PendingSyncRecoveryJournalStore(),
+        now: @escaping () -> Date = Date.init,
+        transactionID: @escaping () -> UUID = UUID.init
+    ) {
+        self.queueAdmin = queueAdmin
+        self.localQueueSnapshot = localQueueSnapshot
+        self.replaceLocalBatches = replaceLocalBatches
+        self.flushReadyLocalBatch = flushReadyLocalBatch
+        self.journalStore = journalStore
+        self.now = now
+        self.transactionID = transactionID
+    }
+
+    func prepareSnapshots() async throws -> (
+        legacy: SyncQueueSnapshot,
+        unsent: [SyncBatch],
+        local: [SyncBatch]
+    ) {
+        await flushReadyLocalBatch()
+
+        let legacyHealth = await queueAdmin.legacyQueueHealth()
+        guard legacyHealth.isRecoveryWritable else {
+            throw RecoveryError.unhealthyLegacyQueue
+        }
+
+        let unsentSnapshot = queueAdmin.unsentBatchQueueSnapshot()
+        guard unsentSnapshot.health.isRecoveryWritable else {
+            throw RecoveryError.unhealthyUnsentBatchQueue
+        }
+
+        let localSnapshot = localQueueSnapshot()
+        guard localSnapshot.health.isRecoveryWritable else {
+            throw RecoveryError.unhealthyLocalObligationQueue
+        }
+
+        return (
+            legacy: await queueAdmin.legacyQueueSnapshot(),
+            unsent: unsentSnapshot.pendingBatches,
+            local: localSnapshot.pendingBatches
+        )
+    }
+
+    func commitReplacement(_ replacement: SyncRecoveryReplacementState) async throws {
+        queueAdmin.suspendOutboundForRecovery()
+
+        let original: (
+            legacy: SyncQueueSnapshot,
+            unsent: [SyncBatch],
+            local: [SyncBatch]
+        )
+
+        do {
+            original = try await prepareSnapshots()
+        } catch {
+            queueAdmin.resumeOutboundAfterRecovery()
+            throw error
+        }
+
+        let journal = PendingSyncRecoveryJournal(
+            version: 1,
+            transactionID: transactionID(),
+            createdAt: now(),
+            phase: .prepared,
+            originalLegacySnapshot: original.legacy,
+            originalUnsentBatches: original.unsent,
+            originalLocalObligations: original.local,
+            replacementLegacySnapshot: replacement.legacySnapshot,
+            replacementUnsentBatches: replacement.unsentBatches,
+            replacementLocalObligations: replacement.localConvergenceBatches
+        )
+
+        do {
+            try journalStore.save(journal)
+            try await queueAdmin.replaceLegacyQueueSnapshot(replacement.legacySnapshot)
+            _ = try journalStore.updatePhase(.legacyReplaced)
+            try queueAdmin.replaceUnsentBatches(replacement.unsentBatches)
+            _ = try journalStore.updatePhase(.unsentBatchesReplaced)
+            try replaceLocalBatches(replacement.localConvergenceBatches)
+            _ = try journalStore.updatePhase(.localObligationsReplaced)
+            await queueAdmin.refreshPendingSyncStatus()
+            _ = try journalStore.updatePhase(.committed)
+            try journalStore.delete()
+            queueAdmin.resumeOutboundAfterRecovery()
+            queueAdmin.flushAllOutboundWork()
+        } catch {
+            try await rollback(journal: journal)
+            throw RecoveryError.replacementFailed
+        }
+    }
+
+    func rollbackIfNeededOnLaunch() async throws {
+        guard let journal = try journalStore.load() else { return }
+        if journal.phase == .committed {
+            try journalStore.delete()
+            return
+        }
+        queueAdmin.suspendOutboundForRecovery()
+        try await rollback(journal: journal)
+    }
+
+    private func rollback(journal: PendingSyncRecoveryJournal) async throws {
+        do {
+            try await queueAdmin.replaceLegacyQueueSnapshot(journal.originalLegacySnapshot)
+            try queueAdmin.replaceUnsentBatches(journal.originalUnsentBatches)
+            try replaceLocalBatches(journal.originalLocalObligations)
+            await queueAdmin.refreshPendingSyncStatus()
+            try journalStore.delete()
+            queueAdmin.resumeOutboundAfterRecovery()
+        } catch {
+            throw RecoveryError.rollbackFailed
+        }
+    }
+}
+
+private extension SyncQueuePersistenceHealth {
+    var isRecoveryWritable: Bool {
+        switch self {
+        case .healthy, .fileMissing:
+            true
+        case .corrupt, .readFailed:
+            false
+        }
+    }
+}
+
+private extension PersistedQueueHealth {
+    var isRecoveryWritable: Bool {
+        switch self {
+        case .healthy, .fileMissing:
+            true
+        case .corrupt, .unsupportedVersion, .readFailed:
+            false
+        }
+    }
+}
