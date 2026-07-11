@@ -24,15 +24,18 @@ final class MacLegacySyncReceiver {
     private let context: ModelContext
     private let applier: MyRAMSyncChangeApplier
     private let appliedStore: MacLegacyAppliedChangeStoring
+    private let performSave: () throws -> Void
 
     init(
         context: ModelContext,
         conflictStore: SyncConflictStore = SyncConflictStore(),
-        appliedStore: MacLegacyAppliedChangeStoring = FileBackedMacLegacyAppliedChangeStore()
+        appliedStore: MacLegacyAppliedChangeStoring = FileBackedMacLegacyAppliedChangeStore(),
+        performSave: (() throws -> Void)? = nil
     ) {
         self.context = context
         self.applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
         self.appliedStore = appliedStore
+        self.performSave = performSave ?? { try context.save() }
     }
 
     func receive(_ envelope: SyncEnvelope) throws -> MacLegacyReceiveResult {
@@ -68,7 +71,7 @@ final class MacLegacySyncReceiver {
         )
 
         do {
-            try context.save()
+            try performSave()
         } catch {
             throw MacLegacySyncReceiverError.modelSaveFailed
         }

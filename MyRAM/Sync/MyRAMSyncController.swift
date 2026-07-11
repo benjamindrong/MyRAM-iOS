@@ -34,8 +34,14 @@ struct TrustedPeerReconnectTracker {
     }
 }
 
+protocol MyRAMSyncTransporting: AnyObject {
+    func invite(_ peerID: MCPeerID, timeout: TimeInterval)
+    func connectedPeers() async -> [MCPeerID]
+    func send(_ data: Data, toPeers peers: [MCPeerID], mode: MCSessionSendDataMode) async throws
+}
+
 // Runs potentially blocking Multipeer operations away from SwiftUI's main actor.
-private final class MyRAMMultipeerTransport {
+private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
     private let browser: MCNearbyServiceBrowser
     private let session: MCSession
     private let queue = DispatchQueue(label: "com.myram.nearby-sync.transport")
@@ -154,7 +160,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private let session: MCSession
     private let advertiser: MCNearbyServiceAdvertiser
     private let browser: MCNearbyServiceBrowser
-    private lazy var transport = MyRAMMultipeerTransport(browser: browser, session: session)
+    private let transport: MyRAMSyncTransporting
     private var reconnectTracker = TrustedPeerReconnectTracker()
     private lazy var debouncedSender = DebouncedChangeSender { [weak self] in
         await self?.requestLegacyFlush()
@@ -164,7 +170,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private var legacyFlushRequestedWhileActive = false
     private var isOutboundSuspendedForRecovery = false
 
-    init(unsentBatchQueueFileURL: URL? = MyRAMSyncController.unsentBatchQueueFileURL()) {
+    init(
+        unsentBatchQueueFileURL: URL? = MyRAMSyncController.unsentBatchQueueFileURL(),
+        pendingChangesFileURL: URL? = nil,
+        startsNetworking: Bool = true,
+        transport: MyRAMSyncTransporting? = nil
+    ) {
         let deviceName = MyRAMDeviceIdentity.currentDisplayName()
         let storedDeviceID = MyRAMDeviceIdentity.currentDeviceID()
         let peer = MCPeerID(displayName: "\(deviceName)|\(storedDeviceID)")
@@ -174,18 +185,24 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         syncEngine = SyncEngine(
             deviceID: storedDeviceID,
             store: syncStore,
-            queue: SyncQueue(persistence: FileBackedSyncQueuePersistence(fileURL: Self.pendingChangesFileURL()))
+            queue: SyncQueue(persistence: FileBackedSyncQueuePersistence(
+                fileURL: pendingChangesFileURL ?? Self.pendingChangesFileURL()
+            ))
         )
         session = MCSession(peer: peer, securityIdentity: nil, encryptionPreference: .required)
         advertiser = MCNearbyServiceAdvertiser(peer: peer, discoveryInfo: nil, serviceType: serviceType)
         browser = MCNearbyServiceBrowser(peer: peer, serviceType: serviceType)
         unsentBatches = FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
+        self.transport = transport ?? MyRAMMultipeerTransport(browser: browser, session: session)
 
         super.init()
 
         session.delegate = self
         advertiser.delegate = self
         browser.delegate = self
+
+        guard startsNetworking else { return }
+
         advertiser.startAdvertisingPeer()
         browser.startBrowsingForPeers()
 
