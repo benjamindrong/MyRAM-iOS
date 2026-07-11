@@ -639,6 +639,100 @@ final class PendingSyncRecoveryTests: XCTestCase {
 }
 
 @MainActor
+final class NotesListStateBootstrapTests: XCTestCase {
+    func testBootstrapRunsLaunchRecoveryBeforeNetworkingAndEditing() async throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let state = NotesListState(
+            context: container.mainContext,
+            startsBootstrapAutomatically: false,
+            bootstrapActionsFactory: { _, _ in
+                NotesListState.BootstrapActions(
+                    rollbackIfNeededOnLaunch: {
+                        events.append("rollback")
+                    },
+                    refreshPendingSyncStatus: {
+                        events.append("refresh-status")
+                    },
+                    resumeOutboundAfterRecovery: {
+                        events.append("resume-outbound")
+                    },
+                    startNetworkingIfNeeded: {
+                        events.append("start-networking")
+                    },
+                    resumePendingConvergencePresentationIfNeeded: {
+                        events.append("resume-convergence-presentation")
+                    }
+                )
+            }
+        )
+
+        XCTAssertEqual(state.bootstrapState, .recovering)
+
+        await state.bootstrapAfterRecovery()
+
+        XCTAssertEqual(
+            events,
+            [
+                "rollback",
+                "refresh-status",
+                "resume-outbound",
+                "start-networking",
+                "resume-convergence-presentation"
+            ]
+        )
+        XCTAssertEqual(state.bootstrapState, .ready)
+    }
+
+    func testBootstrapFailsClosedWhenLaunchRecoveryFails() async throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let state = NotesListState(
+            context: container.mainContext,
+            startsBootstrapAutomatically: false,
+            bootstrapActionsFactory: { _, _ in
+                NotesListState.BootstrapActions(
+                    rollbackIfNeededOnLaunch: {
+                        events.append("rollback")
+                        throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed
+                    },
+                    refreshPendingSyncStatus: {
+                        events.append("refresh-status")
+                    },
+                    resumeOutboundAfterRecovery: {
+                        events.append("resume-outbound")
+                    },
+                    startNetworkingIfNeeded: {
+                        events.append("start-networking")
+                    },
+                    resumePendingConvergencePresentationIfNeeded: {
+                        events.append("resume-convergence-presentation")
+                    }
+                )
+            }
+        )
+
+        await state.bootstrapAfterRecovery()
+
+        XCTAssertEqual(events, ["rollback"])
+        XCTAssertEqual(
+            state.bootstrapState,
+            .failed("Startup recovery failed. Restart MyRAM before syncing or editing.")
+        )
+    }
+
+    private func makeContainer() throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "NotesListStateBootstrapTests-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
+    }
+}
+
+@MainActor
 private final class FakePendingSyncQueueAdmin: PendingSyncQueueAdministrating {
     var legacySnapshot: SyncQueueSnapshot
     var legacyHealth: SyncQueuePersistenceHealth = .healthy

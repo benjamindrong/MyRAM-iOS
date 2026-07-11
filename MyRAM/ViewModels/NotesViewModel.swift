@@ -1580,6 +1580,21 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
+    func rollbackIfNeededOnLaunch(syncController: MyRAMSyncController) async throws {
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: syncController,
+            localQueueSnapshot: { [weak self] in
+                self?.localConvergenceQueueSnapshot()
+                    ?? FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .fileMissing)
+            },
+            replaceLocalBatches: { [weak self] batches in
+                try self?.replaceLocalConvergenceBatches(batches)
+            },
+            flushReadyLocalBatch: { nil }
+        )
+        try await coordinator.rollbackIfNeededOnLaunch()
+    }
+
     private static func recoveryMessage(for error: Error) -> String {
         switch error {
         case PendingSyncRecoveryCoordinator.RecoveryError.unhealthyLegacyQueue:

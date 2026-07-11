@@ -6,14 +6,57 @@ import Combine
 
 @MainActor
 final class NotesListState: ObservableObject {
+    enum BootstrapState: Equatable {
+        case recovering
+        case ready
+        case failed(String)
+    }
+
+    struct BootstrapActions {
+        var rollbackIfNeededOnLaunch: @MainActor () async throws -> Void
+        var refreshPendingSyncStatus: @MainActor () async -> Void
+        var resumeOutboundAfterRecovery: @MainActor () -> Void
+        var startNetworkingIfNeeded: @MainActor () -> Void
+        var resumePendingConvergencePresentationIfNeeded: @MainActor () -> Void
+    }
+
     let vm: NotesViewModel
     let syncController: MyRAMSyncController
+    @Published private(set) var bootstrapState: BootstrapState = .recovering
+    private let bootstrapActions: BootstrapActions
     private var cancellables: Set<AnyCancellable> = []
 
-    init(context: ModelContext) {
-        let syncController = MyRAMSyncController()
+    init(
+        context: ModelContext,
+        startsBootstrapAutomatically: Bool = true,
+        bootstrapActionsFactory: ((NotesViewModel, MyRAMSyncController) -> BootstrapActions)? = nil
+    ) {
+        let syncController = MyRAMSyncController(startsNetworking: false)
+        syncController.suspendOutboundForRecovery()
         self.syncController = syncController
-        vm = NotesViewModel(context: context, syncController: syncController)
+        vm = NotesViewModel(
+            context: context,
+            syncController: syncController,
+            resumesPendingConvergenceOnInit: false
+        )
+        bootstrapActions = bootstrapActionsFactory?(vm, syncController)
+            ?? BootstrapActions(
+                rollbackIfNeededOnLaunch: { [vm, syncController] in
+                    try await vm.rollbackIfNeededOnLaunch(syncController: syncController)
+                },
+                refreshPendingSyncStatus: { [syncController] in
+                    await syncController.refreshPendingSyncStatus()
+                },
+                resumeOutboundAfterRecovery: { [syncController] in
+                    syncController.resumeOutboundAfterRecovery()
+                },
+                startNetworkingIfNeeded: { [syncController] in
+                    syncController.startNetworkingIfNeeded()
+                },
+                resumePendingConvergencePresentationIfNeeded: { [vm] in
+                    vm.resumePendingConvergencePresentationIfNeeded()
+                }
+            )
 
         vm.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
@@ -21,6 +64,25 @@ final class NotesListState: ObservableObject {
         syncController.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+
+        if startsBootstrapAutomatically {
+            Task { [weak self] in
+                await self?.bootstrapAfterRecovery()
+            }
+        }
+    }
+
+    func bootstrapAfterRecovery() async {
+        do {
+            try await bootstrapActions.rollbackIfNeededOnLaunch()
+            await bootstrapActions.refreshPendingSyncStatus()
+            bootstrapActions.resumeOutboundAfterRecovery()
+            bootstrapActions.startNetworkingIfNeeded()
+            bootstrapActions.resumePendingConvergencePresentationIfNeeded()
+            bootstrapState = .ready
+        } catch {
+            bootstrapState = .failed("Startup recovery failed. Restart MyRAM before syncing or editing.")
+        }
     }
 }
 
@@ -93,48 +155,78 @@ struct NotesListView: View {
     
     var body: some View {
         NavigationStack {
-            VStack(spacing: 6) {
-                notesListTopBar
-                    .padding(.horizontal)
-                    .padding(.top, 6)
+            switch state.bootstrapState {
+            case .recovering:
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
+            case .failed(let message):
+                VStack(spacing: 12) {
+                    Text(message)
+                        .font(.body)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.red)
+                    Button("Copy Support Details") {
+                        UIPasteboard.general.string = message
+                    }
+                        .buttonStyle(.borderedProminent)
+                    Text("Close and reopen MyRAM before syncing or editing.")
+                        .font(.footnote)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.secondary)
+                }
+                .padding()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
+            case .ready:
+                readyContent
+            }
+        }
+    }
 
-                notesSearchField
-                    .padding(.horizontal)
+    private var readyContent: some View {
+        VStack(spacing: 6) {
+            notesListTopBar
+                .padding(.horizontal)
+                .padding(.top, 6)
+
+            notesSearchField
+                .padding(.horizontal)
 
 #if targetEnvironment(macCatalyst)
-                // Legacy Catalyst desktop split view. Future native macOS will use os(macOS)-gated AppKit/SwiftUI code.
-                ZStack(alignment: .topLeading) {
-                    HStack(spacing: 0) {
-                        notesListContent
-                            .frame(width: desktopSidebarWidth)
+            // Legacy Catalyst desktop split view. Future native macOS will use os(macOS)-gated AppKit/SwiftUI code.
+            ZStack(alignment: .topLeading) {
+                HStack(spacing: 0) {
+                    notesListContent
+                        .frame(width: desktopSidebarWidth)
 
-                        desktopEditorDetail
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    }
-
-                    desktopSidebarDivider
-                        .offset(x: desktopSidebarWidth)
-                        .zIndex(1)
-
-                    desktopSidebarResizeHandle
-                        .offset(x: desktopSidebarWidth)
-                        .zIndex(2)
+                    desktopEditorDetail
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-#else
-                notesListContent
-#endif
+
+                desktopSidebarDivider
+                    .offset(x: desktopSidebarWidth)
+                    .zIndex(1)
+
+                desktopSidebarResizeHandle
+                    .offset(x: desktopSidebarWidth)
+                    .zIndex(2)
             }
-            .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
-            .toolbar(.hidden, for: .navigationBar)
-            .background(searchKeyboardShortcut)
-            .modifier(MobileNoteEditorSheet(
-                selectedNote: $selectedNote,
-                vm: vm,
-                syncController: syncController,
-                onOpenSyncConflicts: {
-                    showingNearbySync = true
-                }
-            ))
+#else
+            notesListContent
+#endif
+        }
+        .background(editorChromeStyle.appBackgroundColor.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
+        .background(searchKeyboardShortcut)
+        .modifier(MobileNoteEditorSheet(
+            selectedNote: $selectedNote,
+            vm: vm,
+            syncController: syncController,
+            onOpenSyncConflicts: {
+                showingNearbySync = true
+            }
+        ))
             .sheet(isPresented: $showingRecentlyDeleted) {
                 RecentlyDeletedView(
                     notes: recentlyDeletedNotes,
@@ -360,7 +452,6 @@ struct NotesListView: View {
                 Text("Only notes created by the demo data generator will be removed.")
             }
 #endif
-        }
         .onChange(of: vm.notes) { _, updatedNotes in
             let currentIDs = Set(updatedNotes.map(\.id))
             selectedNoteIDs = selectedNoteIDs.intersection(currentIDs)
