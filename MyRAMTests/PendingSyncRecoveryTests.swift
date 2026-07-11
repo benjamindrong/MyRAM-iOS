@@ -214,6 +214,190 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertNotNil(payload.deletedAt)
     }
 
+    func testStateBuilderRejectsInvalidLegacyEntityID() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+
+        XCTAssertThrowsError(
+            try SyncRecoveryStateBuilder.build(
+                context: context,
+                conflictStore: SyncConflictStore(fileURL: temporaryConflictURL()),
+                legacySnapshot: SyncQueueSnapshot(pendingChanges: [makeLegacyChange(entityID: "not-a-uuid")]),
+                unsentBatches: [],
+                localConvergenceBatches: [],
+                currentDeviceID: "current-device",
+                recoveryTimestamp: Date(timeIntervalSince1970: 200)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SyncRecoveryStateBuilderError, .invalidLegacyEntityID("not-a-uuid"))
+        }
+    }
+
+    func testStateBuilderRejectsMissingNonDeleteLegacyNote() throws {
+        let missingNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000160501")!
+        let container = try makeContainer()
+        let context = container.mainContext
+
+        XCTAssertThrowsError(
+            try SyncRecoveryStateBuilder.build(
+                context: context,
+                conflictStore: SyncConflictStore(fileURL: temporaryConflictURL()),
+                legacySnapshot: SyncQueueSnapshot(pendingChanges: [makeLegacyChange(entityID: missingNoteID.uuidString)]),
+                unsentBatches: [],
+                localConvergenceBatches: [],
+                currentDeviceID: "current-device",
+                recoveryTimestamp: Date(timeIntervalSince1970: 200)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecoveryStateBuilderError,
+                .missingCurrentEntity(entityType: .item, entityID: missingNoteID)
+            )
+        }
+    }
+
+    func testStateBuilderRejectsMissingNoteReferencedOnlyByUnsentBatch() throws {
+        let missingNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000160502")!
+        let container = try makeContainer()
+        let context = container.mainContext
+
+        XCTAssertThrowsError(
+            try SyncRecoveryStateBuilder.build(
+                context: context,
+                conflictStore: SyncConflictStore(fileURL: temporaryConflictURL()),
+                legacySnapshot: SyncQueueSnapshot(),
+                unsentBatches: [makeBatch(idSuffix: 41, noteID: missingNoteID)],
+                localConvergenceBatches: [],
+                currentDeviceID: "current-device",
+                recoveryTimestamp: Date(timeIntervalSince1970: 200)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecoveryStateBuilderError,
+                .missingCurrentNoteReferencedByUnsentBatch(missingNoteID)
+            )
+        }
+    }
+
+    func testStateBuilderRejectsMissingNoteReferencedOnlyByLocalObligation() throws {
+        let missingNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000160503")!
+        let container = try makeContainer()
+        let context = container.mainContext
+
+        XCTAssertThrowsError(
+            try SyncRecoveryStateBuilder.build(
+                context: context,
+                conflictStore: SyncConflictStore(fileURL: temporaryConflictURL()),
+                legacySnapshot: SyncQueueSnapshot(),
+                unsentBatches: [],
+                localConvergenceBatches: [makeBatch(idSuffix: 42, noteID: missingNoteID)],
+                currentDeviceID: "current-device",
+                recoveryTimestamp: Date(timeIntervalSince1970: 200)
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncRecoveryStateBuilderError,
+                .missingCurrentNoteReferencedByLocalObligation(missingNoteID)
+            )
+        }
+    }
+
+    func testStateBuilderAllowsMissingBatchNoteWhenValidatedTombstoneExists() throws {
+        let deletedNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000160504")!
+        let container = try makeContainer()
+        let context = container.mainContext
+        let tombstone = try makeDeletedNoteChange(
+            noteID: deletedNoteID,
+            title: "Deleted",
+            updatedAt: Date(timeIntervalSince1970: 20)
+        )
+
+        let replacement = try SyncRecoveryStateBuilder.build(
+            context: context,
+            conflictStore: SyncConflictStore(fileURL: temporaryConflictURL()),
+            legacySnapshot: SyncQueueSnapshot(pendingChanges: [tombstone]),
+            unsentBatches: [makeBatch(idSuffix: 43, noteID: deletedNoteID)],
+            localConvergenceBatches: [],
+            currentDeviceID: "current-device",
+            recoveryTimestamp: Date(timeIntervalSince1970: 200)
+        )
+
+        XCTAssertEqual(replacement.legacySnapshot.pendingChanges.map(\.entityID), [deletedNoteID.uuidString])
+        XCTAssertEqual(replacement.legacySnapshot.pendingChanges.first?.operation, .delete)
+    }
+
+    func testStateBuilderRejectsPendingLegacyConflictMetadata() throws {
+        let conflictID = UUID(uuidString: "00000000-0000-0000-0000-000000160505")!
+        let container = try makeContainer()
+        let context = container.mainContext
+        let change = SyncChange(
+            entityType: .conflict,
+            entityID: conflictID.uuidString,
+            operation: .upsert,
+            payload: Data(),
+            updatedAt: Date(timeIntervalSince1970: 1),
+            originDeviceID: "old-device"
+        )
+
+        XCTAssertThrowsError(
+            try SyncRecoveryStateBuilder.build(
+                context: context,
+                conflictStore: SyncConflictStore(fileURL: temporaryConflictURL()),
+                legacySnapshot: SyncQueueSnapshot(pendingChanges: [change]),
+                unsentBatches: [],
+                localConvergenceBatches: [],
+                currentDeviceID: "current-device",
+                recoveryTimestamp: Date(timeIntervalSince1970: 200)
+            )
+        ) { error in
+            XCTAssertEqual(error as? SyncRecoveryStateBuilderError, .unsupportedPendingLegacyConflictMetadata(conflictID))
+        }
+    }
+
+    func testCoordinatorBuilderFailureLeavesQueuesAndJournalUntouched() async throws {
+        let fileURL = temporaryJournalURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let originalLegacy = SyncQueueSnapshot(pendingChanges: [makeLegacyChange(entityID: UUID().uuidString)])
+        let originalUnsent = [makeBatch(idSuffix: 51)]
+        let originalLocal = [makeBatch(idSuffix: 52)]
+        var localBatches = originalLocal
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: originalLegacy,
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(pendingBatches: originalUnsent, health: .healthy)
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncBatchQueueSnapshot(pendingBatches: localBatches, health: .healthy)
+            },
+            replaceLocalBatches: { batches in
+                localBatches = batches
+            },
+            flushReadyLocalBatch: {},
+            journalStore: PendingSyncRecoveryJournalStore(fileURL: fileURL),
+            now: { Date(timeIntervalSince1970: 100) },
+            transactionID: { UUID(uuidString: "00000000-0000-0000-0000-000000160506")! }
+        )
+
+        do {
+            try await coordinator.resetPendingSync(
+                prepareDurableState: {},
+                buildReplacement: { _, _, _, _ in
+                    throw SyncRecoveryStateBuilderError.missingCurrentNoteReferencedByUnsentBatch(UUID())
+                }
+            )
+            XCTFail("Expected builder failure")
+        } catch {
+            XCTAssertTrue(error is SyncRecoveryStateBuilderError)
+        }
+
+        XCTAssertEqual(admin.legacySnapshot, originalLegacy)
+        XCTAssertEqual(admin.unsentSnapshot.pendingBatches, originalUnsent)
+        XCTAssertEqual(localBatches, originalLocal)
+        XCTAssertFalse(admin.isSuspended)
+        XCTAssertNil(try PendingSyncRecoveryJournalStore(fileURL: fileURL).load())
+    }
+
     func testJournalStorePersistsPhaseUpdatesAndDeletes() throws {
         let fileURL = temporaryJournalURL()
         defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }

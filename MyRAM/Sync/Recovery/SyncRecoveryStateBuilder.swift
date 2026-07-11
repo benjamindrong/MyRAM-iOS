@@ -13,6 +13,12 @@ struct SyncRecoveryReplacementState: Equatable {
 
 enum SyncRecoveryStateBuilderError: Error, Equatable {
     case activeConflict(entityType: SyncConflictEntityType, entityID: UUID)
+    case invalidLegacyEntityID(String)
+    case missingCurrentEntity(entityType: SyncEntityType, entityID: UUID)
+    case missingCurrentNoteReferencedByUnsentBatch(UUID)
+    case missingCurrentNoteReferencedByLocalObligation(UUID)
+    case unsupportedPendingLegacyConflictMetadata(UUID)
+    case targetCoverageMismatch
 }
 
 enum SyncRecoveryStateBuilder {
@@ -25,8 +31,8 @@ enum SyncRecoveryStateBuilder {
         currentDeviceID: String,
         recoveryTimestamp: Date
     ) throws -> SyncRecoveryReplacementState {
-        let legacyTargets = targets(from: legacySnapshot.pendingChanges)
-        let affectedNoteIDs = try affectedNoteIDs(
+        let legacyTargets = try targets(from: legacySnapshot.pendingChanges)
+        let allAffectedNoteIDs = try affectedNoteIDs(
             context: context,
             legacyChanges: legacySnapshot.pendingChanges,
             unsentBatches: unsentBatches,
@@ -35,14 +41,38 @@ enum SyncRecoveryStateBuilder {
         try validateNoActiveConflicts(
             conflictStore: conflictStore,
             legacyTargets: legacyTargets,
-            affectedNoteIDs: affectedNoteIDs
+            affectedNoteIDs: allAffectedNoteIDs
         )
 
-        let notes = try fetchNotes(context: context, ids: affectedNoteIDs)
+        let notes = try fetchNotes(context: context, ids: allAffectedNoteIDs)
+        try validateBatchNoteCoverage(
+            requestedNoteIDs: affectedNoteIDs(in: unsentBatches),
+            notes: notes,
+            legacyChanges: legacySnapshot.pendingChanges,
+            error: SyncRecoveryStateBuilderError.missingCurrentNoteReferencedByUnsentBatch
+        )
+        try validateBatchNoteCoverage(
+            requestedNoteIDs: affectedNoteIDs(in: localConvergenceBatches),
+            notes: notes,
+            legacyChanges: legacySnapshot.pendingChanges,
+            error: SyncRecoveryStateBuilderError.missingCurrentNoteReferencedByLocalObligation
+        )
+
         var replacementChanges: [SyncChange] = []
         var emittedTargets = Set<SyncTarget>()
 
         let folders = try fetchFolders(context: context, ids: affectedFolderIDs(legacyTargets: legacyTargets))
+        let thoughts = try context.fetch(FetchDescriptor<PinnedThought>())
+        let attachments = try context.fetch(FetchDescriptor<NotePhotoAttachment>())
+        try validateLegacyCoverage(
+            targets: legacyTargets,
+            notes: notes,
+            folders: folders,
+            thoughts: thoughts,
+            attachments: attachments,
+            legacyChanges: legacySnapshot.pendingChanges
+        )
+
         for folder in folders.sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
             for folder in folderChain(for: folder).sorted(by: { $0.id.uuidString < $1.id.uuidString }) {
                 append(
@@ -117,6 +147,13 @@ enum SyncRecoveryStateBuilder {
             )
         )
 
+        try validateReplacementCoverage(
+            legacyTargets: legacyTargets,
+            unsentNoteIDs: affectedNoteIDs(in: unsentBatches),
+            localNoteIDs: affectedNoteIDs(in: localConvergenceBatches),
+            replacementChanges: replacementChanges
+        )
+
         return SyncRecoveryReplacementState(
             legacySnapshot: SyncQueueSnapshot(
                 pendingChanges: replacementChanges,
@@ -147,7 +184,9 @@ enum SyncRecoveryStateBuilder {
         var markerIDs = Set<UUID>()
         var attachmentIDs = Set<UUID>()
         for change in legacyChanges {
-            guard let target = SyncTarget(change: change) else { continue }
+            guard let target = SyncTarget(change: change) else {
+                throw SyncRecoveryStateBuilderError.invalidLegacyEntityID(change.entityID)
+            }
             switch target.entityType {
             case .item:
                 noteIDs.insert(target.entityID)
@@ -186,8 +225,89 @@ enum SyncRecoveryStateBuilder {
         Set(legacyTargets.compactMap { $0.entityType == .collection ? $0.entityID : nil })
     }
 
-    private static func targets(from changes: [SyncChange]) -> Set<SyncTarget> {
-        Set(changes.compactMap(SyncTarget.init(change:)))
+    private static func targets(from changes: [SyncChange]) throws -> Set<SyncTarget> {
+        var targets = Set<SyncTarget>()
+        for change in changes {
+            guard let target = SyncTarget(change: change) else {
+                throw SyncRecoveryStateBuilderError.invalidLegacyEntityID(change.entityID)
+            }
+            guard target.entityType != .conflict else {
+                throw SyncRecoveryStateBuilderError.unsupportedPendingLegacyConflictMetadata(target.entityID)
+            }
+            targets.insert(target)
+        }
+        return targets
+    }
+
+    private static func validateBatchNoteCoverage(
+        requestedNoteIDs: Set<UUID>,
+        notes: [Note],
+        legacyChanges: [SyncChange],
+        error: (UUID) -> SyncRecoveryStateBuilderError
+    ) throws {
+        let currentNoteIDs = Set(notes.map(\.id))
+        for noteID in requestedNoteIDs where !currentNoteIDs.contains(noteID) {
+            guard hasValidDeletionTombstone(
+                entityType: .item,
+                entityID: noteID,
+                in: legacyChanges
+            ) else {
+                throw error(noteID)
+            }
+        }
+    }
+
+    private static func validateLegacyCoverage(
+        targets: Set<SyncTarget>,
+        notes: [Note],
+        folders: [Folder],
+        thoughts: [PinnedThought],
+        attachments: [NotePhotoAttachment],
+        legacyChanges: [SyncChange]
+    ) throws {
+        let noteIDs = Set(notes.map(\.id))
+        let folderIDs = Set(folders.map(\.id))
+        let thoughtIDs = Set(thoughts.map(\.id))
+        let attachmentIDs = Set(attachments.map(\.id))
+
+        for target in targets {
+            let isCovered: Bool
+            switch target.entityType {
+            case .item:
+                isCovered = noteIDs.contains(target.entityID)
+            case .collection:
+                isCovered = folderIDs.contains(target.entityID)
+            case .marker:
+                isCovered = thoughtIDs.contains(target.entityID)
+            case .attachment:
+                isCovered = attachmentIDs.contains(target.entityID)
+            case .conflict:
+                isCovered = false
+            }
+            if !isCovered,
+               !hasValidDeletionTombstone(entityType: target.entityType, entityID: target.entityID, in: legacyChanges) {
+                throw SyncRecoveryStateBuilderError.missingCurrentEntity(
+                    entityType: target.entityType,
+                    entityID: target.entityID
+                )
+            }
+        }
+    }
+
+    private static func validateReplacementCoverage(
+        legacyTargets: Set<SyncTarget>,
+        unsentNoteIDs: Set<UUID>,
+        localNoteIDs: Set<UUID>,
+        replacementChanges: [SyncChange]
+    ) throws {
+        let replacementTargets = Set(replacementChanges.compactMap(SyncTarget.init(change:)))
+        for target in legacyTargets where !replacementTargets.contains(target) {
+            throw SyncRecoveryStateBuilderError.targetCoverageMismatch
+        }
+        for noteID in unsentNoteIDs.union(localNoteIDs)
+            where !replacementTargets.contains(SyncTarget(entityType: .item, entityID: noteID)) {
+            throw SyncRecoveryStateBuilderError.targetCoverageMismatch
+        }
     }
 
     private static func validateNoActiveConflicts(
@@ -287,6 +407,19 @@ enum SyncRecoveryStateBuilder {
             return ((try? MyRAMSyncPayloadCoding.decodePhotoAttachment(from: change.payload))?.isDeleted) == true
         case .conflict:
             return false
+        }
+    }
+
+    private static func hasValidDeletionTombstone(
+        entityType: SyncEntityType,
+        entityID: UUID,
+        in changes: [SyncChange]
+    ) -> Bool {
+        changes.contains { change in
+            change.entityType == entityType
+                && change.operation == .delete
+                && UUID(uuidString: change.entityID) == entityID
+                && isValidDeletionTombstone(change)
         }
     }
 }
