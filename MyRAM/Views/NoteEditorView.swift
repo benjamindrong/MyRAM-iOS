@@ -287,7 +287,12 @@ struct NoteEditorView: View {
             if let syncController {
                 NearbySyncView(
                     syncController: syncController,
-                    style: editorChromeStyle
+                    notesViewModel: vm,
+                    style: editorChromeStyle,
+                    prepareEditorState: {
+                        commitActivePinnedThoughtEdit()
+                        commitPendingNoteEdit()
+                    }
                 )
                 .navigationTitle("Nearby Sync")
                 .navigationBarTitleDisplayMode(.inline)

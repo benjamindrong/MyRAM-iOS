@@ -158,7 +158,9 @@ struct NotesListView: View {
                 NavigationStack {
                     NearbySyncView(
                         syncController: syncController,
-                        style: editorChromeStyle
+                        notesViewModel: vm,
+                        style: editorChromeStyle,
+                        prepareEditorState: {}
                     )
                         .navigationTitle("Nearby Sync")
                         .navigationBarTitleDisplayMode(.inline)

@@ -209,6 +209,10 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         !session.connectedPeers.isEmpty
     }
 
+    var currentDeviceID: String {
+        syncEngine.deviceID
+    }
+
     func invite(_ peer: MyRAMDiscoveredPeer) {
         guard let attempt = reconnectTracker.beginConnecting(to: peer.deviceID) else { return }
 

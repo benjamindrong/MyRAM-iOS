@@ -284,6 +284,69 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertNil(try PendingSyncRecoveryJournalStore(fileURL: fileURL).load())
     }
 
+    func testCoordinatorBuildsReplacementWhileSuspendedAndFlushesAfterCommit() async throws {
+        let fileURL = temporaryJournalURL()
+        defer { try? FileManager.default.removeItem(at: fileURL.deletingLastPathComponent()) }
+        let originalLegacy = SyncQueueSnapshot(pendingChanges: [makeLegacyChange(entityID: "note-1")])
+        let replacementLegacy = SyncQueueSnapshot(pendingChanges: [makeLegacyChange(entityID: "note-2")])
+        var localBatches = [makeBatch(idSuffix: 31)]
+        var didPrepare = false
+        var didFlushLocal = false
+        var didBuildWhileSuspended = false
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: originalLegacy,
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [makeBatch(idSuffix: 32)],
+                health: .healthy
+            )
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncBatchQueueSnapshot(pendingBatches: localBatches, health: .healthy)
+            },
+            replaceLocalBatches: { batches in
+                localBatches = batches
+            },
+            flushReadyLocalBatch: {
+                didFlushLocal = true
+            },
+            journalStore: PendingSyncRecoveryJournalStore(fileURL: fileURL),
+            now: { Date(timeIntervalSince1970: 100) },
+            transactionID: { UUID(uuidString: "00000000-0000-0000-0000-000000160401")! }
+        )
+
+        try await coordinator.resetPendingSync(
+            prepareDurableState: {
+                didPrepare = true
+            },
+            buildReplacement: { legacy, unsent, local, _ in
+                XCTAssertTrue(didPrepare)
+                XCTAssertTrue(didFlushLocal)
+                XCTAssertEqual(legacy, originalLegacy)
+                XCTAssertEqual(unsent.count, 1)
+                XCTAssertEqual(local.count, 1)
+                didBuildWhileSuspended = admin.isSuspended
+                return SyncRecoveryReplacementState(
+                    legacySnapshot: replacementLegacy,
+                    unsentBatches: [],
+                    localConvergenceBatches: [],
+                    replacedLegacyCount: legacy.pendingChanges.count,
+                    replacedUnsentBatchCount: unsent.count,
+                    replacedLocalObligationCount: local.count
+                )
+            }
+        )
+
+        XCTAssertTrue(didBuildWhileSuspended)
+        XCTAssertEqual(admin.legacySnapshot, replacementLegacy)
+        XCTAssertEqual(admin.unsentSnapshot.pendingBatches, [])
+        XCTAssertEqual(localBatches, [])
+        XCTAssertFalse(admin.isSuspended)
+        XCTAssertTrue(admin.didFlushAllOutboundWork)
+        XCTAssertNil(try PendingSyncRecoveryJournalStore(fileURL: fileURL).load())
+    }
+
     private func temporaryJournalURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

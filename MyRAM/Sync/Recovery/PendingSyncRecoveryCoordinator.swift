@@ -115,6 +115,84 @@ final class PendingSyncRecoveryCoordinator {
         }
     }
 
+    func resetPendingSync(
+        prepareDurableState: () throws -> Void,
+        buildReplacement: (
+            _ legacy: SyncQueueSnapshot,
+            _ unsent: [SyncBatch],
+            _ local: [SyncBatch],
+            _ recoveryTimestamp: Date
+        ) throws -> SyncRecoveryReplacementState
+    ) async throws {
+        queueAdmin.suspendOutboundForRecovery()
+
+        let original: (
+            legacy: SyncQueueSnapshot,
+            unsent: [SyncBatch],
+            local: [SyncBatch]
+        )
+        let replacement: SyncRecoveryReplacementState
+        let recoveryTimestamp: Date
+
+        do {
+            try prepareDurableState()
+            original = try await prepareSnapshots()
+            recoveryTimestamp = now()
+            replacement = try buildReplacement(
+                original.legacy,
+                original.unsent,
+                original.local,
+                recoveryTimestamp
+            )
+        } catch {
+            queueAdmin.resumeOutboundAfterRecovery()
+            throw error
+        }
+
+        try await applyReplacement(replacement, original: original, createdAt: recoveryTimestamp)
+    }
+
+    private func applyReplacement(
+        _ replacement: SyncRecoveryReplacementState,
+        original: (
+            legacy: SyncQueueSnapshot,
+            unsent: [SyncBatch],
+            local: [SyncBatch]
+        ),
+        createdAt: Date
+    ) async throws {
+        let journal = PendingSyncRecoveryJournal(
+            version: 1,
+            transactionID: transactionID(),
+            createdAt: createdAt,
+            phase: .prepared,
+            originalLegacySnapshot: original.legacy,
+            originalUnsentBatches: original.unsent,
+            originalLocalObligations: original.local,
+            replacementLegacySnapshot: replacement.legacySnapshot,
+            replacementUnsentBatches: replacement.unsentBatches,
+            replacementLocalObligations: replacement.localConvergenceBatches
+        )
+
+        do {
+            try journalStore.save(journal)
+            try await queueAdmin.replaceLegacyQueueSnapshot(replacement.legacySnapshot)
+            _ = try journalStore.updatePhase(.legacyReplaced)
+            try queueAdmin.replaceUnsentBatches(replacement.unsentBatches)
+            _ = try journalStore.updatePhase(.unsentBatchesReplaced)
+            try replaceLocalBatches(replacement.localConvergenceBatches)
+            _ = try journalStore.updatePhase(.localObligationsReplaced)
+            await queueAdmin.refreshPendingSyncStatus()
+            _ = try journalStore.updatePhase(.committed)
+            try journalStore.delete()
+            queueAdmin.resumeOutboundAfterRecovery()
+            queueAdmin.flushAllOutboundWork()
+        } catch {
+            try await rollback(journal: journal)
+            throw RecoveryError.replacementFailed
+        }
+    }
+
     func rollbackIfNeededOnLaunch() async throws {
         guard let journal = try journalStore.load() else { return }
         if journal.phase == .committed {

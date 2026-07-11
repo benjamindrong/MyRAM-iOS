@@ -2,7 +2,10 @@ import SwiftUI
 
 struct NearbySyncView: View {
     @ObservedObject var syncController: MyRAMSyncController
+    @ObservedObject var notesViewModel: NotesViewModel
     let style: EditorChromeStyle
+    let prepareEditorState: () throws -> Void
+    @State private var showingResetConfirmation = false
 
     var body: some View {
         ScrollView {
@@ -21,6 +24,29 @@ struct NearbySyncView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(!syncController.hasConnectedPeers)
+                }
+
+                section("Advanced") {
+                    Button("Reset Pending Sync") {
+                        showingResetConfirmation = true
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isResetDisabled)
+
+                    switch notesViewModel.pendingSyncRecoveryStatus {
+                    case .idle:
+                        EmptyView()
+                    case .running:
+                        ProgressView()
+                    case .succeeded:
+                        Text("Replacement changes will drain after a connected peer acknowledges them.")
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    case .failed(let message):
+                        Text(message)
+                            .font(.footnote)
+                            .foregroundStyle(.red)
+                    }
                 }
 
                 section("Nearby Devices") {
@@ -59,6 +85,34 @@ struct NearbySyncView: View {
             .padding(16)
         }
         .background(style.appBackgroundColor.ignoresSafeArea())
+        .alert("Reset Pending Sync?", isPresented: $showingResetConfirmation) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset and Resync", role: .destructive) {
+                Task {
+                    await notesViewModel.resetPendingSync(
+                        syncController: syncController,
+                        prepareEditorState: prepareEditorState
+                    )
+                }
+            }
+        } message: {
+            Text(resetConfirmationMessage)
+        }
+    }
+
+    private var isResetDisabled: Bool {
+        syncController.pendingSyncStatus.totalOutboundItems == 0
+            || !syncController.pendingSyncStatus.healthIssues.isEmpty
+            || notesViewModel.pendingSyncRecoveryStatus.isRunning
+    }
+
+    private var resetConfirmationMessage: String {
+        let status = syncController.pendingSyncStatus
+        return """
+        This will replace \(status.legacyChanges) legacy changes, \(status.unsentBatches) unsent batches, and \(status.localConvergenceObligations) pending local batch with a fresh synchronization of this device's current notes and related data.
+
+        Your current local notes, folders, pinned content, attachments, and deletion state will remain on this device.
+        """
     }
 
     @ViewBuilder
