@@ -373,7 +373,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             replaceLocalBatches: { batches in
                 localBatches = batches
             },
-            flushReadyLocalBatch: {},
+            flushReadyLocalBatch: { nil },
             journalStore: PendingSyncRecoveryJournalStore(fileURL: fileURL),
             now: { Date(timeIntervalSince1970: 100) },
             transactionID: { UUID(uuidString: "00000000-0000-0000-0000-000000160506")! }
@@ -439,7 +439,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             replaceLocalBatches: { batches in
                 localBatches = batches
             },
-            flushReadyLocalBatch: {},
+            flushReadyLocalBatch: { nil },
             journalStore: PendingSyncRecoveryJournalStore(fileURL: fileURL),
             now: { Date(timeIntervalSince1970: 100) },
             transactionID: { UUID(uuidString: "00000000-0000-0000-0000-000000160001")! }
@@ -494,6 +494,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             },
             flushReadyLocalBatch: {
                 didFlushLocal = true
+                return nil
             },
             journalStore: PendingSyncRecoveryJournalStore(fileURL: fileURL),
             now: { Date(timeIntervalSince1970: 100) },
@@ -529,6 +530,32 @@ final class PendingSyncRecoveryTests: XCTestCase {
         XCTAssertFalse(admin.isSuspended)
         XCTAssertTrue(admin.didFlushAllOutboundWork)
         XCTAssertNil(try PendingSyncRecoveryJournalStore(fileURL: fileURL).load())
+    }
+
+    func testPrepareSnapshotsRejectsCapturedBatchMissingFromDurableQueues() async throws {
+        let capturedBatchID = UUID(uuidString: "00000000-0000-0000-0000-000000160601")!
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .healthy)
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .healthy)
+            },
+            replaceLocalBatches: { _ in },
+            flushReadyLocalBatch: { capturedBatchID }
+        )
+
+        do {
+            _ = try await coordinator.prepareSnapshots()
+            XCTFail("Expected captured batch durability failure")
+        } catch {
+            XCTAssertEqual(
+                error as? PendingSyncRecoveryCoordinator.RecoveryError,
+                .capturedBatchNotDurable(capturedBatchID)
+            )
+        }
     }
 
     private func temporaryJournalURL() -> URL {

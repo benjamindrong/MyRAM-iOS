@@ -160,6 +160,12 @@ struct NotesListView: View {
                         syncController: syncController,
                         notesViewModel: vm,
                         style: editorChromeStyle,
+                        resetAvailability: vm.hasMountedActiveEditor
+                            ? NearbySyncView.ResetAvailability(
+                                isAvailable: false,
+                                unavailableReason: "Close the editor or open Nearby Sync from the editor before resetting."
+                            )
+                            : .available,
                         prepareEditorState: {}
                     )
                         .navigationTitle("Nearby Sync")

@@ -1514,15 +1514,23 @@ final class NotesViewModel: ObservableObject {
         pendingLocalConvergenceBatches.snapshot()
     }
 
+    var hasMountedActiveEditor: Bool {
+        mountedActiveEditorNoteID != nil
+    }
+
     func replaceLocalConvergenceBatches(_ batches: [SyncBatch]) throws {
         try pendingLocalConvergenceBatches.replacePendingBatches(batches)
     }
 
-    func flushReadyLocalBatchForRecovery() async {
-        if let batch = await syncBatchAccumulator.takeReadyBatch(at: .now) {
-            await handleReadyLocalBatch(batch)
+    func capturePendingLocalBatchForRecovery() async -> SyncBatchID? {
+        guard let batch = await syncBatchAccumulator.takePendingBatchNow() else {
+            await resumePendingConvergencePresentation()
+            return nil
         }
+        let outcome = await syncConvergenceRuntime.submitLocalBatch(batch)
+        handleConvergenceRuntimeOutcome(outcome)
         await resumePendingConvergencePresentation()
+        return batch.id
     }
 
     func resetPendingSync(
@@ -1541,7 +1549,7 @@ final class NotesViewModel: ObservableObject {
                 try self?.replaceLocalConvergenceBatches(batches)
             },
             flushReadyLocalBatch: { [weak self] in
-                await self?.flushReadyLocalBatchForRecovery()
+                await self?.capturePendingLocalBatchForRecovery()
             }
         )
 
@@ -1579,6 +1587,16 @@ final class NotesViewModel: ObservableObject {
             return "Reset is blocked because the pending local batch queue is unreadable."
         case SyncRecoveryStateBuilderError.activeConflict:
             return "Resolve the active sync conflict before resetting pending sync."
+        case SyncRecoveryStateBuilderError.unsupportedPendingLegacyConflictMetadata:
+            return "Resolve the active sync conflict before resetting pending sync."
+        case SyncRecoveryStateBuilderError.missingCurrentNoteReferencedByUnsentBatch,
+             SyncRecoveryStateBuilderError.missingCurrentNoteReferencedByLocalObligation,
+             SyncRecoveryStateBuilderError.missingCurrentEntity,
+             SyncRecoveryStateBuilderError.invalidLegacyEntityID,
+             SyncRecoveryStateBuilderError.targetCoverageMismatch:
+            return "Reset is blocked because some queued sync work cannot be safely represented."
+        case PendingSyncRecoveryCoordinator.RecoveryError.capturedBatchNotDurable:
+            return "Reset is blocked because the latest edit was not saved into the pending sync queue."
         case PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed:
             return "Reset failed and rollback could not finish. Restart MyRAM before syncing again."
         default:

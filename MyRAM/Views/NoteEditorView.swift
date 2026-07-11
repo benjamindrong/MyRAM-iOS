@@ -289,6 +289,7 @@ struct NoteEditorView: View {
                     syncController: syncController,
                     notesViewModel: vm,
                     style: editorChromeStyle,
+                    resetAvailability: .available,
                     prepareEditorState: {
                         commitActivePinnedThoughtEdit()
                         commitPendingNoteEdit()

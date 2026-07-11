@@ -1,9 +1,17 @@
 import SwiftUI
 
 struct NearbySyncView: View {
+    struct ResetAvailability: Equatable {
+        let isAvailable: Bool
+        let unavailableReason: String?
+
+        static let available = ResetAvailability(isAvailable: true, unavailableReason: nil)
+    }
+
     @ObservedObject var syncController: MyRAMSyncController
     @ObservedObject var notesViewModel: NotesViewModel
     let style: EditorChromeStyle
+    let resetAvailability: ResetAvailability
     let prepareEditorState: () throws -> Void
     @State private var showingResetConfirmation = false
 
@@ -32,6 +40,12 @@ struct NearbySyncView: View {
                     }
                     .buttonStyle(.bordered)
                     .disabled(isResetDisabled)
+
+                    if let unavailableReason = resetAvailability.unavailableReason {
+                        Text(unavailableReason)
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
 
                     switch notesViewModel.pendingSyncRecoveryStatus {
                     case .idle:
@@ -104,6 +118,7 @@ struct NearbySyncView: View {
         syncController.pendingSyncStatus.totalOutboundItems == 0
             || !syncController.pendingSyncStatus.healthIssues.isEmpty
             || notesViewModel.pendingSyncRecoveryStatus.isRunning
+            || !resetAvailability.isAvailable
     }
 
     private var resetConfirmationMessage: String {

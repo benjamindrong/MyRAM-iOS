@@ -10,12 +10,13 @@ final class PendingSyncRecoveryCoordinator {
         case journalWriteFailed
         case replacementFailed
         case rollbackFailed
+        case capturedBatchNotDurable(SyncBatchID)
     }
 
     private let queueAdmin: PendingSyncQueueAdministrating
     private let localQueueSnapshot: () -> FileBackedSyncBatchQueueSnapshot
     private let replaceLocalBatches: ([SyncBatch]) throws -> Void
-    private let flushReadyLocalBatch: () async -> Void
+    private let flushReadyLocalBatch: () async throws -> SyncBatchID?
     private let journalStore: PendingSyncRecoveryJournalStore
     private let now: () -> Date
     private let transactionID: () -> UUID
@@ -24,7 +25,7 @@ final class PendingSyncRecoveryCoordinator {
         queueAdmin: PendingSyncQueueAdministrating,
         localQueueSnapshot: @escaping () -> FileBackedSyncBatchQueueSnapshot,
         replaceLocalBatches: @escaping ([SyncBatch]) throws -> Void,
-        flushReadyLocalBatch: @escaping () async -> Void,
+        flushReadyLocalBatch: @escaping () async throws -> SyncBatchID?,
         journalStore: PendingSyncRecoveryJournalStore = PendingSyncRecoveryJournalStore(),
         now: @escaping () -> Date = Date.init,
         transactionID: @escaping () -> UUID = UUID.init
@@ -43,7 +44,7 @@ final class PendingSyncRecoveryCoordinator {
         unsent: [SyncBatch],
         local: [SyncBatch]
     ) {
-        await flushReadyLocalBatch()
+        let capturedBatchID = try await flushReadyLocalBatch()
 
         let legacyHealth = await queueAdmin.legacyQueueHealth()
         guard legacyHealth.isRecoveryWritable else {
@@ -58,6 +59,12 @@ final class PendingSyncRecoveryCoordinator {
         let localSnapshot = localQueueSnapshot()
         guard localSnapshot.health.isRecoveryWritable else {
             throw RecoveryError.unhealthyLocalObligationQueue
+        }
+
+        if let capturedBatchID,
+           !unsentSnapshot.pendingBatches.contains(where: { $0.id == capturedBatchID }),
+           !localSnapshot.pendingBatches.contains(where: { $0.id == capturedBatchID }) {
+            throw RecoveryError.capturedBatchNotDurable(capturedBatchID)
         }
 
         return (
