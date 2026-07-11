@@ -398,7 +398,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     private func sendBatch(_ batch: SyncBatch) async throws {
         if isOutboundSuspendedForRecovery {
-            enqueueUnsentBatch(batch)
+            try enqueueUnsentBatchDurably(batch)
             legacyFlushRequestedWhileActive = true
             await updatePendingCount()
             return
@@ -406,12 +406,9 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
         let sent = await sendQueuedBatch(batch)
         if sent {
-            unsentBatches.removeAll(withIDs: [batch.id])
+            try unsentBatches.removeBatches(withIDs: [batch.id])
         } else {
-            enqueueUnsentBatch(batch)
-        }
-        guard sent || unsentBatches.contains(batch.id) else {
-            throw SyncConvergenceLocalBatchTransportError.acceptanceNotDurable(batchID: batch.id)
+            try enqueueUnsentBatchDurably(batch)
         }
     }
 
@@ -445,13 +442,25 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         for batch in unsentBatches.pendingBatches {
             let sent = await sendQueuedBatch(batch)
             if sent {
-                unsentBatches.removeAll(withIDs: [batch.id])
+                do {
+                    try unsentBatches.removeBatches(withIDs: [batch.id])
+                    await updatePendingCount()
+                } catch {
+                    lastErrorMessage = "Unable to update the unsent batch queue."
+                    await updatePendingCount()
+                    return
+                }
             }
         }
     }
 
-    private func enqueueUnsentBatch(_ batch: SyncBatch) {
-        unsentBatches.enqueue(batch)
+    private func enqueueUnsentBatchDurably(_ batch: SyncBatch) throws {
+        do {
+            try unsentBatches.enqueueDurably(batch)
+        } catch {
+            lastErrorMessage = "Unable to update the unsent batch queue."
+            throw error
+        }
     }
 
     private static func pendingChangesFileURL() -> URL {
@@ -560,6 +569,12 @@ extension MyRAMSyncController: PendingSyncQueueAdministrating {
     func refreshPendingSyncStatus() async {
         await updatePendingCount()
     }
+
+#if DEBUG
+    func injectUnsentBatchPersistenceFailureForNextWrite() {
+        unsentBatches.injectPersistenceFailureForNextWrite()
+    }
+#endif
 }
 
 extension MyRAMSyncController: SyncConvergenceLocalBatchTransportAdapter {}

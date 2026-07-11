@@ -2243,6 +2243,36 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(metrics.saveCount, 1)
     }
 
+    func testLocalObligationRemainsDurableWhenTransportAcceptanceThrows() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000127399")!
+        let note = Note(title: "Original", content: "Body")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        let localObligationQueueURL = temporarySyncBatchQueueFileURL()
+        let localObligationQueue = FileBackedSyncBatchQueue(fileURL: localObligationQueueURL)
+        let batch = makeTitleOnlyBatch(idSuffix: 127500, title: "Unsatisfied")
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: localObligationQueue,
+            localBatchTransportAdapter: FailingLocalBatchTransport(error: FileBackedSyncBatchQueue.QueueError.persistenceFailed),
+            presentationAdapter: CompletingPresentationAdapter()
+        )
+
+        let outcome = await runtime.submitLocalBatch(batch)
+
+        guard case .blocked(let failure) = outcome else {
+            return XCTFail("Expected local obligation drain to block")
+        }
+        XCTAssertEqual(failure.batchID, batch.id)
+        XCTAssertEqual(localObligationQueue.pendingBatches, [batch])
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: localObligationQueueURL).pendingBatches, [batch])
+    }
+
     func testUnrelatedIncorporationHistoryDoesNotChangeActiveNotePlanning() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -6963,6 +6993,19 @@ private extension UIView {
 @MainActor
 private final class AcceptingLocalBatchTransport: SyncConvergenceLocalBatchTransportAdapter {
     func acceptLocalBatch(_ batch: SyncBatch) async throws {}
+}
+
+@MainActor
+private final class FailingLocalBatchTransport: SyncConvergenceLocalBatchTransportAdapter {
+    private let error: Error
+
+    init(error: Error) {
+        self.error = error
+    }
+
+    func acceptLocalBatch(_ batch: SyncBatch) async throws {
+        throw error
+    }
 }
 
 private struct CompletingPresentationAdapter: SyncConvergencePresentationAdapter {

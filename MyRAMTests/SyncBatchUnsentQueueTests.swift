@@ -159,6 +159,23 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(reloadedQueue.pendingBatches, [first, second])
     }
 
+    func testDurableEnqueueRejectsCapacityWithoutEvictingExistingEntries() throws {
+        let fileURL = temporaryQueueFileURL()
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+        let third = makeBatch(idSuffix: 3)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 2)
+
+        try queue.enqueueDurably(first)
+        try queue.enqueueDurably(second)
+        XCTAssertThrowsError(try queue.enqueueDurably(third)) { error in
+            XCTAssertEqual(error as? FileBackedSyncBatchQueue.QueueError, .capacityExceeded)
+        }
+
+        XCTAssertEqual(queue.pendingBatches, [first, second])
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 2).pendingBatches, [first, second])
+    }
+
     func testFileBackedIncomingQueueRollsBackMemoryAndDiskOnPersistenceFailure() throws {
         let fileURL = temporaryQueueFileURL()
         let first = makeBatch(idSuffix: 1)
@@ -183,6 +200,37 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
             XCTAssertEqual(error as? FileBackedSyncBatchQueue.QueueError, .unhealthyPersistence)
         }
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [first])
+    }
+
+    func testDurableEnqueueRestoresMemoryWhenPersistenceFails() throws {
+        let fileURL = temporaryQueueFileURL()
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        try queue.enqueueDurably(first)
+        queue.injectPersistenceFailureForNextWrite()
+        XCTAssertThrowsError(try queue.enqueueDurably(second)) { error in
+            XCTAssertEqual(error as? FileBackedSyncBatchQueue.QueueError, .persistenceFailed)
+        }
+
+        XCTAssertEqual(queue.pendingBatches, [first])
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [first])
+    }
+
+    func testDurableEnqueueDuplicateBatchIDIsIdempotentAndDoesNotRewriteFile() throws {
+        let fileURL = temporaryQueueFileURL()
+        let batch = makeBatch(idSuffix: 1)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        try queue.enqueueDurably(batch)
+        let originalData = try Data(contentsOf: fileURL)
+        queue.injectPersistenceFailureForNextWrite()
+        try queue.enqueueDurably(batch)
+
+        XCTAssertEqual(queue.pendingBatches, [batch])
+        XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [batch])
     }
 
     func testFileBackedQueueRemovesOnlySuccessfulIDsFromDisk() {

@@ -52,6 +52,10 @@ final class FileBackedSyncBatchQueue {
     }
 
     func enqueueIncoming(_ batch: SyncBatch) throws {
+        try enqueueDurably(batch)
+    }
+
+    func enqueueDurably(_ batch: SyncBatch) throws {
         guard canPersistCurrentQueue else { throw QueueError.unhealthyPersistence }
         let originalBatches = queue.pendingBatches
         do {

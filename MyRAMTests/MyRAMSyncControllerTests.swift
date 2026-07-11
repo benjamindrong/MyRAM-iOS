@@ -159,12 +159,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
     func testManualSyncFlushesUnsentBatchQueue() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(transport: transport)
-        let batch = SyncBatch(
-            id: UUID(uuidString: "00000000-0000-0000-0000-000000000201")!,
-            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
-            createdAt: Date(timeIntervalSince1970: 1),
-            changes: []
-        )
+        let batch = makeBatch(idSuffix: 201)
 
         try await controller.acceptLocalBatch(batch)
         XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
@@ -176,15 +171,62 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertEqual(transport.sentBatchEnvelopes.map(\.batch), [batch])
     }
 
+    func testRecoverySuspendedAcceptLocalBatchThrowsWhenDurableEnqueueFails() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(),
+            transport: transport
+        )
+        let batch = makeBatch(idSuffix: 202)
+
+        controller.suspendOutboundForRecovery()
+        controller.injectUnsentBatchPersistenceFailureForNextWrite()
+
+        do {
+            try await controller.acceptLocalBatch(batch)
+            XCTFail("Expected durable enqueue failure to propagate")
+        } catch {
+            XCTAssertEqual(error as? FileBackedSyncBatchQueue.QueueError, .persistenceFailed)
+        }
+
+        XCTAssertTrue(controller.unsentBatchQueueSnapshot().pendingBatches.isEmpty)
+    }
+
+    func testSuccessfulTransportFollowedByFailedDurableRemovalKeepsUnsentBatch() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(),
+            transport: transport
+        )
+        let batch = makeBatch(idSuffix: 203)
+
+        try await controller.acceptLocalBatch(batch)
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
+
+        transport.connectedPeers = [Self.remotePeerID]
+        controller.injectUnsentBatchPersistenceFailureForNextWrite()
+
+        do {
+            try await controller.acceptLocalBatch(batch)
+            XCTFail("Expected durable removal failure to propagate")
+        } catch {
+            XCTAssertEqual(error as? FileBackedSyncBatchQueue.QueueError, .persistenceFailed)
+        }
+
+        XCTAssertEqual(transport.sentBatchEnvelopes.map(\.batch), [batch])
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
+    }
+
     // MARK: - Helpers
 
     private static let remotePeerID = MCPeerID(displayName: "Remote|remote-device")
 
     private func makeController(
+        unsentBatchQueueFileURL: URL? = nil,
         transport: FakeMyRAMSyncTransport
     ) throws -> MyRAMSyncController {
         MyRAMSyncController(
-            unsentBatchQueueFileURL: nil,
+            unsentBatchQueueFileURL: unsentBatchQueueFileURL,
             pendingChangesFileURL: temporaryQueueFileURL(),
             startsNetworking: false,
             transport: transport
@@ -208,6 +250,15 @@ final class MyRAMSyncControllerTests: XCTestCase {
             payload: Data("payload".utf8),
             updatedAt: Date(timeIntervalSince1970: 1),
             originDeviceID: originDeviceID
+        )
+    }
+
+    private func makeBatch(idSuffix: Int) -> SyncBatch {
+        SyncBatch(
+            id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", idSuffix))!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
+            changes: []
         )
     }
 
