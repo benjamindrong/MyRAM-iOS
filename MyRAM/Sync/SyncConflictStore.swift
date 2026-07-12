@@ -176,8 +176,14 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
     }
 
     func preserve(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
+        let conflicts = activeConflicts()
+        if conflicts.contains(where: {
+            SyncTextConflictStore.isExactRemoteMatch($0.syncTextConflict, conflict.syncTextConflict)
+        }) {
+            return conflicts
+        }
         preservedEffectConflicts.append(conflict)
-        if activeConflicts().contains(where: { sameLogicalConflict($0, conflict) }) {
+        if conflicts.contains(where: { sameLogicalConflict($0, conflict) }) {
             queuedConflictsByKey[ConflictKey(
                 entityType: conflict.entityType,
                 entityID: conflict.entityID,

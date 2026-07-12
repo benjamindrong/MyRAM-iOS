@@ -3056,6 +3056,80 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(vm.syncConflicts, conflictStore.activeConflicts())
     }
 
+    func testLegacyIncomingExactConflictRedeliveryCommitsMissingBaselineWithoutDuplicateQueue() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Original", content: "Local body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 150)
+        context.insert(note)
+        try context.save()
+
+        final class BaselineWriteFailure {
+            var shouldFail = true
+        }
+        let failure = BaselineWriteFailure()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(
+            fileURL: conflictFileURL,
+            fileIO: SyncConflictStore.FileIO(
+                fileExists: { FileManager.default.fileExists(atPath: $0) },
+                readData: { try Data(contentsOf: $0) },
+                createDirectory: {
+                    try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
+                },
+                writeData: { data, url in
+                    if failure.shouldFail, url.lastPathComponent == "sync-remote-text-baselines.json" {
+                        throw CocoaError(.fileWriteNoPermission)
+                    }
+                    try data.write(to: url, options: [.atomic])
+                },
+                removeItem: { try FileManager.default.removeItem(at: $0) }
+            )
+        )
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: conflictStore,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Original",
+            content: "Remote body",
+            baseTitle: "Original",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let firstDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(conflictStore.activeConflicts().count, 1)
+        XCTAssertNil(conflictStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent))
+        XCTAssertNil(conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteTitle))
+        XCTAssertEqual(note.content, "Local body")
+
+        failure.shouldFail = false
+        let secondDispositions = await vm.applyIncomingSyncChanges([change])
+
+        XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(conflictStore.activeConflicts().count, 1)
+        XCTAssertNil(conflictStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent))
+        XCTAssertEqual(
+            conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteTitle)?.text,
+            "Original"
+        )
+        XCTAssertEqual(note.title, "Original")
+        XCTAssertEqual(note.content, "Local body")
+        XCTAssertEqual(
+            [firstDispositions, secondDispositions].flatMap { $0 }.filter { $0.disposition == .applied }.count,
+            1
+        )
+    }
+
     func testBufferedConflictStoreReadsPinnedTextBaselineWrittenDuringApply() {
         let conflictFileURL = temporarySyncConflictFileURL()
         defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
@@ -3128,6 +3202,43 @@ final class MyRAMTests: XCTestCase {
             realStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent)?.conflict.id,
             queuedConflict.id
         )
+    }
+
+    func testBufferedConflictStoreExactRemoteConflictDoesNotExposeQueuedReadOrEffect() {
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let realStore = SyncConflictStore(fileURL: conflictFileURL)
+        let bufferedStore = BufferedSyncConflictStore(base: realStore)
+        let noteID = UUID()
+        let activeConflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Local 1",
+            remoteText: "Remote",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 300),
+            expiresAt: Date().addingTimeInterval(1_000)
+        )
+        let redeliveredConflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Local 2",
+            remoteText: "Remote",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 400),
+            expiresAt: Date().addingTimeInterval(1_000)
+        )
+
+        _ = realStore.preserve(activeConflict)
+        _ = bufferedStore.preserve(redeliveredConflict)
+
+        XCTAssertEqual(bufferedStore.activeConflicts().map(\.id), [activeConflict.id])
+        XCTAssertNil(bufferedStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent))
+        XCTAssertTrue(bufferedStore.effects.preservedConflicts.isEmpty)
     }
 
     // MARK: - Partial envelope save failure (8.6)
