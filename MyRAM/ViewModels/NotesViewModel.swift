@@ -124,7 +124,7 @@ final class NotesViewModel: ObservableObject {
         self.saveContext = saveContext ?? { try context.save() }
         self.saveLegacyIncomingApplyContext = saveLegacyIncomingApplyContext ?? { try $0.save() }
         self.commitLegacyIncomingEffects = commitLegacyIncomingEffects ?? { effects in
-            Self.commitLegacyIncomingEffects(effects, to: syncConflictStore)
+            try Self.commitLegacyIncomingEffects(effects, to: syncConflictStore)
         }
         pendingIncomingBatches = FileBackedSyncBatchQueue(
             fileURL: pendingIncomingBatchQueueFileURL,
@@ -1602,11 +1602,6 @@ final class NotesViewModel: ObservableObject {
                 continue
             }
 
-            guard !legacyIncomingChangeHasDirtyAffectedMainObject(change) else {
-                dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
-                continue
-            }
-
             if let boundaryOutcome = await finalizePendingLocalObligationForLegacyIncomingChangesIfNeeded(
                 beforeIncomingBodyMutationFor: legacyIncomingBodyMutationNoteIDs(in: [change])
             ) {
@@ -1619,11 +1614,6 @@ final class NotesViewModel: ObservableObject {
             }
 
             guard !context.hasChanges else {
-                dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
-                continue
-            }
-
-            guard !legacyIncomingChangeHasDirtyAffectedMainObject(change) else {
                 dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
                 continue
             }
@@ -1648,11 +1638,12 @@ final class NotesViewModel: ObservableObject {
                 dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
                 continue
             }
+            let committedSyncConflicts = syncConflictStore.activeConflicts()
 
             // Only after durable persistence succeeds do any observable side
             // effects fire: conflict publication, current note/folder state,
             // UserDefaults, folder refresh, and the editor reload.
-            syncConflicts = applyResult.syncConflicts
+            syncConflicts = committedSyncConflicts
             applyResult.preservedConflicts.forEach(recordSyncConflictPreserved)
 
             if applyResult.deletedCurrentNoteID != nil {
@@ -1670,38 +1661,6 @@ final class NotesViewModel: ObservableObject {
             dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .applied))
         }
         return dispositions
-    }
-
-    private func legacyIncomingChangeHasDirtyAffectedMainObject(_ change: SyncChange) -> Bool {
-        switch change.entityType {
-        case .collection:
-            guard let payload = try? MyRAMSyncPayloadCoding.decodeFolder(from: change.payload) else { return false }
-            return context.hasPendingChanges(for: Folder.self, id: payload.id)
-
-        case .item:
-            guard let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload) else { return false }
-            return context.hasPendingChanges(for: Note.self, id: payload.id)
-
-        case .marker:
-            guard let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) else { return false }
-            return context.hasPendingChanges(for: PinnedThought.self, id: payload.id)
-
-        case .attachment:
-            guard let payload = try? MyRAMSyncPayloadCoding.decodePhotoAttachment(from: change.payload) else { return false }
-            return context.hasPendingChanges(for: NotePhotoAttachment.self, id: payload.id)
-
-        case .conflict:
-            guard let payload = try? MyRAMSyncPayloadCoding.decodeSyncConflict(from: change.payload),
-                  let conflict = payload.conflict else { return false }
-            switch conflict.entityType {
-            case .note:
-                return context.hasPendingChanges(for: Note.self, id: conflict.entityID)
-            case .folder:
-                return context.hasPendingChanges(for: Folder.self, id: conflict.entityID)
-            case .pinnedThought:
-                return context.hasPendingChanges(for: PinnedThought.self, id: conflict.entityID)
-            }
-        }
     }
 
     private func applyLegacyIncomingChangeInIsolatedContext(
@@ -1788,19 +1747,8 @@ final class NotesViewModel: ObservableObject {
     private static func commitLegacyIncomingEffects(
         _ effects: LegacyIncomingBufferedEffects,
         to store: SyncConflictStore
-    ) {
-        for conflict in effects.removedResolvedConflicts {
-            _ = store.removeResolvedConflict(conflict)
-        }
-        for conflictID in effects.removedConflictIDs {
-            _ = store.removeConflict(id: conflictID)
-        }
-        for conflict in effects.preservedConflicts {
-            _ = store.preserve(conflict)
-        }
-        for baseline in effects.remoteBaselines {
-            store.saveRemoteBaseline(baseline)
-        }
+    ) throws {
+        try store.commitLegacyIncomingEffectsChecked(effects)
     }
 
     private func refreshMainContextAfterLegacyIncomingApply(_ change: SyncChange) throws {

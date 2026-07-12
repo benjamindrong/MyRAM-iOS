@@ -2936,32 +2936,35 @@ final class MyRAMTests: XCTestCase {
         context.insert(note)
         try context.save()
 
-        final class CommitFailure {
+        final class BaselineWriteFailure {
             var shouldFail = true
-            var callCount = 0
         }
-        let failure = CommitFailure()
+        let failure = BaselineWriteFailure()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
-        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let conflictStore = SyncConflictStore(
+            fileURL: conflictFileURL,
+            fileIO: SyncConflictStore.FileIO(
+                fileExists: { FileManager.default.fileExists(atPath: $0) },
+                readData: { try Data(contentsOf: $0) },
+                createDirectory: {
+                    try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
+                },
+                writeData: { data, url in
+                    if failure.shouldFail, url.lastPathComponent == "sync-remote-text-baselines.json" {
+                        throw CocoaError(.fileWriteNoPermission)
+                    }
+                    try data.write(to: url, options: [.atomic])
+                },
+                removeItem: { try FileManager.default.removeItem(at: $0) }
+            )
+        )
         let vm = NotesViewModel(
             context: context,
             syncConflictStore: conflictStore,
             pendingIncomingBatchQueueFileURL: nil,
             pendingLocalConvergenceBatchQueueFileURL: nil,
-            resumesPendingConvergenceOnInit: false,
-            commitLegacyIncomingEffects: { effects in
-                failure.callCount += 1
-                if failure.shouldFail {
-                    throw NSError(domain: "MyRAMTests.CommitFailure", code: 1)
-                }
-                for baseline in effects.remoteBaselines {
-                    conflictStore.saveRemoteBaseline(baseline)
-                }
-                for conflict in effects.preservedConflicts {
-                    _ = conflictStore.preserve(conflict)
-                }
-            }
+            resumesPendingConvergenceOnInit: false
         )
         let change = try legacyNoteChange(
             noteID: noteID,
@@ -2974,7 +2977,6 @@ final class MyRAMTests: XCTestCase {
 
         let firstDispositions = await vm.applyIncomingSyncChanges([change])
         XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
-        XCTAssertEqual(failure.callCount, 1)
         XCTAssertNil(conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteContent))
 
         let reloadedAfterFailure = try XCTUnwrap(
@@ -2985,12 +2987,73 @@ final class MyRAMTests: XCTestCase {
         failure.shouldFail = false
         let secondDispositions = await vm.applyIncomingSyncChanges([change])
         XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
-        XCTAssertEqual(failure.callCount, 2)
         XCTAssertEqual(
             conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteContent)?.text,
             "Peer body"
         )
         XCTAssertEqual(note.content, "Peer body")
+    }
+
+    func testLegacyIncomingCheckedConflictCommitFailureRedeliversMissingEffects() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Original", content: "Local body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 150)
+        context.insert(note)
+        try context.save()
+
+        final class ConflictWriteFailure {
+            var shouldFail = true
+        }
+        let failure = ConflictWriteFailure()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(
+            fileURL: conflictFileURL,
+            fileIO: .live,
+            textFileIO: SyncTextConflictStore.FileIO(
+                fileExists: { FileManager.default.fileExists(atPath: $0) },
+                readData: { try Data(contentsOf: $0) },
+                createDirectory: {
+                    try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
+                },
+                writeData: { data, url in
+                    if failure.shouldFail, url.lastPathComponent == "sync-conflicts.json" {
+                        throw CocoaError(.fileWriteNoPermission)
+                    }
+                    try data.write(to: url, options: [.atomic])
+                },
+                removeItem: { try FileManager.default.removeItem(at: $0) }
+            )
+        )
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: conflictStore,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Original",
+            content: "Peer body",
+            baseTitle: "Original",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let firstDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertTrue(conflictStore.activeConflicts().isEmpty)
+        XCTAssertTrue(vm.syncConflicts.isEmpty)
+
+        failure.shouldFail = false
+        let secondDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(conflictStore.activeConflicts().count, 1)
+        XCTAssertEqual(vm.syncConflicts, conflictStore.activeConflicts())
     }
 
     func testBufferedConflictStoreReadsPinnedTextBaselineWrittenDuringApply() {
@@ -3020,6 +3083,50 @@ final class MyRAMTests: XCTestCase {
                 modifiedAt: modifiedAt,
                 originDeviceID: "device-b"
             )
+        )
+    }
+
+    func testBufferedConflictStoreQueuesSameFieldConflictForReadAfterWriteAndCheckedCommit() throws {
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let realStore = SyncConflictStore(fileURL: conflictFileURL)
+        let bufferedStore = BufferedSyncConflictStore(base: realStore)
+        let noteID = UUID()
+        let activeConflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Local",
+            remoteText: "Remote 1",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            expiresAt: Date().addingTimeInterval(1_000)
+        )
+        let queuedConflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Local",
+            remoteText: "Remote 2",
+            remoteModifiedAt: Date(timeIntervalSince1970: 300),
+            expiresAt: Date().addingTimeInterval(1_000)
+        )
+
+        _ = realStore.preserve(activeConflict)
+        _ = bufferedStore.preserve(queuedConflict)
+
+        XCTAssertEqual(bufferedStore.activeConflicts().map(\.id), [activeConflict.id])
+        XCTAssertEqual(
+            bufferedStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent)?.conflict.id,
+            queuedConflict.id
+        )
+
+        try realStore.commitLegacyIncomingEffectsChecked(bufferedStore.effects)
+        XCTAssertEqual(realStore.activeConflicts().map(\.id), [activeConflict.id])
+        XCTAssertEqual(
+            realStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent)?.conflict.id,
+            queuedConflict.id
         )
     }
 

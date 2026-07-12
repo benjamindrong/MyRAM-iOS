@@ -119,7 +119,7 @@ struct LegacyIncomingBufferedEffects: Equatable {
 }
 
 final class BufferedSyncConflictStore: SyncConflictStoring {
-    private struct BaselineKey: Hashable {
+    private struct ConflictKey: Hashable {
         let entityType: SyncConflictEntityType
         let entityID: UUID
         let field: SyncConflictField
@@ -127,9 +127,11 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
 
     private let base: SyncConflictStoring
     private var bufferedConflicts: [SyncConflictVersion] = []
+    private var preservedEffectConflicts: [SyncConflictVersion] = []
     private var removedConflictIDs: [UUID] = []
     private var removedResolvedConflicts: [SyncConflictVersion] = []
-    private var baselinesByKey: [BaselineKey: SyncRemoteTextBaseline] = [:]
+    private var queuedConflictsByKey: [ConflictKey: SyncTextQueuedConflict] = [:]
+    private var baselinesByKey: [ConflictKey: SyncRemoteTextBaseline] = [:]
 
     init(base: SyncConflictStoring) {
         self.base = base
@@ -137,7 +139,7 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
 
     var effects: LegacyIncomingBufferedEffects {
         LegacyIncomingBufferedEffects(
-            preservedConflicts: bufferedConflicts,
+            preservedConflicts: preservedEffectConflicts,
             removedConflictIDs: removedConflictIDs,
             removedResolvedConflicts: removedResolvedConflicts,
             remoteBaselines: baselinesByKey.values.sorted {
@@ -174,7 +176,14 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
     }
 
     func preserve(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
-        if !activeConflicts().contains(where: { sameLogicalConflict($0, conflict) }) {
+        preservedEffectConflicts.append(conflict)
+        if activeConflicts().contains(where: { sameLogicalConflict($0, conflict) }) {
+            queuedConflictsByKey[ConflictKey(
+                entityType: conflict.entityType,
+                entityID: conflict.entityID,
+                field: conflict.field
+            )] = SyncTextQueuedConflict(conflict: conflict.syncTextConflict)
+        } else {
             bufferedConflicts.append(conflict)
         }
         return activeConflicts()
@@ -212,7 +221,8 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
         entityID: UUID,
         field: SyncConflictField
     ) -> SyncTextQueuedConflict? {
-        base.queuedConflict(entityType: entityType, entityID: entityID, field: field)
+        queuedConflictsByKey[ConflictKey(entityType: entityType, entityID: entityID, field: field)]
+            ?? base.queuedConflict(entityType: entityType, entityID: entityID, field: field)
     }
 
     func remoteBaseline(
@@ -220,12 +230,12 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
         entityID: UUID,
         field: SyncConflictField
     ) -> SyncRemoteTextBaseline? {
-        baselinesByKey[BaselineKey(entityType: entityType, entityID: entityID, field: field)]
+        baselinesByKey[ConflictKey(entityType: entityType, entityID: entityID, field: field)]
             ?? base.remoteBaseline(entityType: entityType, entityID: entityID, field: field)
     }
 
     func saveRemoteBaseline(_ baseline: SyncRemoteTextBaseline) {
-        baselinesByKey[BaselineKey(
+        baselinesByKey[ConflictKey(
             entityType: baseline.entityType,
             entityID: baseline.entityID,
             field: baseline.field
@@ -337,13 +347,17 @@ final class SyncConflictStore: SyncConflictStoring {
     private let decoder = JSONDecoder()
 
     convenience init(fileURL: URL = SyncConflictStore.defaultFileURL()) {
-        self.init(fileURL: fileURL, fileIO: .live)
+        self.init(fileURL: fileURL, fileIO: .live, textFileIO: .live)
     }
 
-    init(fileURL: URL = SyncConflictStore.defaultFileURL(), fileIO: FileIO) {
+    init(
+        fileURL: URL = SyncConflictStore.defaultFileURL(),
+        fileIO: FileIO,
+        textFileIO: SyncTextConflictStore.FileIO = .live
+    ) {
         self.fileURL = fileURL
         self.fileIO = fileIO
-        textConflictStore = SyncTextConflictStore(fileURL: fileURL)
+        textConflictStore = SyncTextConflictStore(fileURL: fileURL, fileIO: textFileIO)
         migrateLegacyConflictsIfNeeded()
     }
 
@@ -413,6 +427,15 @@ final class SyncConflictStore: SyncConflictStoring {
             baselines.append(baseline)
         }
         saveBaselines(baselines)
+    }
+
+    func commitLegacyIncomingEffectsChecked(_ effects: LegacyIncomingBufferedEffects) throws {
+        try textConflictStore.commitChecked(SyncTextConflictCommitEffects(
+            preservedConflicts: effects.preservedConflicts.map(\.syncTextConflict),
+            removedConflictIDs: effects.removedConflictIDs,
+            removedResolvedConflicts: effects.removedResolvedConflicts.map(\.syncTextConflict)
+        ))
+        try saveRemoteBaselinesChecked(effects.remoteBaselines)
     }
 
     func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date, originDeviceID: String?) {
@@ -518,6 +541,30 @@ final class SyncConflictStore: SyncConflictStoring {
     private func loadBaselines() -> [SyncRemoteTextBaseline] {
         guard let data = try? Data(contentsOf: baselineFileURL) else { return [] }
         return (try? decoder.decode([SyncRemoteTextBaseline].self, from: data)) ?? []
+    }
+
+    private func loadBaselinesChecked() throws -> [SyncRemoteTextBaseline] {
+        guard fileIO.fileExists(baselineFileURL.path) else { return [] }
+        let data = try fileIO.readData(baselineFileURL)
+        return try decoder.decode([SyncRemoteTextBaseline].self, from: data)
+    }
+
+    private func saveRemoteBaselinesChecked(_ baselines: [SyncRemoteTextBaseline]) throws {
+        guard !baselines.isEmpty else { return }
+        var updatedBaselines = try loadBaselinesChecked()
+        for baseline in baselines {
+            if let index = updatedBaselines.firstIndex(where: {
+                $0.entityType == baseline.entityType
+                    && $0.entityID == baseline.entityID
+                    && $0.field == baseline.field
+            }) {
+                updatedBaselines[index] = baseline
+            } else {
+                updatedBaselines.append(baseline)
+            }
+        }
+        try fileIO.createDirectory(baselineFileURL.deletingLastPathComponent())
+        try fileIO.writeData(try encoder.encode(updatedBaselines), baselineFileURL)
     }
 
     private func saveBaselines(_ baselines: [SyncRemoteTextBaseline]) {
