@@ -595,6 +595,7 @@ func expectedPresentationRequest(
         expectedPreBodyHash: entry.expectedPreBodyHash,
         committedPostBodyHash: entry.committedPostBodyHash,
         incrementalOperations: entry.incrementalOperations,
+        rewriteSafetyReceipt: entry.rewriteSafetyReceipt,
         committedNote: committedNote,
         committedBodyHash: SyncBatchContentHash.sha256Hex(for: committedNote.body),
         committedTitle: committedNote.title

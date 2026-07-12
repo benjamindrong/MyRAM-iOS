@@ -2530,7 +2530,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         )
 
         let data = try payload.encodedPayloadData()
-        XCTAssertEqual(sha256Hex(data), "9cd2489d7c1338e54c0db95eabf20e5a98c8fefc872e4b02665ce3a678e1e3e5")
+        XCTAssertEqual(sha256Hex(data), "7e4815ab5ec666a687c94d422eb5a582ffd9da12529532654c3cd506bfc591ad")
         let decoded = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(data)
         XCTAssertEqual(decoded.queueCleanupBatchIDs, [TestIDs.batch, TestIDs.extraBatch])
         XCTAssertEqual(decoded.presentationEntries.map(\.noteID), [TestIDs.noteA, TestIDs.noteB])

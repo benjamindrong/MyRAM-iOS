@@ -236,15 +236,74 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertNil(replayed)
     }
 
-    func testAmbiguousReplacementIsSkipped() {
-        XCTAssertNil(
-            IPhoneSyncBatchCaptureHook.bodyTextChanged(
-                noteID: UUID(uuidString: "00000000-0000-0000-0000-000000124002")!,
-                oldBody: "abc",
-                newBody: "axc",
-                modifiedAt: Date(timeIntervalSince1970: 4)
-            )
+    func testBodyReplacementEmitsContinuousDeleteInsertChain() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000124002")!
+        let changes = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: "abc",
+            newBody: "axc",
+            modifiedAt: Date(timeIntervalSince1970: 4),
+            bodyHashCapabilityEnabled: true
         )
+
+        XCTAssertEqual(changes.count, 2)
+        guard case .noteBodyTextDeleted(let deletion) = changes[0],
+              case .noteBodyTextInserted(let insertion) = changes[1] else {
+            return XCTFail("Expected replacement to delete before inserting")
+        }
+        XCTAssertEqual(deletion.noteID, noteID)
+        XCTAssertEqual(deletion.utf16Offset, 1)
+        XCTAssertEqual(deletion.utf16Length, 1)
+        XCTAssertEqual(deletion.expectedText, "b")
+        XCTAssertEqual(deletion.baseContentHash, SyncBatchContentHash.sha256Hex(for: "abc"))
+        XCTAssertEqual(insertion.noteID, noteID)
+        XCTAssertEqual(insertion.utf16Offset, 1)
+        XCTAssertEqual(insertion.text, "x")
+        XCTAssertEqual(insertion.baseContentHash, SyncBatchContentHash.sha256Hex(for: "ac"))
+        let replay = try changes.reduce("abc") { body, change in
+            try SyncConvergenceLocalEvidenceCapture.apply(change, to: body)
+        }
+        XCTAssertEqual(replay, "axc")
+    }
+
+    func testSeparatedBodyReplacementsPreserveUnchangedInterior() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000124003")!
+        let changes = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: "ab-cd-ef",
+            newBody: "ax-cd-yf",
+            modifiedAt: Date(timeIntervalSince1970: 5),
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertEqual(changes.count, 4)
+        XCTAssertEqual(try changes.reduce("ab-cd-ef") { try SyncConvergenceLocalEvidenceCapture.apply($1, to: $0) }, "ax-cd-yf")
+        let deletedTexts = changes.compactMap { change -> String? in
+            guard case .noteBodyTextDeleted(let deletion) = change else { return nil }
+            return deletion.expectedText
+        }
+        XCTAssertEqual(deletedTexts, ["b", "e"])
+        XCTAssertFalse(deletedTexts.contains("-cd-"))
+    }
+
+    func testBodyReplacementUsesUTF16OffsetsForEmojiAndComposedUnicode() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000124004")!
+        let oldBody = "A😀e\u{301}B"
+        let newBody = "A😇e\u{301}B"
+        let changes = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: oldBody,
+            newBody: newBody,
+            modifiedAt: Date(timeIntervalSince1970: 6),
+            bodyHashCapabilityEnabled: true
+        )
+
+        guard case .noteBodyTextDeleted(let deletion) = changes.first else {
+            return XCTFail("Expected unicode replacement to start with deletion")
+        }
+        XCTAssertEqual(deletion.utf16Offset, "A".utf16.count)
+        XCTAssertEqual(deletion.utf16Length, "😀".utf16.count)
+        XCTAssertEqual(try changes.reduce(oldBody) { try SyncConvergenceLocalEvidenceCapture.apply($1, to: $0) }, newBody)
     }
 
     private func makeAccumulator() -> IPhoneSyncBatchAccumulator {

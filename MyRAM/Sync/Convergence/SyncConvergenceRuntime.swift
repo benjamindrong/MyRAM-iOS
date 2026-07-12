@@ -12,7 +12,13 @@ enum SyncConvergenceRuntimeOutcome {
 
 protocol SyncConvergenceIncomingLocalBoundaryAdapter: AnyObject {
     @MainActor
-    func finalizePendingLocalObligationIfNeeded(beforeIncomingBodyMutationFor noteIDs: Set<UUID>) async -> SyncConvergenceRuntimeOutcome?
+    func takePendingLocalObligationIfNeeded(beforeIncomingBodyMutationFor noteIDs: Set<UUID>) async -> SyncConvergenceLocalObligation?
+}
+
+enum SyncConvergenceIncomingLocalBoundaryOutcome {
+    case ready
+    case evidenceRegistered(obligationID: UUID)
+    case cannotProceed(SyncConvergenceRuntimeOutcome)
 }
 
 /// Captures the document-scale work performed while registering one or more local batches.
@@ -171,6 +177,15 @@ final class SyncConvergenceRuntime {
                 blockedOrigins: blockedOrigins
             ) {
                 let batch = convergenceQueue.pendingBatches[candidateIndex]
+                switch await satisfyIncomingLocalBoundary(noteIDs: Self.bodyMutationNoteIDs(in: batch)) {
+                case .ready:
+                    break
+                case .evidenceRegistered:
+                    drainRequestedWhileActive = true
+                    continue
+                case .cannotProceed(let outcome):
+                    return outcome
+                }
                 attemptedBatchIDs.insert(batch.id)
                 let input: SyncConvergencePlanningInput
                 do {
@@ -183,11 +198,6 @@ final class SyncConvergenceRuntime {
                 let planning = planner.plan(input: input)
                 switch planning {
                 case .planned(let incorporationInput):
-                    if let boundaryOutcome = await finalizePendingLocalObligationBeforeIncomingBodyMutation(
-                        noteIDs: Self.bodyMutationNoteIDs(in: batch)
-                    ) {
-                        return boundaryOutcome
-                    }
                     let incorporation = incorporationExecutor.incorporate(
                         input: incorporationInput,
                         transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
@@ -283,6 +293,10 @@ final class SyncConvergenceRuntime {
         case blocked(SyncBatchDrainFailure)
     }
 
+    private enum SyncConvergenceLocalAdmissionResult {
+        case evidenceRegistered(obligationID: UUID)
+    }
+
     private func satisfyLocalObligations() async throws -> SyncConvergenceLocalObligationPassOutcome {
         var attemptedBatchIDs: Set<UUID> = []
         var blockedNoteIDs: Set<UUID> = []
@@ -299,7 +313,7 @@ final class SyncConvergenceRuntime {
             let obligation = localObligationQueue.pendingObligations[candidateIndex]
             attemptedBatchIDs.insert(obligation.id)
             do {
-                try registerLocalEvidence(for: obligation)
+                _ = try admitQueuedLocalObligation(obligation)
             } catch SyncConvergenceTransactionFailure.staleAuthoritativeState {
                 guard case .legacyMissing = obligation.evidence else {
                     return .blocked(SyncBatchDrainFailure(batchID: obligation.id, kind: .staleAuthoritativeState))
@@ -358,11 +372,32 @@ final class SyncConvergenceRuntime {
         return deferredItems.isEmpty ? .complete : .deferred(deferredItems)
     }
 
-    private func finalizePendingLocalObligationBeforeIncomingBodyMutation(noteIDs: Set<UUID>) async -> SyncConvergenceRuntimeOutcome? {
-        guard !noteIDs.isEmpty, let incomingLocalBoundaryAdapter else { return nil }
-        return await incomingLocalBoundaryAdapter.finalizePendingLocalObligationIfNeeded(
+    private func satisfyIncomingLocalBoundary(noteIDs: Set<UUID>) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
+        guard !noteIDs.isEmpty, let incomingLocalBoundaryAdapter else { return .ready }
+        guard let obligation = await incomingLocalBoundaryAdapter.takePendingLocalObligationIfNeeded(
             beforeIncomingBodyMutationFor: noteIDs
-        )
+        ) else {
+            return .ready
+        }
+        do {
+            try localObligationQueue.enqueue(obligation)
+            _ = try admitQueuedLocalObligation(obligation)
+            return .evidenceRegistered(obligationID: obligation.id)
+        } catch let evidenceError as SyncConvergenceLocalEvidenceCaptureError {
+            return .cannotProceed(.quarantined(SyncConvergenceQuarantinedWork(items: [
+                SyncConvergenceQuarantinedItem(
+                    domain: .localObligation,
+                    batchID: obligation.id,
+                    affectedNoteIDs: Self.affectedNoteIDs(in: obligation.batch),
+                    originDeviceID: obligation.batch.originDeviceID,
+                    reason: Self.quarantineReason(for: evidenceError)
+                )
+            ])))
+        } catch let failure as SyncConvergenceTransactionFailure {
+            return .cannotProceed(.blocked(Self.drainFailure(for: failure, batchID: obligation.id)))
+        } catch {
+            return .cannotProceed(.blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: obligation.id)))
+        }
     }
 
     private func makePlanningInput(for batch: SyncBatch) throws -> SyncConvergencePlanningInput {
@@ -426,6 +461,45 @@ final class SyncConvergenceRuntime {
 #if DEBUG
         localEvidenceMetrics?.recordSave()
 #endif
+    }
+
+    private func admitQueuedLocalObligation(
+        _ obligation: SyncConvergenceLocalObligation
+    ) throws -> SyncConvergenceLocalAdmissionResult {
+        if case .captured = obligation.evidence {
+            _ = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
+        }
+        try registerLocalEvidence(for: obligation)
+        try verifyRegisteredLocalEvidence(for: obligation)
+        return .evidenceRegistered(obligationID: obligation.id)
+    }
+
+    private func verifyRegisteredLocalEvidence(for obligation: SyncConvergenceLocalObligation) throws {
+        let capturedChanges = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
+        guard !capturedChanges.isEmpty else { return }
+        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
+        for (operationIndex, capturedChange) in capturedChanges.enumerated() {
+            guard SyncConvergenceLocalEvidenceCapture.isBodyTextOperation(capturedChange.change) else { continue }
+            guard let evidence = capturedChange.evidence else {
+                throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: Self.noteID(for: capturedChange.change))
+            }
+            let expectedRecord = try retainedOperationRecord(
+                batch: obligation.batch,
+                change: capturedChange.change,
+                operationIndex: operationIndex,
+                baseHash: evidence.preBodyHash,
+                resultHash: evidence.postBodyHash
+            )
+            let identity = SyncConvergenceRetainedOperationIdentity(
+                batchID: obligation.id,
+                operationIndex: operationIndex
+            )
+            guard let registeredRecord = try transaction.loadRetainedOperation(identity: identity),
+                  registeredRecord.source == .local,
+                  registeredRecord.operation == expectedRecord else {
+                throw SyncConvergenceTransactionFailure.inconsistentIncorporationState(noteID: evidence.noteID)
+            }
+        }
     }
 
     private func registerCapturedLocalBodyEvidence(
