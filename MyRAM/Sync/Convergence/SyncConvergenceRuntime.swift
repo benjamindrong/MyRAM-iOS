@@ -119,6 +119,12 @@ final class SyncConvergenceRuntime {
         }
     }
 
+    func admitPendingLocalObligationForIncomingMutation(
+        _ obligation: SyncConvergenceLocalObligation
+    ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
+        await admitLocalObligationForIncomingBoundary(obligation)
+    }
+
     func resumePendingWork() async -> SyncConvergenceRuntimeOutcome {
         await drain()
     }
@@ -379,6 +385,12 @@ final class SyncConvergenceRuntime {
         ) else {
             return .ready
         }
+        return await admitLocalObligationForIncomingBoundary(obligation)
+    }
+
+    private func admitLocalObligationForIncomingBoundary(
+        _ obligation: SyncConvergenceLocalObligation
+    ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
         do {
             try localObligationQueue.enqueue(obligation)
             _ = try admitQueuedLocalObligation(obligation)

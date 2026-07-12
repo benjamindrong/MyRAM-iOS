@@ -59,6 +59,7 @@ final class NotesViewModel: ObservableObject {
     private let syncController: MyRAMSyncControlling?
     private let syncConflictStore: SyncConflictStore
     private let syncConflictService: MyRAMSyncConflictService
+    private let saveContext: () throws -> Void
     private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
     private let pendingIncomingBatches: FileBackedSyncBatchQueue
     private let pendingLocalConvergenceBatches: FileBackedSyncConvergenceLocalObligationQueue
@@ -101,11 +102,13 @@ final class NotesViewModel: ObservableObject {
         pendingLocalConvergenceBatchQueueLimit: Int = 100,
         bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
         syncBatchQuietWindow: TimeInterval = 3,
-        resumesPendingConvergenceOnInit: Bool = true
+        resumesPendingConvergenceOnInit: Bool = true,
+        saveContext: (() throws -> Void)? = nil
     ) {
         self.context = context
         self.syncController = syncController
         self.syncConflictStore = syncConflictStore
+        self.saveContext = saveContext ?? { try context.save() }
         pendingIncomingBatches = FileBackedSyncBatchQueue(
             fileURL: pendingIncomingBatchQueueFileURL,
             limit: pendingIncomingBatchQueueLimit
@@ -498,6 +501,12 @@ final class NotesViewModel: ObservableObject {
         recentTextEditByNoteID[note.id] = Date()
     }
 
+#if DEBUG
+    func hasRecentTextEditForTesting(noteID: UUID) -> Bool {
+        recentTextEditByNoteID[noteID] != nil
+    }
+#endif
+
     func refreshedNote(withID noteID: UUID) -> Note? {
         fetchNote(withID: noteID)
     }
@@ -511,6 +520,8 @@ final class NotesViewModel: ObservableObject {
         guard note.deletedAt == nil else { return }
         let oldTitle = note.title
         let oldContent = note.content
+        let oldRichTextContentData = note.richTextContentData
+        let oldModifiedAt = note.modifiedAt
         let modifiedAt = Date.now
         let preparedEdit: PreparedLocalNoteEdit
         do {
@@ -530,13 +541,17 @@ final class NotesViewModel: ObservableObject {
         note.content = content
         note.richTextContentData = richTextContentData
         note.modifiedAt = modifiedAt
-        recordActiveNoteTextEdited(note)
         do {
-            try context.save()
+            try saveContext()
         } catch {
+            note.title = oldTitle
+            note.content = oldContent
+            note.richTextContentData = oldRichTextContentData
+            note.modifiedAt = oldModifiedAt
             syncBatchErrorMessage = "Unable to save the latest edit."
             return
         }
+        recordActiveNoteTextEdited(note)
         recordPreparedLocalNoteEdit(preparedEdit)
     }
 
@@ -2513,12 +2528,12 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
             guard let obligation = await syncBatchAccumulator.takePendingObligationIfAffecting(noteID: noteID) else {
                 return nil
             }
-            let outcome = await syncConvergenceRuntime.submitLocalObligation(obligation)
+            let outcome = await syncConvergenceRuntime.admitPendingLocalObligationForIncomingMutation(obligation)
             switch outcome {
-            case .blocked, .quarantined:
+            case .ready, .evidenceRegistered:
+                continue
+            case .cannotProceed(let outcome):
                 return outcome
-            case .drained, .pending, .deferred, .alreadyDraining:
-                return nil
             }
         }
         return nil

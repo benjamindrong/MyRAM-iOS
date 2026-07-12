@@ -2425,10 +2425,11 @@ final class MyRAMTests: XCTestCase {
         ])
     }
 
-    func testCommitNoteEditPreparationFailureLeavesStateAndAccumulatorUnchanged() async throws {
+    func testCommitNoteEditLargeReplacementRecordsCapturedEvidenceChain() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let originalBody = String(repeating: "a", count: 600)
+        let replacementBody = String(repeating: "b", count: 600)
         let note = Note(title: "Draft", content: originalBody)
         context.insert(note)
         try context.save()
@@ -2442,19 +2443,87 @@ final class MyRAMTests: XCTestCase {
             resumesPendingConvergenceOnInit: false
         )
 
-        viewModel.commitNoteEdit(
-            note,
-            title: "Draft",
-            content: String(repeating: "b", count: 600)
+        viewModel.commitNoteEdit(note, title: "Draft", content: replacementBody)
+
+        XCTAssertEqual(note.content, replacementBody)
+        XCTAssertEqual(note.title, "Draft")
+        XCTAssertNil(viewModel.syncBatchErrorMessage)
+        await Task.yield()
+        await Task.yield()
+        guard let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery() else {
+            return XCTFail("Expected large replacement to enter the local obligation accumulator")
+        }
+        XCTAssertEqual(syncController.recordedBatches.map(\.id), [pendingBatchID])
+        XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 2)
+        let retainedOperations = try context.fetch(FetchDescriptor<RetainedBodyOperation>(
+            sortBy: [SortDescriptor(\.operationIndex)]
+        ))
+        XCTAssertEqual(retainedOperations.map(\.operationIndex), [0, 1])
+        XCTAssertEqual(retainedOperations.map(\.baseContentHash), [
+            SyncBatchContentHash.sha256Hex(for: originalBody),
+            SyncBatchContentHash.sha256Hex(for: "")
+        ])
+    }
+
+    func testCommitNoteEditSaveFailureRestoresStateAndDoesNotRecordConvergenceWork() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let originalRichText = Data([1, 2, 3])
+        let failedRichText = Data([9, 8, 7])
+        let originalModifiedAt = Date(timeIntervalSince1970: 100)
+        let note = Note(title: "Draft", content: "abc")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-0000001275D0")!
+        note.richTextContentData = originalRichText
+        note.modifiedAt = originalModifiedAt
+        let folder = Folder(name: "Unrelated")
+        context.insert(note)
+        context.insert(folder)
+        try context.save()
+        folder.name = "Unrelated dirty change"
+        var failNextSave = true
+        struct SaveFailure: Error {}
+        let syncController = RecordingSyncController()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: syncController,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false,
+            saveContext: {
+                if failNextSave {
+                    failNextSave = false
+                    throw SaveFailure()
+                }
+                try context.save()
+            }
         )
 
-        XCTAssertEqual(note.content, originalBody)
+        viewModel.commitNoteEdit(note, title: "Saved later?", content: "axc", richTextContentData: failedRichText)
+
         XCTAssertEqual(note.title, "Draft")
-        XCTAssertEqual(viewModel.syncBatchErrorMessage, "Unable to capture local sync evidence for the latest edit.")
+        XCTAssertEqual(note.content, "abc")
+        XCTAssertEqual(note.richTextContentData, originalRichText)
+        XCTAssertEqual(note.modifiedAt, originalModifiedAt)
+        XCTAssertEqual(folder.name, "Unrelated dirty change")
+        XCTAssertEqual(viewModel.syncBatchErrorMessage, "Unable to save the latest edit.")
+        XCTAssertFalse(viewModel.hasRecentTextEditForTesting(noteID: note.id))
         let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery()
         XCTAssertNil(pendingBatchID)
         XCTAssertTrue(syncController.recordedBatches.isEmpty)
         XCTAssertTrue(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).isEmpty)
+
+        try context.save()
+        let freshContext = ModelContext(container)
+        let noteID = note.id
+        let reloadedNote = try XCTUnwrap(try freshContext.fetch(FetchDescriptor<Note>(
+            predicate: #Predicate { $0.id == noteID }
+        )).first)
+        let reloadedFolder = try XCTUnwrap(try freshContext.fetch(FetchDescriptor<Folder>()).first)
+        XCTAssertEqual(reloadedNote.title, "Draft")
+        XCTAssertEqual(reloadedNote.content, "abc")
+        XCTAssertEqual(reloadedNote.richTextContentData, originalRichText)
+        XCTAssertEqual(reloadedFolder.name, "Unrelated dirty change")
     }
 
     func testIncomingBodyMutationFinalizesPendingLocalObligationBeforeAuthoritativeMutation() async throws {
@@ -2574,6 +2643,90 @@ final class MyRAMTests: XCTestCase {
             $0.sourceRaw == SyncConvergenceRetainedOperationSource.local.rawValue
         }
         XCTAssertEqual(localRetainedOperations.map(\.batchID), [localBatch.id])
+    }
+
+    func testLegacyIncomingMutationAppliesOnlyAfterExactLocalEvidenceRegistration() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-0000001275D1")!
+        let note = Note(title: "Shared", content: "Hello")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: RecordingSyncController(),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        await Task.yield()
+        await Task.yield()
+
+        await viewModel.applyIncomingSyncChanges([
+            try legacyNoteChange(
+                noteID: noteID,
+                title: "Shared",
+                content: "Hello local remote",
+                baseTitle: "Shared",
+                baseContent: "Hello local",
+                modifiedAt: Date.now.addingTimeInterval(10)
+            )
+        ])
+
+        XCTAssertEqual(note.content, "Hello local remote")
+        XCTAssertNil(viewModel.syncBatchErrorMessage)
+        let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery()
+        XCTAssertNil(pendingBatchID)
+        let retainedOperations = try context.fetch(FetchDescriptor<RetainedBodyOperation>())
+        let localRetainedOperations = retainedOperations.filter {
+            $0.sourceRaw == SyncConvergenceRetainedOperationSource.local.rawValue
+        }
+        XCTAssertEqual(localRetainedOperations.map(\.operationIndex), [0])
+        XCTAssertEqual(localRetainedOperations.first?.expectedText, nil)
+        XCTAssertEqual(localRetainedOperations.first?.text, " local")
+    }
+
+    func testLegacyIncomingMutationDoesNotApplyWhenLocalAdmissionCannotBeProven() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-0000001275D2")!
+        let note = Note(title: "Shared", content: "Hello")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: RecordingSyncController(),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueLimit: 0,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        await Task.yield()
+        await Task.yield()
+
+        await viewModel.applyIncomingSyncChanges([
+            try legacyNoteChange(
+                noteID: noteID,
+                title: "Shared",
+                content: "Hello local remote",
+                baseTitle: "Shared",
+                baseContent: "Hello local",
+                modifiedAt: Date.now.addingTimeInterval(10)
+            )
+        ])
+
+        XCTAssertEqual(note.content, "Hello local")
+        XCTAssertEqual(note.title, "Shared")
+        XCTAssertTrue(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).isEmpty)
+        XCTAssertNotNil(viewModel.syncBatchErrorMessage)
     }
 
     func testStaleLegacyLocalObligationDoesNotBlockDifferentOriginCapturedObligation() async throws {
@@ -7030,6 +7183,33 @@ final class MyRAMTests: XCTestCase {
         )
 
         return try ModelContainer(for: schema, configurations: configuration)
+    }
+
+    private func legacyNoteChange(
+        noteID: UUID,
+        title: String,
+        content: String,
+        baseTitle: String?,
+        baseContent: String?,
+        modifiedAt: Date,
+        originDeviceID: String = "device-b"
+    ) throws -> SyncChange {
+        let remoteNote = Note(title: title, content: content)
+        remoteNote.id = noteID
+        remoteNote.modifiedAt = modifiedAt
+        return SyncChange(
+            entityType: .item,
+            entityID: noteID.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(
+                note: remoteNote,
+                baseTitle: baseTitle,
+                baseContent: baseContent,
+                baseRichTextContentData: nil
+            )),
+            updatedAt: modifiedAt,
+            originDeviceID: originDeviceID
+        )
     }
 
     private func makeMountedEditorFixture(

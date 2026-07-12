@@ -306,6 +306,171 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertEqual(try changes.reduce(oldBody) { try SyncConvergenceLocalEvidenceCapture.apply($1, to: $0) }, newBody)
     }
 
+    func testLargeBodyReplacementEmitsValidConvergenceWork() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000124006")!
+        let oldBody = String(repeating: "a", count: 600)
+        let newBody = String(repeating: "b", count: 600)
+
+        let changes = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: oldBody,
+            newBody: newBody,
+            modifiedAt: Date(timeIntervalSince1970: 7),
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertEqual(changes.count, 2)
+        assertEvidenceChain(changes, oldBody: oldBody, newBody: newBody)
+        guard case .noteBodyTextDeleted(let deletion) = changes[0],
+              case .noteBodyTextInserted(let insertion) = changes[1] else {
+            return XCTFail("Expected no-common large replacement to delete then insert")
+        }
+        XCTAssertEqual(deletion.expectedText, oldBody)
+        XCTAssertEqual(insertion.text, newBody)
+    }
+
+    func testSeparatedBodyReplacementsBeyondFiveHundredCharactersPreserveInterior() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000124007")!
+        let interior = String(repeating: "m", count: 520)
+        let oldBody = "a\(interior)b"
+        let newBody = "x\(interior)y"
+
+        let changes = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: oldBody,
+            newBody: newBody,
+            modifiedAt: Date(timeIntervalSince1970: 8),
+            bodyHashCapabilityEnabled: true
+        )
+
+        assertEvidenceChain(changes, oldBody: oldBody, newBody: newBody)
+        let deletedTexts = changes.compactMap { change -> String? in
+            guard case .noteBodyTextDeleted(let deletion) = change else { return nil }
+            return deletion.expectedText
+        }
+        XCTAssertEqual(deletedTexts, ["a", "b"])
+        XCTAssertFalse(deletedTexts.contains(interior))
+    }
+
+    func testNoCommonCharacterReplacementEmitsTruthfulDeleteInsertChain() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000124008")!
+        let changes = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: "abc",
+            newBody: "xyz",
+            modifiedAt: Date(timeIntervalSince1970: 9),
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertEqual(changes.count, 2)
+        assertEvidenceChain(changes, oldBody: "abc", newBody: "xyz")
+        guard case .noteBodyTextDeleted(let deletion) = changes[0],
+              case .noteBodyTextInserted(let insertion) = changes[1] else {
+            return XCTFail("Expected no-common replacement to delete then insert")
+        }
+        XCTAssertEqual(deletion.expectedText, "abc")
+        XCTAssertEqual(insertion.text, "xyz")
+    }
+
+    func testRepeatedCharactersProduceDeterministicEvidence() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000124009")!
+        let first = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: "aaaaabaaaaa",
+            newBody: "aaaacbaaaaa",
+            modifiedAt: Date(timeIntervalSince1970: 10),
+            bodyHashCapabilityEnabled: true
+        )
+        let second = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: "aaaaabaaaaa",
+            newBody: "aaaacbaaaaa",
+            modifiedAt: Date(timeIntervalSince1970: 10),
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertEqual(first, second)
+        assertEvidenceChain(first, oldBody: "aaaaabaaaaa", newBody: "aaaacbaaaaa")
+    }
+
+    func testAdjacentRemovalsAreGrouped() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-00000012400A")!
+        let changes = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: "abcdef",
+            newBody: "abef",
+            modifiedAt: Date(timeIntervalSince1970: 11),
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertEqual(changes.count, 1)
+        guard case .noteBodyTextDeleted(let deletion) = changes[0] else {
+            return XCTFail("Expected adjacent removals to be grouped as one deletion")
+        }
+        XCTAssertEqual(deletion.expectedText, "cd")
+        assertEvidenceChain(changes, oldBody: "abcdef", newBody: "abef")
+    }
+
+    func testAdjacentInsertionsAreGrouped() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-00000012400B")!
+        let changes = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: "abef",
+            newBody: "abcdef",
+            modifiedAt: Date(timeIntervalSince1970: 12),
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertEqual(changes.count, 1)
+        guard case .noteBodyTextInserted(let insertion) = changes[0] else {
+            return XCTFail("Expected adjacent insertions to be grouped as one insertion")
+        }
+        XCTAssertEqual(insertion.text, "cd")
+        assertEvidenceChain(changes, oldBody: "abef", newBody: "abcdef")
+    }
+
+    func testChangedBodyNeverProducesEmptyOperationList() throws {
+        let changes = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: UUID(uuidString: "00000000-0000-0000-0000-00000012400C")!,
+            oldBody: "left",
+            newBody: "right",
+            modifiedAt: Date(timeIntervalSince1970: 13),
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertFalse(changes.isEmpty)
+    }
+
+    private func assertEvidenceChain(
+        _ changes: [SyncBatchChange],
+        oldBody: String,
+        newBody: String,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        var body = oldBody
+        for change in changes {
+            switch change {
+            case .noteBodyTextInserted(let insertion):
+                XCTAssertEqual(insertion.baseContentHash, SyncBatchContentHash.sha256Hex(for: body), file: file, line: line)
+            case .noteBodyTextDeleted(let deletion):
+                XCTAssertEqual(deletion.baseContentHash, SyncBatchContentHash.sha256Hex(for: body), file: file, line: line)
+                let start = body.utf16.index(body.utf16.startIndex, offsetBy: deletion.utf16Offset)
+                let end = body.utf16.index(start, offsetBy: deletion.utf16Length)
+                let range = String.Index(start, within: body)!..<String.Index(end, within: body)!
+                XCTAssertEqual(String(body[range]), deletion.expectedText, file: file, line: line)
+            case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+                XCTFail("Unexpected non-positional body change", file: file, line: line)
+            }
+            do {
+                body = try SyncConvergenceLocalEvidenceCapture.apply(change, to: body)
+            } catch {
+                XCTFail("Replay failed: \(error)", file: file, line: line)
+            }
+        }
+        XCTAssertEqual(body, newBody, file: file, line: line)
+    }
+
     private func makeAccumulator() -> IPhoneSyncBatchAccumulator {
         IPhoneSyncBatchAccumulator(
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000124003")!,

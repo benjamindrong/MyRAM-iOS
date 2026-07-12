@@ -72,11 +72,8 @@ enum SyncBatchBodyEditScript {
     enum CaptureError: Error, Equatable {
         case invalidUTF16Boundary
         case emptyChangedBodyScript
-        case editScriptTooLarge
         case replayMismatch
     }
-
-    private static let maxDiffCells = 250_000
 
     static func changes(
         noteID: UUID,
@@ -165,7 +162,7 @@ enum SyncBatchBodyEditScript {
         modifiedAt: Date,
         bodyHashCapabilityEnabled: Bool
     ) throws -> [SyncBatchChange] {
-        let matches = try lcsMatches(oldMiddle, newMiddle)
+        let matches = collectionDifferenceMatches(oldMiddle: oldMiddle, newMiddle: newMiddle)
         var oldCursor = 0
         var newCursor = 0
         var currentOffset = middleOffset
@@ -212,40 +209,30 @@ enum SyncBatchBodyEditScript {
         return changes
     }
 
-    private static func lcsMatches(
-        _ oldCharacters: [Character],
-        _ newCharacters: [Character]
-    ) throws -> [(oldIndex: Int, newIndex: Int)] {
-        guard oldCharacters.count * newCharacters.count <= maxDiffCells else {
-            throw CaptureError.editScriptTooLarge
-        }
-        var table = Array(
-            repeating: Array(repeating: 0, count: newCharacters.count + 1),
-            count: oldCharacters.count + 1
-        )
-        if !oldCharacters.isEmpty, !newCharacters.isEmpty {
-            for oldIndex in stride(from: oldCharacters.count - 1, through: 0, by: -1) {
-                for newIndex in stride(from: newCharacters.count - 1, through: 0, by: -1) {
-                    if oldCharacters[oldIndex] == newCharacters[newIndex] {
-                        table[oldIndex][newIndex] = table[oldIndex + 1][newIndex + 1] + 1
-                    } else {
-                        table[oldIndex][newIndex] = max(table[oldIndex + 1][newIndex], table[oldIndex][newIndex + 1])
-                    }
-                }
-            }
-        }
-
+    private static func collectionDifferenceMatches(
+        oldMiddle: [Character],
+        newMiddle: [Character]
+    ) -> [(oldIndex: Int, newIndex: Int)] {
+        let difference = newMiddle.difference(from: oldMiddle)
+        let removedOffsets = Set(difference.compactMap { change -> Int? in
+            guard case .remove(let offset, _, _) = change else { return nil }
+            return offset
+        })
+        let insertedOffsets = Set(difference.compactMap { change -> Int? in
+            guard case .insert(let offset, _, _) = change else { return nil }
+            return offset
+        })
+        var matches: [(oldIndex: Int, newIndex: Int)] = []
         var oldIndex = 0
         var newIndex = 0
-        var matches: [(oldIndex: Int, newIndex: Int)] = []
-        while oldIndex < oldCharacters.count, newIndex < newCharacters.count {
-            if oldCharacters[oldIndex] == newCharacters[newIndex] {
+        while oldIndex < oldMiddle.count, newIndex < newMiddle.count {
+            if removedOffsets.contains(oldIndex) {
+                oldIndex += 1
+            } else if insertedOffsets.contains(newIndex) {
+                newIndex += 1
+            } else {
                 matches.append((oldIndex, newIndex))
                 oldIndex += 1
-                newIndex += 1
-            } else if table[oldIndex + 1][newIndex] >= table[oldIndex][newIndex + 1] {
-                oldIndex += 1
-            } else {
                 newIndex += 1
             }
         }
