@@ -64,9 +64,19 @@ struct SyncRemoteTextBaseline: Codable, Equatable {
     let originDeviceID: String?
 }
 
+enum SyncConflictBaselineSnapshotState: Equatable {
+    case absent
+    case present(Data)
+}
+
+enum SyncConflictStoreSnapshotError: Error, Equatable {
+    case baselineCaptureFailed(path: String)
+    case baselineRestoreFailed(path: String)
+}
+
 struct SyncConflictStoreSnapshot {
     let textConflicts: SyncTextConflictStoreSnapshot
-    let baselinesData: Data?
+    let baselines: SyncConflictBaselineSnapshotState
 }
 
 extension SyncRemoteTextBaseline {
@@ -80,15 +90,42 @@ extension SyncRemoteTextBaseline {
 }
 
 final class SyncConflictStore {
+    struct FileIO {
+        var fileExists: (String) -> Bool
+        var readData: (URL) throws -> Data
+        var createDirectory: (URL) throws -> Void
+        var writeData: (Data, URL) throws -> Void
+        var removeItem: (URL) throws -> Void
+
+        static let live = FileIO(
+            fileExists: { FileManager.default.fileExists(atPath: $0) },
+            readData: { try Data(contentsOf: $0) },
+            createDirectory: {
+                try FileManager.default.createDirectory(
+                    at: $0,
+                    withIntermediateDirectories: true
+                )
+            },
+            writeData: { data, url in try data.write(to: url, options: [.atomic]) },
+            removeItem: { try FileManager.default.removeItem(at: $0) }
+        )
+    }
+
     static let retention = SyncTextConflictPolicy.retention
 
     private let fileURL: URL
     private let textConflictStore: SyncTextConflictStore
+    private let fileIO: FileIO
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
 
-    init(fileURL: URL = SyncConflictStore.defaultFileURL()) {
+    convenience init(fileURL: URL = SyncConflictStore.defaultFileURL()) {
+        self.init(fileURL: fileURL, fileIO: .live)
+    }
+
+    init(fileURL: URL = SyncConflictStore.defaultFileURL(), fileIO: FileIO) {
         self.fileURL = fileURL
+        self.fileIO = fileIO
         textConflictStore = SyncTextConflictStore(fileURL: fileURL)
         migrateLegacyConflictsIfNeeded()
     }
@@ -214,24 +251,39 @@ final class SyncConflictStore {
     /// change (which may write conflict/baseline state as a side effect)
     /// before a separate, later persistence step (e.g. a SwiftData save) is
     /// known to succeed, so that write can be rolled back on failure.
-    func snapshot() -> SyncConflictStoreSnapshot {
+    func snapshot() throws -> SyncConflictStoreSnapshot {
         SyncConflictStoreSnapshot(
-            textConflicts: textConflictStore.snapshot(),
-            baselinesData: try? Data(contentsOf: baselineFileURL)
+            textConflicts: try textConflictStore.snapshot(),
+            baselines: try baselineSnapshotState()
         )
     }
 
     /// Restores exactly the state captured by `snapshot()`.
-    func restore(_ snapshot: SyncConflictStoreSnapshot) {
-        textConflictStore.restore(snapshot.textConflicts)
-        if let baselinesData = snapshot.baselinesData {
-            try? FileManager.default.createDirectory(
-                at: baselineFileURL.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
-            try? baselinesData.write(to: baselineFileURL, options: [.atomic])
-        } else {
-            try? FileManager.default.removeItem(at: baselineFileURL)
+    func restore(_ snapshot: SyncConflictStoreSnapshot) throws {
+        try textConflictStore.restore(snapshot.textConflicts)
+        do {
+            switch snapshot.baselines {
+            case .absent:
+                if fileIO.fileExists(baselineFileURL.path) {
+                    try fileIO.removeItem(baselineFileURL)
+                }
+            case .present(let baselinesData):
+                try fileIO.createDirectory(baselineFileURL.deletingLastPathComponent())
+                try fileIO.writeData(baselinesData, baselineFileURL)
+            }
+        } catch {
+            throw SyncConflictStoreSnapshotError.baselineRestoreFailed(path: baselineFileURL.path)
+        }
+    }
+
+    private func baselineSnapshotState() throws -> SyncConflictBaselineSnapshotState {
+        guard fileIO.fileExists(baselineFileURL.path) else {
+            return .absent
+        }
+        do {
+            return .present(try fileIO.readData(baselineFileURL))
+        } catch {
+            throw SyncConflictStoreSnapshotError.baselineCaptureFailed(path: baselineFileURL.path)
         }
     }
 

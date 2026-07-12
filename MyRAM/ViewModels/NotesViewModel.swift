@@ -1594,19 +1594,27 @@ final class NotesViewModel: ObservableObject {
                 continue
             }
 
+            guard !context.hasChanges else {
+                dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
+                continue
+            }
+
+            let conflictStoreSnapshot: SyncConflictStoreSnapshot
+            do {
+                conflictStoreSnapshot = try syncConflictStore.snapshot()
+            } catch {
+                dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
+                continue
+            }
+
             // Apply speculatively against the shared context and roll back on
             // save failure, rather than an isolated context: MyRAMSyncChangeApplier
             // fetches by ID against whatever context it is given, and a second
             // context cannot see objects the caller has only inserted but not
             // yet saved in this one, nor observe another context's later commit
-            // on an already-fetched reference (e.g. `currentNote`). Between
-            // apply() and save()/rollback() below there is no `await`, so no
-            // other MainActor work can interleave and be discarded by the
-            // rollback. MyRAMSyncChangeApplier also writes preserved-conflict/
-            // baseline state to syncConflictStore as a side effect of apply(),
-            // independent of SwiftData; snapshot it first so a failed save
-            // rolls that back too.
-            let conflictStoreSnapshot = syncConflictStore.snapshot()
+            // on an already-fetched reference (e.g. `currentNote`). The clean
+            // context guard above ensures rollback cannot discard unrelated
+            // unsaved work that was already present before this candidate.
             let applier = MyRAMSyncChangeApplier(
                 context: context,
                 conflictStore: syncConflictStore,
@@ -1625,14 +1633,22 @@ final class NotesViewModel: ObservableObject {
                 try saveLegacyIncomingApplyContext()
             } catch {
                 context.rollback()
-                // ModelContext.rollback() clears dirty tracking but does not
-                // eagerly re-materialize already-resident objects' property
-                // values from the store; a follow-up fetch forces that so a
-                // live reference (e.g. this note, or `currentNote`) reflects
-                // the reverted value rather than the discarded mutation.
-                forceRefreshResidentModelObjectsAfterRollback()
-                syncConflictStore.restore(conflictStoreSnapshot)
-                dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
+                guard !context.hasChanges else {
+                    dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .quarantined))
+                    continue
+                }
+
+                do {
+                    // ModelContext.rollback() clears dirty tracking but does
+                    // not eagerly re-materialize already-resident objects'
+                    // property values from the store; a follow-up fetch forces
+                    // that so live references reflect reverted values.
+                    try forceRefreshResidentModelObjectsAfterRollback()
+                    try syncConflictStore.restore(conflictStoreSnapshot)
+                    dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
+                } catch {
+                    dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .quarantined))
+                }
                 continue
             }
 
@@ -1664,11 +1680,11 @@ final class NotesViewModel: ObservableObject {
     /// resident type to re-materialize from the store so any live reference
     /// the app holds (e.g. `currentNote`) reflects the reverted state rather
     /// than the discarded speculative mutation.
-    private func forceRefreshResidentModelObjectsAfterRollback() {
-        _ = try? context.fetch(FetchDescriptor<Note>())
-        _ = try? context.fetch(FetchDescriptor<Folder>())
-        _ = try? context.fetch(FetchDescriptor<PinnedThought>())
-        _ = try? context.fetch(FetchDescriptor<NotePhotoAttachment>())
+    private func forceRefreshResidentModelObjectsAfterRollback() throws {
+        _ = try context.fetch(FetchDescriptor<Note>())
+        _ = try context.fetch(FetchDescriptor<Folder>())
+        _ = try context.fetch(FetchDescriptor<PinnedThought>())
+        _ = try context.fetch(FetchDescriptor<NotePhotoAttachment>())
     }
 
     func applyIncomingSyncBatch(_ batch: SyncBatch) async {

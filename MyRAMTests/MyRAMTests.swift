@@ -2644,6 +2644,219 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(reopenedNote.content, "Original body")
     }
 
+    func testLegacyIncomingDirtyContextRefusesApplyWithoutSnapshotOrRollback() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteAID = UUID()
+        let noteA = Note(title: "A", content: "A body")
+        noteA.id = noteAID
+        noteA.modifiedAt = Date(timeIntervalSince1970: 100)
+        let noteB = Note(title: "B", content: "B body")
+        noteB.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(noteA)
+        context.insert(noteB)
+        try context.save()
+
+        final class SnapshotProbe {
+            var fileExistsCalls = 0
+        }
+        let probe = SnapshotProbe()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(
+            fileURL: conflictFileURL,
+            fileIO: SyncConflictStore.FileIO(
+                fileExists: { _ in
+                    probe.fileExistsCalls += 1
+                    return false
+                },
+                readData: { _ in throw CocoaError(.fileReadUnknown) },
+                createDirectory: { _ in },
+                writeData: { _, _ in },
+                removeItem: { _ in }
+            )
+        )
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: conflictStore,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        noteB.content = "Unsaved local B"
+        XCTAssertTrue(context.hasChanges)
+
+        let change = try legacyNoteChange(
+            noteID: noteAID,
+            title: "A",
+            content: "Peer A",
+            baseTitle: "A",
+            baseContent: "A body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let dispositions = await vm.applyIncomingSyncChanges([change])
+
+        XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(noteA.content, "A body")
+        XCTAssertEqual(noteB.content, "Unsaved local B")
+        XCTAssertEqual(probe.fileExistsCalls, 0)
+        XCTAssertTrue(context.hasChanges)
+    }
+
+    func testLegacyIncomingDirtyContextRedeliversAfterLocalChangeSaves() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteAID = UUID()
+        let noteA = Note(title: "A", content: "A body")
+        noteA.id = noteAID
+        noteA.modifiedAt = Date(timeIntervalSince1970: 100)
+        let noteB = Note(title: "B", content: "B body")
+        noteB.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(noteA)
+        context.insert(noteB)
+        try context.save()
+
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let change = try legacyNoteChange(
+            noteID: noteAID,
+            title: "A",
+            content: "Peer A",
+            baseTitle: "A",
+            baseContent: "A body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        noteB.content = "Unsaved local B"
+        let firstDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(noteA.content, "A body")
+
+        try context.save()
+        let secondDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(noteA.content, "Peer A")
+        XCTAssertEqual(noteB.content, "Unsaved local B")
+    }
+
+    func testSyncConflictStoreBaselineAbsentSnapshotRemovesSpeculativeBaseline() throws {
+        let conflictFileURL = temporarySyncConflictFileURL()
+        let directoryURL = conflictFileURL.deletingLastPathComponent()
+        let baselineURL = directoryURL.appendingPathComponent("sync-remote-text-baselines.json")
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+
+        let snapshot = try conflictStore.snapshot()
+
+        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+        try Data("speculative baseline".utf8).write(to: baselineURL)
+
+        try conflictStore.restore(snapshot)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: baselineURL.path))
+    }
+
+    func testLegacyIncomingBaselineCaptureFailureReturnsRetryBeforeMutation() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Original", content: "Original body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        try context.save()
+
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(
+            fileURL: conflictFileURL,
+            fileIO: SyncConflictStore.FileIO(
+                fileExists: { path in path.hasSuffix("sync-remote-text-baselines.json") },
+                readData: { _ in throw CocoaError(.fileReadNoPermission) },
+                createDirectory: { _ in },
+                writeData: { _, _ in },
+                removeItem: { _ in }
+            )
+        )
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: conflictStore,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Original",
+            content: "Peer body",
+            baseTitle: "Original",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let dispositions = await vm.applyIncomingSyncChanges([change])
+
+        XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(note.content, "Original body")
+        XCTAssertFalse(context.hasChanges)
+    }
+
+    func testLegacyIncomingBaselineRestoreFailureQuarantinesAfterRollback() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Original", content: "Original body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        try context.save()
+
+        let injector = InjectableLegacyIncomingSaveFailure(shouldFail: true)
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(
+            fileURL: conflictFileURL,
+            fileIO: SyncConflictStore.FileIO(
+                fileExists: { path in path.hasSuffix("sync-remote-text-baselines.json") },
+                readData: { _ in Data("baseline before".utf8) },
+                createDirectory: { _ in },
+                writeData: { _, _ in throw CocoaError(.fileWriteNoPermission) },
+                removeItem: { _ in }
+            )
+        )
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: conflictStore,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveLegacyIncomingApplyContext: { try injector.save(context) }
+        )
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Original",
+            content: "Peer body",
+            baseTitle: "Original",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let dispositions = await vm.applyIncomingSyncChanges([change])
+
+        XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .quarantined)])
+        XCTAssertEqual(note.content, "Original body")
+        XCTAssertFalse(context.hasChanges)
+    }
+
     // MARK: - Unrelated later save cannot persist a refused mutation (8.3, load-bearing)
 
     func testUnrelatedLaterSaveCannotPersistARefusedLegacyIncomingMutation() async throws {
