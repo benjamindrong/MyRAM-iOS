@@ -81,7 +81,7 @@ private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
 
 @MainActor
 protocol MyRAMSyncControlling: AnyObject {
-    var onChangesReceived: (([SyncChange]) async -> Void)? { get set }
+    var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])? { get set }
     var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)? { get set }
     var onBatchReceived: ((SyncBatch) async -> Void)? { get set }
 
@@ -94,6 +94,17 @@ protocol MyRAMSyncControlling: AnyObject {
     )
 
     func acceptLocalBatch(_ batch: SyncBatch) async throws
+}
+
+enum LegacyIncomingCandidateDisposition: Equatable, Sendable {
+    case applied
+    case retryRequired
+    case quarantined
+}
+
+struct LegacyIncomingChangeResult: Equatable, Sendable {
+    let changeID: UUID
+    let disposition: LegacyIncomingCandidateDisposition
 }
 
 @MainActor
@@ -148,7 +159,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     @Published private(set) var lastConnectionEvent = "Browsing for nearby MyRAM devices"
 
     let localPeerName: String
-    var onChangesReceived: (([SyncChange]) async -> Void)?
+    var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])?
     var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
     var onBatchReceived: ((SyncBatch) async -> Void)?
     var onFlushLocalConvergenceRequested: (() async -> Void)?
@@ -391,20 +402,20 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         reconnectTracker.finishConnecting(attempt)
     }
 
-    private func sendAcknowledgement(for changes: [SyncChange], to peerID: MCPeerID) async {
-        guard !changes.isEmpty else { return }
+    private func sendAcknowledgement(forChangeIDs changeIDs: Set<UUID>, to peerID: MCPeerID) async {
+        guard !changeIDs.isEmpty else { return }
 
         let envelope = SyncEnvelope(
             senderDeviceID: syncEngine.deviceID,
             changes: [],
-            acknowledgedChangeIDs: changes.map(\.id)
+            acknowledgedChangeIDs: changeIDs.sorted { $0.uuidString < $1.uuidString }
         )
 
         do {
             let payload = try JSONEncoder().encode(envelope)
             let data = try MultipeerSyncMessageCoding.encode(kind: .legacySyncEnvelope, payload: payload)
             try await transport.send(data, toPeers: [peerID], mode: .reliable)
-            await syncEngine.markAcknowledgementSent(changes.map(\.id))
+            await syncEngine.markAcknowledgementSent(changeIDs.sorted { $0.uuidString < $1.uuidString })
             lastErrorMessage = nil
         } catch {
             lastErrorMessage = "Unable to confirm nearby sync."
@@ -668,14 +679,31 @@ extension MyRAMSyncController: MCSessionDelegate {
     }
 
     private func receiveLegacyEnvelope(_ envelope: SyncEnvelope, from peerID: MCPeerID) async {
-        let result = await syncEngine.applyIncomingEnvelope(envelope)
-        if !result.acknowledgedLocalChanges.isEmpty {
-            await onLocalChangesAcknowledged?(result.acknowledgedLocalChanges)
+        let preparation = await syncEngine.prepareIncomingEnvelope(envelope)
+        if !preparation.acknowledgedLocalChanges.isEmpty {
+            await onLocalChangesAcknowledged?(preparation.acknowledgedLocalChanges)
         }
-        let changesByID = Dictionary(uniqueKeysWithValues: envelope.changes.map { ($0.id, $0) })
-        let appliedChanges = result.appliedChangeIDs.compactMap { changesByID[$0] }
-        await onChangesReceived?(appliedChanges)
-        await sendAcknowledgement(for: envelope.changes, to: peerID)
+
+        let candidateChanges = preparation.candidateChanges
+        let callbackResults = await onChangesReceived?(candidateChanges) ?? []
+        let dispositions = Self.validatedDispositions(
+            callbackResults,
+            candidateChanges: candidateChanges
+        )
+        let appliedIDs = Set(dispositions.compactMap { element in
+            element.value == .applied ? element.key : nil
+        })
+        do {
+            try await syncEngine.commitHandledIncomingChanges(appliedIDs)
+        } catch {
+            lastErrorMessage = "Unable to confirm nearby sync."
+            await updatePendingCount()
+            return
+        }
+        await sendAcknowledgement(
+            forChangeIDs: appliedIDs.union(preparation.alreadyHandledChangeIDs),
+            to: peerID
+        )
         lastSyncAt = envelope.sentAt
         await updatePendingCount()
         if !isOutboundSuspendedForRecovery,
@@ -683,6 +711,25 @@ extension MyRAMSyncController: MCSessionDelegate {
            await syncEngine.pendingChangeCount() > 0 {
             await requestLegacyFlush()
         }
+    }
+
+    private static func validatedDispositions(
+        _ results: [LegacyIncomingChangeResult],
+        candidateChanges: [SyncChange]
+    ) -> [UUID: LegacyIncomingCandidateDisposition] {
+        let candidateIDs = Set(candidateChanges.map(\.id))
+        var dispositions = Dictionary(
+            uniqueKeysWithValues: candidateIDs.map { ($0, LegacyIncomingCandidateDisposition.retryRequired) }
+        )
+        var seenResultIDs: Set<UUID> = []
+        for result in results {
+            guard candidateIDs.contains(result.changeID),
+                  seenResultIDs.insert(result.changeID).inserted else {
+                continue
+            }
+            dispositions[result.changeID] = result.disposition
+        }
+        return dispositions
     }
 
     nonisolated func session(

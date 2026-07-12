@@ -124,7 +124,9 @@ final class NotesViewModel: ObservableObject {
         )
         syncConflictService = MyRAMSyncConflictService(context: context, store: syncConflictStore)
         self.syncController?.onChangesReceived = { [weak self] changes in
-            await self?.applyIncomingSyncChanges(changes)
+            await self?.applyIncomingSyncChanges(changes) ?? changes.map {
+                LegacyIncomingChangeResult(changeID: $0.id, disposition: .retryRequired)
+            }
         }
         self.syncController?.onLocalChangesAcknowledged = { [weak self] changes in
             await self?.advanceSyncBaselines(forAcknowledgedLocalChanges: changes)
@@ -1570,47 +1572,57 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    func applyIncomingSyncChanges(_ changes: [SyncChange]) async {
-        guard !changes.isEmpty else { return }
-        if let boundaryOutcome = await finalizePendingLocalObligationForLegacyIncomingChangesIfNeeded(
-            beforeIncomingBodyMutationFor: legacyIncomingBodyMutationNoteIDs(in: changes)
-        ) {
-            await handleConvergenceRuntimeOutcome(boundaryOutcome)
-            return
-        }
+    func applyIncomingSyncChanges(_ changes: [SyncChange]) async -> [LegacyIncomingChangeResult] {
+        guard !changes.isEmpty else { return [] }
         let activeNoteID = currentNote?.id
         isApplyingRemoteSyncChange = true
         defer { isApplyingRemoteSyncChange = false }
+        var dispositions: [LegacyIncomingChangeResult] = []
 
-        let applier = MyRAMSyncChangeApplier(
-            context: context,
-            conflictStore: syncConflictStore,
-            isTextApplicationUnsafe: { [weak self] entityType, entityID, field in
-                self?.isIncomingTextUnsafe(entityType: entityType, entityID: entityID, field: field) ?? false
+        for change in changes {
+            if let boundaryOutcome = await finalizePendingLocalObligationForLegacyIncomingChangesIfNeeded(
+                beforeIncomingBodyMutationFor: legacyIncomingBodyMutationNoteIDs(in: [change])
+            ) {
+                await handleConvergenceRuntimeOutcome(boundaryOutcome)
+                dispositions.append(LegacyIncomingChangeResult(
+                    changeID: change.id,
+                    disposition: Self.legacyDisposition(forBoundaryOutcome: boundaryOutcome)
+                ))
+                continue
             }
-        )
-        let result = applier.apply(
-            changes,
-            activeNoteID: activeNoteID,
-            currentNoteID: currentNote?.id,
-            currentFolderID: currentFolder?.id
-        )
-        syncConflicts = applier.syncConflicts
-        result.preservedConflicts.forEach(recordSyncConflictPreserved)
 
-        if result.deletedCurrentNoteID != nil {
-            currentNote = nil
-            UserDefaults.standard.removeObject(forKey: "lastNoteID")
-        }
-        if let replacementFolderID = result.currentFolderReplacementID {
-            currentFolder = fetchFolder(withID: replacementFolderID)
-        }
+            let applier = MyRAMSyncChangeApplier(
+                context: context,
+                conflictStore: syncConflictStore,
+                isTextApplicationUnsafe: { [weak self] entityType, entityID, field in
+                    self?.isIncomingTextUnsafe(entityType: entityType, entityID: entityID, field: field) ?? false
+                }
+            )
+            let result = applier.apply(
+                [change],
+                activeNoteID: activeNoteID,
+                currentNoteID: currentNote?.id,
+                currentFolderID: currentFolder?.id
+            )
+            syncConflicts = applier.syncConflicts
+            result.preservedConflicts.forEach(recordSyncConflictPreserved)
 
-        try? context.save()
-        refreshCurrentFolderContent()
-        if result.shouldRefreshActiveNote {
-            publishActiveEditorReload(noteID: activeNoteID, reason: .unsupportedIntegratedChange)
+            if result.deletedCurrentNoteID != nil {
+                currentNote = nil
+                UserDefaults.standard.removeObject(forKey: "lastNoteID")
+            }
+            if let replacementFolderID = result.currentFolderReplacementID {
+                currentFolder = fetchFolder(withID: replacementFolderID)
+            }
+
+            try? context.save()
+            refreshCurrentFolderContent()
+            if result.shouldRefreshActiveNote {
+                publishActiveEditorReload(noteID: activeNoteID, reason: .unsupportedIntegratedChange)
+            }
+            dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .applied))
         }
+        return dispositions
     }
 
     func applyIncomingSyncBatch(_ batch: SyncBatch) async {
@@ -2520,9 +2532,23 @@ final class NotesViewModel: ObservableObject {
 }
 
 extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
+    private static func legacyDisposition(
+        forBoundaryOutcome outcome: SyncConvergenceRuntimeOutcome
+    ) -> LegacyIncomingCandidateDisposition {
+        if case .quarantined = outcome {
+            return .quarantined
+        }
+        return .retryRequired
+    }
+
     private func finalizePendingLocalObligationForLegacyIncomingChangesIfNeeded(
         beforeIncomingBodyMutationFor noteIDs: Set<UUID>
     ) async -> SyncConvergenceRuntimeOutcome? {
+        let queuedOutcome = await syncConvergenceRuntime.admitQueuedLocalObligationsForIncomingMutation(affecting: noteIDs)
+        if case .cannotProceed(let outcome) = queuedOutcome {
+            return outcome
+        }
+
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await syncBatchAccumulator.containsPendingBodyChange(for: noteID) else { continue }
             guard let obligation = await syncBatchAccumulator.takePendingObligationIfAffecting(noteID: noteID) else {

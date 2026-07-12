@@ -125,6 +125,20 @@ final class SyncConvergenceRuntime {
         await admitLocalObligationForIncomingBoundary(obligation)
     }
 
+    func admitQueuedLocalObligationsForIncomingMutation(
+        affecting noteIDs: Set<UUID>
+    ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
+        for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            for obligation in localObligationQueue.pendingObligations(affecting: noteID) {
+                let outcome = await admitLocalObligationForIncomingBoundary(obligation)
+                if case .cannotProceed = outcome {
+                    return outcome
+                }
+            }
+        }
+        return .ready
+    }
+
     func resumePendingWork() async -> SyncConvergenceRuntimeOutcome {
         await drain()
     }

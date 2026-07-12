@@ -41,6 +41,12 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         obligations.contains { $0.id == batchID }
     }
 
+    func pendingObligations(affecting noteID: UUID) -> [SyncConvergenceLocalObligation] {
+        obligations.filter { obligation in
+            Self.affectedNoteIDs(in: obligation.batch).contains(noteID)
+        }
+    }
+
     func enqueue(_ obligation: SyncConvergenceLocalObligation) throws {
         guard canPersistCurrentQueue else { throw QueueError.unhealthyPersistence }
         guard limit > 0 else { throw QueueError.capacityExceeded }
@@ -175,6 +181,23 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
             health = .readFailed(String(describing: error))
             throw error
         }
+    }
+
+    private static func affectedNoteIDs(in batch: SyncBatch) -> Set<UUID> {
+        Set(batch.changes.compactMap { change -> UUID? in
+            switch change {
+            case .noteCreated(let payload):
+                return payload.noteID
+            case .noteTitleChanged(let payload):
+                return payload.noteID
+            case .noteBodyTextInserted(let payload):
+                return payload.noteID
+            case .noteBodyTextDeleted(let payload):
+                return payload.noteID
+            case .noteBodyReconciled(let payload):
+                return payload.noteID
+            }
+        })
     }
 }
 

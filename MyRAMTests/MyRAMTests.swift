@@ -82,7 +82,7 @@ final class MyRAMTests: XCTestCase {
     }
 
     private final class RecordingSyncController: MyRAMSyncControlling, SyncConvergenceLocalBatchTransportAdapter {
-        var onChangesReceived: (([SyncChange]) async -> Void)?
+        var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])?
         var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
         var onBatchReceived: ((SyncBatch) async -> Void)?
         private(set) var recordedChanges: [SyncChange] = []
@@ -781,7 +781,7 @@ final class MyRAMTests: XCTestCase {
             )
         )
 
-        await vm.applyIncomingSyncChanges([
+        _ = await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .attachment,
                 entityID: attachmentID.uuidString,
@@ -799,7 +799,7 @@ final class MyRAMTests: XCTestCase {
         let deletePayload = try MyRAMSyncPayloadCoding.encode(
             MyRAMPhotoAttachmentSyncPayload(attachment: note.photoAttachments[0], isDeleted: true)
         )
-        await vm.applyIncomingSyncChanges([
+        _ = await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .attachment,
                 entityID: attachmentID.uuidString,
@@ -1757,7 +1757,7 @@ final class MyRAMTests: XCTestCase {
         remoteNote.id = note.id
         remoteNote.modifiedAt = Date(timeIntervalSince1970: 200)
 
-        await vm.applyIncomingSyncChanges([
+        _ = await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .item,
                 entityID: note.id.uuidString,
@@ -2666,7 +2666,7 @@ final class MyRAMTests: XCTestCase {
         await Task.yield()
         await Task.yield()
 
-        await viewModel.applyIncomingSyncChanges([
+        _ = await viewModel.applyIncomingSyncChanges([
             try legacyNoteChange(
                 noteID: noteID,
                 title: "Shared",
@@ -2712,7 +2712,7 @@ final class MyRAMTests: XCTestCase {
         await Task.yield()
         await Task.yield()
 
-        await viewModel.applyIncomingSyncChanges([
+        _ = await viewModel.applyIncomingSyncChanges([
             try legacyNoteChange(
                 noteID: noteID,
                 title: "Shared",
@@ -3734,7 +3734,7 @@ final class MyRAMTests: XCTestCase {
         let remoteNote = Note(title: "Remote Title", content: "remote body")
         remoteNote.id = fixture.note.id
         remoteNote.modifiedAt = Date(timeIntervalSince1970: 50)
-        await fixture.vm.applyIncomingSyncChanges([
+        _ = await fixture.vm.applyIncomingSyncChanges([
             try legacyNoteSyncChange(
                 note: remoteNote,
                 baseTitle: "Local Title",
@@ -4066,7 +4066,7 @@ final class MyRAMTests: XCTestCase {
         deviceANote.createdAt = note.createdAt
         deviceANote.modifiedAt = note.modifiedAt.addingTimeInterval(1)
 
-        await vm.applyIncomingSyncChanges([
+        _ = await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .item,
                 entityID: note.id.uuidString,
@@ -4849,7 +4849,7 @@ final class MyRAMTests: XCTestCase {
         await vm.advanceSyncBaselines(forAcknowledgedLocalChanges: [acknowledgedChange])
         let remoteModifiedAt = Date(timeIntervalSince1970: 200)
 
-        await vm.applyIncomingSyncChanges([
+        _ = await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .marker,
                 entityID: thought.id.uuidString,
