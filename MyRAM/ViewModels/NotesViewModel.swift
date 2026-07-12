@@ -1305,9 +1305,6 @@ final class NotesViewModel: ObservableObject {
                 postBody: newBody
             )
         }
-        if oldBody != newBody, bodyChange == nil {
-            throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: noteID)
-        }
 
         return PreparedLocalNoteEdit(titleChange: titleChange, bodyChange: bodyChange)
     }

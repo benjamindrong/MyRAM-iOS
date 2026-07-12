@@ -2379,7 +2379,12 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).map(\.batchID), [validBatch.id])
     }
 
-    func testCommitNoteEditEvidencePreparationFailureLeavesNoteBodyAndAccumulatorUnchanged() async throws {
+    func testCommitNoteEditNonPositionalBodyReplacementStillCommitsWithoutCapturedBodyEvidence() async throws {
+        // A mid-string replacement ("abc" -> "axc") cannot be expressed as a single
+        // positional insert/delete, so bodyTextChanged legitimately returns nil for
+        // it (see SyncBatchNoteChangeCapture). That is not a preparation failure:
+        // the local edit must still commit and save even when no incremental body
+        // evidence can be captured for this change.
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let note = Note(title: "Draft", content: "abc")
@@ -2395,13 +2400,10 @@ final class MyRAMTests: XCTestCase {
         )
 
         viewModel.commitNoteEdit(note, title: "Draft", content: "axc")
-        let syncBatchErrorMessage = viewModel.syncBatchErrorMessage
-        let capturedBatchID = await viewModel.capturePendingLocalBatchForRecovery()
 
-        XCTAssertNil(capturedBatchID)
-        XCTAssertEqual(note.content, "abc")
+        XCTAssertEqual(note.content, "axc")
         XCTAssertEqual(note.title, "Draft")
-        XCTAssertNotNil(syncBatchErrorMessage)
+        XCTAssertNil(viewModel.syncBatchErrorMessage)
     }
 
     func testIncomingBodyMutationFinalizesPendingLocalObligationBeforeAuthoritativeMutation() async throws {
@@ -3020,7 +3022,9 @@ final class MyRAMTests: XCTestCase {
             ]
         ))
 
-        XCTAssertEqual(vm.syncBatchErrorMessage, "Incoming reconciliation cannot be processed by this version.")
+        // Unsupported reconciliation is a note-scoped retryable condition: the batch
+        // remains durably queued and does not surface as a blocking error.
+        XCTAssertNil(vm.syncBatchErrorMessage)
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: queueFileURL).pendingBatches.count, 1)
     }
 
@@ -3604,7 +3608,8 @@ final class MyRAMTests: XCTestCase {
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
             pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
-            syncBatchQuietWindow: 0
+            syncBatchQuietWindow: 0,
+            resumesPendingConvergenceOnInit: false
         )
 
         await vm.applyIncomingSyncBatch(firstBatch)
