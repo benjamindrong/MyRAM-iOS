@@ -34,6 +34,29 @@ struct SyncConvergenceDeferredWork: Equatable {
     }
 }
 
+struct SyncConvergenceQuarantinedWork: Equatable {
+    let items: [SyncConvergenceQuarantinedItem]
+
+    var isEmpty: Bool {
+        items.isEmpty
+    }
+}
+
+struct SyncConvergenceQuarantinedItem: Equatable {
+    let domain: SyncConvergenceDeferredItem.Domain
+    let batchID: UUID
+    let affectedNoteIDs: Set<UUID>
+    let originDeviceID: UUID
+    let reason: SyncConvergenceQuarantineReason
+}
+
+enum SyncConvergenceQuarantineReason: Equatable {
+    case localEvidenceContinuityViolation
+    case localEvidenceIndexMismatch
+    case localEvidenceInvalidOperation
+    case localEvidenceBaseHashMismatch
+}
+
 struct SyncConvergenceDeferredItem: Equatable {
     enum Domain: Equatable {
         case incoming

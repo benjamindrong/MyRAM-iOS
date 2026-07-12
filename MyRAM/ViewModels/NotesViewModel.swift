@@ -31,6 +31,15 @@ enum PendingSyncRecoveryStatus: Equatable {
     }
 }
 
+private struct PreparedLocalNoteEdit {
+    let titleChange: SyncConvergenceCapturedLocalChange?
+    let bodyChange: SyncConvergenceCapturedLocalChange?
+
+    var capturedChanges: [SyncConvergenceCapturedLocalChange] {
+        [titleChange, bodyChange].compactMap { $0 }
+    }
+}
+
 @MainActor
 final class NotesViewModel: ObservableObject {
     @Published var notes: [Note] = []
@@ -64,7 +73,8 @@ final class NotesViewModel: ObservableObject {
         convergenceQueue: pendingIncomingBatches,
         localObligationQueue: pendingLocalConvergenceBatches,
         localBatchTransportAdapter: syncController as? SyncConvergenceLocalBatchTransportAdapter,
-        presentationAdapter: NotesViewModelConvergencePresentationAdapter(viewModel: self)
+        presentationAdapter: NotesViewModelConvergencePresentationAdapter(viewModel: self),
+        incomingLocalBoundaryAdapter: self
     )
     private var activeEditorPresentationAcknowledgment: ActiveEditorPresentationAcknowledgment?
     private var recentTextEditByNoteID: [UUID: Date] = [:]
@@ -501,17 +511,33 @@ final class NotesViewModel: ObservableObject {
         guard note.deletedAt == nil else { return }
         let oldTitle = note.title
         let oldContent = note.content
+        let modifiedAt = Date.now
+        let preparedEdit: PreparedLocalNoteEdit
+        do {
+            preparedEdit = try prepareLocalNoteEdit(
+                noteID: note.id,
+                oldTitle: oldTitle,
+                newTitle: title,
+                oldBody: oldContent,
+                newBody: content,
+                modifiedAt: modifiedAt
+            )
+        } catch {
+            syncBatchErrorMessage = "Unable to capture local sync evidence for the latest edit."
+            return
+        }
         note.title = title
         note.content = content
         note.richTextContentData = richTextContentData
-        note.modifiedAt = .now
+        note.modifiedAt = modifiedAt
         recordActiveNoteTextEdited(note)
-        try? context.save()
-        recordSyncBatchChanges(
-            oldTitle: oldTitle,
-            oldContent: oldContent,
-            note: note
-        )
+        do {
+            try context.save()
+        } catch {
+            syncBatchErrorMessage = "Unable to save the latest edit."
+            return
+        }
+        recordPreparedLocalNoteEdit(preparedEdit)
     }
 
     func updateNote(
@@ -1252,33 +1278,69 @@ final class NotesViewModel: ObservableObject {
         )
     }
 
-    private func recordSyncBatchChanges(oldTitle: String, oldContent: String, note: Note) {
-        if let change = IPhoneSyncBatchCaptureHook.titleChanged(
-            noteID: note.id,
+    private func prepareLocalNoteEdit(
+        noteID: UUID,
+        oldTitle: String,
+        newTitle: String,
+        oldBody: String,
+        newBody: String,
+        modifiedAt: Date
+    ) throws -> PreparedLocalNoteEdit {
+        let titleChange = IPhoneSyncBatchCaptureHook.titleChanged(
+            noteID: noteID,
             oldTitle: oldTitle,
-            newTitle: note.title,
-            modifiedAt: note.modifiedAt
-        ) {
-            recordSyncBatchChange(SyncConvergenceCapturedLocalChange(change: change, evidence: nil))
+            newTitle: newTitle,
+            modifiedAt: modifiedAt
+        ).map { SyncConvergenceCapturedLocalChange(change: $0, evidence: nil) }
+
+        let bodyChange = try IPhoneSyncBatchCaptureHook.bodyTextChanged(
+            noteID: noteID,
+            oldBody: oldBody,
+            newBody: newBody,
+            modifiedAt: modifiedAt
+        ).map {
+            try SyncConvergenceLocalEvidenceCapture.capturedChange(
+                for: $0,
+                preBody: oldBody,
+                postBody: newBody
+            )
+        }
+        if oldBody != newBody, bodyChange == nil {
+            throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: noteID)
         }
 
-        if let change = IPhoneSyncBatchCaptureHook.bodyTextChanged(
-            noteID: note.id,
-            oldBody: oldContent,
-            newBody: note.content,
-            modifiedAt: note.modifiedAt
-        ) {
-            do {
-                let capturedChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
-                    for: change,
-                    preBody: oldContent,
-                    postBody: note.content
-                )
-                recordSyncBatchChange(capturedChange)
-            } catch {
-                syncBatchErrorMessage = "Unable to capture local sync evidence for the latest edit."
+        return PreparedLocalNoteEdit(titleChange: titleChange, bodyChange: bodyChange)
+    }
+
+    private func recordPreparedLocalNoteEdit(_ edit: PreparedLocalNoteEdit) {
+        edit.capturedChanges.forEach(recordSyncBatchChange)
+    }
+
+    private func legacyIncomingBodyMutationNoteIDs(in changes: [SyncChange]) -> Set<UUID> {
+        Set(changes.compactMap { change in
+            guard change.entityType == .item,
+                  let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload) else {
+                return nil
             }
-        }
+            return payload.id
+        })
+    }
+
+    private static func bodyMutationNoteIDs(in batch: SyncBatch) -> Set<UUID> {
+        Set(batch.changes.compactMap { change -> UUID? in
+            switch change {
+            case .noteCreated(let payload):
+                return payload.noteID
+            case .noteBodyTextInserted(let payload):
+                return payload.noteID
+            case .noteBodyTextDeleted(let payload):
+                return payload.noteID
+            case .noteBodyReconciled(let payload):
+                return payload.noteID
+            case .noteTitleChanged:
+                return nil
+            }
+        })
     }
 
     private func recordSyncBatchChange(_ capturedChange: SyncConvergenceCapturedLocalChange) {
@@ -1488,6 +1550,12 @@ final class NotesViewModel: ObservableObject {
 
     func applyIncomingSyncChanges(_ changes: [SyncChange]) async {
         guard !changes.isEmpty else { return }
+        if let boundaryOutcome = await finalizePendingLocalObligationIfNeeded(
+            beforeIncomingBodyMutationFor: legacyIncomingBodyMutationNoteIDs(in: changes)
+        ) {
+            await handleConvergenceRuntimeOutcome(boundaryOutcome)
+            return
+        }
         let activeNoteID = currentNote?.id
         isApplyingRemoteSyncChange = true
         defer { isApplyingRemoteSyncChange = false }
@@ -1525,6 +1593,12 @@ final class NotesViewModel: ObservableObject {
 
     func applyIncomingSyncBatch(_ batch: SyncBatch) async {
         guard !batch.changes.isEmpty else { return }
+        if let boundaryOutcome = await finalizePendingLocalObligationIfNeeded(
+            beforeIncomingBodyMutationFor: Self.bodyMutationNoteIDs(in: batch)
+        ) {
+            await handleConvergenceRuntimeOutcome(boundaryOutcome)
+            return
+        }
         let outcome = await syncConvergenceRuntime.submitRemoteBatch(batch)
         await handleConvergenceRuntimeOutcome(outcome)
     }
@@ -1667,6 +1741,8 @@ final class NotesViewModel: ObservableObject {
             break
         case .deferred:
             break
+        case .quarantined:
+            syncBatchErrorMessage = "Pending local sync evidence needs recovery before this note can continue syncing."
         case .alreadyDraining:
             break
         case .blocked(let failure):
@@ -2424,6 +2500,27 @@ final class NotesViewModel: ObservableObject {
 
     nonisolated static func defaultDateFormatter(_ date: Date) -> String {
         date.formatted(date: .abbreviated, time: .shortened)
+    }
+}
+
+extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
+    func finalizePendingLocalObligationIfNeeded(
+        beforeIncomingBodyMutationFor noteIDs: Set<UUID>
+    ) async -> SyncConvergenceRuntimeOutcome? {
+        for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard await syncBatchAccumulator.containsPendingBodyChange(for: noteID) else { continue }
+            guard let obligation = await syncBatchAccumulator.takePendingObligationIfAffecting(noteID: noteID) else {
+                return nil
+            }
+            let outcome = await syncConvergenceRuntime.submitLocalObligation(obligation)
+            switch outcome {
+            case .blocked, .quarantined:
+                return outcome
+            case .drained, .pending, .deferred, .alreadyDraining:
+                return nil
+            }
+        }
+        return nil
     }
 }
 

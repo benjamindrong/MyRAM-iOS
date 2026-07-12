@@ -107,6 +107,21 @@ actor IPhoneSyncBatchAccumulator {
         extractPendingBatch { _ in true }
     }
 
+    func containsPendingBodyChange(for noteID: UUID) -> Bool {
+        pendingBatch?.capturedChanges.contains {
+            guard SyncConvergenceLocalEvidenceCapture.isBodyTextOperation($0.change) else { return false }
+            return SyncConvergenceLocalEvidenceCapture.noteID(for: $0.change) == noteID
+        } ?? false
+    }
+
+    func takePendingObligationIfAffecting(noteID: UUID) -> SyncConvergenceLocalObligation? {
+        extractPendingBatch { pendingBatch in
+            pendingBatch.capturedChanges.contains {
+                SyncConvergenceLocalEvidenceCapture.noteID(for: $0.change) == noteID
+            }
+        }
+    }
+
     private func extractPendingBatch(when shouldExtract: (PendingBatch) -> Bool) -> SyncConvergenceLocalObligation? {
         guard let pendingBatch, shouldExtract(pendingBatch) else { return nil }
         readinessTask?.cancel()

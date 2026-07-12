@@ -372,6 +372,10 @@ enum SyncBatchDrainFailureKind: Equatable {
     case staleAuthoritativeState
     case unprovenTextLoss
     case unsupportedDigestFormat
+    case localEvidenceContinuityViolation
+    case localEvidenceIndexMismatch
+    case localEvidenceInvalidOperation
+    case localEvidenceBaseHashMismatch
     case unexpected
 }
 
@@ -409,6 +413,17 @@ enum SyncBatchDrainFailureClassifier {
             case .persistenceFailed, .unhealthyPersistence:
                 kind = .queuePersistence
             }
+        } else if let evidenceError = error as? SyncConvergenceLocalEvidenceCaptureError {
+            switch evidenceError {
+            case .continuityViolation:
+                kind = .localEvidenceContinuityViolation
+            case .indexedChangeMismatch:
+                kind = .localEvidenceIndexMismatch
+            case .invalidBodyOperation, .missingBodyEvidence:
+                kind = .localEvidenceInvalidOperation
+            case .mismatchedBaseHash:
+                kind = .localEvidenceBaseHashMismatch
+            }
         } else {
             kind = .persistence
         }
@@ -439,6 +454,14 @@ enum SyncBatchDrainFailureClassifier {
             "Incoming sync rewrite omitted text without verified delete evidence. Sync is waiting for a safer merge path."
         case .unsupportedDigestFormat:
             "Incoming sync history uses an unsupported digest format."
+        case .localEvidenceContinuityViolation:
+            "Pending local sync evidence needs recovery before this note can continue syncing."
+        case .localEvidenceIndexMismatch:
+            "Pending local sync evidence is inconsistent and needs recovery."
+        case .localEvidenceInvalidOperation:
+            "Pending local sync evidence is invalid and needs recovery."
+        case .localEvidenceBaseHashMismatch:
+            "Pending local sync evidence conflicts with its recorded base and needs recovery."
         case .unexpected:
             "Unable to apply incoming sync batch."
         }

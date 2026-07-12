@@ -179,6 +179,50 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertNil(pendingBatchID)
     }
 
+    func testTakePendingObligationIfAffectingFlushesWholePendingBatchForMatchingNote() async throws {
+        let accumulator = makeAccumulator()
+        let noteAID = UUID(uuidString: "00000000-0000-0000-0000-000000124301")!
+        let noteBID = UUID(uuidString: "00000000-0000-0000-0000-000000124302")!
+        let noteAChange = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+            noteID: noteAID,
+            utf16Offset: 1,
+            text: "!",
+            modifiedAt: Date(timeIntervalSince1970: 1),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+        ))
+        let noteBChange = titleChange("B")
+        let capturedNoteAChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+            for: noteAChange,
+            preBody: "A",
+            postBody: "A!"
+        )
+
+        await accumulator.record(capturedNoteAChange, at: Date(timeIntervalSince1970: 1))
+        await accumulator.record(noteBChange, at: Date(timeIntervalSince1970: 2))
+
+        let hasPendingNoteABodyChange = await accumulator.containsPendingBodyChange(for: noteAID)
+        let hasPendingNoteBBodyChange = await accumulator.containsPendingBodyChange(for: noteBID)
+        XCTAssertTrue(hasPendingNoteABodyChange)
+        XCTAssertFalse(hasPendingNoteBBodyChange)
+        let obligation = await accumulator.takePendingObligationIfAffecting(noteID: noteAID)
+        let pendingBatchID = await accumulator.pendingBatchID()
+
+        XCTAssertEqual(obligation?.changes, [noteAChange, noteBChange])
+        XCTAssertNil(pendingBatchID)
+    }
+
+    func testTakePendingObligationIfAffectingLeavesUnrelatedPendingBatchAlone() async {
+        let accumulator = makeAccumulator()
+        let unrelatedNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000124303")!
+
+        await accumulator.record(titleChange("A"), at: Date(timeIntervalSince1970: 1))
+        let obligation = await accumulator.takePendingObligationIfAffecting(noteID: unrelatedNoteID)
+        let pendingBatchID = await accumulator.pendingBatchID()
+
+        XCTAssertNil(obligation)
+        XCTAssertNotNil(pendingBatchID)
+    }
+
     func testTakePendingBatchNowClearsBatchSoReadyEmissionCannotReplayIt() async {
         let accumulator = makeAccumulator()
         let start = Date(timeIntervalSince1970: 700)

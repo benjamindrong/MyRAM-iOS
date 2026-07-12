@@ -2293,6 +2293,166 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(transport.acceptedBatches.map(\.id), [batch.id])
     }
 
+    func testCapturedLocalObligationValidationFailureRejectsBeforeQueueInsertion() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000127513")!
+        let note = Note(title: "Shared", content: "A")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        let obligation = try discontinuousCapturedObligation(noteID: noteID)
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil)
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: localQueue,
+            localBatchTransportAdapter: AcceptingLocalBatchTransport(),
+            presentationAdapter: CompletingPresentationAdapter()
+        )
+
+        let outcome = await runtime.submitLocalObligation(obligation)
+
+        guard case .blocked(let failure) = outcome else {
+            return XCTFail("Expected invalid newly submitted captured obligation to be blocked")
+        }
+        XCTAssertEqual(failure.kind, .localEvidenceContinuityViolation)
+        XCTAssertTrue(localQueue.pendingObligations.isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).isEmpty)
+    }
+
+    func testPersistedCorruptCapturedObligationQuarantinesAndDisjointLocalWorkProgresses() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteAID = UUID(uuidString: "00000000-0000-0000-0000-000000127514")!
+        let noteBID = UUID(uuidString: "00000000-0000-0000-0000-000000127515")!
+        let noteA = Note(title: "A", content: "A")
+        noteA.id = noteAID
+        let noteB = Note(title: "B", content: "B")
+        noteB.id = noteBID
+        context.insert(noteA)
+        context.insert(noteB)
+        try context.save()
+
+        let corruptObligation = try discontinuousCapturedObligation(noteID: noteAID)
+        let validChange = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+            noteID: noteBID,
+            utf16Offset: 1,
+            text: "!",
+            modifiedAt: Date(timeIntervalSince1970: 5),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "B")
+        ))
+        let capturedValidChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+            for: validChange,
+            preBody: "B",
+            postBody: "B!"
+        )
+        let validBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127516")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127517")!,
+            createdAt: Date(timeIntervalSince1970: 5),
+            changes: [validChange]
+        )
+        let validObligation = SyncConvergenceLocalObligation(batch: validBatch, capturedChanges: [capturedValidChange])
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil)
+        try localQueue.enqueue(corruptObligation)
+        try localQueue.enqueue(validObligation)
+        let transport = AcceptingLocalBatchTransport()
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: localQueue,
+            localBatchTransportAdapter: transport,
+            presentationAdapter: CompletingPresentationAdapter()
+        )
+
+        let outcome = await runtime.resumePendingWork()
+
+        guard case .quarantined(let quarantined) = outcome else {
+            return XCTFail("Expected persisted corrupt captured obligation to be quarantined")
+        }
+        XCTAssertEqual(quarantined.items.map(\.batchID), [corruptObligation.id])
+        XCTAssertEqual(quarantined.items.first?.reason, .localEvidenceContinuityViolation)
+        XCTAssertEqual(localQueue.pendingBatches.map(\.id), [corruptObligation.id])
+        XCTAssertEqual(transport.acceptedBatches.map(\.id), [validBatch.id])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).map(\.batchID), [validBatch.id])
+    }
+
+    func testCommitNoteEditEvidencePreparationFailureLeavesNoteBodyAndAccumulatorUnchanged() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let note = Note(title: "Draft", content: "abc")
+        context.insert(note)
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: RecordingSyncController(),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        viewModel.commitNoteEdit(note, title: "Draft", content: "axc")
+        let syncBatchErrorMessage = viewModel.syncBatchErrorMessage
+        let capturedBatchID = await viewModel.capturePendingLocalBatchForRecovery()
+
+        XCTAssertNil(capturedBatchID)
+        XCTAssertEqual(note.content, "abc")
+        XCTAssertEqual(note.title, "Draft")
+        XCTAssertNotNil(syncBatchErrorMessage)
+    }
+
+    func testIncomingBodyMutationFinalizesPendingLocalObligationBeforeAuthoritativeMutation() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000127518")!
+        let note = Note(title: "Shared", content: "Hello")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+        let syncController = RecordingSyncController()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: syncController,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        await Task.yield()
+        await Task.yield()
+        let remoteBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127519")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-00000012751A")!,
+            createdAt: Date(timeIntervalSince1970: 20),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: "Hello local".utf16.count,
+                    text: " remote",
+                    modifiedAt: Date(timeIntervalSince1970: 20),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello local")
+                ))
+            ]
+        )
+
+        await viewModel.applyIncomingSyncBatch(remoteBatch)
+
+        XCTAssertEqual(syncController.recordedBatches.count, 1)
+        XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 1)
+        guard case .noteBodyTextInserted(let localChange) = syncController.recordedBatches.first?.changes.first else {
+            return XCTFail("Expected pending local body insertion to be finalized before incoming mutation")
+        }
+        XCTAssertEqual(localChange.noteID, noteID)
+        XCTAssertEqual(localChange.utf16Offset, "Hello".utf16.count)
+        XCTAssertEqual(localChange.text, " local")
+        XCTAssertEqual(note.content, "Hello local remote")
+    }
+
     func testStaleLegacyLocalObligationDoesNotBlockDifferentOriginCapturedObligation() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -7189,6 +7349,40 @@ private final class FailingLocalBatchTransport: SyncConvergenceLocalBatchTranspo
     func acceptLocalBatch(_ batch: SyncBatch) async throws {
         throw error
     }
+}
+
+private func discontinuousCapturedObligation(noteID: UUID) throws -> SyncConvergenceLocalObligation {
+    let firstChange = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+        noteID: noteID,
+        utf16Offset: 1,
+        text: "B",
+        modifiedAt: Date(timeIntervalSince1970: 1),
+        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+    ))
+    let secondChange = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+        noteID: noteID,
+        utf16Offset: 1,
+        text: "C",
+        modifiedAt: Date(timeIntervalSince1970: 2),
+        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+    ))
+    let firstCapturedChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+        for: firstChange,
+        preBody: "A",
+        postBody: "AB"
+    )
+    let secondCapturedChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+        for: secondChange,
+        preBody: "A",
+        postBody: "AC"
+    )
+    let batch = SyncBatch(
+        id: UUID(uuidString: "00000000-0000-0000-0000-0000001275A0")!,
+        originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-0000001275A1")!,
+        createdAt: Date(timeIntervalSince1970: 1),
+        changes: [firstChange, secondChange]
+    )
+    return SyncConvergenceLocalObligation(batch: batch, capturedChanges: [firstCapturedChange, secondCapturedChange])
 }
 
 private struct CompletingPresentationAdapter: SyncConvergencePresentationAdapter {
