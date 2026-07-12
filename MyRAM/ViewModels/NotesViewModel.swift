@@ -60,6 +60,7 @@ final class NotesViewModel: ObservableObject {
     private let syncConflictStore: SyncConflictStore
     private let syncConflictService: MyRAMSyncConflictService
     private let saveContext: () throws -> Void
+    private let saveLegacyIncomingApplyContext: () throws -> Void
     private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
     private let pendingIncomingBatches: FileBackedSyncBatchQueue
     private let pendingLocalConvergenceBatches: FileBackedSyncConvergenceLocalObligationQueue
@@ -103,12 +104,14 @@ final class NotesViewModel: ObservableObject {
         bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
         syncBatchQuietWindow: TimeInterval = 3,
         resumesPendingConvergenceOnInit: Bool = true,
-        saveContext: (() throws -> Void)? = nil
+        saveContext: (() throws -> Void)? = nil,
+        saveLegacyIncomingApplyContext: (() throws -> Void)? = nil
     ) {
         self.context = context
         self.syncController = syncController
         self.syncConflictStore = syncConflictStore
         self.saveContext = saveContext ?? { try context.save() }
+        self.saveLegacyIncomingApplyContext = saveLegacyIncomingApplyContext ?? { try context.save() }
         pendingIncomingBatches = FileBackedSyncBatchQueue(
             fileURL: pendingIncomingBatchQueueFileURL,
             limit: pendingIncomingBatchQueueLimit
@@ -1591,6 +1594,19 @@ final class NotesViewModel: ObservableObject {
                 continue
             }
 
+            // Apply speculatively against the shared context and roll back on
+            // save failure, rather than an isolated context: MyRAMSyncChangeApplier
+            // fetches by ID against whatever context it is given, and a second
+            // context cannot see objects the caller has only inserted but not
+            // yet saved in this one, nor observe another context's later commit
+            // on an already-fetched reference (e.g. `currentNote`). Between
+            // apply() and save()/rollback() below there is no `await`, so no
+            // other MainActor work can interleave and be discarded by the
+            // rollback. MyRAMSyncChangeApplier also writes preserved-conflict/
+            // baseline state to syncConflictStore as a side effect of apply(),
+            // independent of SwiftData; snapshot it first so a failed save
+            // rolls that back too.
+            let conflictStoreSnapshot = syncConflictStore.snapshot()
             let applier = MyRAMSyncChangeApplier(
                 context: context,
                 conflictStore: syncConflictStore,
@@ -1604,6 +1620,25 @@ final class NotesViewModel: ObservableObject {
                 currentNoteID: currentNote?.id,
                 currentFolderID: currentFolder?.id
             )
+
+            do {
+                try saveLegacyIncomingApplyContext()
+            } catch {
+                context.rollback()
+                // ModelContext.rollback() clears dirty tracking but does not
+                // eagerly re-materialize already-resident objects' property
+                // values from the store; a follow-up fetch forces that so a
+                // live reference (e.g. this note, or `currentNote`) reflects
+                // the reverted value rather than the discarded mutation.
+                forceRefreshResidentModelObjectsAfterRollback()
+                syncConflictStore.restore(conflictStoreSnapshot)
+                dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
+                continue
+            }
+
+            // Only after durable persistence succeeds do any observable side
+            // effects fire: conflict publication, current note/folder state,
+            // UserDefaults, folder refresh, and the editor reload.
             syncConflicts = applier.syncConflicts
             result.preservedConflicts.forEach(recordSyncConflictPreserved)
 
@@ -1615,7 +1650,6 @@ final class NotesViewModel: ObservableObject {
                 currentFolder = fetchFolder(withID: replacementFolderID)
             }
 
-            try? context.save()
             refreshCurrentFolderContent()
             if result.shouldRefreshActiveNote {
                 publishActiveEditorReload(noteID: activeNoteID, reason: .unsupportedIntegratedChange)
@@ -1623,6 +1657,18 @@ final class NotesViewModel: ObservableObject {
             dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .applied))
         }
         return dispositions
+    }
+
+    /// MyRAMSyncChangeApplier can mutate notes, folders, pinned thoughts, and
+    /// photo attachments for a single change. After a rollback, force each
+    /// resident type to re-materialize from the store so any live reference
+    /// the app holds (e.g. `currentNote`) reflects the reverted state rather
+    /// than the discarded speculative mutation.
+    private func forceRefreshResidentModelObjectsAfterRollback() {
+        _ = try? context.fetch(FetchDescriptor<Note>())
+        _ = try? context.fetch(FetchDescriptor<Folder>())
+        _ = try? context.fetch(FetchDescriptor<PinnedThought>())
+        _ = try? context.fetch(FetchDescriptor<NotePhotoAttachment>())
     }
 
     func applyIncomingSyncBatch(_ batch: SyncBatch) async {

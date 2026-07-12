@@ -64,6 +64,11 @@ struct SyncRemoteTextBaseline: Codable, Equatable {
     let originDeviceID: String?
 }
 
+struct SyncConflictStoreSnapshot {
+    let textConflicts: SyncTextConflictStoreSnapshot
+    let baselinesData: Data?
+}
+
 extension SyncRemoteTextBaseline {
     var syncTextBaseline: SyncTextTrackedBaseline {
         SyncTextTrackedBaseline(
@@ -202,6 +207,32 @@ final class SyncConflictStore {
                 originDeviceID: originDeviceID
             )
         )
+    }
+
+    /// Captures the exact on-disk conflict-store and remote-text-baseline
+    /// state. Intended for callers that speculatively apply an incoming
+    /// change (which may write conflict/baseline state as a side effect)
+    /// before a separate, later persistence step (e.g. a SwiftData save) is
+    /// known to succeed, so that write can be rolled back on failure.
+    func snapshot() -> SyncConflictStoreSnapshot {
+        SyncConflictStoreSnapshot(
+            textConflicts: textConflictStore.snapshot(),
+            baselinesData: try? Data(contentsOf: baselineFileURL)
+        )
+    }
+
+    /// Restores exactly the state captured by `snapshot()`.
+    func restore(_ snapshot: SyncConflictStoreSnapshot) {
+        textConflictStore.restore(snapshot.textConflicts)
+        if let baselinesData = snapshot.baselinesData {
+            try? FileManager.default.createDirectory(
+                at: baselineFileURL.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try? baselinesData.write(to: baselineFileURL, options: [.atomic])
+        } else {
+            try? FileManager.default.removeItem(at: baselineFileURL)
+        }
     }
 
     private func migrateLegacyConflictsIfNeeded() {
