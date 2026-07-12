@@ -40,6 +40,15 @@ private struct PreparedLocalNoteEdit {
     }
 }
 
+private struct LegacyIncomingIsolatedApplyResult {
+    let syncConflicts: [SyncConflictVersion]
+    let preservedConflicts: [SyncConflictVersion]
+    let bufferedEffects: LegacyIncomingBufferedEffects
+    let deletedCurrentNoteID: UUID?
+    let currentFolderReplacementID: UUID?
+    let shouldRefreshActiveNote: Bool
+}
+
 @MainActor
 final class NotesViewModel: ObservableObject {
     @Published var notes: [Note] = []
@@ -60,7 +69,8 @@ final class NotesViewModel: ObservableObject {
     private let syncConflictStore: SyncConflictStore
     private let syncConflictService: MyRAMSyncConflictService
     private let saveContext: () throws -> Void
-    private let saveLegacyIncomingApplyContext: () throws -> Void
+    private let saveLegacyIncomingApplyContext: (ModelContext) throws -> Void
+    private let commitLegacyIncomingEffects: (LegacyIncomingBufferedEffects) throws -> Void
     private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
     private let pendingIncomingBatches: FileBackedSyncBatchQueue
     private let pendingLocalConvergenceBatches: FileBackedSyncConvergenceLocalObligationQueue
@@ -105,13 +115,17 @@ final class NotesViewModel: ObservableObject {
         syncBatchQuietWindow: TimeInterval = 3,
         resumesPendingConvergenceOnInit: Bool = true,
         saveContext: (() throws -> Void)? = nil,
-        saveLegacyIncomingApplyContext: (() throws -> Void)? = nil
+        saveLegacyIncomingApplyContext: ((ModelContext) throws -> Void)? = nil,
+        commitLegacyIncomingEffects: ((LegacyIncomingBufferedEffects) throws -> Void)? = nil
     ) {
         self.context = context
         self.syncController = syncController
         self.syncConflictStore = syncConflictStore
         self.saveContext = saveContext ?? { try context.save() }
-        self.saveLegacyIncomingApplyContext = saveLegacyIncomingApplyContext ?? { try context.save() }
+        self.saveLegacyIncomingApplyContext = saveLegacyIncomingApplyContext ?? { try $0.save() }
+        self.commitLegacyIncomingEffects = commitLegacyIncomingEffects ?? { effects in
+            Self.commitLegacyIncomingEffects(effects, to: syncConflictStore)
+        }
         pendingIncomingBatches = FileBackedSyncBatchQueue(
             fileURL: pendingIncomingBatchQueueFileURL,
             limit: pendingIncomingBatchQueueLimit
@@ -1583,6 +1597,16 @@ final class NotesViewModel: ObservableObject {
         var dispositions: [LegacyIncomingChangeResult] = []
 
         for change in changes {
+            guard !context.hasChanges else {
+                dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
+                continue
+            }
+
+            guard !legacyIncomingChangeHasDirtyAffectedMainObject(change) else {
+                dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
+                continue
+            }
+
             if let boundaryOutcome = await finalizePendingLocalObligationForLegacyIncomingChangesIfNeeded(
                 beforeIncomingBodyMutationFor: legacyIncomingBodyMutationNoteIDs(in: [change])
             ) {
@@ -1599,75 +1623,48 @@ final class NotesViewModel: ObservableObject {
                 continue
             }
 
-            let conflictStoreSnapshot: SyncConflictStoreSnapshot
+            guard !legacyIncomingChangeHasDirtyAffectedMainObject(change) else {
+                dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
+                continue
+            }
+
+            let applyResult: LegacyIncomingIsolatedApplyResult
             do {
-                conflictStoreSnapshot = try syncConflictStore.snapshot()
+                applyResult = try applyLegacyIncomingChangeInIsolatedContext(
+                    change,
+                    activeNoteID: activeNoteID,
+                    currentNoteID: currentNote?.id,
+                    currentFolderID: currentFolder?.id
+                )
             } catch {
                 dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
                 continue
             }
 
-            // Apply speculatively against the shared context and roll back on
-            // save failure, rather than an isolated context: MyRAMSyncChangeApplier
-            // fetches by ID against whatever context it is given, and a second
-            // context cannot see objects the caller has only inserted but not
-            // yet saved in this one, nor observe another context's later commit
-            // on an already-fetched reference (e.g. `currentNote`). The clean
-            // context guard above ensures rollback cannot discard unrelated
-            // unsaved work that was already present before this candidate.
-            let applier = MyRAMSyncChangeApplier(
-                context: context,
-                conflictStore: syncConflictStore,
-                isTextApplicationUnsafe: { [weak self] entityType, entityID, field in
-                    self?.isIncomingTextUnsafe(entityType: entityType, entityID: entityID, field: field) ?? false
-                }
-            )
-            let result = applier.apply(
-                [change],
-                activeNoteID: activeNoteID,
-                currentNoteID: currentNote?.id,
-                currentFolderID: currentFolder?.id
-            )
-
             do {
-                try saveLegacyIncomingApplyContext()
+                try commitLegacyIncomingEffects(applyResult.bufferedEffects)
+                try refreshMainContextAfterLegacyIncomingApply(change)
             } catch {
-                context.rollback()
-                guard !context.hasChanges else {
-                    dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .quarantined))
-                    continue
-                }
-
-                do {
-                    // ModelContext.rollback() clears dirty tracking but does
-                    // not eagerly re-materialize already-resident objects'
-                    // property values from the store; a follow-up fetch forces
-                    // that so live references reflect reverted values.
-                    try forceRefreshResidentModelObjectsAfterRollback()
-                    try syncConflictStore.restore(conflictStoreSnapshot)
-                    dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
-                } catch {
-                    dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .quarantined))
-                }
+                dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
                 continue
             }
 
             // Only after durable persistence succeeds do any observable side
             // effects fire: conflict publication, current note/folder state,
             // UserDefaults, folder refresh, and the editor reload.
-            syncConflicts = applier.syncConflicts
-            result.preservedConflicts.forEach(recordSyncConflictPreserved)
+            syncConflicts = applyResult.syncConflicts
+            applyResult.preservedConflicts.forEach(recordSyncConflictPreserved)
 
-            if result.deletedCurrentNoteID != nil {
+            if applyResult.deletedCurrentNoteID != nil {
                 currentNote = nil
                 UserDefaults.standard.removeObject(forKey: "lastNoteID")
             }
-            if let replacementFolderID = result.currentFolderReplacementID {
+            if let replacementFolderID = applyResult.currentFolderReplacementID {
                 currentFolder = fetchFolder(withID: replacementFolderID)
             }
 
             refreshCurrentFolderContent()
-            if result.shouldRefreshActiveNote {
+            if applyResult.shouldRefreshActiveNote {
                 publishActiveEditorReload(noteID: activeNoteID, reason: .unsupportedIntegratedChange)
             }
             dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .applied))
@@ -1675,16 +1672,216 @@ final class NotesViewModel: ObservableObject {
         return dispositions
     }
 
-    /// MyRAMSyncChangeApplier can mutate notes, folders, pinned thoughts, and
-    /// photo attachments for a single change. After a rollback, force each
-    /// resident type to re-materialize from the store so any live reference
-    /// the app holds (e.g. `currentNote`) reflects the reverted state rather
-    /// than the discarded speculative mutation.
-    private func forceRefreshResidentModelObjectsAfterRollback() throws {
-        _ = try context.fetch(FetchDescriptor<Note>())
-        _ = try context.fetch(FetchDescriptor<Folder>())
-        _ = try context.fetch(FetchDescriptor<PinnedThought>())
-        _ = try context.fetch(FetchDescriptor<NotePhotoAttachment>())
+    private func legacyIncomingChangeHasDirtyAffectedMainObject(_ change: SyncChange) -> Bool {
+        switch change.entityType {
+        case .collection:
+            guard let payload = try? MyRAMSyncPayloadCoding.decodeFolder(from: change.payload) else { return false }
+            return context.hasPendingChanges(for: Folder.self, id: payload.id)
+
+        case .item:
+            guard let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload) else { return false }
+            return context.hasPendingChanges(for: Note.self, id: payload.id)
+
+        case .marker:
+            guard let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) else { return false }
+            return context.hasPendingChanges(for: PinnedThought.self, id: payload.id)
+
+        case .attachment:
+            guard let payload = try? MyRAMSyncPayloadCoding.decodePhotoAttachment(from: change.payload) else { return false }
+            return context.hasPendingChanges(for: NotePhotoAttachment.self, id: payload.id)
+
+        case .conflict:
+            guard let payload = try? MyRAMSyncPayloadCoding.decodeSyncConflict(from: change.payload),
+                  let conflict = payload.conflict else { return false }
+            switch conflict.entityType {
+            case .note:
+                return context.hasPendingChanges(for: Note.self, id: conflict.entityID)
+            case .folder:
+                return context.hasPendingChanges(for: Folder.self, id: conflict.entityID)
+            case .pinnedThought:
+                return context.hasPendingChanges(for: PinnedThought.self, id: conflict.entityID)
+            }
+        }
+    }
+
+    private func applyLegacyIncomingChangeInIsolatedContext(
+        _ change: SyncChange,
+        activeNoteID: UUID?,
+        currentNoteID: UUID?,
+        currentFolderID: UUID?
+    ) throws -> LegacyIncomingIsolatedApplyResult {
+        let isolatedContext = ModelContext(context.container)
+        try verifyLegacyIncomingPersistedRowsAreVisible(change, in: isolatedContext)
+        let bufferedConflictStore = BufferedSyncConflictStore(base: syncConflictStore)
+        let applier = MyRAMSyncChangeApplier(
+            context: isolatedContext,
+            conflictStore: bufferedConflictStore,
+            isTextApplicationUnsafe: { [weak self] entityType, entityID, field in
+                self?.isIncomingTextUnsafe(entityType: entityType, entityID: entityID, field: field) ?? false
+            }
+        )
+        let result = applier.apply(
+            [change],
+            activeNoteID: activeNoteID,
+            currentNoteID: currentNoteID,
+            currentFolderID: currentFolderID
+        )
+        try saveLegacyIncomingApplyContext(isolatedContext)
+        return LegacyIncomingIsolatedApplyResult(
+            syncConflicts: applier.syncConflicts,
+            preservedConflicts: result.preservedConflicts,
+            bufferedEffects: bufferedConflictStore.effects,
+            deletedCurrentNoteID: result.deletedCurrentNoteID,
+            currentFolderReplacementID: result.currentFolderReplacementID,
+            shouldRefreshActiveNote: result.shouldRefreshActiveNote
+        )
+    }
+
+    private func verifyLegacyIncomingPersistedRowsAreVisible(_ change: SyncChange, in context: ModelContext) throws {
+        switch change.entityType {
+        case .collection:
+            guard let payload = try? MyRAMSyncPayloadCoding.decodeFolder(from: change.payload) else { throw CocoaError(.fileReadCorruptFile) }
+            let isolatedFolder = try fetchFolder(withID: payload.id, in: context)
+            if change.operation == .delete {
+                guard isolatedFolder != nil else { throw CocoaError(.fileNoSuchFile) }
+            } else if try fetchFolder(withID: payload.id, in: self.context) != nil, isolatedFolder == nil {
+                throw CocoaError(.fileNoSuchFile)
+            }
+
+        case .item:
+            guard let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload) else { throw CocoaError(.fileReadCorruptFile) }
+            let isolatedNote = try fetchNote(withID: payload.id, in: context)
+            if change.operation == .delete {
+                guard isolatedNote != nil else { throw CocoaError(.fileNoSuchFile) }
+            } else if try fetchNote(withID: payload.id, in: self.context) != nil, isolatedNote == nil {
+                throw CocoaError(.fileNoSuchFile)
+            }
+
+        case .marker:
+            guard let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) else { throw CocoaError(.fileReadCorruptFile) }
+            let isolatedThought = try fetchPinnedThought(withID: payload.id, in: context)
+            if change.operation == .delete || payload.isDeleted {
+                guard isolatedThought != nil else { throw CocoaError(.fileNoSuchFile) }
+            } else if try fetchPinnedThought(withID: payload.id, in: self.context) != nil, isolatedThought == nil {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            if let noteID = payload.noteID {
+                guard try fetchNote(withID: noteID, in: context) != nil else { throw CocoaError(.fileNoSuchFile) }
+            }
+
+        case .attachment:
+            guard let payload = try? MyRAMSyncPayloadCoding.decodePhotoAttachment(from: change.payload) else { throw CocoaError(.fileReadCorruptFile) }
+            let isolatedAttachment = try fetchPhotoAttachment(withID: payload.id, in: context)
+            if change.operation == .delete || payload.isDeleted {
+                guard isolatedAttachment != nil else { throw CocoaError(.fileNoSuchFile) }
+            } else if try fetchPhotoAttachment(withID: payload.id, in: self.context) != nil, isolatedAttachment == nil {
+                throw CocoaError(.fileNoSuchFile)
+            } else if let noteID = payload.noteID {
+                guard try fetchNote(withID: noteID, in: context) != nil else { throw CocoaError(.fileNoSuchFile) }
+            }
+
+        case .conflict:
+            return
+        }
+    }
+
+    private static func commitLegacyIncomingEffects(
+        _ effects: LegacyIncomingBufferedEffects,
+        to store: SyncConflictStore
+    ) {
+        for conflict in effects.removedResolvedConflicts {
+            _ = store.removeResolvedConflict(conflict)
+        }
+        for conflictID in effects.removedConflictIDs {
+            _ = store.removeConflict(id: conflictID)
+        }
+        for conflict in effects.preservedConflicts {
+            _ = store.preserve(conflict)
+        }
+        for baseline in effects.remoteBaselines {
+            store.saveRemoteBaseline(baseline)
+        }
+    }
+
+    private func refreshMainContextAfterLegacyIncomingApply(_ change: SyncChange) throws {
+        switch change.entityType {
+        case .collection:
+            if let payload = try? MyRAMSyncPayloadCoding.decodeFolder(from: change.payload) {
+                _ = try fetchFolder(withID: payload.id, in: context)
+                if let parentID = payload.parentFolderID {
+                    _ = try fetchFolder(withID: parentID, in: context)
+                }
+            }
+        case .item:
+            if let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload) {
+                _ = try fetchNote(withID: payload.id, in: context)
+                if let folderID = payload.folderID {
+                    _ = try fetchFolder(withID: folderID, in: context)
+                }
+            }
+        case .marker:
+            if let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) {
+                _ = try fetchPinnedThought(withID: payload.id, in: context)
+                if let noteID = payload.noteID {
+                    _ = try fetchNote(withID: noteID, in: context)
+                }
+            }
+        case .attachment:
+            if let payload = try? MyRAMSyncPayloadCoding.decodePhotoAttachment(from: change.payload) {
+                _ = try fetchPhotoAttachment(withID: payload.id, in: context)
+                if let noteID = payload.noteID {
+                    _ = try fetchNote(withID: noteID, in: context)
+                }
+            }
+        case .conflict:
+            if let payload = try? MyRAMSyncPayloadCoding.decodeSyncConflict(from: change.payload),
+               let conflict = payload.conflict {
+                switch conflict.entityType {
+                case .note:
+                    _ = try fetchNote(withID: conflict.entityID, in: context)
+                case .folder:
+                    _ = try fetchFolder(withID: conflict.entityID, in: context)
+                case .pinnedThought:
+                    _ = try fetchPinnedThought(withID: conflict.entityID, in: context)
+                }
+            }
+        }
+    }
+
+    private func fetchNote(withID noteID: UUID, in context: ModelContext) throws -> Note? {
+        let descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { note in
+                note.id == noteID
+            }
+        )
+        return try context.fetch(descriptor).first
+    }
+
+    private func fetchFolder(withID folderID: UUID, in context: ModelContext) throws -> Folder? {
+        let descriptor = FetchDescriptor<Folder>(
+            predicate: #Predicate { folder in
+                folder.id == folderID
+            }
+        )
+        return try context.fetch(descriptor).first
+    }
+
+    private func fetchPinnedThought(withID thoughtID: UUID, in context: ModelContext) throws -> PinnedThought? {
+        let descriptor = FetchDescriptor<PinnedThought>(
+            predicate: #Predicate { thought in
+                thought.id == thoughtID
+            }
+        )
+        return try context.fetch(descriptor).first
+    }
+
+    private func fetchPhotoAttachment(withID attachmentID: UUID, in context: ModelContext) throws -> NotePhotoAttachment? {
+        let descriptor = FetchDescriptor<NotePhotoAttachment>(
+            predicate: #Predicate { attachment in
+                attachment.id == attachmentID
+            }
+        )
+        return try context.fetch(descriptor).first
     }
 
     func applyIncomingSyncBatch(_ batch: SyncBatch) async {
@@ -2635,6 +2832,31 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
             return await syncBatchAccumulator.takePendingObligationIfAffecting(noteID: noteID)
         }
         return nil
+    }
+}
+
+private extension ModelContext {
+    func hasPendingChanges(for modelType: Note.Type, id: UUID) -> Bool {
+        hasPendingModelChange { (note: Note) in note.id == id }
+    }
+
+    func hasPendingChanges(for modelType: Folder.Type, id: UUID) -> Bool {
+        hasPendingModelChange { (folder: Folder) in folder.id == id }
+    }
+
+    func hasPendingChanges(for modelType: PinnedThought.Type, id: UUID) -> Bool {
+        hasPendingModelChange { (thought: PinnedThought) in thought.id == id }
+    }
+
+    func hasPendingChanges(for modelType: NotePhotoAttachment.Type, id: UUID) -> Bool {
+        hasPendingModelChange { (attachment: NotePhotoAttachment) in attachment.id == id }
+    }
+
+    private func hasPendingModelChange<T: PersistentModel>(_ matches: (T) -> Bool) -> Bool {
+        (insertedModelsArray + changedModelsArray + deletedModelsArray).contains {
+            guard let model = $0 as? T else { return false }
+            return matches(model)
+        }
     }
 }
 

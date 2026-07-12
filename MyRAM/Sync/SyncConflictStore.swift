@@ -64,6 +64,223 @@ struct SyncRemoteTextBaseline: Codable, Equatable {
     let originDeviceID: String?
 }
 
+protocol SyncConflictStoring: AnyObject {
+    func activeConflicts(now: Date) -> [SyncConflictVersion]
+    func preserve(_ conflict: SyncConflictVersion) -> [SyncConflictVersion]
+    func removeConflict(id: UUID) -> [SyncConflictVersion]
+    func removeResolvedConflict(_ conflict: SyncConflictVersion) -> [SyncConflictVersion]
+    func hasActiveConflict(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField,
+        now: Date
+    ) -> Bool
+    func queuedConflict(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField
+    ) -> SyncTextQueuedConflict?
+    func remoteBaseline(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField
+    ) -> SyncRemoteTextBaseline?
+    func saveRemoteBaseline(_ baseline: SyncRemoteTextBaseline)
+    func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date, originDeviceID: String?)
+    func saveNoteContentBaseline(
+        noteID: UUID,
+        content: String,
+        richTextContentData: Data?,
+        modifiedAt: Date,
+        originDeviceID: String?
+    )
+    func savePinnedTextBaseline(thoughtID: UUID, text: String, modifiedAt: Date, originDeviceID: String?)
+}
+
+extension SyncConflictStoring {
+    func activeConflicts() -> [SyncConflictVersion] {
+        activeConflicts(now: Date())
+    }
+
+    func hasActiveConflict(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField
+    ) -> Bool {
+        hasActiveConflict(entityType: entityType, entityID: entityID, field: field, now: Date())
+    }
+}
+
+struct LegacyIncomingBufferedEffects: Equatable {
+    var preservedConflicts: [SyncConflictVersion] = []
+    var removedConflictIDs: [UUID] = []
+    var removedResolvedConflicts: [SyncConflictVersion] = []
+    var remoteBaselines: [SyncRemoteTextBaseline] = []
+}
+
+final class BufferedSyncConflictStore: SyncConflictStoring {
+    private struct BaselineKey: Hashable {
+        let entityType: SyncConflictEntityType
+        let entityID: UUID
+        let field: SyncConflictField
+    }
+
+    private let base: SyncConflictStoring
+    private var bufferedConflicts: [SyncConflictVersion] = []
+    private var removedConflictIDs: [UUID] = []
+    private var removedResolvedConflicts: [SyncConflictVersion] = []
+    private var baselinesByKey: [BaselineKey: SyncRemoteTextBaseline] = [:]
+
+    init(base: SyncConflictStoring) {
+        self.base = base
+    }
+
+    var effects: LegacyIncomingBufferedEffects {
+        LegacyIncomingBufferedEffects(
+            preservedConflicts: bufferedConflicts,
+            removedConflictIDs: removedConflictIDs,
+            removedResolvedConflicts: removedResolvedConflicts,
+            remoteBaselines: baselinesByKey.values.sorted {
+                if $0.entityType.rawValue != $1.entityType.rawValue {
+                    return $0.entityType.rawValue < $1.entityType.rawValue
+                }
+                if $0.entityID.uuidString != $1.entityID.uuidString {
+                    return $0.entityID.uuidString < $1.entityID.uuidString
+                }
+                return $0.field.rawValue < $1.field.rawValue
+            }
+        )
+    }
+
+    func activeConflicts(now: Date) -> [SyncConflictVersion] {
+        var conflicts = base.activeConflicts(now: now)
+            .filter { !removedConflictIDs.contains($0.id) }
+            .filter { conflict in
+                !removedResolvedConflicts.contains {
+                    $0.entityType == conflict.entityType
+                        && $0.entityID == conflict.entityID
+                        && $0.field == conflict.field
+                }
+            }
+        for conflict in bufferedConflicts where !conflicts.contains(where: { $0.id == conflict.id }) {
+            conflicts.append(conflict)
+        }
+        return conflicts.sorted {
+            if $0.preservedAt == $1.preservedAt {
+                return $0.id.uuidString < $1.id.uuidString
+            }
+            return $0.preservedAt > $1.preservedAt
+        }
+    }
+
+    func preserve(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
+        if !activeConflicts().contains(where: { sameLogicalConflict($0, conflict) }) {
+            bufferedConflicts.append(conflict)
+        }
+        return activeConflicts()
+    }
+
+    func removeConflict(id: UUID) -> [SyncConflictVersion] {
+        bufferedConflicts.removeAll { $0.id == id }
+        if !removedConflictIDs.contains(id) {
+            removedConflictIDs.append(id)
+        }
+        return activeConflicts()
+    }
+
+    func removeResolvedConflict(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
+        bufferedConflicts.removeAll { sameLogicalConflict($0, conflict) }
+        removedResolvedConflicts.append(conflict)
+        return activeConflicts()
+    }
+
+    func hasActiveConflict(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField,
+        now: Date
+    ) -> Bool {
+        activeConflicts(now: now).contains {
+            $0.entityType == entityType
+                && $0.entityID == entityID
+                && $0.field == field
+        }
+    }
+
+    func queuedConflict(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField
+    ) -> SyncTextQueuedConflict? {
+        base.queuedConflict(entityType: entityType, entityID: entityID, field: field)
+    }
+
+    func remoteBaseline(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField
+    ) -> SyncRemoteTextBaseline? {
+        baselinesByKey[BaselineKey(entityType: entityType, entityID: entityID, field: field)]
+            ?? base.remoteBaseline(entityType: entityType, entityID: entityID, field: field)
+    }
+
+    func saveRemoteBaseline(_ baseline: SyncRemoteTextBaseline) {
+        baselinesByKey[BaselineKey(
+            entityType: baseline.entityType,
+            entityID: baseline.entityID,
+            field: baseline.field
+        )] = baseline
+    }
+
+    func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date, originDeviceID: String?) {
+        saveRemoteBaseline(SyncRemoteTextBaseline(
+            entityType: .note,
+            entityID: noteID,
+            field: .noteTitle,
+            text: title,
+            richTextContentData: nil,
+            modifiedAt: modifiedAt,
+            originDeviceID: originDeviceID
+        ))
+    }
+
+    func saveNoteContentBaseline(
+        noteID: UUID,
+        content: String,
+        richTextContentData: Data?,
+        modifiedAt: Date,
+        originDeviceID: String?
+    ) {
+        saveRemoteBaseline(SyncRemoteTextBaseline(
+            entityType: .note,
+            entityID: noteID,
+            field: .noteContent,
+            text: content,
+            richTextContentData: richTextContentData,
+            modifiedAt: modifiedAt,
+            originDeviceID: originDeviceID
+        ))
+    }
+
+    func savePinnedTextBaseline(thoughtID: UUID, text: String, modifiedAt: Date, originDeviceID: String?) {
+        saveRemoteBaseline(SyncRemoteTextBaseline(
+            entityType: .pinnedThought,
+            entityID: thoughtID,
+            field: .pinnedText,
+            text: text,
+            richTextContentData: nil,
+            modifiedAt: modifiedAt,
+            originDeviceID: originDeviceID
+        ))
+    }
+
+    private func sameLogicalConflict(_ lhs: SyncConflictVersion, _ rhs: SyncConflictVersion) -> Bool {
+        lhs.entityType == rhs.entityType
+            && lhs.entityID == rhs.entityID
+            && lhs.field == rhs.field
+    }
+}
+
 enum SyncConflictBaselineSnapshotState: Equatable {
     case absent
     case present(Data)
@@ -89,7 +306,7 @@ extension SyncRemoteTextBaseline {
     }
 }
 
-final class SyncConflictStore {
+final class SyncConflictStore: SyncConflictStoring {
     struct FileIO {
         var fileExists: (String) -> Bool
         var readData: (URL) throws -> Data

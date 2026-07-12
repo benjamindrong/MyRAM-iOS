@@ -2615,7 +2615,7 @@ final class MyRAMTests: XCTestCase {
             pendingIncomingBatchQueueFileURL: nil,
             pendingLocalConvergenceBatchQueueFileURL: nil,
             resumesPendingConvergenceOnInit: false,
-            saveLegacyIncomingApplyContext: { try injector.save(context) }
+            saveLegacyIncomingApplyContext: { try injector.save($0) }
         )
         vm.currentNote = note
         UserDefaults.standard.removeObject(forKey: "lastNoteID")
@@ -2748,24 +2748,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(noteB.content, "Unsaved local B")
     }
 
-    func testSyncConflictStoreBaselineAbsentSnapshotRemovesSpeculativeBaseline() throws {
-        let conflictFileURL = temporarySyncConflictFileURL()
-        let directoryURL = conflictFileURL.deletingLastPathComponent()
-        let baselineURL = directoryURL.appendingPathComponent("sync-remote-text-baselines.json")
-        defer { try? FileManager.default.removeItem(at: directoryURL) }
-        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
-
-        let snapshot = try conflictStore.snapshot()
-
-        try FileManager.default.createDirectory(at: directoryURL, withIntermediateDirectories: true)
-        try Data("speculative baseline".utf8).write(to: baselineURL)
-
-        try conflictStore.restore(snapshot)
-
-        XCTAssertFalse(FileManager.default.fileExists(atPath: baselineURL.path))
-    }
-
-    func testLegacyIncomingBaselineCaptureFailureReturnsRetryBeforeMutation() async throws {
+    func testLegacyIncomingSiblingContextSaveRefreshesRetainedMainReference() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let noteID = UUID()
@@ -2775,21 +2758,12 @@ final class MyRAMTests: XCTestCase {
         context.insert(note)
         try context.save()
 
+        let retainedReference = note
         let conflictFileURL = temporarySyncConflictFileURL()
         defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
-        let conflictStore = SyncConflictStore(
-            fileURL: conflictFileURL,
-            fileIO: SyncConflictStore.FileIO(
-                fileExists: { path in path.hasSuffix("sync-remote-text-baselines.json") },
-                readData: { _ in throw CocoaError(.fileReadNoPermission) },
-                createDirectory: { _ in },
-                writeData: { _, _ in },
-                removeItem: { _ in }
-            )
-        )
         let vm = NotesViewModel(
             context: context,
-            syncConflictStore: conflictStore,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: nil,
             pendingLocalConvergenceBatchQueueFileURL: nil,
             resumesPendingConvergenceOnInit: false
@@ -2805,56 +2779,51 @@ final class MyRAMTests: XCTestCase {
 
         let dispositions = await vm.applyIncomingSyncChanges([change])
 
-        XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
-        XCTAssertEqual(note.content, "Original body")
-        XCTAssertFalse(context.hasChanges)
+        XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(retainedReference.content, "Peer body")
     }
 
-    func testLegacyIncomingBaselineRestoreFailureQuarantinesAfterRollback() async throws {
+    func testLegacyIncomingUnsavedInsertedEntityReturnsRetryWithoutIsolatedSave() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
+        context.autosaveEnabled = false
         let noteID = UUID()
-        let note = Note(title: "Original", content: "Original body")
-        note.id = noteID
-        note.modifiedAt = Date(timeIntervalSince1970: 100)
-        context.insert(note)
-        try context.save()
-
-        let injector = InjectableLegacyIncomingSaveFailure(shouldFail: true)
+        final class SaveProbe {
+            var callCount = 0
+        }
+        let probe = SaveProbe()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
-        let conflictStore = SyncConflictStore(
-            fileURL: conflictFileURL,
-            fileIO: SyncConflictStore.FileIO(
-                fileExists: { path in path.hasSuffix("sync-remote-text-baselines.json") },
-                readData: { _ in Data("baseline before".utf8) },
-                createDirectory: { _ in },
-                writeData: { _, _ in throw CocoaError(.fileWriteNoPermission) },
-                removeItem: { _ in }
-            )
-        )
         let vm = NotesViewModel(
             context: context,
-            syncConflictStore: conflictStore,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: nil,
             pendingLocalConvergenceBatchQueueFileURL: nil,
             resumesPendingConvergenceOnInit: false,
-            saveLegacyIncomingApplyContext: { try injector.save(context) }
+            saveLegacyIncomingApplyContext: { isolatedContext in
+                probe.callCount += 1
+                try isolatedContext.save()
+            }
         )
+        let note = Note(title: "Draft", content: "Unsaved draft")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        XCTAssertTrue(context.hasChanges)
         let change = try legacyNoteChange(
             noteID: noteID,
-            title: "Original",
-            content: "Peer body",
-            baseTitle: "Original",
-            baseContent: "Original body",
+            title: "Draft",
+            content: "Remote body",
+            baseTitle: "Draft",
+            baseContent: "Unsaved draft",
             modifiedAt: Date(timeIntervalSince1970: 200)
         )
 
         let dispositions = await vm.applyIncomingSyncChanges([change])
 
-        XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .quarantined)])
-        XCTAssertEqual(note.content, "Original body")
-        XCTAssertFalse(context.hasChanges)
+        XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(note.content, "Unsaved draft")
+        XCTAssertEqual(probe.callCount, 0)
     }
 
     // MARK: - Unrelated later save cannot persist a refused mutation (8.3, load-bearing)
@@ -2879,7 +2848,7 @@ final class MyRAMTests: XCTestCase {
             pendingIncomingBatchQueueFileURL: nil,
             pendingLocalConvergenceBatchQueueFileURL: nil,
             resumesPendingConvergenceOnInit: false,
-            saveLegacyIncomingApplyContext: { try injector.save(context) }
+            saveLegacyIncomingApplyContext: { try injector.save($0) }
         )
 
         let change = try legacyNoteChange(
@@ -2930,7 +2899,7 @@ final class MyRAMTests: XCTestCase {
             pendingIncomingBatchQueueFileURL: nil,
             pendingLocalConvergenceBatchQueueFileURL: nil,
             resumesPendingConvergenceOnInit: false,
-            saveLegacyIncomingApplyContext: { try injector.save(context) }
+            saveLegacyIncomingApplyContext: { try injector.save($0) }
         )
 
         let change = try legacyNoteChange(
@@ -2950,6 +2919,108 @@ final class MyRAMTests: XCTestCase {
         let secondDispositions = await vm.applyIncomingSyncChanges([change])
         XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
         XCTAssertEqual(note.content, "Peer body")
+
+        let duplicateDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(duplicateDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(note.content, "Peer body")
+    }
+
+    func testLegacyIncomingBufferedBaselineCommitFailureRedeliversMissingEffects() async throws {
+        let storeName = "MyRAMLegacyBufferedEffectFailure-\(UUID().uuidString)"
+        let container = try makeContainer(isStoredInMemoryOnly: false, configurationName: storeName)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Original", content: "Original body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        try context.save()
+
+        final class CommitFailure {
+            var shouldFail = true
+            var callCount = 0
+        }
+        let failure = CommitFailure()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: conflictStore,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            commitLegacyIncomingEffects: { effects in
+                failure.callCount += 1
+                if failure.shouldFail {
+                    throw NSError(domain: "MyRAMTests.CommitFailure", code: 1)
+                }
+                for baseline in effects.remoteBaselines {
+                    conflictStore.saveRemoteBaseline(baseline)
+                }
+                for conflict in effects.preservedConflicts {
+                    _ = conflictStore.preserve(conflict)
+                }
+            }
+        )
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Original",
+            content: "Peer body",
+            baseTitle: "Original",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let firstDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(failure.callCount, 1)
+        XCTAssertNil(conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteContent))
+
+        let reloadedAfterFailure = try XCTUnwrap(
+            try ModelContext(container).fetch(FetchDescriptor<Note>()).first { $0.id == noteID }
+        )
+        XCTAssertEqual(reloadedAfterFailure.content, "Peer body")
+
+        failure.shouldFail = false
+        let secondDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(failure.callCount, 2)
+        XCTAssertEqual(
+            conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteContent)?.text,
+            "Peer body"
+        )
+        XCTAssertEqual(note.content, "Peer body")
+    }
+
+    func testBufferedConflictStoreReadsPinnedTextBaselineWrittenDuringApply() {
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let realStore = SyncConflictStore(fileURL: conflictFileURL)
+        let bufferedStore = BufferedSyncConflictStore(base: realStore)
+        let thoughtID = UUID()
+        let modifiedAt = Date(timeIntervalSince1970: 200)
+
+        bufferedStore.savePinnedTextBaseline(
+            thoughtID: thoughtID,
+            text: "Remote pinned text",
+            modifiedAt: modifiedAt,
+            originDeviceID: "device-b"
+        )
+
+        XCTAssertNil(realStore.remoteBaseline(entityType: .pinnedThought, entityID: thoughtID, field: .pinnedText))
+        XCTAssertEqual(
+            bufferedStore.remoteBaseline(entityType: .pinnedThought, entityID: thoughtID, field: .pinnedText),
+            SyncRemoteTextBaseline(
+                entityType: .pinnedThought,
+                entityID: thoughtID,
+                field: .pinnedText,
+                text: "Remote pinned text",
+                richTextContentData: nil,
+                modifiedAt: modifiedAt,
+                originDeviceID: "device-b"
+            )
+        )
     }
 
     // MARK: - Partial envelope save failure (8.6)
@@ -2978,7 +3049,7 @@ final class MyRAMTests: XCTestCase {
             pendingIncomingBatchQueueFileURL: nil,
             pendingLocalConvergenceBatchQueueFileURL: nil,
             resumesPendingConvergenceOnInit: false,
-            saveLegacyIncomingApplyContext: { try injector.save(context) }
+            saveLegacyIncomingApplyContext: { try injector.save($0) }
         )
 
         let succeedingChange = try legacyNoteChange(
@@ -3039,7 +3110,7 @@ final class MyRAMTests: XCTestCase {
             pendingIncomingBatchQueueFileURL: nil,
             pendingLocalConvergenceBatchQueueFileURL: nil,
             resumesPendingConvergenceOnInit: false,
-            saveLegacyIncomingApplyContext: { try injector.save(context) }
+            saveLegacyIncomingApplyContext: { try injector.save($0) }
         )
 
         // No shared baseline is established for this field, so a remote value

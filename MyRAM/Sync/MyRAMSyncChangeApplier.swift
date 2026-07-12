@@ -43,14 +43,14 @@ struct MyRAMSyncChangeOutcome: Equatable {
 @MainActor
 final class MyRAMSyncChangeApplier {
     private let context: ModelContext
-    private let conflictStore: SyncConflictStore
+    private let conflictStore: SyncConflictStoring
     private let isTextApplicationUnsafe: (SyncConflictEntityType, UUID, SyncConflictField) -> Bool
     private(set) var syncConflicts: [SyncConflictVersion]
     private var newlyPreservedConflicts: [SyncConflictVersion] = []
 
     init(
         context: ModelContext,
-        conflictStore: SyncConflictStore,
+        conflictStore: SyncConflictStoring,
         isTextApplicationUnsafe: @escaping (SyncConflictEntityType, UUID, SyncConflictField) -> Bool = { _, _, _ in false }
     ) {
         self.context = context
