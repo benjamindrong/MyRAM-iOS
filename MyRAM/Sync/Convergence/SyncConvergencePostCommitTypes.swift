@@ -57,6 +57,7 @@ enum SyncConvergencePostCommitFailure: Error, Equatable, Sendable {
     case missingAuthoritativeIncorporation(batchID: UUID)
     case inconsistentIncorporationIdentity(batchID: UUID)
     case malformedPostCommitState(batchID: UUID)
+    case contradictoryPostCommitIndex(batchID: UUID)
     case missingPostCommitWorkPayload(batchID: UUID)
     case malformedPostCommitWorkPayload(batchID: UUID)
     case contradictoryPostCommitWorkPayload(batchID: UUID)
@@ -163,6 +164,10 @@ protocol SyncConvergencePresentationAdapter {
 }
 
 extension SyncConvergencePostCommitState {
+    var hasPendingWork: Bool {
+        self != .none
+    }
+
     var pendingWork: Set<SyncConvergencePostCommitPendingWork> {
         var work: Set<SyncConvergencePostCommitPendingWork> = []
         if queueCleanupPending {

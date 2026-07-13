@@ -93,6 +93,10 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
     }
 
     func insertIncorporatedBatch(_ record: SyncConvergenceIncorporatedBatchRecord) throws {
+        guard let decodedState = try? SyncConvergencePostCommitState.decodePayloadData(record.postCommitStatePayloadData),
+              decodedState.hasPendingWork == record.hasPendingPostCommitWork else {
+            throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: nil)
+        }
         context.insert(IncorporatedSyncBatch(
             batchID: record.batchID,
             originDeviceID: record.originDeviceID,
@@ -109,7 +113,8 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
             authoritativeChildBytes: record.authoritativeChildBytes,
             authoritativeChildrenDigest: record.authoritativeChildrenDigest,
             postCommitWorkPayloadData: record.postCommitWorkPayloadData,
-            postCommitStatePayloadData: record.postCommitStatePayloadData
+            postCommitStatePayloadData: record.postCommitStatePayloadData,
+            hasPendingPostCommitWork: record.hasPendingPostCommitWork
         ))
     }
 

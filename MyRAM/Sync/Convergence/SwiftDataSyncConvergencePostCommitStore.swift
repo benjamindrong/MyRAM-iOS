@@ -4,6 +4,23 @@ import SwiftData
 final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitStateStore {
     private let context: ModelContext
 
+    #if DEBUG
+    enum TestOnlySaveSite {
+        case backfill
+        case compareAndSet
+    }
+
+    enum TestOnlyPostSaveMutation {
+        case contradictoryIndex
+        case selfConsistentUnexpectedState
+    }
+
+    private(set) var testOnlyLastCandidateFetchCount = 0
+    private(set) var testOnlyLastBackfillSaveCount = 0
+    var testOnlyFailNextSaveAt: TestOnlySaveSite?
+    var testOnlyPostSaveMutation: TestOnlyPostSaveMutation?
+    #endif
+
     init(context: ModelContext) {
         self.context = context
     }
@@ -11,13 +28,12 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
     func loadState(
         matching identity: SyncConvergencePersistedIncorporationIdentity
     ) throws -> SyncConvergencePostCommitLoadedState {
-        if let root = try loadRoot(batchID: identity.batchID) {
-            guard root.matches(identity) else { return .inconsistent }
+        let identityBatchID = identity.batchID
+        if let modelRoot = try fetchOne(IncorporatedSyncBatch.self, #Predicate { $0.batchID == identityBatchID }) {
+            guard modelRoot.matches(identity) else { return .inconsistent }
+            let root = try rootProjection(modelRoot)
             do {
-                let state = try SyncConvergenceStableEncoding.decode(
-                    SyncConvergencePostCommitState.self,
-                    from: root.postCommitStatePayloadData
-                )
+                let state = try decodeAndValidatePostCommitState(modelRoot)
                 let workPayload = try decodeWorkPayload(root: root, state: state)
                 return .fullRoot(SyncConvergencePostCommitFullRootState(
                     root: root,
@@ -64,29 +80,44 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
         guard let root = try fetchOne(IncorporatedSyncBatch.self, #Predicate { $0.batchID == batchID }) else {
             throw SyncConvergencePostCommitFailure.missingAuthoritativeIncorporation(batchID: identity.batchID)
         }
-        let currentSnapshot = try loadRoot(batchID: batchID)
+        let currentSnapshot = try rootProjection(root)
         guard currentSnapshot == expectedRoot.root,
               root.matches(identity),
               root.postCommitStatePayloadData == expectedPayloadData else {
             throw SyncConvergencePostCommitFailure.inconsistentIncorporationIdentity(batchID: identity.batchID)
         }
+        _ = try decodeAndValidatePostCommitState(root)
 
         let originalWorkPayloadData = root.postCommitWorkPayloadData
         let encodedState = try SyncConvergenceStableEncoding.encode(newState)
         root.postCommitStatePayloadData = encodedState
+        root.hasPendingPostCommitWork = newState.hasPendingWork
         do {
+            #if DEBUG
+            try testOnlyThrowIfRequested(at: .compareAndSet)
+            #endif
             try context.save()
         } catch {
             context.rollback()
             throw SyncConvergencePostCommitFailure.persistence
         }
 
-        guard let reloaded = try loadRoot(batchID: identity.batchID),
-              reloaded.matches(identity),
+        let identityBatchID = identity.batchID
+        guard let reloadedModel = try fetchOne(IncorporatedSyncBatch.self, #Predicate { $0.batchID == identityBatchID }) else {
+            throw SyncConvergencePostCommitFailure.persistence
+        }
+        #if DEBUG
+        try testOnlyApplyPostSaveMutationIfRequested(to: reloadedModel, expectedState: newState)
+        #endif
+        let reloaded = try rootProjection(reloadedModel)
+        let reloadedState = try decodeAndValidatePostCommitState(reloadedModel)
+        guard reloaded.matches(identity),
+              reloadedState == newState,
               reloaded.postCommitStatePayloadData == encodedState,
+              reloadedModel.hasPendingPostCommitWork == newState.hasPendingWork,
               reloaded.postCommitWorkPayloadData == originalWorkPayloadData,
               reloaded == SyncConvergenceIncorporatedRootProjection(
-                batchID: currentSnapshot?.batchID ?? expectedRoot.root.batchID,
+                batchID: currentSnapshot.batchID,
                 originDeviceID: expectedRoot.root.originDeviceID,
                 createdAt: expectedRoot.root.createdAt,
                 batchSequence: expectedRoot.root.batchSequence,
@@ -109,7 +140,7 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
         }
         return SyncConvergencePostCommitFullRootState(
             root: reloaded,
-            postCommitState: newState,
+            postCommitState: reloadedState,
             postCommitStatePayloadData: encodedState,
             postCommitWorkPayload: try reloaded.postCommitWorkPayloadData.map(SyncConvergencePostCommitWorkPayloadV1.decodePayloadData),
             postCommitWorkPayloadData: reloaded.postCommitWorkPayloadData
@@ -263,21 +294,81 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
 
 extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCommitSource {
     func loadPendingPostCommitRequests() throws -> [SyncConvergencePostCommitRequest] {
+        #if DEBUG
+        testOnlyLastCandidateFetchCount = 0
+        testOnlyLastBackfillSaveCount = 0
+        let isolatedStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(context.container))
+        isolatedStore.testOnlyFailNextSaveAt = testOnlyFailNextSaveAt
+        defer {
+            testOnlyLastCandidateFetchCount = isolatedStore.testOnlyLastCandidateFetchCount
+            testOnlyLastBackfillSaveCount = isolatedStore.testOnlyLastBackfillSaveCount
+            testOnlyFailNextSaveAt = isolatedStore.testOnlyFailNextSaveAt
+        }
+        return try isolatedStore.loadPendingPostCommitRequestsInCurrentContext()
+        #else
+        let isolatedStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(context.container))
+        return try isolatedStore.loadPendingPostCommitRequestsInCurrentContext()
+        #endif
+    }
+
+    private func loadPendingPostCommitRequestsInCurrentContext() throws -> [SyncConvergencePostCommitRequest] {
+        #if DEBUG
+        testOnlyLastCandidateFetchCount = 0
+        testOnlyLastBackfillSaveCount = 0
+        #endif
+
         let descriptor = FetchDescriptor<IncorporatedSyncBatch>(
+            predicate: #Predicate {
+                $0.hasPendingPostCommitWork == true ||
+                $0.hasPendingPostCommitWork == nil
+            },
             sortBy: [
                 SortDescriptor(\.committedAt)
             ]
         )
-        return try context.fetch(descriptor)
+        let candidates = try context.fetch(descriptor)
             .sorted {
                 if $0.committedAt != $1.committedAt { return $0.committedAt < $1.committedAt }
                 return $0.batchID.uuidString < $1.batchID.uuidString
             }
-            .compactMap { root in
+
+        #if DEBUG
+        testOnlyLastCandidateFetchCount = candidates.count
+        #endif
+
+        var backfillAssignments: [(IncorporatedSyncBatch, Bool)] = []
+        var requests: [SyncConvergencePostCommitRequest] = []
+        for root in candidates {
             let projection = try rootProjection(root)
-            let state = try decodePostCommitState(root)
-            guard state != .none else { return nil }
-            return try postCommitRequest(root: projection, state: state)
+            let state = try decodeAndValidatePostCommitState(root)
+            if root.hasPendingPostCommitWork == nil {
+                backfillAssignments.append((root, state.hasPendingWork))
+            }
+            if state != .none {
+                requests.append(try postCommitRequest(root: projection, state: state))
+            }
+        }
+
+        guard !backfillAssignments.isEmpty else { return requests }
+        // The public loader uses a dedicated context; this guard proves phase one stayed read-only.
+        guard !context.hasChanges else {
+            throw SyncConvergencePostCommitFailure.persistence
+        }
+        for (root, hasPendingWork) in backfillAssignments {
+            root.hasPendingPostCommitWork = hasPendingWork
+        }
+        do {
+            #if DEBUG
+            try testOnlyThrowIfRequested(at: .backfill)
+            #endif
+            try context.save()
+            #if DEBUG
+            testOnlyLastBackfillSaveCount = 1
+            #endif
+            return requests
+        } catch {
+            context.rollback()
+            throw SyncConvergencePostCommitFailure.persistence
         }
     }
 
@@ -300,7 +391,7 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
             ))
         }
         let projection = try rootProjection(root)
-        let state = try decodePostCommitState(root)
+        let state = try decodeAndValidatePostCommitState(root)
         guard state != .none else {
             return .completed(projection.persistedIdentity)
         }
@@ -326,14 +417,54 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
         )
     }
 
-    private func decodePostCommitState(_ root: IncorporatedSyncBatch) throws -> SyncConvergencePostCommitState {
+    private func decodeAndValidatePostCommitState(_ root: IncorporatedSyncBatch) throws -> SyncConvergencePostCommitState {
         do {
-            return try SyncConvergencePostCommitState.decodePayloadData(root.postCommitStatePayloadData)
+            let state = try SyncConvergencePostCommitState.decodePayloadData(root.postCommitStatePayloadData)
+            if let indexed = root.hasPendingPostCommitWork, indexed != state.hasPendingWork {
+                throw SyncConvergencePostCommitFailure.contradictoryPostCommitIndex(batchID: root.batchID)
+            }
+            return state
+        } catch let failure as SyncConvergencePostCommitFailure {
+            throw failure
         } catch {
             throw SyncConvergencePostCommitFailure.malformedPostCommitState(batchID: root.batchID)
         }
     }
+
+    #if DEBUG
+    private func testOnlyThrowIfRequested(at site: TestOnlySaveSite) throws {
+        guard testOnlyFailNextSaveAt == site else { return }
+        testOnlyFailNextSaveAt = nil
+        throw TestOnlyInjectedPersistenceError()
+    }
+
+    private func testOnlyApplyPostSaveMutationIfRequested(
+        to root: IncorporatedSyncBatch,
+        expectedState: SyncConvergencePostCommitState
+    ) throws {
+        guard let mutation = testOnlyPostSaveMutation else { return }
+        testOnlyPostSaveMutation = nil
+        switch mutation {
+        case .contradictoryIndex:
+            root.hasPendingPostCommitWork = !expectedState.hasPendingWork
+        case .selfConsistentUnexpectedState:
+            let unexpectedState = expectedState == .none
+                ? SyncConvergencePostCommitState(
+                    queueCleanupPending: true,
+                    legacyCleanupPending: false,
+                    presentationRefreshPending: false
+                )
+                : SyncConvergencePostCommitState.none
+            root.postCommitStatePayloadData = try SyncConvergenceStableEncoding.encode(unexpectedState)
+            root.hasPendingPostCommitWork = unexpectedState.hasPendingWork
+        }
+    }
+    #endif
 }
+
+#if DEBUG
+private struct TestOnlyInjectedPersistenceError: Error {}
+#endif
 
 private extension IncorporatedSyncBatch {
     func matches(_ identity: SyncConvergencePersistedIncorporationIdentity) -> Bool {

@@ -3703,7 +3703,8 @@ final class MyRAMTests: XCTestCase {
                 authoritativeChildCount: 0,
                 authoritativeChildBytes: 0,
                 authoritativeChildrenDigest: String(repeating: "c", count: 64),
-                postCommitStatePayloadData: noPendingPostCommitWork
+                postCommitStatePayloadData: noPendingPostCommitWork,
+                hasPendingPostCommitWork: false
             ))
             context.insert(IncorporationContradictionDiagnostic(
                 batchID: batchID,
