@@ -484,6 +484,7 @@ struct SyncConvergenceIncorporatedBatchRecord: Equatable {
     let authoritativeChildrenDigest: String
     let postCommitWorkPayloadData: Data?
     let postCommitStatePayloadData: Data
+    let hasPendingPostCommitWork: Bool
 }
 
 struct SyncConvergenceOperationIdentityRecord: Equatable {

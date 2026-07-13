@@ -82,6 +82,39 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertTrue(postCommit.presentationRefreshPending)
     }
 
+    func testSwiftDataTransactionRejectsContradictoryPostCommitIndex() throws {
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: ModelContext(container))
+        let batchID = uuid("00000000-0000-0000-0000-000000158101")
+        let committedAt = date(158)
+        let record = SyncConvergenceIncorporatedBatchRecord(
+            batchID: batchID,
+            originDeviceID: uuid("00000000-0000-0000-0000-000000158102"),
+            createdAt: date(157),
+            batchSequence: 158,
+            schemaVersion: 1,
+            committedAt: committedAt,
+            canonicalPayloadDigest: String(repeating: "a", count: 64),
+            canonicalPayloadDigestFormatVersion: 1,
+            committedResultDigest: String(repeating: "b", count: 64),
+            committedResultDigestFormatVersion: 1,
+            affectedNotesPayloadData: try SyncConvergenceAffectedNotesPayloadV1(noteIDs: []).encodedData(),
+            authoritativeChildCount: 0,
+            authoritativeChildBytes: 0,
+            authoritativeChildrenDigest: String(repeating: "c", count: 64),
+            postCommitWorkPayloadData: nil,
+            postCommitStatePayloadData: try SyncConvergencePostCommitState.none.encodedPayloadData(),
+            hasPendingPostCommitWork: true
+        )
+
+        XCTAssertThrowsError(try transaction.insertIncorporatedBatch(record)) { error in
+            XCTAssertEqual(error as? SyncConvergenceTransactionFailure, .invalidMergePlan(noteID: nil))
+        }
+    }
+
     func testAllIdempotentRetainedBodyDeliveryPersistsWithoutPresentationWork() throws {
         let noteID = uuid("00000000-0000-0000-0000-000000132c70")
         let batch = SyncBatch(

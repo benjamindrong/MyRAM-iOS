@@ -331,7 +331,8 @@ final class SyncConvergenceFoundationTests: XCTestCase {
             authoritativeChildCount: 0,
             authoritativeChildBytes: 0,
             authoritativeChildrenDigest: String(repeating: "c", count: 64),
-            postCommitStatePayloadData: Data()
+            postCommitStatePayloadData: Data(),
+            hasPendingPostCommitWork: false
         )
         let mismatchedPayload = CommittedAtOrderingPayload(
             batchID: batchID,
@@ -452,7 +453,8 @@ final class SyncConvergenceFoundationTests: XCTestCase {
             authoritativeChildCount: 0,
             authoritativeChildBytes: 0,
             authoritativeChildrenDigest: String(repeating: "c", count: 64),
-            postCommitStatePayloadData: Data()
+            postCommitStatePayloadData: Data(),
+            hasPendingPostCommitWork: false
         )
         let payload = CommittedAtOrderingPayload(batchID: batchID, committedAt: committedAt)
         let tombstone = try makeValidTombstone(committedAtOrderingPayloadData: try payload.encodedEvidenceData())
@@ -515,7 +517,8 @@ final class SyncConvergenceFoundationTests: XCTestCase {
             authoritativeChildCount: 0,
             authoritativeChildBytes: 0,
             authoritativeChildrenDigest: String(repeating: "c", count: 64),
-            postCommitStatePayloadData: Data()
+            postCommitStatePayloadData: Data(),
+            hasPendingPostCommitWork: false
         )
         let winner = NoteTitleWinner(
             noteID: noteID,

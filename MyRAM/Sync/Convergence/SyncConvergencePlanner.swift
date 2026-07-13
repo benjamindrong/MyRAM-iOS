@@ -3138,7 +3138,8 @@ struct SyncConvergenceIncorporationExecutor {
                 authoritativeChildBytes: childBytes,
                 authoritativeChildrenDigest: childrenDigest,
                 postCommitWorkPayloadData: try postCommitWorkPayload.encodedPayloadData(),
-                postCommitStatePayloadData: try postCommitState.encodedPayloadData()
+                postCommitStatePayloadData: try postCommitState.encodedPayloadData(),
+                hasPendingPostCommitWork: postCommitState.hasPendingWork
             )
         }
 

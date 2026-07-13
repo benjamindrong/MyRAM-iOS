@@ -237,6 +237,7 @@ final class IncorporatedSyncBatch {
     var authoritativeChildrenDigest: String
     var postCommitWorkPayloadData: Data?
     var postCommitStatePayloadData: Data
+    var hasPendingPostCommitWork: Bool?
 
     init(
         id: UUID = UUID(),
@@ -255,7 +256,8 @@ final class IncorporatedSyncBatch {
         authoritativeChildBytes: Int,
         authoritativeChildrenDigest: String,
         postCommitWorkPayloadData: Data? = nil,
-        postCommitStatePayloadData: Data
+        postCommitStatePayloadData: Data,
+        hasPendingPostCommitWork: Bool
     ) {
         self.batchKey = SyncConvergenceKey.incorporatedBatch(batchID: batchID)
         self.id = id
@@ -277,6 +279,7 @@ final class IncorporatedSyncBatch {
         self.authoritativeChildrenDigest = authoritativeChildrenDigest
         self.postCommitWorkPayloadData = postCommitWorkPayloadData
         self.postCommitStatePayloadData = postCommitStatePayloadData
+        self.hasPendingPostCommitWork = hasPendingPostCommitWork
     }
 
     func validateDateAuthority() throws {

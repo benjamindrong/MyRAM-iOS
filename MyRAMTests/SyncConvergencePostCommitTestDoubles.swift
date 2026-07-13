@@ -173,6 +173,7 @@ struct MYR136RawRootSnapshot: Equatable {
     let authoritativeChildrenDigest: String
     let postCommitWorkPayloadData: Data?
     let postCommitStatePayloadData: Data
+    let hasPendingPostCommitWork: Bool?
 
     init(
         batchKey: String,
@@ -194,7 +195,8 @@ struct MYR136RawRootSnapshot: Equatable {
         authoritativeChildBytes: Int,
         authoritativeChildrenDigest: String,
         postCommitWorkPayloadData: Data?,
-        postCommitStatePayloadData: Data
+        postCommitStatePayloadData: Data,
+        hasPendingPostCommitWork: Bool?
     ) {
         self.batchKey = batchKey
         self.id = id
@@ -216,6 +218,7 @@ struct MYR136RawRootSnapshot: Equatable {
         self.authoritativeChildrenDigest = authoritativeChildrenDigest
         self.postCommitWorkPayloadData = postCommitWorkPayloadData
         self.postCommitStatePayloadData = postCommitStatePayloadData
+        self.hasPendingPostCommitWork = hasPendingPostCommitWork
     }
 
     init(root: IncorporatedSyncBatch) throws {
@@ -240,9 +243,13 @@ struct MYR136RawRootSnapshot: Equatable {
         authoritativeChildrenDigest = root.authoritativeChildrenDigest
         postCommitWorkPayloadData = root.postCommitWorkPayloadData.map { Data($0) }
         postCommitStatePayloadData = Data(root.postCommitStatePayloadData)
+        hasPendingPostCommitWork = root.hasPendingPostCommitWork
     }
 
-    func replacingPostCommitStatePayloadData(_ data: Data) -> Self {
+    func replacingPostCommitStatePayloadData(
+        _ data: Data,
+        hasPendingPostCommitWork: Bool? = nil
+    ) -> Self {
         MYR136RawRootSnapshot(
             batchKey: batchKey,
             id: id,
@@ -263,7 +270,8 @@ struct MYR136RawRootSnapshot: Equatable {
             authoritativeChildBytes: authoritativeChildBytes,
             authoritativeChildrenDigest: authoritativeChildrenDigest,
             postCommitWorkPayloadData: postCommitWorkPayloadData,
-            postCommitStatePayloadData: data
+            postCommitStatePayloadData: data,
+            hasPendingPostCommitWork: hasPendingPostCommitWork ?? self.hasPendingPostCommitWork
         )
     }
 }
@@ -346,6 +354,7 @@ func makeMYR135PersistedIdentityFixture() throws -> MYR135PersistedIdentityFixtu
     }
     root.postCommitStatePayloadData = try SyncConvergenceStableEncoding.encode(pendingState)
     root.postCommitWorkPayloadData = try pendingWorkPayload.encodedPayloadData()
+    root.hasPendingPostCommitWork = pendingState.hasPendingWork
     try rootContext.save()
 
     guard case .fullRoot(let loaded) = try SwiftDataSyncConvergencePostCommitStore(
