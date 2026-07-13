@@ -3056,32 +3056,35 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(vm.syncConflicts, conflictStore.activeConflicts())
     }
 
-    func testLegacyIncomingExactConflictRedeliveryCommitsMissingBaselineWithoutDuplicateQueue() async throws {
+    func testLegacyIncomingExactConflictRedeliveryCommitsMissingConflictWithoutDuplicateQueue() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let noteID = UUID()
-        let note = Note(title: "Original", content: "Local body")
+        let note = Note(title: "Local title", content: "Local body")
         note.id = noteID
         note.modifiedAt = Date(timeIntervalSince1970: 150)
         context.insert(note)
         try context.save()
 
-        final class BaselineWriteFailure {
+        final class ConflictWriteFailure {
             var shouldFail = true
         }
-        let failure = BaselineWriteFailure()
+        let failure = ConflictWriteFailure()
         let conflictFileURL = temporarySyncConflictFileURL()
         defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
         let conflictStore = SyncConflictStore(
             fileURL: conflictFileURL,
-            fileIO: SyncConflictStore.FileIO(
+            fileIO: .live,
+            textFileIO: SyncTextConflictStore.FileIO(
                 fileExists: { FileManager.default.fileExists(atPath: $0) },
                 readData: { try Data(contentsOf: $0) },
                 createDirectory: {
                     try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
                 },
                 writeData: { data, url in
-                    if failure.shouldFail, url.lastPathComponent == "sync-remote-text-baselines.json" {
+                    if failure.shouldFail,
+                       url.lastPathComponent == "sync-conflicts.json",
+                       String(data: data, encoding: .utf8)?.contains("Remote body") == true {
                         throw CocoaError(.fileWriteNoPermission)
                     }
                     try data.write(to: url, options: [.atomic])
@@ -3098,31 +3101,33 @@ final class MyRAMTests: XCTestCase {
         )
         let change = try legacyNoteChange(
             noteID: noteID,
-            title: "Original",
+            title: "Remote title",
             content: "Remote body",
-            baseTitle: "Original",
+            baseTitle: "Original title",
             baseContent: "Original body",
             modifiedAt: Date(timeIntervalSince1970: 200)
         )
 
         let firstDispositions = await vm.applyIncomingSyncChanges([change])
         XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
-        XCTAssertEqual(conflictStore.activeConflicts().count, 1)
+        XCTAssertEqual(conflictStore.activeConflicts().map(\.field), [.noteTitle])
+        XCTAssertNil(conflictStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteTitle))
         XCTAssertNil(conflictStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent))
-        XCTAssertNil(conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteTitle))
+        XCTAssertEqual(note.title, "Local title")
         XCTAssertEqual(note.content, "Local body")
 
         failure.shouldFail = false
         let secondDispositions = await vm.applyIncomingSyncChanges([change])
 
         XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
-        XCTAssertEqual(conflictStore.activeConflicts().count, 1)
+        let activeConflictFields = conflictStore.activeConflicts().map(\.field)
+        XCTAssertEqual(activeConflictFields.filter { $0 == .noteTitle }.count, 1)
+        XCTAssertEqual(activeConflictFields.filter { $0 == .noteContent }.count, 1)
+        XCTAssertNil(conflictStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteTitle))
         XCTAssertNil(conflictStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent))
-        XCTAssertEqual(
-            conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteTitle)?.text,
-            "Original"
-        )
-        XCTAssertEqual(note.title, "Original")
+        XCTAssertNil(conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteTitle))
+        XCTAssertNil(conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteContent))
+        XCTAssertEqual(note.title, "Local title")
         XCTAssertEqual(note.content, "Local body")
         XCTAssertEqual(
             [firstDispositions, secondDispositions].flatMap { $0 }.filter { $0.disposition == .applied }.count,
