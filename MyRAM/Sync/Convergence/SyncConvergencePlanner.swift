@@ -2643,7 +2643,6 @@ struct SyncConvergenceIncorporationExecutor {
               root.createdAt == prepared.root.createdAt,
               root.batchSequence == prepared.root.batchSequence,
               root.schemaVersion == prepared.root.schemaVersion,
-              root.committedAt == orderingPayload.committedAt,
               root.canonicalPayloadDigest == prepared.root.canonicalPayloadDigest,
               root.canonicalPayloadDigestFormatVersion == prepared.root.canonicalPayloadDigestFormatVersion,
               root.committedResultDigest == prepared.root.committedResultDigest,
@@ -3041,18 +3040,27 @@ struct SyncConvergenceIncorporationExecutor {
                 }
             }
             self.input = input
+            let sourceBatchIDLowercase = input.sourceBatchID.uuidString.lowercased()
+            var retainedProjectionIndex = input.sourceBatch.changes.count
             self.operationIdentities = try input.plan.incorporationEvidence.operationIdentities
                 .sorted(by: Self.identityOrder)
                 .map { identity in
-                    guard let batchID = UUID(uuidString: identity.batchIDLowercase),
+                    guard UUID(uuidString: identity.batchIDLowercase) != nil,
                           let noteID = identity.noteID(from: input)
                     else {
                         throw ExecutorFailure(.invalidMergePlan(noteID: nil))
                     }
+                    let projectedOperationIndex: Int
+                    if identity.batchIDLowercase == sourceBatchIDLowercase {
+                        projectedOperationIndex = identity.operationIndex
+                    } else {
+                        projectedOperationIndex = retainedProjectionIndex
+                        retainedProjectionIndex += 1
+                    }
                     return SyncConvergenceOperationIdentityRecord(
-                        batchID: batchID,
+                        batchID: input.sourceBatchID,
                         noteID: noteID,
-                        operationIndex: identity.operationIndex,
+                        operationIndex: projectedOperationIndex,
                         operationIdentity: identity
                     )
                 }
@@ -3095,7 +3103,7 @@ struct SyncConvergenceIncorporationExecutor {
             let postCommitState = SyncConvergencePostCommitState(
                 queueCleanupPending: input.plan.cleanupPlan.retryQueueCleanup || !input.plan.cleanupPlan.batchIDs.isEmpty,
                 legacyCleanupPending: input.plan.cleanupPlan.retryLegacyCleanup,
-                presentationRefreshPending: !input.plan.presentationPlan.noteRoutings.isEmpty
+                presentationRefreshPending: input.plan.presentationPlan.noteRoutings.contains { $0.value != .none }
             )
             let postCommitWorkPayload: SyncConvergencePostCommitWorkPayloadV1
             do {
@@ -3164,7 +3172,7 @@ struct SyncConvergenceIncorporationExecutor {
             expectedNoteEffects: [ExpectedNoteEffectProjection]
         ) throws -> [ChildProjection] {
             try makeChildProjection(
-                operationIdentities: children.operationIdentities.sorted { $0.operationIndex < $1.operationIndex },
+                operationIdentities: children.operationIdentities.sorted(by: identityRecordOrder),
                 noteEffects: expectedNoteEffects.sorted { $0.noteID.uuidString < $1.noteID.uuidString },
                 resultEvidence: children.resultEvidence.sorted(by: { resultEvidenceOrder($0.evidence, $1.evidence) })
             )
@@ -3184,6 +3192,7 @@ struct SyncConvergenceIncorporationExecutor {
             let identityAuthority = try makeOperationIdentityAuthority(input: input)
             let expectedRoutedNoteIDs = Set(
                 input.plan.presentationPlan.noteRoutings
+                    .filter { $0.value != .none }
                     .map(\.key)
             )
             let entries = try expectedRoutedNoteIDs
@@ -3298,7 +3307,11 @@ struct SyncConvergenceIncorporationExecutor {
             for record in operationIdentities {
                 var encoder = CanonicalPayloadDigestFormatV1()
                 try encoder.appendOperationIdentity(record.operationIdentity)
-                projections.append(ChildProjection(kind: "operation", key: "\(record.operationIndex)", bytes: encoder.data))
+                projections.append(ChildProjection(
+                    kind: "operation",
+                    key: "\(record.operationIdentity.batchIDLowercase)|\(record.operationIdentity.operationIndex)",
+                    bytes: encoder.data
+                ))
             }
             for record in noteEffects {
                 var encoder = CanonicalPayloadDigestFormatV1()
@@ -3321,6 +3334,16 @@ struct SyncConvergenceIncorporationExecutor {
         private static func identityOrder(_ lhs: OperationIdentityPayload, _ rhs: OperationIdentityPayload) -> Bool {
             if lhs.batchIDLowercase != rhs.batchIDLowercase { return lhs.batchIDLowercase < rhs.batchIDLowercase }
             return lhs.operationIndex < rhs.operationIndex
+        }
+
+        private static func identityRecordOrder(
+            _ lhs: SyncConvergenceOperationIdentityRecord,
+            _ rhs: SyncConvergenceOperationIdentityRecord
+        ) -> Bool {
+            if lhs.operationIdentity.batchIDLowercase != rhs.operationIdentity.batchIDLowercase {
+                return lhs.operationIdentity.batchIDLowercase < rhs.operationIdentity.batchIDLowercase
+            }
+            return lhs.operationIdentity.operationIndex < rhs.operationIdentity.operationIndex
         }
 
         private static func resultEvidenceOrder(_ lhs: SyncConvergenceResultEvidence, _ rhs: SyncConvergenceResultEvidence) -> Bool {

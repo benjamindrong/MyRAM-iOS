@@ -117,6 +117,45 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(reloadedQueue.pendingBatches.first?.id, batch.id)
     }
 
+    func testLocalObligationQueueMigratesVersionOneBatchesAsLegacyMissingEvidence() throws {
+        let fileURL = temporaryQueueFileURL()
+        let first = makeBatch(idSuffix: 1)
+        let second = makeBatch(idSuffix: 2)
+        let legacyQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+        try legacyQueue.enqueueIncoming(first)
+        try legacyQueue.enqueueIncoming(second)
+
+        let migratedQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10)
+
+        XCTAssertEqual(migratedQueue.pendingBatches, [first, second])
+        XCTAssertEqual(migratedQueue.pendingObligations.map(\.evidence), [.legacyMissing, .legacyMissing])
+        XCTAssertEqual(FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10).pendingBatches, [first, second])
+    }
+
+    func testDrainPassSchedulerSkipsBlockedNotesWithoutRotatingQueueOrder() {
+        let noteA = UUID(uuidString: "00000000-0000-0000-0000-000000124301")!
+        let noteB = UUID(uuidString: "00000000-0000-0000-0000-000000124302")!
+        let noteC = UUID(uuidString: "00000000-0000-0000-0000-000000124303")!
+        let originA = UUID(uuidString: "00000000-0000-0000-0000-000000124304")!
+        let originB = UUID(uuidString: "00000000-0000-0000-0000-000000124305")!
+        let candidates = [
+            SyncConvergenceQueueCandidate(batchID: UUID(), originDeviceID: originA, affectedNoteIDs: [noteA], queuePosition: 0),
+            SyncConvergenceQueueCandidate(batchID: UUID(), originDeviceID: originB, affectedNoteIDs: [noteB], queuePosition: 1),
+            SyncConvergenceQueueCandidate(batchID: UUID(), originDeviceID: originB, affectedNoteIDs: [noteA, noteC], queuePosition: 2),
+            SyncConvergenceQueueCandidate(batchID: UUID(), originDeviceID: originB, affectedNoteIDs: [noteC], queuePosition: 3)
+        ]
+
+        let index = SyncConvergenceDrainPassScheduler.nextEligibleIndex(
+            candidates: candidates,
+            attemptedBatchIDs: [candidates[0].batchID],
+            blockedNoteIDs: [noteA],
+            blockedOrigins: [originA]
+        )
+
+        XCTAssertEqual(index, 1)
+        XCTAssertEqual(candidates.map(\.queuePosition), [0, 1, 2, 3])
+    }
+
     func testFileBackedQueueDeduplicatesByStableBatchID() {
         let fileURL = temporaryQueueFileURL()
         let batch = makeBatch(idSuffix: 1)

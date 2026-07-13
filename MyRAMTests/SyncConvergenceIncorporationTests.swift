@@ -708,7 +708,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             input: titleOnly.input,
             notes: [titleOnly.noteID: titleOnly.initialNote],
             committedAt: titleOnly.committedAt,
-            expectedRoutings: [:]
+            expectedRoutings: [titleOnly.noteID: .none]
         )
         XCTAssertTrue(titleOnlyResult.work.presentationEntries.isEmpty)
 
@@ -1744,6 +1744,18 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 replayKey: SyncBatchReplayKey(batch: batch, change: batch.changes[2], operationIndex: 2)
             )
         )
+        let fallbackRetainedDelete = retainedDelete(
+            noteID: fallbackNote,
+            batchID: uuid("00000000-0000-0000-0000-000000134106"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000134107"),
+            operationIndex: 0,
+            offset: 1,
+            length: 1,
+            expectedText: "C",
+            modifiedAt: date(5),
+            baseBody: "ACB",
+            resultHash: SyncBatchContentHash.sha256Hex(for: "AB")
+        )
         let notes = [
             noneNote: SyncConvergenceMutableNoteRecord(
                 noteID: noneNote,
@@ -1781,7 +1793,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                     generation: 1
                 )
             ],
-            retainedRemoteOperations: [noneRetained]
+            retainedRemoteOperations: [noneRetained, fallbackRetainedDelete]
         )
         return MYR134MixedRoutingFixture(
             noneNote: noneNote,
@@ -2659,12 +2671,16 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         let first = try makeReconstructedSnapshotFixture(
             noteID: uuid("00000000-0000-0000-0000-000000133101"),
             batchID: uuid("00000000-0000-0000-0000-000000133102"),
-            originID: uuid("00000000-0000-0000-0000-000000133103")
+            originID: uuid("00000000-0000-0000-0000-000000133103"),
+            retainedDeleteBatchID: uuid("00000000-0000-0000-0000-000000133104"),
+            retainedDeleteOriginID: uuid("00000000-0000-0000-0000-000000133105")
         )
         let second = try makeReconstructedSnapshotFixture(
             noteID: uuid("00000000-0000-0000-0000-000000133201"),
             batchID: uuid("00000000-0000-0000-0000-000000133202"),
-            originID: uuid("00000000-0000-0000-0000-000000133203")
+            originID: uuid("00000000-0000-0000-0000-000000133203"),
+            retainedDeleteBatchID: uuid("00000000-0000-0000-0000-000000133204"),
+            retainedDeleteOriginID: uuid("00000000-0000-0000-0000-000000133205")
         )
         let fixture = try makeCombinedFixture(first, second)
         let snapshots = fixture.plan.historyPlan.snapshotAdditions.map {
@@ -3167,6 +3183,20 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             retainedSnapshots: [
                 SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: baseHash, body: base, generation: 1)
             ],
+            retainedRemoteOperations: [
+                retainedDelete(
+                    noteID: noteID,
+                    batchID: uuid("00000000-0000-0000-0000-000000133105"),
+                    originDeviceID: uuid("00000000-0000-0000-0000-000000133106"),
+                    operationIndex: 0,
+                    offset: 1,
+                    length: 1,
+                    expectedText: "C",
+                    modifiedAt: date(3),
+                    baseBody: "ACB",
+                    resultHash: baseHash
+                )
+            ],
             persistedTitleWinners: [priorWinner]
         )
         let outcome = SyncConvergencePlanner().plan(input: input)
@@ -3268,15 +3298,17 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
     private func makeReconstructedSnapshotFixture(
         noteID: UUID = uuid("00000000-0000-0000-0000-000000133001"),
         batchID: UUID = uuid("00000000-0000-0000-0000-000000133002"),
-        originID: UUID = uuid("00000000-0000-0000-0000-000000133003")
+        originID: UUID = uuid("00000000-0000-0000-0000-000000133003"),
+        retainedDeleteBatchID: UUID = uuid("00000000-0000-0000-0000-000000133402"),
+        retainedDeleteOriginID: UUID = uuid("00000000-0000-0000-0000-000000133403")
     ) throws -> Fixture {
         let currentBody = "ACB"
         let incomingBase = "AB"
         let incomingBaseHash = SyncBatchContentHash.sha256Hex(for: incomingBase)
         let retainedDelete = retainedDelete(
             noteID: noteID,
-            batchID: uuid("00000000-0000-0000-0000-000000133402"),
-            originDeviceID: uuid("00000000-0000-0000-0000-000000133403"),
+            batchID: retainedDeleteBatchID,
+            originDeviceID: retainedDeleteOriginID,
             operationIndex: 0,
             offset: 1,
             length: 1,
@@ -3450,7 +3482,8 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                     body: "AB",
                     generation: 1
                 )
-            ]
+            ],
+            retainedRemoteOperations: first.input.retainedRemoteOperations + second.input.retainedRemoteOperations
         )) else {
             throw TestFixtureError.unexpectedPlanningOutcome
         }
@@ -4516,16 +4549,22 @@ private func assertPersistedOperationIdentities(
     line: UInt = #line
 ) throws {
     let expected = Dictionary(
-        uniqueKeysWithValues: fixture.plan.incorporationEvidence.operationIdentities.map { ($0.operationIndex, $0) }
+        uniqueKeysWithValues: fixture.plan.incorporationEvidence.operationIdentities.map {
+            ($0.testIdentityKey, $0)
+        }
     )
-    XCTAssertEqual(Set(rows.map(\.operationIndex)), Set(expected.keys), file: file, line: line)
+    let decodedRows = try rows.map { row in
+        (row, try OperationIdentityPayload.decodePayloadData(row.operationIdentityPayloadData))
+    }
+    XCTAssertEqual(Set(decodedRows.map { $0.1.testIdentityKey }), Set(expected.keys), file: file, line: line)
     for row in rows {
-        let identity = try XCTUnwrap(expected[row.operationIndex], file: file, line: line)
+        let decodedIdentity = try OperationIdentityPayload.decodePayloadData(row.operationIdentityPayloadData)
+        let identity = try XCTUnwrap(expected[decodedIdentity.testIdentityKey], file: file, line: line)
         XCTAssertEqual(row.batchID, fixture.batch.id, file: file, line: line)
         XCTAssertEqual(row.noteID, fixture.noteID, file: file, line: line)
         XCTAssertEqual(row.operationIdentityPayloadData, try identity.encodedPayloadData(), file: file, line: line)
         XCTAssertEqual(row.canonicalReplayKeyPayloadData, try identity.canonicalReplayKey.encodedEvidenceData(), file: file, line: line)
-        XCTAssertEqual(try OperationIdentityPayload.decodePayloadData(row.operationIdentityPayloadData), identity, file: file, line: line)
+        XCTAssertEqual(decodedIdentity, identity, file: file, line: line)
         XCTAssertEqual(try canonicalOperationIdentityBytes(identity), try row.testCanonicalChildBytes, file: file, line: line)
     }
 }
@@ -4595,7 +4634,12 @@ private func assertAuthoritativeChildAccounting(
     line: UInt = #line
 ) throws {
     let operationChildren = try operationIdentities.map {
-        PersistedChild(kind: "operation", key: "\($0.operationIndex)", bytes: try $0.testCanonicalChildBytes)
+        let identity = try OperationIdentityPayload.decodePayloadData($0.operationIdentityPayloadData)
+        return PersistedChild(
+            kind: "operation",
+            key: identity.testIdentityKey,
+            bytes: try $0.testCanonicalChildBytes
+        )
     }
     let noteEffectChildren = try noteEffects.map {
         PersistedChild(kind: "note-effect", key: $0.noteID.uuidString.lowercased(), bytes: try $0.testCanonicalChildBytes)
@@ -4618,12 +4662,22 @@ private func assertPersistedRetainedOperations(
 ) throws {
     let expected = Dictionary(
         uniqueKeysWithValues: fixture.plan.historyPlan.retainedOperationAdditions.map {
-            ($0.operationIdentity.operationIndex, $0.testRetainedOperationRecord)
+            ($0.operationIdentity.testIdentityKey, $0.testRetainedOperationRecord)
         }
     )
-    XCTAssertEqual(Set(rows.map(\.operationIndex)), Set(expected.keys), file: file, line: line)
+    let rowKeys = try rows.map {
+        try CanonicalReplayKeyPayload.decodeEvidenceData($0.canonicalReplayKeyPayloadData).testIdentityKey(
+            batchID: $0.batchID,
+            operationIndex: $0.operationIndex
+        )
+    }
+    XCTAssertEqual(Set(rowKeys), Set(expected.keys), file: file, line: line)
     for row in rows {
-        let operation = try XCTUnwrap(expected[row.operationIndex], file: file, line: line)
+        let key = try CanonicalReplayKeyPayload.decodeEvidenceData(row.canonicalReplayKeyPayloadData).testIdentityKey(
+            batchID: row.batchID,
+            operationIndex: row.operationIndex
+        )
+        let operation = try XCTUnwrap(expected[key], file: file, line: line)
         XCTAssertEqual(row.noteID, operation.noteID, file: file, line: line)
         XCTAssertEqual(row.batchID, operation.batchID, file: file, line: line)
         XCTAssertEqual(row.originDeviceID, operation.originDeviceID, file: file, line: line)
@@ -4689,6 +4743,18 @@ private func canonicalNoteEffectBytes(batchID: UUID, noteID: UUID, kinds: [Strin
     var encoder = CanonicalPayloadDigestFormatV1()
     try encoder.appendProjectedNoteEffect(batchID: batchID, noteID: noteID, kinds: kinds)
     return encoder.data
+}
+
+private extension OperationIdentityPayload {
+    var testIdentityKey: String {
+        "\(batchIDLowercase)|\(operationIndex)"
+    }
+}
+
+private extension CanonicalReplayKeyPayload {
+    func testIdentityKey(batchID: UUID, operationIndex: Int) -> String {
+        "\(batchID.uuidString.lowercased())|\(operationIndex)"
+    }
 }
 
 private func sha256Hex(_ data: Data) -> String {

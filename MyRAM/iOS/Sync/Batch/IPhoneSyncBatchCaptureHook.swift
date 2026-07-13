@@ -16,6 +16,22 @@ enum IPhoneSyncBatchCaptureHook {
         SyncBatchNoteChangeCapture.titleChanged(noteID: noteID, oldTitle: oldTitle, newTitle: newTitle, modifiedAt: modifiedAt)
     }
 
+    static func bodyTextChanges(
+        noteID: UUID,
+        oldBody: String,
+        newBody: String,
+        modifiedAt: Date,
+        bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled
+    ) throws -> [SyncBatchChange] {
+        try SyncBatchNoteChangeCapture.bodyTextChanges(
+            noteID: noteID,
+            oldBody: oldBody,
+            newBody: newBody,
+            modifiedAt: modifiedAt,
+            bodyHashCapabilityEnabled: bodyHashCapabilityEnabled
+        )
+    }
+
     static func bodyTextChanged(
         noteID: UUID,
         oldBody: String,
@@ -23,12 +39,19 @@ enum IPhoneSyncBatchCaptureHook {
         modifiedAt: Date,
         bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled
     ) -> SyncBatchChange? {
-        SyncBatchNoteChangeCapture.bodyTextChanged(
+        let changes = try? SyncBatchNoteChangeCapture.bodyTextChanges(
             noteID: noteID,
             oldBody: oldBody,
             newBody: newBody,
             modifiedAt: modifiedAt,
             bodyHashCapabilityEnabled: bodyHashCapabilityEnabled
         )
+        return changes?.onlyElement
+    }
+}
+
+private extension Array {
+    var onlyElement: Element? {
+        count == 1 ? self[0] : nil
     }
 }

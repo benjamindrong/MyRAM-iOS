@@ -82,7 +82,7 @@ final class MyRAMTests: XCTestCase {
     }
 
     private final class RecordingSyncController: MyRAMSyncControlling, SyncConvergenceLocalBatchTransportAdapter {
-        var onChangesReceived: (([SyncChange]) async -> Void)?
+        var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])?
         var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
         var onBatchReceived: ((SyncBatch) async -> Void)?
         private(set) var recordedChanges: [SyncChange] = []
@@ -109,6 +109,24 @@ final class MyRAMTests: XCTestCase {
 
         func acceptLocalBatch(_ batch: SyncBatch) async throws {
             recordedBatches.append(batch)
+        }
+    }
+
+    private final class InjectableLegacyIncomingSaveFailure {
+        var shouldFail: Bool
+        var failingCallNumbers: Set<Int> = []
+        private(set) var callCount = 0
+
+        init(shouldFail: Bool) {
+            self.shouldFail = shouldFail
+        }
+
+        func save(_ context: ModelContext) throws {
+            callCount += 1
+            if shouldFail || failingCallNumbers.contains(callCount) {
+                throw NSError(domain: "MyRAMTests.InjectedLegacyIncomingSaveFailure", code: 1)
+            }
+            try context.save()
         }
     }
 
@@ -781,7 +799,7 @@ final class MyRAMTests: XCTestCase {
             )
         )
 
-        await vm.applyIncomingSyncChanges([
+        _ = await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .attachment,
                 entityID: attachmentID.uuidString,
@@ -799,7 +817,7 @@ final class MyRAMTests: XCTestCase {
         let deletePayload = try MyRAMSyncPayloadCoding.encode(
             MyRAMPhotoAttachmentSyncPayload(attachment: note.photoAttachments[0], isDeleted: true)
         )
-        await vm.applyIncomingSyncChanges([
+        _ = await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .attachment,
                 entityID: attachmentID.uuidString,
@@ -1757,7 +1775,7 @@ final class MyRAMTests: XCTestCase {
         remoteNote.id = note.id
         remoteNote.modifiedAt = Date(timeIntervalSince1970: 200)
 
-        await vm.applyIncomingSyncChanges([
+        _ = await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .item,
                 entityID: note.id.uuidString,
@@ -2227,7 +2245,7 @@ final class MyRAMTests: XCTestCase {
         let runtime = SyncConvergenceRuntime(
             context: context,
             convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
-            localObligationQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
             localBatchTransportAdapter: transport,
             presentationAdapter: CompletingPresentationAdapter(),
             localEvidenceMetrics: metrics
@@ -2243,6 +2261,1391 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(metrics.saveCount, 1)
     }
 
+    func testCapturedLocalEvidenceRegistersAfterAuthoritativeBodyMovesOnWithoutReverseReconstruction() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000127510")!
+        let note = Note(title: "Shared", content: "Hello world!!")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        let change = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+            noteID: noteID,
+            utf16Offset: "Hello".utf16.count,
+            text: " world",
+            modifiedAt: Date(timeIntervalSince1970: 10),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello")
+        ))
+        let capturedChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+            for: change,
+            preBody: "Hello",
+            postBody: "Hello world"
+        )
+        let batch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127511")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127512")!,
+            createdAt: Date(timeIntervalSince1970: 11),
+            changes: [change]
+        )
+        let obligation = SyncConvergenceLocalObligation(batch: batch, capturedChanges: [capturedChange])
+        let metrics = SyncConvergenceLocalEvidenceMetrics()
+        let transport = AcceptingLocalBatchTransport()
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: transport,
+            presentationAdapter: CompletingPresentationAdapter(),
+            localEvidenceMetrics: metrics
+        )
+
+        let outcome = await runtime.submitLocalObligation(obligation)
+
+        guard case .drained = outcome else { return XCTFail("Expected captured local obligation to drain") }
+        let retained = try XCTUnwrap(context.fetch(FetchDescriptor<RetainedBodyOperation>()).first)
+        XCTAssertEqual(retained.baseContentHash, SyncBatchContentHash.sha256Hex(for: "Hello"))
+        XCTAssertEqual(retained.resultContentHash, SyncBatchContentHash.sha256Hex(for: "Hello world"))
+        XCTAssertEqual(metrics.wholeBodyReconstructionCount, 0)
+        XCTAssertEqual(metrics.retainedOperationRecordCount, 1)
+        XCTAssertEqual(transport.acceptedBatches.map(\.id), [batch.id])
+    }
+
+    func testCapturedLocalObligationValidationFailureRejectsBeforeQueueInsertion() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000127513")!
+        let note = Note(title: "Shared", content: "A")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        let obligation = try discontinuousCapturedObligation(noteID: noteID)
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil)
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: localQueue,
+            localBatchTransportAdapter: AcceptingLocalBatchTransport(),
+            presentationAdapter: CompletingPresentationAdapter()
+        )
+
+        let outcome = await runtime.submitLocalObligation(obligation)
+
+        guard case .blocked(let failure) = outcome else {
+            return XCTFail("Expected invalid newly submitted captured obligation to be blocked")
+        }
+        XCTAssertEqual(failure.kind, .localEvidenceContinuityViolation)
+        XCTAssertTrue(localQueue.pendingObligations.isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).isEmpty)
+    }
+
+    func testPersistedCorruptCapturedObligationQuarantinesAndDisjointLocalWorkProgresses() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteAID = UUID(uuidString: "00000000-0000-0000-0000-000000127514")!
+        let noteBID = UUID(uuidString: "00000000-0000-0000-0000-000000127515")!
+        let noteA = Note(title: "A", content: "A")
+        noteA.id = noteAID
+        let noteB = Note(title: "B", content: "B")
+        noteB.id = noteBID
+        context.insert(noteA)
+        context.insert(noteB)
+        try context.save()
+
+        let corruptObligation = try discontinuousCapturedObligation(noteID: noteAID)
+        let validChange = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+            noteID: noteBID,
+            utf16Offset: 1,
+            text: "!",
+            modifiedAt: Date(timeIntervalSince1970: 5),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "B")
+        ))
+        let capturedValidChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+            for: validChange,
+            preBody: "B",
+            postBody: "B!"
+        )
+        let validBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127516")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127517")!,
+            createdAt: Date(timeIntervalSince1970: 5),
+            changes: [validChange]
+        )
+        let validObligation = SyncConvergenceLocalObligation(batch: validBatch, capturedChanges: [capturedValidChange])
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil)
+        try localQueue.enqueue(corruptObligation)
+        try localQueue.enqueue(validObligation)
+        let transport = AcceptingLocalBatchTransport()
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: localQueue,
+            localBatchTransportAdapter: transport,
+            presentationAdapter: CompletingPresentationAdapter()
+        )
+
+        let outcome = await runtime.resumePendingWork()
+
+        guard case .quarantined(let quarantined) = outcome else {
+            return XCTFail("Expected persisted corrupt captured obligation to be quarantined")
+        }
+        XCTAssertEqual(quarantined.items.map(\.batchID), [corruptObligation.id])
+        XCTAssertEqual(quarantined.items.first?.reason, .localEvidenceContinuityViolation)
+        XCTAssertEqual(localQueue.pendingBatches.map(\.id), [corruptObligation.id])
+        XCTAssertEqual(transport.acceptedBatches.map(\.id), [validBatch.id])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).map(\.batchID), [validBatch.id])
+    }
+
+    func testCommitNoteEditBodyReplacementRecordsCapturedEvidenceChain() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let note = Note(title: "Draft", content: "abc")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-0000001275B0")!
+        context.insert(note)
+        try context.save()
+        let syncController = RecordingSyncController()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: syncController,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        viewModel.commitNoteEdit(note, title: "Draft", content: "axc")
+
+        XCTAssertEqual(note.content, "axc")
+        XCTAssertEqual(note.title, "Draft")
+        XCTAssertNil(viewModel.syncBatchErrorMessage)
+        await Task.yield()
+        await Task.yield()
+        guard let obligationID = await viewModel.capturePendingLocalBatchForRecovery() else {
+            return XCTFail("Expected replacement edit to enter the local obligation accumulator")
+        }
+        XCTAssertEqual(syncController.recordedBatches.count, 1)
+        XCTAssertEqual(syncController.recordedBatches.first?.id, obligationID)
+        XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 2)
+        guard case .noteBodyTextDeleted(let deletion) = syncController.recordedBatches.first?.changes.first,
+              case .noteBodyTextInserted(let insertion) = syncController.recordedBatches.first?.changes.dropFirst().first else {
+            return XCTFail("Expected replacement to record delete then insert")
+        }
+        XCTAssertEqual(deletion.expectedText, "b")
+        XCTAssertEqual(insertion.text, "x")
+        let retainedOperations = try context.fetch(FetchDescriptor<RetainedBodyOperation>(
+            sortBy: [SortDescriptor(\.operationIndex)]
+        ))
+        XCTAssertEqual(retainedOperations.map(\.operationIndex), [0, 1])
+        XCTAssertEqual(retainedOperations.map(\.baseContentHash), [
+            SyncBatchContentHash.sha256Hex(for: "abc"),
+            SyncBatchContentHash.sha256Hex(for: "ac")
+        ])
+    }
+
+    func testCommitNoteEditLargeReplacementRecordsCapturedEvidenceChain() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let originalBody = String(repeating: "a", count: 600)
+        let replacementBody = String(repeating: "b", count: 600)
+        let note = Note(title: "Draft", content: originalBody)
+        context.insert(note)
+        try context.save()
+        let syncController = RecordingSyncController()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: syncController,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        viewModel.commitNoteEdit(note, title: "Draft", content: replacementBody)
+
+        XCTAssertEqual(note.content, replacementBody)
+        XCTAssertEqual(note.title, "Draft")
+        XCTAssertNil(viewModel.syncBatchErrorMessage)
+        await Task.yield()
+        await Task.yield()
+        guard let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery() else {
+            return XCTFail("Expected large replacement to enter the local obligation accumulator")
+        }
+        XCTAssertEqual(syncController.recordedBatches.map(\.id), [pendingBatchID])
+        XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 2)
+        let retainedOperations = try context.fetch(FetchDescriptor<RetainedBodyOperation>(
+            sortBy: [SortDescriptor(\.operationIndex)]
+        ))
+        XCTAssertEqual(retainedOperations.map(\.operationIndex), [0, 1])
+        XCTAssertEqual(retainedOperations.map(\.baseContentHash), [
+            SyncBatchContentHash.sha256Hex(for: originalBody),
+            SyncBatchContentHash.sha256Hex(for: "")
+        ])
+    }
+
+    func testCommitNoteEditSaveFailureRestoresStateAndDoesNotRecordConvergenceWork() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let originalRichText = Data([1, 2, 3])
+        let failedRichText = Data([9, 8, 7])
+        let originalModifiedAt = Date(timeIntervalSince1970: 100)
+        let note = Note(title: "Draft", content: "abc")
+        note.id = UUID(uuidString: "00000000-0000-0000-0000-0000001275D0")!
+        note.richTextContentData = originalRichText
+        note.modifiedAt = originalModifiedAt
+        let folder = Folder(name: "Unrelated")
+        context.insert(note)
+        context.insert(folder)
+        try context.save()
+        folder.name = "Unrelated dirty change"
+        var failNextSave = true
+        struct SaveFailure: Error {}
+        let syncController = RecordingSyncController()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: syncController,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false,
+            saveContext: {
+                if failNextSave {
+                    failNextSave = false
+                    throw SaveFailure()
+                }
+                try context.save()
+            }
+        )
+
+        viewModel.commitNoteEdit(note, title: "Saved later?", content: "axc", richTextContentData: failedRichText)
+
+        XCTAssertEqual(note.title, "Draft")
+        XCTAssertEqual(note.content, "abc")
+        XCTAssertEqual(note.richTextContentData, originalRichText)
+        XCTAssertEqual(note.modifiedAt, originalModifiedAt)
+        XCTAssertEqual(folder.name, "Unrelated dirty change")
+        XCTAssertEqual(viewModel.syncBatchErrorMessage, "Unable to save the latest edit.")
+        XCTAssertFalse(viewModel.hasRecentTextEditForTesting(noteID: note.id))
+        let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery()
+        XCTAssertNil(pendingBatchID)
+        XCTAssertTrue(syncController.recordedBatches.isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).isEmpty)
+
+        try context.save()
+        let freshContext = ModelContext(container)
+        let noteID = note.id
+        let reloadedNote = try XCTUnwrap(try freshContext.fetch(FetchDescriptor<Note>(
+            predicate: #Predicate { $0.id == noteID }
+        )).first)
+        let reloadedFolder = try XCTUnwrap(try freshContext.fetch(FetchDescriptor<Folder>()).first)
+        XCTAssertEqual(reloadedNote.title, "Draft")
+        XCTAssertEqual(reloadedNote.content, "abc")
+        XCTAssertEqual(reloadedNote.richTextContentData, originalRichText)
+        XCTAssertEqual(reloadedFolder.name, "Unrelated dirty change")
+    }
+
+    func testIncomingBodyMutationFinalizesPendingLocalObligationBeforeAuthoritativeMutation() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000127518")!
+        let note = Note(title: "Shared", content: "Hello")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+        let syncController = RecordingSyncController()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: syncController,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        await Task.yield()
+        await Task.yield()
+        let remoteBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127519")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-00000012751A")!,
+            createdAt: Date(timeIntervalSince1970: 20),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: "Hello local".utf16.count,
+                    text: " remote",
+                    modifiedAt: Date(timeIntervalSince1970: 20),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello local")
+                ))
+            ]
+        )
+
+        await viewModel.applyIncomingSyncBatch(remoteBatch)
+
+        XCTAssertEqual(syncController.recordedBatches.count, 1)
+        XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 1)
+        guard case .noteBodyTextInserted(let localChange) = syncController.recordedBatches.first?.changes.first else {
+            return XCTFail("Expected pending local body insertion to be finalized before incoming mutation")
+        }
+        XCTAssertEqual(localChange.noteID, noteID)
+        XCTAssertEqual(localChange.utf16Offset, "Hello".utf16.count)
+        XCTAssertEqual(localChange.text, " local")
+        XCTAssertEqual(note.content, "Hello local remote")
+    }
+
+    // MARK: - Legacy incoming save-failure durability (8.1, 8.2, 8.4)
+
+    func testLegacyIncomingSaveFailureReturnsRetryRequiredWithNoDurableMutationOrSideEffects() async throws {
+        let storeName = "MyRAMLegacySaveFailure-\(UUID().uuidString)"
+        let container = try makeContainer(isStoredInMemoryOnly: false, configurationName: storeName)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Original", content: "Original body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        try context.save()
+
+        let injector = InjectableLegacyIncomingSaveFailure(shouldFail: true)
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveLegacyIncomingApplyContext: { try injector.save($0) }
+        )
+        vm.currentNote = note
+        UserDefaults.standard.removeObject(forKey: "lastNoteID")
+
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Original",
+            content: "Peer body",
+            baseTitle: "Original",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let dispositions = await vm.applyIncomingSyncChanges([change])
+
+        XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(note.content, "Original body")
+        XCTAssertEqual(vm.currentNote?.id, noteID)
+        XCTAssertNil(UserDefaults.standard.string(forKey: "lastNoteID"))
+        XCTAssertNil(vm.activeEditorSyncUpdate)
+
+        let reopenedContainer = try makeContainer(isStoredInMemoryOnly: false, configurationName: storeName)
+        let reopenedNote = try XCTUnwrap(
+            try reopenedContainer.mainContext.fetch(FetchDescriptor<Note>()).first { $0.id == noteID }
+        )
+        XCTAssertEqual(reopenedNote.content, "Original body")
+    }
+
+    func testLegacyIncomingDirtyContextRefusesApplyWithoutSnapshotOrRollback() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteAID = UUID()
+        let noteA = Note(title: "A", content: "A body")
+        noteA.id = noteAID
+        noteA.modifiedAt = Date(timeIntervalSince1970: 100)
+        let noteB = Note(title: "B", content: "B body")
+        noteB.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(noteA)
+        context.insert(noteB)
+        try context.save()
+
+        final class SnapshotProbe {
+            var fileExistsCalls = 0
+        }
+        let probe = SnapshotProbe()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(
+            fileURL: conflictFileURL,
+            fileIO: SyncConflictStore.FileIO(
+                fileExists: { _ in
+                    probe.fileExistsCalls += 1
+                    return false
+                },
+                readData: { _ in throw CocoaError(.fileReadUnknown) },
+                createDirectory: { _ in },
+                writeData: { _, _ in },
+                removeItem: { _ in }
+            )
+        )
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: conflictStore,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        noteB.content = "Unsaved local B"
+        XCTAssertTrue(context.hasChanges)
+
+        let change = try legacyNoteChange(
+            noteID: noteAID,
+            title: "A",
+            content: "Peer A",
+            baseTitle: "A",
+            baseContent: "A body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let dispositions = await vm.applyIncomingSyncChanges([change])
+
+        XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(noteA.content, "A body")
+        XCTAssertEqual(noteB.content, "Unsaved local B")
+        XCTAssertEqual(probe.fileExistsCalls, 0)
+        XCTAssertTrue(context.hasChanges)
+    }
+
+    func testLegacyIncomingDirtyContextRedeliversAfterLocalChangeSaves() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteAID = UUID()
+        let noteA = Note(title: "A", content: "A body")
+        noteA.id = noteAID
+        noteA.modifiedAt = Date(timeIntervalSince1970: 100)
+        let noteB = Note(title: "B", content: "B body")
+        noteB.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(noteA)
+        context.insert(noteB)
+        try context.save()
+
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let change = try legacyNoteChange(
+            noteID: noteAID,
+            title: "A",
+            content: "Peer A",
+            baseTitle: "A",
+            baseContent: "A body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        noteB.content = "Unsaved local B"
+        let firstDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(noteA.content, "A body")
+
+        try context.save()
+        let secondDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(noteA.content, "Peer A")
+        XCTAssertEqual(noteB.content, "Unsaved local B")
+    }
+
+    func testLegacyIncomingSiblingContextSaveRefreshesRetainedMainReference() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Original", content: "Original body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        try context.save()
+
+        let retainedReference = note
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Original",
+            content: "Peer body",
+            baseTitle: "Original",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let dispositions = await vm.applyIncomingSyncChanges([change])
+
+        XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(retainedReference.content, "Peer body")
+    }
+
+    func testLegacyIncomingUnsavedInsertedEntityReturnsRetryWithoutIsolatedSave() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        context.autosaveEnabled = false
+        let noteID = UUID()
+        final class SaveProbe {
+            var callCount = 0
+        }
+        let probe = SaveProbe()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveLegacyIncomingApplyContext: { isolatedContext in
+                probe.callCount += 1
+                try isolatedContext.save()
+            }
+        )
+        let note = Note(title: "Draft", content: "Unsaved draft")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        XCTAssertTrue(context.hasChanges)
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Draft",
+            content: "Remote body",
+            baseTitle: "Draft",
+            baseContent: "Unsaved draft",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let dispositions = await vm.applyIncomingSyncChanges([change])
+
+        XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(note.content, "Unsaved draft")
+        XCTAssertEqual(probe.callCount, 0)
+    }
+
+    // MARK: - Unrelated later save cannot persist a refused mutation (8.3, load-bearing)
+
+    func testUnrelatedLaterSaveCannotPersistARefusedLegacyIncomingMutation() async throws {
+        let storeName = "MyRAMLegacySaveFailureCompaction-\(UUID().uuidString)"
+        let container = try makeContainer(isStoredInMemoryOnly: false, configurationName: storeName)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Original", content: "Original body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        try context.save()
+
+        let injector = InjectableLegacyIncomingSaveFailure(shouldFail: true)
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveLegacyIncomingApplyContext: { try injector.save($0) }
+        )
+
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Original",
+            content: "Peer body",
+            baseTitle: "Original",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+        _ = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(note.content, "Original body")
+
+        // A later, wholly unrelated edit succeeds and saves normally.
+        injector.shouldFail = false
+        vm.commitNoteEdit(note, title: "Original", content: "Original body edited locally")
+        XCTAssertEqual(note.content, "Original body edited locally")
+
+        let reopenedContainer = try makeContainer(isStoredInMemoryOnly: false, configurationName: storeName)
+        let reopenedNote = try XCTUnwrap(
+            try reopenedContainer.mainContext.fetch(FetchDescriptor<Note>()).first { $0.id == noteID }
+        )
+        XCTAssertEqual(
+            reopenedNote.content,
+            "Original body edited locally",
+            "The refused incoming mutation must not have ridden along with the later unrelated save."
+        )
+    }
+
+    // MARK: - Redelivery succeeds exactly once after admission stops failing (8.5)
+
+    func testLegacyIncomingRedeliverySucceedsExactlyOnceAfterSaveFailureClears() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Original", content: "Original body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        try context.save()
+
+        let injector = InjectableLegacyIncomingSaveFailure(shouldFail: true)
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveLegacyIncomingApplyContext: { try injector.save($0) }
+        )
+
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Original",
+            content: "Peer body",
+            baseTitle: "Original",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let firstDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(note.content, "Original body")
+
+        injector.shouldFail = false
+        let secondDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(note.content, "Peer body")
+
+        let duplicateDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(duplicateDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(note.content, "Peer body")
+    }
+
+    func testLegacyIncomingBufferedBaselineCommitFailureRedeliversMissingEffects() async throws {
+        let storeName = "MyRAMLegacyBufferedEffectFailure-\(UUID().uuidString)"
+        let container = try makeContainer(isStoredInMemoryOnly: false, configurationName: storeName)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Original", content: "Original body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        try context.save()
+
+        final class BaselineWriteFailure {
+            var shouldFail = true
+        }
+        let failure = BaselineWriteFailure()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(
+            fileURL: conflictFileURL,
+            fileIO: SyncConflictStore.FileIO(
+                fileExists: { FileManager.default.fileExists(atPath: $0) },
+                readData: { try Data(contentsOf: $0) },
+                createDirectory: {
+                    try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
+                },
+                writeData: { data, url in
+                    if failure.shouldFail, url.lastPathComponent == "sync-remote-text-baselines.json" {
+                        throw CocoaError(.fileWriteNoPermission)
+                    }
+                    try data.write(to: url, options: [.atomic])
+                },
+                removeItem: { try FileManager.default.removeItem(at: $0) }
+            )
+        )
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: conflictStore,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Original",
+            content: "Peer body",
+            baseTitle: "Original",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let firstDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertNil(conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteContent))
+
+        let reloadedAfterFailure = try XCTUnwrap(
+            try ModelContext(container).fetch(FetchDescriptor<Note>()).first { $0.id == noteID }
+        )
+        XCTAssertEqual(reloadedAfterFailure.content, "Peer body")
+
+        failure.shouldFail = false
+        let secondDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(
+            conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteContent)?.text,
+            "Peer body"
+        )
+        XCTAssertEqual(note.content, "Peer body")
+    }
+
+    func testLegacyIncomingCheckedConflictCommitFailureRedeliversMissingEffects() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Original", content: "Local body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 150)
+        context.insert(note)
+        try context.save()
+
+        final class ConflictWriteFailure {
+            var shouldFail = true
+        }
+        let failure = ConflictWriteFailure()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(
+            fileURL: conflictFileURL,
+            fileIO: .live,
+            textFileIO: SyncTextConflictStore.FileIO(
+                fileExists: { FileManager.default.fileExists(atPath: $0) },
+                readData: { try Data(contentsOf: $0) },
+                createDirectory: {
+                    try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
+                },
+                writeData: { data, url in
+                    if failure.shouldFail, url.lastPathComponent == "sync-conflicts.json" {
+                        throw CocoaError(.fileWriteNoPermission)
+                    }
+                    try data.write(to: url, options: [.atomic])
+                },
+                removeItem: { try FileManager.default.removeItem(at: $0) }
+            )
+        )
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: conflictStore,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Original",
+            content: "Peer body",
+            baseTitle: "Original",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let firstDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertTrue(conflictStore.activeConflicts().isEmpty)
+        XCTAssertTrue(vm.syncConflicts.isEmpty)
+
+        failure.shouldFail = false
+        let secondDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(conflictStore.activeConflicts().count, 1)
+        XCTAssertEqual(vm.syncConflicts, conflictStore.activeConflicts())
+    }
+
+    func testLegacyIncomingExactConflictRedeliveryCommitsMissingConflictWithoutDuplicateQueue() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Local title", content: "Local body")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 150)
+        context.insert(note)
+        try context.save()
+
+        final class ConflictWriteFailure {
+            var shouldFail = true
+        }
+        let failure = ConflictWriteFailure()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(
+            fileURL: conflictFileURL,
+            fileIO: .live,
+            textFileIO: SyncTextConflictStore.FileIO(
+                fileExists: { FileManager.default.fileExists(atPath: $0) },
+                readData: { try Data(contentsOf: $0) },
+                createDirectory: {
+                    try FileManager.default.createDirectory(at: $0, withIntermediateDirectories: true)
+                },
+                writeData: { data, url in
+                    if failure.shouldFail,
+                       url.lastPathComponent == "sync-conflicts.json",
+                       String(data: data, encoding: .utf8)?.contains("Remote body") == true {
+                        throw CocoaError(.fileWriteNoPermission)
+                    }
+                    try data.write(to: url, options: [.atomic])
+                },
+                removeItem: { try FileManager.default.removeItem(at: $0) }
+            )
+        )
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: conflictStore,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Remote title",
+            content: "Remote body",
+            baseTitle: "Original title",
+            baseContent: "Original body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let firstDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertEqual(conflictStore.activeConflicts().map(\.field), [.noteTitle])
+        XCTAssertNil(conflictStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteTitle))
+        XCTAssertNil(conflictStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent))
+        XCTAssertEqual(note.title, "Local title")
+        XCTAssertEqual(note.content, "Local body")
+
+        failure.shouldFail = false
+        let secondDispositions = await vm.applyIncomingSyncChanges([change])
+
+        XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        let activeConflictFields = conflictStore.activeConflicts().map(\.field)
+        XCTAssertEqual(activeConflictFields.filter { $0 == .noteTitle }.count, 1)
+        XCTAssertEqual(activeConflictFields.filter { $0 == .noteContent }.count, 1)
+        XCTAssertNil(conflictStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteTitle))
+        XCTAssertNil(conflictStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent))
+        XCTAssertNil(conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteTitle))
+        XCTAssertNil(conflictStore.remoteBaseline(entityType: .note, entityID: noteID, field: .noteContent))
+        XCTAssertEqual(note.title, "Local title")
+        XCTAssertEqual(note.content, "Local body")
+        XCTAssertEqual(
+            [firstDispositions, secondDispositions].flatMap { $0 }.filter { $0.disposition == .applied }.count,
+            1
+        )
+    }
+
+    func testBufferedConflictStoreReadsPinnedTextBaselineWrittenDuringApply() {
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let realStore = SyncConflictStore(fileURL: conflictFileURL)
+        let bufferedStore = BufferedSyncConflictStore(base: realStore)
+        let thoughtID = UUID()
+        let modifiedAt = Date(timeIntervalSince1970: 200)
+
+        bufferedStore.savePinnedTextBaseline(
+            thoughtID: thoughtID,
+            text: "Remote pinned text",
+            modifiedAt: modifiedAt,
+            originDeviceID: "device-b"
+        )
+
+        XCTAssertNil(realStore.remoteBaseline(entityType: .pinnedThought, entityID: thoughtID, field: .pinnedText))
+        XCTAssertEqual(
+            bufferedStore.remoteBaseline(entityType: .pinnedThought, entityID: thoughtID, field: .pinnedText),
+            SyncRemoteTextBaseline(
+                entityType: .pinnedThought,
+                entityID: thoughtID,
+                field: .pinnedText,
+                text: "Remote pinned text",
+                richTextContentData: nil,
+                modifiedAt: modifiedAt,
+                originDeviceID: "device-b"
+            )
+        )
+    }
+
+    func testBufferedConflictStoreQueuesSameFieldConflictForReadAfterWriteAndCheckedCommit() throws {
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let realStore = SyncConflictStore(fileURL: conflictFileURL)
+        let bufferedStore = BufferedSyncConflictStore(base: realStore)
+        let noteID = UUID()
+        let activeConflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Local",
+            remoteText: "Remote 1",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            expiresAt: Date().addingTimeInterval(1_000)
+        )
+        let queuedConflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Local",
+            remoteText: "Remote 2",
+            remoteModifiedAt: Date(timeIntervalSince1970: 300),
+            expiresAt: Date().addingTimeInterval(1_000)
+        )
+
+        _ = realStore.preserve(activeConflict)
+        _ = bufferedStore.preserve(queuedConflict)
+
+        XCTAssertEqual(bufferedStore.activeConflicts().map(\.id), [activeConflict.id])
+        XCTAssertEqual(
+            bufferedStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent)?.conflict.id,
+            queuedConflict.id
+        )
+
+        try realStore.commitLegacyIncomingEffectsChecked(bufferedStore.effects)
+        XCTAssertEqual(realStore.activeConflicts().map(\.id), [activeConflict.id])
+        XCTAssertEqual(
+            realStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent)?.conflict.id,
+            queuedConflict.id
+        )
+    }
+
+    func testBufferedConflictStoreExactRemoteConflictDoesNotExposeQueuedReadOrEffect() {
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let realStore = SyncConflictStore(fileURL: conflictFileURL)
+        let bufferedStore = BufferedSyncConflictStore(base: realStore)
+        let noteID = UUID()
+        let activeConflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Local 1",
+            remoteText: "Remote",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 300),
+            expiresAt: Date().addingTimeInterval(1_000)
+        )
+        let redeliveredConflict = SyncConflictVersion(
+            entityType: .note,
+            entityID: noteID,
+            noteID: noteID,
+            field: .noteContent,
+            localText: "Local 2",
+            remoteText: "Remote",
+            remoteModifiedAt: Date(timeIntervalSince1970: 200),
+            preservedAt: Date(timeIntervalSince1970: 400),
+            expiresAt: Date().addingTimeInterval(1_000)
+        )
+
+        _ = realStore.preserve(activeConflict)
+        _ = bufferedStore.preserve(redeliveredConflict)
+
+        XCTAssertEqual(bufferedStore.activeConflicts().map(\.id), [activeConflict.id])
+        XCTAssertNil(bufferedStore.queuedConflict(entityType: .note, entityID: noteID, field: .noteContent))
+        XCTAssertTrue(bufferedStore.effects.preservedConflicts.isEmpty)
+    }
+
+    // MARK: - Partial envelope save failure (8.6)
+
+    func testPartialLegacyEnvelopeSaveFailureAppliesOnlySuccessfulCandidate() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let succeedingNoteID = UUID()
+        let succeedingNote = Note(title: "A", content: "A body")
+        succeedingNote.id = succeedingNoteID
+        succeedingNote.modifiedAt = Date(timeIntervalSince1970: 100)
+        let failingNoteID = UUID()
+        let failingNote = Note(title: "B", content: "B body")
+        failingNote.id = failingNoteID
+        failingNote.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(succeedingNote)
+        context.insert(failingNote)
+        try context.save()
+
+        let injector = InjectableLegacyIncomingSaveFailure(shouldFail: false)
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveLegacyIncomingApplyContext: { try injector.save($0) }
+        )
+
+        let succeedingChange = try legacyNoteChange(
+            noteID: succeedingNoteID,
+            title: "A",
+            content: "A body from peer",
+            baseTitle: "A",
+            baseContent: "A body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+        let failingChange = try legacyNoteChange(
+            noteID: failingNoteID,
+            title: "B",
+            content: "B body from peer",
+            baseTitle: "B",
+            baseContent: "B body",
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        // applyIncomingSyncChanges processes candidates in array order with no
+        // intervening await between apply() and save() for a given change, so
+        // the succeeding change's save is call #1 and the failing change's is
+        // call #2.
+        injector.failingCallNumbers = [2]
+        let dispositions = await vm.applyIncomingSyncChanges([succeedingChange, failingChange])
+
+        XCTAssertEqual(
+            Set(dispositions.filter { $0.disposition == .applied }.map(\.changeID)),
+            [succeedingChange.id]
+        )
+        XCTAssertEqual(
+            Set(dispositions.filter { $0.disposition == .retryRequired }.map(\.changeID)),
+            [failingChange.id]
+        )
+        XCTAssertEqual(succeedingNote.content, "A body from peer")
+        XCTAssertEqual(failingNote.content, "B body")
+    }
+
+    // MARK: - Conflict-producing change saves before conflict publication (8.8)
+
+    func testConflictProducingLegacyIncomingChangeDoesNotPublishConflictBeforeSaveSucceeds() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Shared", content: "Local text")
+        note.id = noteID
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        try context.save()
+
+        let injector = InjectableLegacyIncomingSaveFailure(shouldFail: true)
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let conflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let vm = NotesViewModel(
+            context: context,
+            syncConflictStore: conflictStore,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveLegacyIncomingApplyContext: { try injector.save($0) }
+        )
+
+        // No shared baseline is established for this field, so a remote value
+        // that diverges from local text resolves as a conflict rather than a
+        // clean apply.
+        let change = try legacyNoteChange(
+            noteID: noteID,
+            title: "Shared",
+            content: "Remote text",
+            baseTitle: nil,
+            baseContent: nil,
+            modifiedAt: Date(timeIntervalSince1970: 200)
+        )
+
+        let firstDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(firstDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
+        XCTAssertTrue(
+            conflictStore.activeConflicts().isEmpty,
+            "A speculative conflict write must not survive a failed isolated save."
+        )
+        XCTAssertTrue(vm.activeSyncConflicts(for: note).isEmpty)
+
+        injector.shouldFail = false
+        let secondDispositions = await vm.applyIncomingSyncChanges([change])
+        XCTAssertEqual(secondDispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .applied)])
+        XCTAssertEqual(conflictStore.activeConflicts().count, 1)
+        XCTAssertEqual(vm.activeSyncConflicts(for: note).count, 1)
+    }
+
+    func testRuntimeRegistersPendingLocalEvidenceBeforeIncomingPlanningWhenTransportUnavailable() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-0000001275C0")!
+        let note = Note(title: "Shared", content: "Hello local")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        let localChange = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+            noteID: noteID,
+            utf16Offset: "Hello".utf16.count,
+            text: " local",
+            modifiedAt: Date(timeIntervalSince1970: 10),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello")
+        ))
+        let capturedLocalChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+            for: localChange,
+            preBody: "Hello",
+            postBody: "Hello local"
+        )
+        let localBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-0000001275C1")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-0000001275C2")!,
+            createdAt: Date(timeIntervalSince1970: 10),
+            changes: [localChange]
+        )
+        let boundary = SinglePendingLocalBoundaryAdapter(
+            obligation: SyncConvergenceLocalObligation(batch: localBatch, capturedChanges: [capturedLocalChange])
+        )
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil)
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: localQueue,
+            localBatchTransportAdapter: nil,
+            presentationAdapter: CompletingPresentationAdapter(),
+            incomingLocalBoundaryAdapter: boundary
+        )
+        let remoteBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-0000001275C3")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-0000001275C4")!,
+            createdAt: Date(timeIntervalSince1970: 20),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: "Hello local".utf16.count,
+                    text: " remote",
+                    modifiedAt: Date(timeIntervalSince1970: 20),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello local")
+                ))
+            ]
+        )
+
+        let outcome = await runtime.submitRemoteBatch(remoteBatch)
+
+        guard case .deferred(let deferred) = outcome else {
+            return XCTFail("Expected local transport to remain deferred after incoming incorporation")
+        }
+        XCTAssertEqual(boundary.takeCount, 1)
+        XCTAssertEqual(note.content, "Hello local remote")
+        XCTAssertEqual(localQueue.pendingBatches.map(\.id), [localBatch.id])
+        XCTAssertEqual(deferred.localObligations.map(\.batchID), [localBatch.id])
+        let retainedOperations = try context.fetch(FetchDescriptor<RetainedBodyOperation>())
+        let localRetainedOperations = retainedOperations.filter {
+            $0.sourceRaw == SyncConvergenceRetainedOperationSource.local.rawValue
+        }
+        XCTAssertEqual(localRetainedOperations.map(\.batchID), [localBatch.id])
+    }
+
+    func testLegacyIncomingMutationAppliesOnlyAfterExactLocalEvidenceRegistration() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-0000001275D1")!
+        let note = Note(title: "Shared", content: "Hello")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: RecordingSyncController(),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        await Task.yield()
+        await Task.yield()
+
+        _ = await viewModel.applyIncomingSyncChanges([
+            try legacyNoteChange(
+                noteID: noteID,
+                title: "Shared",
+                content: "Hello local remote",
+                baseTitle: "Shared",
+                baseContent: "Hello local",
+                modifiedAt: Date.now.addingTimeInterval(10)
+            )
+        ])
+
+        XCTAssertEqual(note.content, "Hello local remote")
+        XCTAssertNil(viewModel.syncBatchErrorMessage)
+        let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery()
+        XCTAssertNil(pendingBatchID)
+        let retainedOperations = try context.fetch(FetchDescriptor<RetainedBodyOperation>())
+        let localRetainedOperations = retainedOperations.filter {
+            $0.sourceRaw == SyncConvergenceRetainedOperationSource.local.rawValue
+        }
+        XCTAssertEqual(localRetainedOperations.map(\.operationIndex), [0])
+        XCTAssertEqual(localRetainedOperations.first?.expectedText, nil)
+        XCTAssertEqual(localRetainedOperations.first?.text, " local")
+    }
+
+    func testLegacyIncomingMutationDoesNotApplyWhenLocalAdmissionCannotBeProven() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-0000001275D2")!
+        let note = Note(title: "Shared", content: "Hello")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: RecordingSyncController(),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueLimit: 0,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        viewModel.commitNoteEdit(note, title: "Shared", content: "Hello local")
+        await Task.yield()
+        await Task.yield()
+
+        _ = await viewModel.applyIncomingSyncChanges([
+            try legacyNoteChange(
+                noteID: noteID,
+                title: "Shared",
+                content: "Hello local remote",
+                baseTitle: "Shared",
+                baseContent: "Hello local",
+                modifiedAt: Date.now.addingTimeInterval(10)
+            )
+        ])
+
+        XCTAssertEqual(note.content, "Hello local")
+        XCTAssertEqual(note.title, "Shared")
+        XCTAssertTrue(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).isEmpty)
+        XCTAssertNotNil(viewModel.syncBatchErrorMessage)
+    }
+
+    func testStaleLegacyLocalObligationDoesNotBlockDifferentOriginCapturedObligation() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteAID = UUID(uuidString: "00000000-0000-0000-0000-000000127520")!
+        let noteBID = UUID(uuidString: "00000000-0000-0000-0000-000000127521")!
+        let noteA = Note(title: "A", content: "changed")
+        noteA.id = noteAID
+        let noteB = Note(title: "B", content: "B")
+        noteB.id = noteBID
+        context.insert(noteA)
+        context.insert(noteB)
+        try context.save()
+
+        let staleChange = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+            noteID: noteAID,
+            utf16Offset: 1,
+            text: "x",
+            modifiedAt: Date(timeIntervalSince1970: 1)
+        ))
+        let staleBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127522")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127523")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [staleChange]
+        )
+        let validChange = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+            noteID: noteBID,
+            utf16Offset: 1,
+            text: "!",
+            modifiedAt: Date(timeIntervalSince1970: 2),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "B")
+        ))
+        let capturedValidChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+            for: validChange,
+            preBody: "B",
+            postBody: "B!"
+        )
+        let validBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127524")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127525")!,
+            createdAt: Date(timeIntervalSince1970: 2),
+            changes: [validChange]
+        )
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil)
+        try localQueue.enqueue(SyncConvergenceLocalObligation(legacyBatch: staleBatch))
+        try localQueue.enqueue(SyncConvergenceLocalObligation(batch: validBatch, capturedChanges: [capturedValidChange]))
+        let transport = AcceptingLocalBatchTransport()
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: localQueue,
+            localBatchTransportAdapter: transport,
+            presentationAdapter: CompletingPresentationAdapter()
+        )
+
+        let outcome = await runtime.resumePendingWork()
+
+        guard case .deferred(let deferred) = outcome else {
+            return XCTFail("Expected stale legacy local obligation to defer")
+        }
+        XCTAssertEqual(deferred.localObligations.map(\.batchID), [staleBatch.id])
+        XCTAssertEqual(localQueue.pendingBatches.map(\.id), [staleBatch.id])
+        XCTAssertEqual(transport.acceptedBatches.map(\.id), [validBatch.id])
+        XCTAssertEqual(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).map(\.batchID), [validBatch.id])
+    }
+
+    func testDeferredIncomingBatchDoesNotBlockDisjointLaterBatch() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteAID = UUID(uuidString: "00000000-0000-0000-0000-000000127530")!
+        let noteBID = UUID(uuidString: "00000000-0000-0000-0000-000000127531")!
+        let noteA = Note(title: "A", content: "local-a")
+        noteA.id = noteAID
+        let noteB = Note(title: "B", content: "local-b")
+        noteB.id = noteBID
+        context.insert(noteA)
+        context.insert(noteB)
+        try context.save()
+
+        let deferredBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127532")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127533")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteAID,
+                    utf16Offset: 0,
+                    text: "remote ",
+                    modifiedAt: Date(timeIntervalSince1970: 1),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "missing-base")
+                ))
+            ]
+        )
+        let validBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000127534")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000127535")!,
+            createdAt: Date(timeIntervalSince1970: 2),
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteBID,
+                    title: "Remote B",
+                    modifiedAt: Date(timeIntervalSince1970: 2)
+                ))
+            ]
+        )
+        let queue = FileBackedSyncBatchQueue(fileURL: nil)
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: queue,
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: CompletingPresentationAdapter()
+        )
+
+        let firstOutcome = await runtime.submitRemoteBatch(deferredBatch)
+        guard case .deferred = firstOutcome else {
+            return XCTFail("Expected first incoming batch to defer")
+        }
+        let secondOutcome = await runtime.submitRemoteBatch(validBatch)
+
+        guard case .deferred(let deferred) = secondOutcome else {
+            return XCTFail("Expected remaining note-A work to stay deferred")
+        }
+        XCTAssertEqual(deferred.incoming.map(\.batchID), [deferredBatch.id])
+        XCTAssertEqual(noteA.content, "local-a")
+        XCTAssertEqual(noteB.title, "Remote B")
+        XCTAssertEqual(queue.pendingBatches.map(\.id), [deferredBatch.id])
+    }
+
     func testLocalObligationRemainsDurableWhenTransportAcceptanceThrows() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -2253,7 +3656,7 @@ final class MyRAMTests: XCTestCase {
         try context.save()
 
         let localObligationQueueURL = temporarySyncBatchQueueFileURL()
-        let localObligationQueue = FileBackedSyncBatchQueue(fileURL: localObligationQueueURL)
+        let localObligationQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: localObligationQueueURL)
         let batch = makeTitleOnlyBatch(idSuffix: 127500, title: "Unsatisfied")
         let runtime = SyncConvergenceRuntime(
             context: context,
@@ -2270,7 +3673,7 @@ final class MyRAMTests: XCTestCase {
         }
         XCTAssertEqual(failure.batchID, batch.id)
         XCTAssertEqual(localObligationQueue.pendingBatches, [batch])
-        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: localObligationQueueURL).pendingBatches, [batch])
+        XCTAssertEqual(FileBackedSyncConvergenceLocalObligationQueue(fileURL: localObligationQueueURL).pendingBatches, [batch])
     }
 
     func testUnrelatedIncorporationHistoryDoesNotChangeActiveNotePlanning() async throws {
@@ -2319,7 +3722,7 @@ final class MyRAMTests: XCTestCase {
         let runtime = SyncConvergenceRuntime(
             context: context,
             convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
-            localObligationQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
             localBatchTransportAdapter: nil,
             presentationAdapter: CompletingPresentationAdapter()
         )
@@ -2416,7 +3819,7 @@ final class MyRAMTests: XCTestCase {
         let runtime = SyncConvergenceRuntime(
             context: context,
             convergenceQueue: queue,
-            localObligationQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
             localBatchTransportAdapter: nil,
             presentationAdapter: adapter
         )
@@ -2483,7 +3886,7 @@ final class MyRAMTests: XCTestCase {
         let runtime = SyncConvergenceRuntime(
             context: context,
             convergenceQueue: queue,
-            localObligationQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
             localBatchTransportAdapter: nil,
             presentationAdapter: CompletingPresentationAdapter()
         )
@@ -2681,7 +4084,9 @@ final class MyRAMTests: XCTestCase {
             ]
         ))
 
-        XCTAssertEqual(vm.syncBatchErrorMessage, "Incoming reconciliation cannot be processed by this version.")
+        // Unsupported reconciliation is a note-scoped retryable condition: the batch
+        // remains durably queued and does not surface as a blocking error.
+        XCTAssertNil(vm.syncBatchErrorMessage)
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: queueFileURL).pendingBatches.count, 1)
     }
 
@@ -3117,7 +4522,7 @@ final class MyRAMTests: XCTestCase {
         let remoteNote = Note(title: "Remote Title", content: "remote body")
         remoteNote.id = fixture.note.id
         remoteNote.modifiedAt = Date(timeIntervalSince1970: 50)
-        await fixture.vm.applyIncomingSyncChanges([
+        _ = await fixture.vm.applyIncomingSyncChanges([
             try legacyNoteSyncChange(
                 note: remoteNote,
                 baseTitle: "Local Title",
@@ -3265,7 +4670,8 @@ final class MyRAMTests: XCTestCase {
             syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
             pendingIncomingBatchQueueFileURL: queueFileURL,
             pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
-            syncBatchQuietWindow: 0
+            syncBatchQuietWindow: 0,
+            resumesPendingConvergenceOnInit: false
         )
 
         await vm.applyIncomingSyncBatch(firstBatch)
@@ -3448,7 +4854,7 @@ final class MyRAMTests: XCTestCase {
         deviceANote.createdAt = note.createdAt
         deviceANote.modifiedAt = note.modifiedAt.addingTimeInterval(1)
 
-        await vm.applyIncomingSyncChanges([
+        _ = await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .item,
                 entityID: note.id.uuidString,
@@ -4231,7 +5637,7 @@ final class MyRAMTests: XCTestCase {
         await vm.advanceSyncBaselines(forAcknowledgedLocalChanges: [acknowledgedChange])
         let remoteModifiedAt = Date(timeIntervalSince1970: 200)
 
-        await vm.applyIncomingSyncChanges([
+        _ = await vm.applyIncomingSyncChanges([
             SyncChange(
                 entityType: .marker,
                 entityID: thought.id.uuidString,
@@ -6567,6 +7973,33 @@ final class MyRAMTests: XCTestCase {
         return try ModelContainer(for: schema, configurations: configuration)
     }
 
+    private func legacyNoteChange(
+        noteID: UUID,
+        title: String,
+        content: String,
+        baseTitle: String?,
+        baseContent: String?,
+        modifiedAt: Date,
+        originDeviceID: String = "device-b"
+    ) throws -> SyncChange {
+        let remoteNote = Note(title: title, content: content)
+        remoteNote.id = noteID
+        remoteNote.modifiedAt = modifiedAt
+        return SyncChange(
+            entityType: .item,
+            entityID: noteID.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(
+                note: remoteNote,
+                baseTitle: baseTitle,
+                baseContent: baseContent,
+                baseRichTextContentData: nil
+            )),
+            updatedAt: modifiedAt,
+            originDeviceID: originDeviceID
+        )
+    }
+
     private func makeMountedEditorFixture(
         title: String,
         content: String
@@ -6992,7 +8425,11 @@ private extension UIView {
 
 @MainActor
 private final class AcceptingLocalBatchTransport: SyncConvergenceLocalBatchTransportAdapter {
-    func acceptLocalBatch(_ batch: SyncBatch) async throws {}
+    private(set) var acceptedBatches: [SyncBatch] = []
+
+    func acceptLocalBatch(_ batch: SyncBatch) async throws {
+        acceptedBatches.append(batch)
+    }
 }
 
 @MainActor
@@ -7006,6 +8443,79 @@ private final class FailingLocalBatchTransport: SyncConvergenceLocalBatchTranspo
     func acceptLocalBatch(_ batch: SyncBatch) async throws {
         throw error
     }
+}
+
+@MainActor
+private final class SinglePendingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter {
+    private var obligation: SyncConvergenceLocalObligation?
+    private(set) var takeCount = 0
+
+    init(obligation: SyncConvergenceLocalObligation) {
+        self.obligation = obligation
+    }
+
+    func takePendingLocalObligationIfNeeded(
+        beforeIncomingBodyMutationFor noteIDs: Set<UUID>
+    ) async -> SyncConvergenceLocalObligation? {
+        guard let obligation,
+              !noteIDs.isDisjoint(with: Self.affectedNoteIDs(in: obligation.batch)) else {
+            return nil
+        }
+        takeCount += 1
+        self.obligation = nil
+        return obligation
+    }
+
+    private static func affectedNoteIDs(in batch: SyncBatch) -> Set<UUID> {
+        Set(batch.changes.map { change in
+            switch change {
+            case .noteCreated(let payload):
+                return payload.noteID
+            case .noteTitleChanged(let payload):
+                return payload.noteID
+            case .noteBodyTextInserted(let payload):
+                return payload.noteID
+            case .noteBodyTextDeleted(let payload):
+                return payload.noteID
+            case .noteBodyReconciled(let payload):
+                return payload.noteID
+            }
+        })
+    }
+}
+
+private func discontinuousCapturedObligation(noteID: UUID) throws -> SyncConvergenceLocalObligation {
+    let firstChange = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+        noteID: noteID,
+        utf16Offset: 1,
+        text: "B",
+        modifiedAt: Date(timeIntervalSince1970: 1),
+        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+    ))
+    let secondChange = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+        noteID: noteID,
+        utf16Offset: 1,
+        text: "C",
+        modifiedAt: Date(timeIntervalSince1970: 2),
+        baseContentHash: SyncBatchContentHash.sha256Hex(for: "A")
+    ))
+    let firstCapturedChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+        for: firstChange,
+        preBody: "A",
+        postBody: "AB"
+    )
+    let secondCapturedChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+        for: secondChange,
+        preBody: "A",
+        postBody: "AC"
+    )
+    let batch = SyncBatch(
+        id: UUID(uuidString: "00000000-0000-0000-0000-0000001275A0")!,
+        originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-0000001275A1")!,
+        createdAt: Date(timeIntervalSince1970: 1),
+        changes: [firstChange, secondChange]
+    )
+    return SyncConvergenceLocalObligation(batch: batch, capturedChanges: [firstCapturedChange, secondCapturedChange])
 }
 
 private struct CompletingPresentationAdapter: SyncConvergencePresentationAdapter {

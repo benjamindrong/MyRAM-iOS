@@ -43,14 +43,14 @@ struct MyRAMSyncChangeOutcome: Equatable {
 @MainActor
 final class MyRAMSyncChangeApplier {
     private let context: ModelContext
-    private let conflictStore: SyncConflictStore
+    private let conflictStore: SyncConflictStoring
     private let isTextApplicationUnsafe: (SyncConflictEntityType, UUID, SyncConflictField) -> Bool
     private(set) var syncConflicts: [SyncConflictVersion]
     private var newlyPreservedConflicts: [SyncConflictVersion] = []
 
     init(
         context: ModelContext,
-        conflictStore: SyncConflictStore,
+        conflictStore: SyncConflictStoring,
         isTextApplicationUnsafe: @escaping (SyncConflictEntityType, UUID, SyncConflictField) -> Bool = { _, _, _ in false }
     ) {
         self.context = context
@@ -784,7 +784,7 @@ final class MyRAMSyncChangeApplier {
         }
 
         switch SyncThreeWayTextMergePolicy.merge(base: baseline.text, local: localText, remote: remoteText) {
-        case .apply(let text), .merged(let text):
+        case .apply(let text, _):
             return .apply(text)
         case .noOp:
             return .apply(localText)
@@ -904,7 +904,7 @@ final class MyRAMSyncChangeApplier {
         }
 
         switch SyncThreeWayTextMergePolicy.merge(base: baseText, local: localText, remote: resolvedText) {
-        case .apply(let text), .merged(let text):
+        case .apply(let text, _):
             applyResolvedText(text, conflict: conflict)
             return true
         case .noOp:

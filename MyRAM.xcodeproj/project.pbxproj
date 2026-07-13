@@ -131,6 +131,12 @@
 		BCA132010000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift */; };
 		BCA132010000000000000053 /* SyncConvergencePostCommitExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */; };
 		BCA132010000000000000070 /* SyncConvergenceRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000070 /* SyncConvergenceRuntime.swift */; };
+		BCA161010000000000000001 /* SyncConvergenceLocalObligation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000001 /* SyncConvergenceLocalObligation.swift */; };
+		BCA161010000000000000002 /* SyncConvergenceLocalObligation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000001 /* SyncConvergenceLocalObligation.swift */; };
+		BCA161010000000000000003 /* FileBackedSyncConvergenceLocalObligationQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000002 /* FileBackedSyncConvergenceLocalObligationQueue.swift */; };
+		BCA161010000000000000004 /* FileBackedSyncConvergenceLocalObligationQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000002 /* FileBackedSyncConvergenceLocalObligationQueue.swift */; };
+		BCA161010000000000000005 /* SyncConvergenceDrainPassScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000003 /* SyncConvergenceDrainPassScheduler.swift */; };
+		BCA161010000000000000006 /* SyncConvergenceDrainPassScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000003 /* SyncConvergenceDrainPassScheduler.swift */; };
 		BCA132010000000000000054 /* SyncConvergencePostCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000054 /* SyncConvergencePostCommitTests.swift */; };
 		BCA132010000000000000055 /* SyncConvergencePostCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000055 /* SyncConvergencePostCommitTests.swift */; };
 		BCA137010000000000000001 /* SyncConvergencePostCommitTestDoubles.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA137020000000000000001 /* SyncConvergencePostCommitTestDoubles.swift */; };
@@ -321,6 +327,9 @@
 		BCA132020000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataSyncConvergencePostCommitStore.swift; sourceTree = "<group>"; };
 		BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitExecutor.swift; sourceTree = "<group>"; };
 		BCA132020000000000000070 /* SyncConvergenceRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceRuntime.swift; sourceTree = "<group>"; };
+		BCA161020000000000000001 /* SyncConvergenceLocalObligation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceLocalObligation.swift; sourceTree = "<group>"; };
+		BCA161020000000000000002 /* FileBackedSyncConvergenceLocalObligationQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBackedSyncConvergenceLocalObligationQueue.swift; sourceTree = "<group>"; };
+		BCA161020000000000000003 /* SyncConvergenceDrainPassScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceDrainPassScheduler.swift; sourceTree = "<group>"; };
 		BCA132020000000000000054 /* SyncConvergencePostCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitTests.swift; sourceTree = "<group>"; };
 		BCA132020000000000000055 /* SyncConvergencePostCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergencePostCommitTests.swift; sourceTree = "<group>"; };
 		BCA137020000000000000001 /* SyncConvergencePostCommitTestDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitTestDoubles.swift; sourceTree = "<group>"; };
@@ -550,6 +559,9 @@
 				BCA132020000000000000051 /* SyncConvergencePostCommitGating.swift */,
 				BCA132020000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift */,
 				BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */,
+				BCA161020000000000000001 /* SyncConvergenceLocalObligation.swift */,
+				BCA161020000000000000002 /* FileBackedSyncConvergenceLocalObligationQueue.swift */,
+				BCA161020000000000000003 /* SyncConvergenceDrainPassScheduler.swift */,
 				BCA132020000000000000070 /* SyncConvergenceRuntime.swift */,
 			);
 			path = Convergence;
@@ -982,6 +994,9 @@
 				BCA132010000000000000051 /* SyncConvergencePostCommitGating.swift in Sources */,
 				BCA132010000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift in Sources */,
 				BCA132010000000000000053 /* SyncConvergencePostCommitExecutor.swift in Sources */,
+				BCA161010000000000000001 /* SyncConvergenceLocalObligation.swift in Sources */,
+				BCA161010000000000000003 /* FileBackedSyncConvergenceLocalObligationQueue.swift in Sources */,
+				BCA161010000000000000005 /* SyncConvergenceDrainPassScheduler.swift in Sources */,
 				BCA132010000000000000070 /* SyncConvergenceRuntime.swift in Sources */,
 				BCA123010000000000000020 /* SyncBatchUnsentQueue.swift in Sources */,
 				BCA123010000000000000023 /* FileBackedSyncBatchQueue.swift in Sources */,
@@ -1122,6 +1137,9 @@
 				BCA132010000000000000057 /* SyncConvergencePostCommitGating.swift in Sources */,
 				BCA132010000000000000058 /* SwiftDataSyncConvergencePostCommitStore.swift in Sources */,
 				BCA132010000000000000059 /* SyncConvergencePostCommitExecutor.swift in Sources */,
+				BCA161010000000000000002 /* SyncConvergenceLocalObligation.swift in Sources */,
+				BCA161010000000000000004 /* FileBackedSyncConvergenceLocalObligationQueue.swift in Sources */,
+				BCA161010000000000000006 /* SyncConvergenceDrainPassScheduler.swift in Sources */,
 				BCA132010000000000000071 /* SyncConvergenceRuntime.swift in Sources */,
 				BCA123010000000000000021 /* SyncBatchUnsentQueue.swift in Sources */,
 				BCA123010000000000000024 /* FileBackedSyncBatchQueue.swift in Sources */,

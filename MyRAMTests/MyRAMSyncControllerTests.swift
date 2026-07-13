@@ -70,6 +70,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         var receivedChangeIDs: [UUID] = []
         controller.onChangesReceived = { changes in
             receivedChangeIDs.append(contentsOf: changes.map(\.id))
+            return changes.map { LegacyIncomingChangeResult(changeID: $0.id, disposition: .applied) }
         }
 
         let incomingChange = makeChange(entityID: "remote-note", originDeviceID: "remote-device")
@@ -83,6 +84,132 @@ final class MyRAMSyncControllerTests: XCTestCase {
         let ack = try XCTUnwrap(transport.sentLegacyEnvelopes.first)
         XCTAssertTrue(ack.changes.isEmpty)
         XCTAssertEqual(ack.acknowledgedChangeIDs, [incomingChange.id])
+    }
+
+    func testRetryRequiredLegacyCandidateIsNotAcknowledgedOrMarkedHandledAndRedelivers() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(transport: transport)
+        let incomingChange = makeChange(entityID: "remote-note", originDeviceID: "remote-device")
+        var deliveryCount = 0
+        controller.onChangesReceived = { changes in
+            deliveryCount += changes.count
+            return changes.map {
+                LegacyIncomingChangeResult(
+                    changeID: $0.id,
+                    disposition: deliveryCount < 3 ? .retryRequired : .applied
+                )
+            }
+        }
+
+        let envelope = SyncEnvelope(senderDeviceID: "remote-device", changes: [incomingChange])
+        await deliverLegacyEnvelope(to: controller, envelope)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(deliveryCount, 1)
+        XCTAssertTrue(transport.sentLegacyEnvelopes.isEmpty)
+
+        await deliverLegacyEnvelope(to: controller, envelope)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(deliveryCount, 2)
+        XCTAssertTrue(transport.sentLegacyEnvelopes.isEmpty)
+
+        await deliverLegacyEnvelope(to: controller, envelope)
+        await waitUntil { transport.sentLegacyEnvelopes.count == 1 }
+        XCTAssertEqual(deliveryCount, 3)
+        XCTAssertEqual(transport.sentLegacyEnvelopes.last?.acknowledgedChangeIDs, [incomingChange.id])
+
+        transport.removeAllSentLegacyEnvelopes()
+        await deliverLegacyEnvelope(to: controller, envelope)
+        await waitUntil { transport.sentLegacyEnvelopes.count == 1 }
+        XCTAssertEqual(deliveryCount, 3, "engine-proven duplicates must not re-enter the app callback")
+        XCTAssertEqual(transport.sentLegacyEnvelopes.last?.acknowledgedChangeIDs, [incomingChange.id])
+    }
+
+    func testPartialLegacyEnvelopeAcknowledgesOnlyAppliedCandidate() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(transport: transport)
+        let appliedChange = makeChange(entityID: "remote-note-1", originDeviceID: "remote-device")
+        let retryChange = makeChange(entityID: "remote-note-2", originDeviceID: "remote-device")
+        var receivedBatches: [[UUID]] = []
+        controller.onChangesReceived = { changes in
+            receivedBatches.append(changes.map(\.id))
+            return changes.map {
+                LegacyIncomingChangeResult(
+                    changeID: $0.id,
+                    disposition: $0.id == appliedChange.id ? .applied : .retryRequired
+                )
+            }
+        }
+
+        await deliverLegacyEnvelope(
+            to: controller,
+            SyncEnvelope(senderDeviceID: "remote-device", changes: [appliedChange, retryChange])
+        )
+        await waitUntil { transport.sentLegacyEnvelopes.count == 1 }
+
+        XCTAssertEqual(transport.sentLegacyEnvelopes.last?.acknowledgedChangeIDs, [appliedChange.id])
+        XCTAssertEqual(receivedBatches.map(Set.init), [Set([appliedChange.id, retryChange.id])])
+
+        transport.removeAllSentLegacyEnvelopes()
+        controller.onChangesReceived = { changes in
+            receivedBatches.append(changes.map(\.id))
+            return changes.map { LegacyIncomingChangeResult(changeID: $0.id, disposition: .applied) }
+        }
+        await deliverLegacyEnvelope(
+            to: controller,
+            SyncEnvelope(senderDeviceID: "remote-device", changes: [appliedChange, retryChange])
+        )
+        await waitUntil { transport.sentLegacyEnvelopes.count == 1 }
+
+        XCTAssertEqual(
+            receivedBatches.map(Set.init),
+            [Set([appliedChange.id, retryChange.id]), Set([retryChange.id])]
+        )
+        XCTAssertEqual(Set(transport.sentLegacyEnvelopes.last?.acknowledgedChangeIDs ?? []), Set([appliedChange.id, retryChange.id]))
+    }
+
+    func testUnknownLegacyDispositionResultFailsClosed() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(transport: transport)
+        let incomingChange = makeChange(entityID: "remote-note", originDeviceID: "remote-device")
+        var deliveryCount = 0
+        controller.onChangesReceived = { _ in
+            deliveryCount += 1
+            return [LegacyIncomingChangeResult(changeID: UUID(), disposition: .applied)]
+        }
+
+        let envelope = SyncEnvelope(senderDeviceID: "remote-device", changes: [incomingChange])
+        await deliverLegacyEnvelope(to: controller, envelope)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(deliveryCount, 1)
+        XCTAssertTrue(transport.sentLegacyEnvelopes.isEmpty)
+
+        await deliverLegacyEnvelope(to: controller, envelope)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertEqual(deliveryCount, 2)
+        XCTAssertTrue(transport.sentLegacyEnvelopes.isEmpty)
+    }
+
+    func testHandledCommitFailurePreventsLegacyAcknowledgement() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let blockedDirectoryURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: false)
+        try Data().write(to: blockedDirectoryURL)
+        let controller = try makeController(
+            pendingChangesFileURL: blockedDirectoryURL.appendingPathComponent("sync-pending-changes.json"),
+            transport: transport
+        )
+        controller.onChangesReceived = { changes in
+            changes.map { LegacyIncomingChangeResult(changeID: $0.id, disposition: .applied) }
+        }
+
+        await deliverLegacyEnvelope(
+            to: controller,
+            SyncEnvelope(senderDeviceID: "remote-device", changes: [makeChange(entityID: "remote-note", originDeviceID: "remote-device")])
+        )
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertTrue(transport.sentLegacyEnvelopes.isEmpty)
+        XCTAssertEqual(controller.lastErrorMessage, "Unable to confirm nearby sync.")
     }
 
     func test101DistinctTargetsDrainAcrossTwoAcknowledgementCyclesWithoutManualSync() async throws {
@@ -335,11 +462,12 @@ final class MyRAMSyncControllerTests: XCTestCase {
 
     private func makeController(
         unsentBatchQueueFileURL: URL? = nil,
+        pendingChangesFileURL: URL? = nil,
         transport: FakeMyRAMSyncTransport
     ) throws -> MyRAMSyncController {
         MyRAMSyncController(
             unsentBatchQueueFileURL: unsentBatchQueueFileURL,
-            pendingChangesFileURL: temporaryQueueFileURL(),
+            pendingChangesFileURL: pendingChangesFileURL ?? temporaryQueueFileURL(),
             startsNetworking: false,
             transport: transport
         )
@@ -445,5 +573,9 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     func resumeNextLegacySend() {
         guard !suspendedLegacySendContinuations.isEmpty else { return }
         suspendedLegacySendContinuations.removeFirst().resume()
+    }
+
+    func removeAllSentLegacyEnvelopes() {
+        sentLegacyEnvelopes.removeAll()
     }
 }
