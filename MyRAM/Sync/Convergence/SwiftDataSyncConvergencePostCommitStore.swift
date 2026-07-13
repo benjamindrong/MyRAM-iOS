@@ -5,9 +5,14 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
     private let context: ModelContext
 
     #if DEBUG
+    enum TestOnlySaveSite {
+        case backfill
+        case compareAndSet
+    }
+
     private(set) var testOnlyLastCandidateFetchCount = 0
     private(set) var testOnlyLastBackfillSaveCount = 0
-    var testOnlyFailNextBackfillSave = false
+    var testOnlyFailNextSaveAt: TestOnlySaveSite?
     #endif
 
     init(context: ModelContext) {
@@ -82,6 +87,9 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
         root.postCommitStatePayloadData = encodedState
         root.hasPendingPostCommitWork = newState.hasPendingWork
         do {
+            #if DEBUG
+            try testOnlyThrowIfRequested(at: .compareAndSet)
+            #endif
             try context.save()
         } catch {
             context.rollback()
@@ -280,6 +288,24 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
         #if DEBUG
         testOnlyLastCandidateFetchCount = 0
         testOnlyLastBackfillSaveCount = 0
+        let isolatedStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(context.container))
+        isolatedStore.testOnlyFailNextSaveAt = testOnlyFailNextSaveAt
+        defer {
+            testOnlyLastCandidateFetchCount = isolatedStore.testOnlyLastCandidateFetchCount
+            testOnlyLastBackfillSaveCount = isolatedStore.testOnlyLastBackfillSaveCount
+            testOnlyFailNextSaveAt = isolatedStore.testOnlyFailNextSaveAt
+        }
+        return try isolatedStore.loadPendingPostCommitRequestsInCurrentContext()
+        #else
+        let isolatedStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(context.container))
+        return try isolatedStore.loadPendingPostCommitRequestsInCurrentContext()
+        #endif
+    }
+
+    private func loadPendingPostCommitRequestsInCurrentContext() throws -> [SyncConvergencePostCommitRequest] {
+        #if DEBUG
+        testOnlyLastCandidateFetchCount = 0
+        testOnlyLastBackfillSaveCount = 0
         #endif
 
         let descriptor = FetchDescriptor<IncorporatedSyncBatch>(
@@ -315,20 +341,17 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
         }
 
         guard !backfillAssignments.isEmpty else { return requests }
+        // The public loader uses a dedicated context; this guard proves phase one stayed read-only.
         guard !context.hasChanges else {
             throw SyncConvergencePostCommitFailure.persistence
         }
         for (root, hasPendingWork) in backfillAssignments {
             root.hasPendingPostCommitWork = hasPendingWork
         }
-        #if DEBUG
-        if testOnlyFailNextBackfillSave {
-            testOnlyFailNextBackfillSave = false
-            context.rollback()
-            throw SyncConvergencePostCommitFailure.persistence
-        }
-        #endif
         do {
+            #if DEBUG
+            try testOnlyThrowIfRequested(at: .backfill)
+            #endif
             try context.save()
             #if DEBUG
             testOnlyLastBackfillSaveCount = 1
@@ -398,7 +421,19 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
             throw SyncConvergencePostCommitFailure.malformedPostCommitState(batchID: root.batchID)
         }
     }
+
+    #if DEBUG
+    private func testOnlyThrowIfRequested(at site: TestOnlySaveSite) throws {
+        guard testOnlyFailNextSaveAt == site else { return }
+        testOnlyFailNextSaveAt = nil
+        throw TestOnlyInjectedPersistenceError()
+    }
+    #endif
 }
+
+#if DEBUG
+private struct TestOnlyInjectedPersistenceError: Error {}
+#endif
 
 private extension IncorporatedSyncBatch {
     func matches(_ identity: SyncConvergencePersistedIncorporationIdentity) -> Bool {

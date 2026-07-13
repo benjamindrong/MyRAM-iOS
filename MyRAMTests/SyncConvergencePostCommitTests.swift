@@ -1251,6 +1251,26 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         )
     }
 
+    func testMYR158CASSaveFailureRollsBackStateAndIndex() throws {
+        let fixture = try makeMYR136Fixture()
+        let beforeCAS = try fixture.rawRootSnapshot()
+        let failingStore = fixture.store()
+        failingStore.testOnlyFailNextSaveAt = .compareAndSet
+
+        XCTAssertThrowsError(
+            try failingStore.compareAndSetPostCommitState(
+                expectedRoot: SyncConvergencePostCommitRootSnapshot(root: fixture.loaded.root),
+                expectedPayloadData: fixture.loaded.postCommitStatePayloadData,
+                newState: .none
+            )
+        ) { error in
+            XCTAssertEqual(error as? SyncConvergencePostCommitFailure, .persistence)
+        }
+
+        XCTAssertNil(failingStore.testOnlyFailNextSaveAt)
+        XCTAssertEqual(try fixture.rawRootSnapshot(), beforeCAS)
+    }
+
     func testMYR158IndexedPendingSelectionSkipsCompletedHistory() throws {
         let container = try makeMYR158Container()
         let seedContext = ModelContext(container)
@@ -1369,12 +1389,17 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertEqual(try myr158Rows(container: container).map(\.hasPendingPostCommitWork), [nil, nil, nil])
     }
 
-    func testMYR158DirtyContextGuardFailsWithoutMutationOrRollback() throws {
+    func testMYR158DirtySharedContextBackfillsWithoutSavingOrRollingBackCallerChanges() throws {
         let container = try makeMYR158Container()
+        let pendingID = postCommitUUID("00000000-0000-0000-0000-000000158951")
+        let completedID = postCommitUUID("00000000-0000-0000-0000-000000158952")
         let seedContext = ModelContext(container)
-        let row = try makeMYR158Root(index: 951, state: .none, hasPendingPostCommitWork: false)
-        row.hasPendingPostCommitWork = nil
-        seedContext.insert(row)
+        let pending = try makeMYR158Root(batchID: pendingID, index: 951, state: myr158QueueOnlyState(), hasPendingPostCommitWork: true)
+        let completed = try makeMYR158Root(batchID: completedID, index: 952, state: .none, hasPendingPostCommitWork: false)
+        pending.hasPendingPostCommitWork = nil
+        completed.hasPendingPostCommitWork = nil
+        seedContext.insert(pending)
+        seedContext.insert(completed)
         try seedContext.save()
 
         let dirtyContext = ModelContext(container)
@@ -1382,11 +1407,77 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         dirtyContext.insert(note)
         let store = SwiftDataSyncConvergencePostCommitStore(context: dirtyContext)
 
-        XCTAssertThrowsError(try store.loadPendingPostCommitRequests()) { error in
-            XCTAssertEqual(error as? SyncConvergencePostCommitFailure, .persistence)
-        }
+        let requests = try store.loadPendingPostCommitRequests()
+
+        XCTAssertEqual(requests.map(\.sourceBatchID), [pendingID])
+        XCTAssertEqual(store.testOnlyLastCandidateFetchCount, 2)
+        XCTAssertEqual(store.testOnlyLastBackfillSaveCount, 1)
         XCTAssertTrue(dirtyContext.hasChanges)
-        XCTAssertEqual(try myr158Root(batchID: row.batchID, container: container).hasPendingPostCommitWork, nil)
+        XCTAssertEqual(note.title, "Unsaved")
+        XCTAssertEqual(try myr158Root(batchID: pendingID, container: container).hasPendingPostCommitWork, true)
+        XCTAssertEqual(try myr158Root(batchID: completedID, container: container).hasPendingPostCommitWork, false)
+        XCTAssertTrue(try myr158PersistedNotes(container: container).isEmpty)
+    }
+
+    @MainActor
+    func testMYR158RuntimeCompletedOnlyLegacyBackfillPreservesDirtyCallerState() async throws {
+        let container = try makeMYR158Container()
+        let completedID = postCommitUUID("00000000-0000-0000-0000-000000158955")
+        let seedContext = ModelContext(container)
+        let completed = try makeMYR158Root(batchID: completedID, index: 955, state: .none, hasPendingPostCommitWork: false)
+        completed.hasPendingPostCommitWork = nil
+        seedContext.insert(completed)
+        try seedContext.save()
+
+        let sharedContext = ModelContext(container)
+        let unsavedNote = Note(title: "Unsaved runtime", content: "Body")
+        sharedContext.insert(unsavedNote)
+        let presentation = MYR158CountingPresentationAdapter()
+        let runtime = SyncConvergenceRuntime(
+            context: sharedContext,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: presentation
+        )
+
+        let outcome = await runtime.resumePendingWork()
+
+        guard case .drained = outcome else { return XCTFail("Expected completed-only legacy recovery to drain, got \(outcome)") }
+        XCTAssertEqual(presentation.requestCount, 0)
+        XCTAssertTrue(sharedContext.hasChanges)
+        XCTAssertEqual(unsavedNote.title, "Unsaved runtime")
+        XCTAssertEqual(try myr158Root(batchID: completedID, container: container).hasPendingPostCommitWork, false)
+        XCTAssertTrue(try myr158PersistedNotes(container: container).isEmpty)
+    }
+
+    @MainActor
+    func testMYR158RuntimePendingLegacyRecoveryIsNotCorruptHistory() async throws {
+        let container = try makeMYR158Container()
+        let pendingID = postCommitUUID("00000000-0000-0000-0000-000000158956")
+        let seedContext = ModelContext(container)
+        let pending = try makeMYR158Root(batchID: pendingID, index: 956, state: myr158QueueOnlyState(), hasPendingPostCommitWork: true)
+        pending.hasPendingPostCommitWork = nil
+        seedContext.insert(pending)
+        try seedContext.save()
+
+        let sharedContext = ModelContext(container)
+        sharedContext.insert(Note(title: "Dirty before CAS", content: "Body"))
+        let runtime = SyncConvergenceRuntime(
+            context: sharedContext,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: MYR158CountingPresentationAdapter()
+        )
+
+        let outcome = await runtime.resumePendingWork()
+
+        if case .blocked(let failure) = outcome, failure.kind == .corruptHistory {
+            XCTFail("Pending legacy recovery must not be misclassified as corrupt history")
+        }
+        guard case .drained = outcome else { return XCTFail("Expected pending legacy recovery to drain, got \(outcome)") }
+        XCTAssertEqual(try myr158Root(batchID: pendingID, container: container).hasPendingPostCommitWork, false)
     }
 
     func testMYR158BackfillSaveFailureRollsBackAssignedIndexes() throws {
@@ -1399,10 +1490,12 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         try seedContext.save()
 
         let failingStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
-        failingStore.testOnlyFailNextBackfillSave = true
+        failingStore.testOnlyFailNextSaveAt = .backfill
         XCTAssertThrowsError(try failingStore.loadPendingPostCommitRequests()) { error in
             XCTAssertEqual(error as? SyncConvergencePostCommitFailure, .persistence)
         }
+        XCTAssertEqual(failingStore.testOnlyLastBackfillSaveCount, 0)
+        XCTAssertNil(failingStore.testOnlyFailNextSaveAt)
         XCTAssertEqual(try myr158Root(batchID: batchID, container: container).hasPendingPostCommitWork, nil)
 
         let retryStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
@@ -2861,6 +2954,10 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         )
     }
 
+    private func myr158PersistedNotes(container: ModelContainer) throws -> [Note] {
+        try ModelContext(container).fetch(FetchDescriptor<Note>())
+    }
+
     private func myr158IndexCounts(container: ModelContainer) throws -> MYR158IndexCounts {
         try myr158Rows(container: container).reduce(into: MYR158IndexCounts()) { counts, row in
             switch row.hasPendingPostCommitWork {
@@ -2880,6 +2977,18 @@ private struct MYR158IndexCounts: Equatable {
     var nilCount = 0
     var falseCount = 0
     var trueCount = 0
+}
+
+@MainActor
+private final class MYR158CountingPresentationAdapter: SyncConvergencePresentationAdapter {
+    private(set) var requestCount = 0
+
+    func refreshPresentation(
+        for request: SyncConvergencePresentationRequest
+    ) async -> SyncConvergencePostCommitAdapterResult {
+        requestCount += 1
+        return .verifiedComplete
+    }
 }
 
 private extension IncorporatedSyncBatch {
