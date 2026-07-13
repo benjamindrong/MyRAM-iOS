@@ -1254,7 +1254,8 @@ final class SyncConvergencePostCommitTests: XCTestCase {
     func testMYR158CASSaveFailureRollsBackStateAndIndex() throws {
         let fixture = try makeMYR136Fixture()
         let beforeCAS = try fixture.rawRootSnapshot()
-        let failingStore = fixture.store()
+        let casContext = ModelContext(fixture.container)
+        let failingStore = fixture.store(context: casContext)
         failingStore.testOnlyFailNextSaveAt = .compareAndSet
 
         XCTAssertThrowsError(
@@ -1268,7 +1269,133 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         }
 
         XCTAssertNil(failingStore.testOnlyFailNextSaveAt)
+        XCTAssertFalse(casContext.hasChanges)
+        XCTAssertEqual(try MYR136RawRootSnapshot(root: fixture.rawRoot(context: casContext)), beforeCAS)
         XCTAssertEqual(try fixture.rawRootSnapshot(), beforeCAS)
+    }
+
+    func testMYR158LegacyNilSuccessfulCASWritesDerivedIndex() throws {
+        let fixture = try makeMYR136Fixture()
+        let mutationContext = ModelContext(fixture.container)
+        let rawRoot = try fixture.rawRoot(context: mutationContext)
+        rawRoot.hasPendingPostCommitWork = nil
+        try mutationContext.save()
+        let beforeCAS = try fixture.rawRootSnapshot()
+        XCTAssertNil(beforeCAS.hasPendingPostCommitWork)
+
+        let newState = SyncConvergencePostCommitState.none
+        let encodedNewState = try SyncConvergenceStableEncoding.encode(newState)
+        let loaded = try fixture.store().compareAndSetPostCommitState(
+            expectedRoot: SyncConvergencePostCommitRootSnapshot(root: fixture.loaded.root),
+            expectedPayloadData: fixture.loaded.postCommitStatePayloadData,
+            newState: newState
+        )
+
+        XCTAssertEqual(loaded.postCommitState, newState)
+        XCTAssertEqual(loaded.postCommitStatePayloadData, encodedNewState)
+        let afterCAS = try fixture.rawRootSnapshot()
+        XCTAssertEqual(afterCAS.postCommitStatePayloadData, encodedNewState)
+        XCTAssertEqual(afterCAS.hasPendingPostCommitWork, newState.hasPendingWork)
+        XCTAssertEqual(afterCAS.postCommitWorkPayloadData, beforeCAS.postCommitWorkPayloadData)
+    }
+
+    func testMYR158CASGuardPrecedenceIgnoresLaterIndexContradictions() throws {
+        struct Case {
+            let label: String
+            let prepare: (MYR136Fixture, ModelContext, IncorporatedSyncBatch) throws -> (SyncConvergencePostCommitRootSnapshot, Data)
+        }
+
+        let cases: [Case] = [
+            Case(label: "expected root mismatch") { fixture, context, root in
+                root.postCommitStatePayloadData = try SyncConvergenceStableEncoding.encode(SyncConvergencePostCommitState.none)
+                root.hasPendingPostCommitWork = true
+                try context.save()
+                return (
+                    SyncConvergencePostCommitRootSnapshot(root: fixture.loaded.root),
+                    fixture.loaded.postCommitStatePayloadData
+                )
+            },
+            Case(label: "persisted identity mismatch") { fixture, context, root in
+                root.canonicalPayloadDigest = String(repeating: "d", count: 64)
+                root.postCommitStatePayloadData = try SyncConvergenceStableEncoding.encode(SyncConvergencePostCommitState.none)
+                root.hasPendingPostCommitWork = true
+                try context.save()
+                return (
+                    SyncConvergencePostCommitRootSnapshot(root: fixture.loaded.root),
+                    root.postCommitStatePayloadData
+                )
+            },
+            Case(label: "expected payload mismatch") { fixture, context, root in
+                root.postCommitStatePayloadData = try SyncConvergenceStableEncoding.encode(SyncConvergencePostCommitState.none)
+                root.hasPendingPostCommitWork = true
+                try context.save()
+                let currentProjection = try SwiftDataSyncConvergencePersistenceTransaction(context: context)
+                    .loadIncorporatedBatch(batchID: fixture.request.sourceBatchID)
+                return (
+                    SyncConvergencePostCommitRootSnapshot(root: try XCTUnwrap(currentProjection)),
+                    fixture.loaded.postCommitStatePayloadData
+                )
+            }
+        ]
+
+        for testCase in cases {
+            let fixture = try makeMYR136Fixture()
+            let mutationContext = ModelContext(fixture.container)
+            let root = try fixture.rawRoot(context: mutationContext)
+            let (expectedRoot, expectedPayloadData) = try testCase.prepare(fixture, mutationContext, root)
+
+            XCTAssertThrowsError(
+                try fixture.store().compareAndSetPostCommitState(
+                    expectedRoot: expectedRoot,
+                    expectedPayloadData: expectedPayloadData,
+                    newState: SyncConvergencePostCommitState.none
+                ),
+                testCase.label
+            ) { error in
+                XCTAssertEqual(
+                    error as? SyncConvergencePostCommitFailure,
+                    .inconsistentIncorporationIdentity(batchID: fixture.request.sourceBatchID),
+                    testCase.label
+                )
+            }
+        }
+    }
+
+    func testMYR158CASPostSaveContradictionReturnsTypedFailure() throws {
+        let fixture = try makeMYR136Fixture()
+        let store = fixture.store()
+        store.testOnlyPostSaveMutation = .contradictoryIndex
+
+        XCTAssertThrowsError(
+            try store.compareAndSetPostCommitState(
+                expectedRoot: SyncConvergencePostCommitRootSnapshot(root: fixture.loaded.root),
+                expectedPayloadData: fixture.loaded.postCommitStatePayloadData,
+                newState: SyncConvergencePostCommitState.none
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncConvergencePostCommitFailure,
+                .contradictoryPostCommitIndex(batchID: fixture.request.sourceBatchID)
+            )
+        }
+        XCTAssertNil(store.testOnlyPostSaveMutation)
+    }
+
+    func testMYR158CASPostSaveUnexpectedSelfConsistentStateReturnsPersistence() throws {
+        let fixture = try makeMYR136Fixture()
+        let store = fixture.store()
+        store.testOnlyPostSaveMutation = .selfConsistentUnexpectedState
+
+        XCTAssertThrowsError(
+            try store.compareAndSetPostCommitState(
+                expectedRoot: SyncConvergencePostCommitRootSnapshot(root: fixture.loaded.root),
+                expectedPayloadData: fixture.loaded.postCommitStatePayloadData,
+                newState: SyncConvergencePostCommitState.none
+            )
+        ) { error in
+            XCTAssertEqual(error as? SyncConvergencePostCommitFailure, .persistence)
+        }
+        XCTAssertNil(store.testOnlyPostSaveMutation)
     }
 
     func testMYR158IndexedPendingSelectionSkipsCompletedHistory() throws {
@@ -1387,6 +1514,57 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             XCTAssertEqual(error as? SyncConvergencePostCommitFailure, .malformedPostCommitState(batchID: malformed.batchID))
         }
         XCTAssertEqual(try myr158Rows(container: container).map(\.hasPendingPostCommitWork), [nil, nil, nil])
+    }
+
+    func testMYR158MalformedPendingWorkPhaseOneDoesNotPersistBackfill() throws {
+        let container = try makeMYR158Container()
+        let seedContext = ModelContext(container)
+        let validBefore = try makeMYR158Root(index: 945, state: .none, hasPendingPostCommitWork: false)
+        let malformed = try makeMYR158Root(
+            index: 946,
+            state: myr158QueueOnlyState(),
+            hasPendingPostCommitWork: true,
+            postCommitWorkPayloadData: Data([0xde, 0xad, 0xbe, 0xef])
+        )
+        let validAfter = try makeMYR158Root(index: 947, state: myr158QueueOnlyState(), hasPendingPostCommitWork: true)
+        for row in [validBefore, malformed, validAfter] {
+            row.hasPendingPostCommitWork = nil
+            seedContext.insert(row)
+        }
+        try seedContext.save()
+
+        let store = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
+        XCTAssertThrowsError(try store.loadPendingPostCommitRequests()) { error in
+            XCTAssertEqual(error as? SyncConvergencePostCommitFailure, .malformedPostCommitWorkPayload(batchID: malformed.batchID))
+        }
+        XCTAssertEqual(store.testOnlyLastBackfillSaveCount, 0)
+        XCTAssertEqual(try myr158Rows(container: container).map(\.hasPendingPostCommitWork), [nil, nil, nil])
+    }
+
+    func testMYR158ContradictoryPendingWorkPhaseOneDoesNotPersistBackfill() throws {
+        let container = try makeMYR158Container()
+        let seedContext = ModelContext(container)
+        let contradictoryPayload = try SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: [],
+            legacyCleanupRequired: false,
+            presentationEntries: []
+        ).encodedPayloadData()
+        let pending = try makeMYR158Root(
+            index: 948,
+            state: myr158QueueOnlyState(),
+            hasPendingPostCommitWork: true,
+            postCommitWorkPayloadData: contradictoryPayload
+        )
+        pending.hasPendingPostCommitWork = nil
+        seedContext.insert(pending)
+        try seedContext.save()
+
+        let store = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
+        XCTAssertThrowsError(try store.loadPendingPostCommitRequests()) { error in
+            XCTAssertEqual(error as? SyncConvergencePostCommitFailure, .contradictoryPostCommitWorkPayload(batchID: pending.batchID))
+        }
+        XCTAssertEqual(store.testOnlyLastBackfillSaveCount, 0)
+        XCTAssertEqual(try myr158Root(batchID: pending.batchID, container: container).hasPendingPostCommitWork, nil)
     }
 
     func testMYR158DirtySharedContextBackfillsWithoutSavingOrRollingBackCallerChanges() throws {
@@ -1526,31 +1704,51 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
     func testMYR158DirectNilReadsRemainNonmutatingUntilGlobalLoadBackfills() throws {
         let container = try makeMYR158Container()
-        let batchID = postCommitUUID("00000000-0000-0000-0000-000000158981")
+        let pendingID = postCommitUUID("00000000-0000-0000-0000-000000158981")
+        let completedID = postCommitUUID("00000000-0000-0000-0000-000000158982")
         let seedContext = ModelContext(container)
-        let row = try makeMYR158Root(batchID: batchID, index: 981, state: myr158QueueOnlyState(), hasPendingPostCommitWork: true)
-        let identity = row.persistedIdentityForTest
-        row.hasPendingPostCommitWork = nil
-        seedContext.insert(row)
+        let pending = try makeMYR158Root(batchID: pendingID, index: 981, state: myr158QueueOnlyState(), hasPendingPostCommitWork: true)
+        let completed = try makeMYR158Root(batchID: completedID, index: 982, state: .none, hasPendingPostCommitWork: false)
+        let pendingIdentity = pending.persistedIdentityForTest
+        let completedIdentity = completed.persistedIdentityForTest
+        pending.hasPendingPostCommitWork = nil
+        completed.hasPendingPostCommitWork = nil
+        seedContext.insert(pending)
+        seedContext.insert(completed)
         try seedContext.save()
 
-        let loadStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
-        guard case .fullRoot(let loaded) = try loadStore.loadState(matching: identity) else {
-            return XCTFail("Expected direct state load")
+        let pendingLoadStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
+        guard case .fullRoot(let loadedPending) = try pendingLoadStore.loadState(matching: pendingIdentity) else {
+            return XCTFail("Expected direct pending state load")
         }
-        XCTAssertEqual(loaded.postCommitState, myr158QueueOnlyState())
-        XCTAssertEqual(try myr158Root(batchID: batchID, container: container).hasPendingPostCommitWork, nil)
+        XCTAssertEqual(loadedPending.postCommitState, myr158QueueOnlyState())
+        XCTAssertEqual(try myr158Root(batchID: pendingID, container: container).hasPendingPostCommitWork, nil)
+        XCTAssertEqual(pendingLoadStore.testOnlyLastBackfillSaveCount, 0)
+
+        let completedLoadStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
+        guard case .fullRoot(let loadedCompleted) = try completedLoadStore.loadState(matching: completedIdentity) else {
+            return XCTFail("Expected direct completed state load")
+        }
+        XCTAssertEqual(loadedCompleted.postCommitState, .none)
+        XCTAssertEqual(try myr158Root(batchID: completedID, container: container).hasPendingPostCommitWork, nil)
+        XCTAssertEqual(completedLoadStore.testOnlyLastBackfillSaveCount, 0)
 
         let statusStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
-        guard case .pending(let request) = try statusStore.loadPostCommitStatus(forBatchID: batchID) else {
+        guard case .pending(let request) = try statusStore.loadPostCommitStatus(forBatchID: pendingID) else {
             return XCTFail("Expected direct pending status")
         }
-        XCTAssertEqual(request.sourceBatchID, batchID)
-        XCTAssertEqual(try myr158Root(batchID: batchID, container: container).hasPendingPostCommitWork, nil)
+        XCTAssertEqual(request.sourceBatchID, pendingID)
+        guard case .completed(let completedStatusIdentity) = try statusStore.loadPostCommitStatus(forBatchID: completedID) else {
+            return XCTFail("Expected direct completed status")
+        }
+        XCTAssertEqual(completedStatusIdentity.batchID, completedID)
+        XCTAssertEqual(try myr158Root(batchID: pendingID, container: container).hasPendingPostCommitWork, nil)
+        XCTAssertEqual(try myr158Root(batchID: completedID, container: container).hasPendingPostCommitWork, nil)
 
         let globalStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
-        XCTAssertEqual(try globalStore.loadPendingPostCommitRequests().map(\.sourceBatchID), [batchID])
-        XCTAssertEqual(try myr158Root(batchID: batchID, container: container).hasPendingPostCommitWork, true)
+        XCTAssertEqual(try globalStore.loadPendingPostCommitRequests().map(\.sourceBatchID), [pendingID])
+        XCTAssertEqual(try myr158Root(batchID: pendingID, container: container).hasPendingPostCommitWork, true)
+        XCTAssertEqual(try myr158Root(batchID: completedID, container: container).hasPendingPostCommitWork, false)
     }
 
     func testLegacyTrueWithoutAdapterRemainsPending() async {

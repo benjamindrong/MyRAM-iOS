@@ -10,9 +10,15 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
         case compareAndSet
     }
 
+    enum TestOnlyPostSaveMutation {
+        case contradictoryIndex
+        case selfConsistentUnexpectedState
+    }
+
     private(set) var testOnlyLastCandidateFetchCount = 0
     private(set) var testOnlyLastBackfillSaveCount = 0
     var testOnlyFailNextSaveAt: TestOnlySaveSite?
+    var testOnlyPostSaveMutation: TestOnlyPostSaveMutation?
     #endif
 
     init(context: ModelContext) {
@@ -100,6 +106,9 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
         guard let reloadedModel = try fetchOne(IncorporatedSyncBatch.self, #Predicate { $0.batchID == identityBatchID }) else {
             throw SyncConvergencePostCommitFailure.persistence
         }
+        #if DEBUG
+        try testOnlyApplyPostSaveMutationIfRequested(to: reloadedModel, expectedState: newState)
+        #endif
         let reloaded = try rootProjection(reloadedModel)
         let reloadedState = try decodeAndValidatePostCommitState(reloadedModel)
         guard reloaded.matches(identity),
@@ -427,6 +436,28 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
         guard testOnlyFailNextSaveAt == site else { return }
         testOnlyFailNextSaveAt = nil
         throw TestOnlyInjectedPersistenceError()
+    }
+
+    private func testOnlyApplyPostSaveMutationIfRequested(
+        to root: IncorporatedSyncBatch,
+        expectedState: SyncConvergencePostCommitState
+    ) throws {
+        guard let mutation = testOnlyPostSaveMutation else { return }
+        testOnlyPostSaveMutation = nil
+        switch mutation {
+        case .contradictoryIndex:
+            root.hasPendingPostCommitWork = !expectedState.hasPendingWork
+        case .selfConsistentUnexpectedState:
+            let unexpectedState = expectedState == .none
+                ? SyncConvergencePostCommitState(
+                    queueCleanupPending: true,
+                    legacyCleanupPending: false,
+                    presentationRefreshPending: false
+                )
+                : SyncConvergencePostCommitState.none
+            root.postCommitStatePayloadData = try SyncConvergenceStableEncoding.encode(unexpectedState)
+            root.hasPendingPostCommitWork = unexpectedState.hasPendingWork
+        }
     }
     #endif
 }

@@ -82,6 +82,98 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertTrue(postCommit.presentationRefreshPending)
     }
 
+    func testMYR158SwiftDataTransactionPersistsPostCommitIndexMatrix() throws {
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
+        let cases: [(String, SyncConvergencePostCommitState)] = [
+            (
+                "queue cleanup only",
+                SyncConvergencePostCommitState(
+                    queueCleanupPending: true,
+                    legacyCleanupPending: false,
+                    presentationRefreshPending: false
+                )
+            ),
+            (
+                "presentation refresh only",
+                SyncConvergencePostCommitState(
+                    queueCleanupPending: false,
+                    legacyCleanupPending: false,
+                    presentationRefreshPending: true
+                )
+            ),
+            (
+                "multiple pending domains",
+                SyncConvergencePostCommitState(
+                    queueCleanupPending: true,
+                    legacyCleanupPending: true,
+                    presentationRefreshPending: true
+                )
+            ),
+            ("no post-commit work", .none)
+        ]
+
+        for (index, testCase) in cases.enumerated() {
+            let batchID = uuid(String(format: "00000000-0000-0000-0000-%012d", 158200 + index))
+            let record = try myr158IncorporatedRecord(
+                batchID: batchID,
+                index: 200 + index,
+                state: testCase.1
+            )
+
+            try transaction.insertIncorporatedBatch(record)
+
+            let root = try XCTUnwrap(try transaction.loadIncorporatedBatch(batchID: batchID), testCase.0)
+            let persisted = try XCTUnwrap(try fetchIncorporatedBatch(batchID: batchID, in: context), testCase.0)
+            let decodedState = try SyncConvergencePostCommitState.decodePayloadData(root.postCommitStatePayloadData)
+            XCTAssertEqual(decodedState, testCase.1, testCase.0)
+            XCTAssertEqual(persisted.hasPendingPostCommitWork, testCase.1.hasPendingWork, testCase.0)
+            let workPayload = try XCTUnwrap(root.postCommitWorkPayloadData, testCase.0)
+            let work = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(workPayload)
+            try work.validateCurrentState(decodedState)
+        }
+    }
+
+    func testMYR158SwiftDataTransactionRejectsMalformedPostCommitStateAsInvalidMergePlan() throws {
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: ModelContext(container))
+        var record = try myr158IncorporatedRecord(
+            batchID: uuid("00000000-0000-0000-0000-000000158299"),
+            index: 299,
+            state: SyncConvergencePostCommitState.none
+        )
+        record = SyncConvergenceIncorporatedBatchRecord(
+            batchID: record.batchID,
+            originDeviceID: record.originDeviceID,
+            createdAt: record.createdAt,
+            batchSequence: record.batchSequence,
+            schemaVersion: record.schemaVersion,
+            committedAt: record.committedAt,
+            canonicalPayloadDigest: record.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: record.canonicalPayloadDigestFormatVersion,
+            committedResultDigest: record.committedResultDigest,
+            committedResultDigestFormatVersion: record.committedResultDigestFormatVersion,
+            affectedNotesPayloadData: record.affectedNotesPayloadData,
+            authoritativeChildCount: record.authoritativeChildCount,
+            authoritativeChildBytes: record.authoritativeChildBytes,
+            authoritativeChildrenDigest: record.authoritativeChildrenDigest,
+            postCommitWorkPayloadData: record.postCommitWorkPayloadData,
+            postCommitStatePayloadData: Data([0xde, 0xad, 0xbe, 0xef]),
+            hasPendingPostCommitWork: false
+        )
+
+        XCTAssertThrowsError(try transaction.insertIncorporatedBatch(record)) { error in
+            XCTAssertEqual(error as? SyncConvergenceTransactionFailure, .invalidMergePlan(noteID: nil))
+        }
+    }
+
     func testSwiftDataTransactionRejectsContradictoryPostCommitIndex() throws {
         let container = try ModelContainer(
             for: Schema(MyRAMModelRegistry.models),
@@ -3018,6 +3110,58 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         let committedAt: Date
         let priorWinner: SyncConvergenceTitleWinnerProjection
         let orphanedWinner: SyncConvergenceTitleWinnerProjection
+    }
+
+    private func myr158IncorporatedRecord(
+        batchID: UUID,
+        index: Int,
+        state: SyncConvergencePostCommitState
+    ) throws -> SyncConvergenceIncorporatedBatchRecord {
+        SyncConvergenceIncorporatedBatchRecord(
+            batchID: batchID,
+            originDeviceID: uuid("00000000-0000-0000-0000-000000158201"),
+            createdAt: date(TimeInterval(158_000 + index)),
+            batchSequence: UInt64(index),
+            schemaVersion: 1,
+            committedAt: date(TimeInterval(159_000 + index)),
+            canonicalPayloadDigest: String(format: "%064d", index),
+            canonicalPayloadDigestFormatVersion: 1,
+            committedResultDigest: String(format: "%064d", index + 1_000),
+            committedResultDigestFormatVersion: 1,
+            affectedNotesPayloadData: try SyncConvergenceAffectedNotesPayloadV1(noteIDs: []).encodedData(),
+            authoritativeChildCount: 0,
+            authoritativeChildBytes: 0,
+            authoritativeChildrenDigest: String(repeating: "c", count: 64),
+            postCommitWorkPayloadData: try SyncConvergencePostCommitWorkPayloadV1(
+                queueCleanupBatchIDs: state.queueCleanupPending ? [batchID] : [],
+                legacyCleanupRequired: state.legacyCleanupPending,
+                presentationEntries: state.presentationRefreshPending ? [myr158PresentationEntry(noteID: uuid("00000000-0000-0000-0000-000000158202"))] : []
+            ).encodedPayloadData(),
+            postCommitStatePayloadData: try state.encodedPayloadData(),
+            hasPendingPostCommitWork: state.hasPendingWork
+        )
+    }
+
+    private func fetchIncorporatedBatch(batchID: UUID, in context: ModelContext) throws -> IncorporatedSyncBatch? {
+        try context.fetch(FetchDescriptor<IncorporatedSyncBatch>(predicate: #Predicate { $0.batchID == batchID })).first
+    }
+
+    private func myr158PresentationEntry(noteID: UUID) -> SyncConvergencePostCommitWorkPayloadV1.PresentationEntry {
+        let priorHash = SyncBatchContentHash.sha256Hex(for: "prior")
+        let committedHash = SyncBatchContentHash.sha256Hex(for: "committed")
+        return SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+            noteID: noteID,
+            routing: .wholeNoteFallback,
+            expectedPreBodyHash: priorHash,
+            committedPostBodyHash: committedHash,
+            incrementalOperations: [],
+            rewriteSafetyReceipt: SyncConvergenceRewriteSafetyReceipt(
+                noteID: noteID,
+                priorBodyHash: priorHash,
+                candidateBodyHash: committedHash,
+                consumedDeleteIdentities: []
+            )
+        )
     }
 
     private func makeFixture(batchSequence: UInt64? = 7) throws -> Fixture {
