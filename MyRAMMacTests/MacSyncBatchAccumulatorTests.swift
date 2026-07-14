@@ -68,6 +68,77 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertEqual(batch?.batchSequence, 7)
     }
 
+
+    func testBoundaryRecordAndTakeReturnsSuppliedBodyChangesExactlyOnce() async throws {
+        let accumulator = makeAccumulator()
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000301")!
+        let start = Date(timeIntervalSince1970: 600)
+        let captured = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: noteID,
+            oldBody: "Hello",
+            newBody: "Hello world",
+            modifiedAt: start,
+            bodyHashCapabilityEnabled: true
+        )
+
+        let obligation = await accumulator.recordAndTakeBoundaryObligation(
+            adding: captured,
+            affecting: noteID,
+            at: start
+        )
+        await accumulator.emitReadyBatches(at: start.addingTimeInterval(5))
+        let replayed = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+
+        XCTAssertEqual(obligation?.batch.changes, captured.map(\.change))
+        guard case .captured(let capturedChanges) = obligation?.evidence else {
+            return XCTFail("Expected captured evidence")
+        }
+        XCTAssertEqual(capturedChanges, captured)
+        XCTAssertNil(replayed)
+    }
+
+    func testBoundaryRecordAndTakeWithEmptyInputExtractsAlreadyPendingBodyWork() async throws {
+        let accumulator = makeAccumulator()
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000302")!
+        let start = Date(timeIntervalSince1970: 700)
+        let captured = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: noteID,
+            oldBody: "A",
+            newBody: "AB",
+            modifiedAt: start,
+            bodyHashCapabilityEnabled: true
+        )
+
+        await accumulator.record(captured, at: start)
+        let obligation = await accumulator.recordAndTakeBoundaryObligation(
+            adding: [],
+            affecting: noteID,
+            at: start.addingTimeInterval(1)
+        )
+
+        guard case .captured(let capturedChanges) = obligation?.evidence else {
+            return XCTFail("Expected captured evidence")
+        }
+        XCTAssertEqual(capturedChanges, captured)
+    }
+
+    func testBoundaryRecordAndTakeLeavesMetadataOnlyPendingWhenNoBodyWorkAffectsNote() async {
+        let accumulator = makeAccumulator()
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000303")!
+        let start = Date(timeIntervalSince1970: 800)
+        let title = SyncConvergenceCapturedLocalChange(change: titleChange("Only title"), evidence: nil)
+
+        let obligation = await accumulator.recordAndTakeBoundaryObligation(
+            adding: [title],
+            affecting: noteID,
+            at: start
+        )
+        let ready = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
+
+        XCTAssertNil(obligation)
+        XCTAssertEqual(ready?.changes, [title.change])
+    }
+
     private func makeAccumulator() -> MacSyncBatchAccumulator {
         MacSyncBatchAccumulator(
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,

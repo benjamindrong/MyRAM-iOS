@@ -48,6 +48,41 @@ enum SyncBatchNoteChangeCapture {
         )
     }
 
+    static func capturedBodyChanges(
+        noteID: UUID,
+        oldBody: String,
+        newBody: String,
+        modifiedAt: Date,
+        bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled
+    ) throws -> [SyncConvergenceCapturedLocalChange] {
+        let operations = try bodyTextChanges(
+            noteID: noteID,
+            oldBody: oldBody,
+            newBody: newBody,
+            modifiedAt: modifiedAt,
+            bodyHashCapabilityEnabled: bodyHashCapabilityEnabled
+        )
+        var capturedChanges: [SyncConvergenceCapturedLocalChange] = []
+        var preOperationBody = oldBody
+
+        for operation in operations {
+            let postOperationBody = try SyncConvergenceLocalEvidenceCapture.apply(operation, to: preOperationBody)
+            capturedChanges.append(
+                try SyncConvergenceLocalEvidenceCapture.capturedChange(
+                    for: operation,
+                    preBody: preOperationBody,
+                    postBody: postOperationBody
+                )
+            )
+            preOperationBody = postOperationBody
+        }
+
+        guard preOperationBody == newBody else {
+            throw SyncBatchBodyEditScript.CaptureError.replayMismatch
+        }
+        return capturedChanges
+    }
+
     static func bodyTextChanged(
         noteID: UUID,
         oldBody: String,

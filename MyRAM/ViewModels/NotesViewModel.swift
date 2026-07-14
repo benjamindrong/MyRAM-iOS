@@ -1327,28 +1327,12 @@ final class NotesViewModel: ObservableObject {
             modifiedAt: modifiedAt
         ).map { SyncConvergenceCapturedLocalChange(change: $0, evidence: nil) }
 
-        let bodyOperations = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+        let bodyChanges = try SyncBatchNoteChangeCapture.capturedBodyChanges(
             noteID: noteID,
             oldBody: oldBody,
             newBody: newBody,
             modifiedAt: modifiedAt
         )
-        var bodyChanges: [SyncConvergenceCapturedLocalChange] = []
-        var preOperationBody = oldBody
-        for operation in bodyOperations {
-            let postOperationBody = try SyncConvergenceLocalEvidenceCapture.apply(operation, to: preOperationBody)
-            bodyChanges.append(
-                try SyncConvergenceLocalEvidenceCapture.capturedChange(
-                    for: operation,
-                    preBody: preOperationBody,
-                    postBody: postOperationBody
-                )
-            )
-            preOperationBody = postOperationBody
-        }
-        guard preOperationBody == newBody else {
-            throw SyncBatchBodyEditScript.CaptureError.replayMismatch
-        }
 
         return PreparedLocalNoteEdit(titleChange: titleChange, bodyChanges: bodyChanges)
     }

@@ -88,21 +88,37 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         browser.invitePeer(peer.peerID, to: session, withContext: nil, timeout: 12)
     }
 
-    func record(_ change: MacSyncChange) {
-        record(SyncConvergenceCapturedLocalChange(change: change, evidence: nil))
+    func record(_ capturedChanges: [SyncConvergenceCapturedLocalChange], at date: Date = .now) async {
+        await accumulator.record(capturedChanges, at: date)
+        await updateSequenceReservationIssue()
     }
 
-    func record(_ capturedChange: SyncConvergenceCapturedLocalChange) {
-        Task {
-            await accumulator.record(capturedChange)
-            if let issue = await accumulator.takeLastSequenceReservationIssue() {
-                lastErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
-            }
-        }
+    func record(_ capturedChange: SyncConvergenceCapturedLocalChange, at date: Date = .now) async {
+        await record([capturedChange], at: date)
+    }
+
+    func recordAndTakeBoundaryObligation(
+        adding capturedChanges: [SyncConvergenceCapturedLocalChange],
+        affecting noteID: UUID,
+        at date: Date = .now
+    ) async -> SyncConvergenceLocalObligation? {
+        let obligation = await accumulator.recordAndTakeBoundaryObligation(
+            adding: capturedChanges,
+            affecting: noteID,
+            at: date
+        )
+        await updateSequenceReservationIssue()
+        return obligation
     }
 
     func takePendingLocalObligationIfAffecting(noteID: UUID) async -> SyncConvergenceLocalObligation? {
         await accumulator.takePendingObligationIfAffecting(noteID: noteID)
+    }
+
+    private func updateSequenceReservationIssue() async {
+        if let issue = await accumulator.takeLastSequenceReservationIssue() {
+            lastErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
+        }
     }
 
     func flushPendingBatch() {

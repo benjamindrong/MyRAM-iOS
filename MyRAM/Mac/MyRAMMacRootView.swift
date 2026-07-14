@@ -51,7 +51,7 @@ struct MyRAMMacRootView: View {
         .onAppear(perform: loadNotesIfNeeded)
         .onAppear(perform: configureSyncConvergenceIfNeeded)
         .onDisappear {
-            _ = flushPendingSave()
+            Task { await flushPendingSave() }
         }
     }
 
@@ -172,9 +172,19 @@ struct MyRAMMacRootView: View {
         )
         let boundarySurface = MacSyncIncomingLocalBoundarySurface(
             flushPendingLocalObligation: { noteIDs in
-                guard let selectedNoteID, noteIDs.contains(selectedNoteID), hasUnsavedChanges else { return nil }
-                guard flushPendingSave() else { return nil }
-                return await syncController.takePendingLocalObligationIfAffecting(noteID: selectedNoteID)
+                for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+                    if selectedNoteID == noteID, hasUnsavedChanges {
+                        return await saveNoteForIncomingBoundary(id: noteID, attributedContent: attributedText)
+                    }
+
+                    if let obligation = await syncController.recordAndTakeBoundaryObligation(
+                        adding: [],
+                        affecting: noteID
+                    ) {
+                        return obligation
+                    }
+                }
+                return nil
             }
         )
         syncConvergenceCoordinator = MacSyncConvergenceCoordinator(
@@ -218,39 +228,45 @@ struct MyRAMMacRootView: View {
 
     private func selectNote(_ note: Note) {
         guard note.id != selectedNoteID else { return }
-        guard flushPendingSave() else { return }
 
-        selectedNoteID = note.id
-        attributedText = MacNotePersistenceAdapter().attributedContent(for: note)
-        hasUnsavedChanges = false
-        saveError = nil
-        resumeSyncConvergence()
+        Task { @MainActor in
+            guard await flushPendingSave() else { return }
+            selectedNoteID = note.id
+            attributedText = MacNotePersistenceAdapter().attributedContent(for: note)
+            hasUnsavedChanges = false
+            saveError = nil
+            resumeSyncConvergence()
+        }
     }
 
     private func createNote() {
-        guard flushPendingSave() else { return }
+        Task { @MainActor in
+            guard await flushPendingSave() else { return }
 
-        do {
-            let newNote = try MacNotePersistenceAdapter().createNote()
-            syncController.record(
-                SyncBatchNoteChangeCapture.noteCreated(
-                    noteID: newNote.id,
-                    title: newNote.title,
-                    body: newNote.content,
-                    folderID: newNote.folder?.id,
-                    createdAt: newNote.createdAt,
-                    modifiedAt: newNote.modifiedAt
+            do {
+                let newNote = try MacNotePersistenceAdapter().createNote()
+                let capturedCreate = SyncConvergenceCapturedLocalChange(
+                    change: SyncBatchNoteChangeCapture.noteCreated(
+                        noteID: newNote.id,
+                        title: newNote.title,
+                        body: newNote.content,
+                        folderID: newNote.folder?.id,
+                        createdAt: newNote.createdAt,
+                        modifiedAt: newNote.modifiedAt
+                    ),
+                    evidence: nil
                 )
-            )
-            notes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
-            selectedNoteID = newNote.id
-            attributedText = MacNotePersistenceAdapter().attributedContent(for: newNote)
-            hasUnsavedChanges = false
-            loadError = nil
-            saveError = nil
-            resumeSyncConvergence()
-        } catch {
-            loadError = "Unable to create note: \(error.localizedDescription)"
+                await syncController.record(capturedCreate, at: newNote.modifiedAt)
+                notes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
+                selectedNoteID = newNote.id
+                attributedText = MacNotePersistenceAdapter().attributedContent(for: newNote)
+                hasUnsavedChanges = false
+                loadError = nil
+                saveError = nil
+                resumeSyncConvergence()
+            } catch {
+                loadError = "Unable to create note: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -263,67 +279,109 @@ struct MyRAMMacRootView: View {
         saveTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: 500_000_000)
             guard !Task.isCancelled, selectedNoteID == noteID else { return }
-            _ = saveNote(id: noteID, attributedContent: contentToSave)
+            _ = await saveNote(id: noteID, attributedContent: contentToSave, publication: .ordinary)
         }
     }
 
-    private func flushPendingSave() -> Bool {
+    private func flushPendingSave() async -> Bool {
         saveTask?.cancel()
         saveTask = nil
 
         guard hasUnsavedChanges, let selectedNoteID else { return true }
-        return saveNote(id: selectedNoteID, attributedContent: attributedText)
+        let result = await saveNote(id: selectedNoteID, attributedContent: attributedText, publication: .ordinary)
+        if case .failed = result { return false }
+        return true
     }
 
-    private func saveNote(id noteID: UUID, attributedContent: NSAttributedString) -> Bool {
+
+    private func saveNoteForIncomingBoundary(
+        id noteID: UUID,
+        attributedContent: NSAttributedString
+    ) async -> SyncConvergenceLocalObligation? {
+        let adapter = MacNotePersistenceAdapter()
+        let prepared: MacPreparedLocalNoteEdit
         do {
-            let adapter = MacNotePersistenceAdapter()
-            guard let note = try adapter.loadNote(id: noteID) else {
-                saveError = "Unable to save note: note was not found."
-                return false
-            }
-            let oldTitle = note.title
-            let oldContent = note.content
-            try adapter.save(note: note, attributedContent: attributedContent)
-            recordSyncBatchChanges(note: note, oldTitle: oldTitle, oldContent: oldContent)
+            prepared = try adapter.prepareLocalNoteEdit(noteID: noteID, proposedAttributedContent: attributedContent)
+            try adapter.persistPreparedLocalNoteEdit(prepared)
+        } catch MacPendingSaveFailure.noteMissing {
+            saveError = "Unable to save note: note was not found."
+            return nil
+        } catch {
+            saveError = "Unable to save note: local edit capture failed."
+            return nil
+        }
+
+        let obligation = await syncController.recordAndTakeBoundaryObligation(
+            adding: prepared.capturedChanges,
+            affecting: noteID,
+            at: prepared.modifiedAt
+        )
+
+        do {
             notes = try adapter.loadNotesCreatingFirstIfNeeded()
+        } catch {
+            loadError = "Unable to load notes: \(error.localizedDescription)"
+        }
+        if selectedNoteID == noteID {
+            hasUnsavedChanges = false
+        }
+        saveError = nil
+        return obligation
+    }
+
+    private func saveNote(
+        id noteID: UUID,
+        attributedContent: NSAttributedString,
+        publication: MacLocalSavePublication
+    ) async -> MacPendingSaveResult {
+        let adapter = MacNotePersistenceAdapter()
+        let prepared: MacPreparedLocalNoteEdit
+        do {
+            prepared = try adapter.prepareLocalNoteEdit(noteID: noteID, proposedAttributedContent: attributedContent)
+        } catch MacPendingSaveFailure.noteMissing {
+            saveError = "Unable to save note: note was not found."
+            return .failed(.noteMissing(noteID: noteID))
+        } catch {
+            saveError = "Unable to save note: local edit capture failed."
+            return .failed(.captureFailed(noteID: noteID))
+        }
+
+        guard prepared.hasAnyAuthoritativeMutation || prepared.previousRichTextContentData != prepared.proposedRichTextContentData else {
             hasUnsavedChanges = selectedNoteID == noteID ? false : hasUnsavedChanges
             saveError = nil
-            resumeSyncConvergence()
-            return true
+            return .noChanges
+        }
+
+        do {
+            try adapter.persistPreparedLocalNoteEdit(prepared)
+        } catch MacPendingSaveFailure.noteMissing {
+            saveError = "Unable to save note: note was not found."
+            return .failed(.noteMissing(noteID: noteID))
         } catch {
             saveError = "Unable to save note: \(error.localizedDescription)"
-            return false
-        }
-    }
-
-    private func recordSyncBatchChanges(note: Note, oldTitle: String, oldContent: String) {
-        if let change = SyncBatchNoteChangeCapture.titleChanged(
-            noteID: note.id,
-            oldTitle: oldTitle,
-            newTitle: note.title,
-            modifiedAt: note.modifiedAt
-        ) {
-            syncController.record(change)
+            return .failed(.persistenceFailed(noteID: noteID))
         }
 
-        if let change = SyncBatchNoteChangeCapture.bodyTextChanged(
-            noteID: note.id,
-            oldBody: oldContent,
-            newBody: note.content,
-            modifiedAt: note.modifiedAt
-        ) {
-            do {
-                let capturedChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
-                    for: change,
-                    preBody: oldContent,
-                    postBody: note.content
-                )
-                syncController.record(capturedChange)
-            } catch {
-                syncController.record(change)
-            }
+        switch publication {
+        case .ordinary:
+            await syncController.record(prepared.capturedChanges, at: prepared.modifiedAt)
+        case .incomingBoundary:
+            _ = await syncController.recordAndTakeBoundaryObligation(
+                adding: prepared.capturedChanges,
+                affecting: noteID,
+                at: prepared.modifiedAt
+            )
         }
+
+        do {
+            notes = try adapter.loadNotesCreatingFirstIfNeeded()
+        } catch {
+            loadError = "Unable to load notes: \(error.localizedDescription)"
+        }
+        hasUnsavedChanges = selectedNoteID == noteID ? false : hasUnsavedChanges
+        saveError = nil
+        resumeSyncConvergence()
+        return prepared.hasBodyMutation ? .savedWithPendingBodyMutation(noteID: noteID) : .savedWithoutBodyMutation
     }
 
     private func reopenAutoCollapsedSidebarAfterWindowExpansion() {
@@ -533,5 +591,10 @@ private struct MacSyncStatusView: View {
         }
         .padding(.vertical, 6)
     }
+}
+
+private enum MacLocalSavePublication {
+    case ordinary
+    case incomingBoundary
 }
 #endif
