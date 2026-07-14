@@ -154,6 +154,113 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertEqual(loadedNote.id, activeNote.id)
     }
 
+
+    func testPrepareLocalNoteEditCapturesBodyChangesWithoutPersisting() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Draft", content: "Hello")
+        let originalModifiedAt = Date(timeIntervalSince1970: 100)
+        note.modifiedAt = originalModifiedAt
+        context.insert(note)
+        try context.save()
+        let adapter = MacNotePersistenceAdapter(context: context)
+
+        let prepared = try adapter.prepareLocalNoteEdit(
+            noteID: note.id,
+            proposedAttributedContent: NSAttributedString(string: "Hello world")
+        )
+
+        XCTAssertEqual(note.content, "Hello")
+        XCTAssertEqual(note.modifiedAt, originalModifiedAt)
+        XCTAssertEqual(prepared.previousBody, "Hello")
+        XCTAssertEqual(prepared.proposedBody, "Hello world")
+        XCTAssertTrue(prepared.hasBodyMutation)
+        XCTAssertEqual(prepared.capturedChanges.map(\.change), try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: note.id,
+            oldBody: "Hello",
+            newBody: "Hello world",
+            modifiedAt: prepared.modifiedAt
+        ).map(\.change))
+        XCTAssertTrue(prepared.capturedChanges.allSatisfy { $0.evidence != nil })
+    }
+
+    func testPrepareLocalNoteEditCapturesMultiOperationBodySequence() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Draft", content: "ab-cd-ef")
+        context.insert(note)
+        try context.save()
+
+        let prepared = try MacNotePersistenceAdapter(context: context).prepareLocalNoteEdit(
+            noteID: note.id,
+            proposedAttributedContent: NSAttributedString(string: "ax-cd-yf")
+        )
+
+        XCTAssertGreaterThan(prepared.capturedChanges.count, 1)
+        var body = "ab-cd-ef"
+        for capturedChange in prepared.capturedChanges {
+            XCTAssertEqual(capturedChange.evidence?.preBodyHash, SyncBatchContentHash.sha256Hex(for: body))
+            body = try SyncConvergenceLocalEvidenceCapture.apply(capturedChange.change, to: body)
+            XCTAssertEqual(capturedChange.evidence?.postBodyHash, SyncBatchContentHash.sha256Hex(for: body))
+        }
+        XCTAssertEqual(body, "ax-cd-yf")
+    }
+
+    func testPersistPreparedLocalNoteEditAppliesOnlyPreparedFields() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Draft", content: "Before")
+        note.modifiedAt = Date(timeIntervalSince1970: 100)
+        context.insert(note)
+        try context.save()
+        let adapter = MacNotePersistenceAdapter(context: context)
+        let prepared = try adapter.prepareLocalNoteEdit(
+            noteID: note.id,
+            proposedAttributedContent: NSAttributedString(string: "After")
+        )
+
+        try adapter.persistPreparedLocalNoteEdit(prepared)
+
+        XCTAssertEqual(note.title, prepared.proposedTitle)
+        XCTAssertEqual(note.content, "After")
+        XCTAssertEqual(note.modifiedAt, prepared.modifiedAt)
+        XCTAssertEqual(note.richTextContentData, prepared.proposedRichTextContentData)
+    }
+
+    func testPrepareLocalNoteEditRichTextOnlyChangeHasNoAuthoritativeMutation() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Styled", content: "Same")
+        context.insert(note)
+        try context.save()
+        let styled = NSMutableAttributedString(string: "Same")
+        styled.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 0, length: styled.length))
+
+        let prepared = try MacNotePersistenceAdapter(context: context).prepareLocalNoteEdit(
+            noteID: note.id,
+            proposedAttributedContent: styled
+        )
+
+        XCTAssertFalse(prepared.hasAnyAuthoritativeMutation)
+        XCTAssertFalse(prepared.hasBodyMutation)
+        XCTAssertTrue(prepared.capturedChanges.isEmpty)
+        XCTAssertNotEqual(prepared.previousRichTextContentData, prepared.proposedRichTextContentData)
+    }
+
+    func testPrepareLocalNoteEditMissingNoteThrowsSemanticFailure() throws {
+        let container = try makeInMemoryContainer()
+        let missingID = UUID(uuidString: "00000000-0000-0000-0000-000000000404")!
+
+        XCTAssertThrowsError(
+            try MacNotePersistenceAdapter(context: container.mainContext).prepareLocalNoteEdit(
+                noteID: missingID,
+                proposedAttributedContent: NSAttributedString(string: "Missing")
+            )
+        ) { error in
+            XCTAssertEqual(error as? MacPendingSaveFailure, .noteMissing(noteID: missingID))
+        }
+    }
+
     func testSavePersistsPlainTextMirrorAndRichTextData() throws {
         let container = try makeInMemoryContainer()
         let context = container.mainContext
