@@ -3363,6 +3363,51 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(vm.activeSyncConflicts(for: note).count, 1)
     }
 
+
+    func testRuntimeBlocksIncomingPlanningWhenBoundaryPreparationFails() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-0000001275D0")!
+        let note = Note(title: "Shared", content: "Hello")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        let incomingQueue = FileBackedSyncBatchQueue(fileURL: nil)
+        let boundary = FailingIncomingLocalBoundaryAdapter(failure: .localCaptureFailed(noteID: noteID))
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: incomingQueue,
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: AcceptingLocalBatchTransport(),
+            presentationAdapter: CompletingPresentationAdapter(),
+            incomingLocalBoundaryAdapter: boundary
+        )
+        let remoteBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-0000001275D1")!,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-0000001275D2")!,
+            createdAt: Date(timeIntervalSince1970: 20),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: "Hello".utf16.count,
+                    text: " remote",
+                    modifiedAt: Date(timeIntervalSince1970: 20),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello")
+                ))
+            ]
+        )
+
+        let outcome = await runtime.submitRemoteBatch(remoteBatch)
+
+        guard case .blocked(let failure) = outcome else {
+            return XCTFail("Expected boundary preparation failure to block incoming work")
+        }
+        XCTAssertEqual(failure.kind, .queuePersistence)
+        XCTAssertEqual(note.content, "Hello")
+        XCTAssertEqual(incomingQueue.pendingBatches.map(\.id), [remoteBatch.id])
+    }
+
     func testRuntimeRegistersPendingLocalEvidenceBeforeIncomingPlanningWhenTransportUnavailable() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -8446,6 +8491,22 @@ private final class FailingLocalBatchTransport: SyncConvergenceLocalBatchTranspo
     }
 }
 
+
+@MainActor
+private final class FailingIncomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter {
+    private let failure: SyncConvergenceIncomingLocalBoundaryFailure
+
+    init(failure: SyncConvergenceIncomingLocalBoundaryFailure) {
+        self.failure = failure
+    }
+
+    func prepareForIncomingBodyMutation(
+        affecting noteIDs: Set<UUID>
+    ) async -> SyncConvergenceIncomingLocalBoundaryPreparation {
+        .failed(failure)
+    }
+}
+
 @MainActor
 private final class SinglePendingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter {
     private var obligation: SyncConvergenceLocalObligation?
@@ -8455,16 +8516,16 @@ private final class SinglePendingLocalBoundaryAdapter: SyncConvergenceIncomingLo
         self.obligation = obligation
     }
 
-    func takePendingLocalObligationIfNeeded(
-        beforeIncomingBodyMutationFor noteIDs: Set<UUID>
-    ) async -> SyncConvergenceLocalObligation? {
+    func prepareForIncomingBodyMutation(
+        affecting noteIDs: Set<UUID>
+    ) async -> SyncConvergenceIncomingLocalBoundaryPreparation {
         guard let obligation,
               !noteIDs.isDisjoint(with: Self.affectedNoteIDs(in: obligation.batch)) else {
-            return nil
+            return .ready
         }
         takeCount += 1
         self.obligation = nil
-        return obligation
+        return .localObligation(obligation)
     }
 
     private static func affectedNoteIDs(in batch: SyncBatch) -> Set<UUID> {

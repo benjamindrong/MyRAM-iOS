@@ -47,7 +47,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             context: container.mainContext,
             syncController: controller,
             presentationSurface: completingPresentationSurface(),
-            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(flushPendingLocalObligation: { _ in nil }),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(prepareForIncomingBodyMutation: { _ in .ready }),
             pendingIncomingQueueFileURL: pendingURL,
             localObligationQueueFileURL: nil
         )

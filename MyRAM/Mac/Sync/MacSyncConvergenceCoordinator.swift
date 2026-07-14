@@ -43,10 +43,6 @@ final class MacSyncConvergenceCoordinator {
         await handle(outcome: runtime.submitRemoteBatch(batch), sourceBatch: batch)
     }
 
-    func submitLocalBatch(_ batch: SyncBatch) async {
-        await handle(outcome: runtime.submitLocalBatch(batch), sourceBatch: batch)
-    }
-
     func submitLocalObligation(_ obligation: SyncConvergenceLocalObligation) async {
         await handle(outcome: runtime.submitLocalObligation(obligation), sourceBatch: obligation.batch)
     }
@@ -77,15 +73,42 @@ final class MacSyncIncomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBou
         self.surface = surface
     }
 
-    func takePendingLocalObligationIfNeeded(
-        beforeIncomingBodyMutationFor noteIDs: Set<UUID>
-    ) async -> SyncConvergenceLocalObligation? {
-        await surface.flushPendingLocalObligation(noteIDs)
+    func prepareForIncomingBodyMutation(
+        affecting noteIDs: Set<UUID>
+    ) async -> SyncConvergenceIncomingLocalBoundaryPreparation {
+        switch await surface.prepareForIncomingBodyMutation(noteIDs) {
+        case .ready:
+            return .ready
+        case .localObligation(let obligation):
+            return .localObligation(obligation)
+        case .failed(let failure):
+            return .failed(failure.sharedBoundaryFailure)
+        case .invariantViolation(let noteID):
+            return .failed(.boundaryInvariantViolation(noteID: noteID))
+        }
+    }
+}
+
+enum MacIncomingBoundaryResult {
+    case ready
+    case localObligation(SyncConvergenceLocalObligation)
+    case failed(MacPendingSaveFailure)
+    case invariantViolation(noteID: UUID)
+}
+
+private extension MacPendingSaveFailure {
+    var sharedBoundaryFailure: SyncConvergenceIncomingLocalBoundaryFailure {
+        switch self {
+        case .noteMissing(let noteID), .captureFailed(let noteID):
+            return .localCaptureFailed(noteID: noteID)
+        case .persistenceFailed(let noteID):
+            return .localPersistenceFailed(noteID: noteID)
+        }
     }
 }
 
 @MainActor
 struct MacSyncIncomingLocalBoundarySurface {
-    let flushPendingLocalObligation: (Set<UUID>) async -> SyncConvergenceLocalObligation?
+    let prepareForIncomingBodyMutation: (Set<UUID>) async -> MacIncomingBoundaryResult
 }
 #endif

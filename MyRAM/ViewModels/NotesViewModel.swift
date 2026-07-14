@@ -2756,14 +2756,17 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
         return nil
     }
 
-    func takePendingLocalObligationIfNeeded(
-        beforeIncomingBodyMutationFor noteIDs: Set<UUID>
-    ) async -> SyncConvergenceLocalObligation? {
+    func prepareForIncomingBodyMutation(
+        affecting noteIDs: Set<UUID>
+    ) async -> SyncConvergenceIncomingLocalBoundaryPreparation {
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await syncBatchAccumulator.containsPendingBodyChange(for: noteID) else { continue }
-            return await syncBatchAccumulator.takePendingObligationIfAffecting(noteID: noteID)
+            guard let obligation = await syncBatchAccumulator.takePendingObligationIfAffecting(noteID: noteID) else {
+                return .failed(.boundaryInvariantViolation(noteID: noteID))
+            }
+            return .localObligation(obligation)
         }
-        return nil
+        return .ready
     }
 }
 

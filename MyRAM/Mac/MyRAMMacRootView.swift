@@ -171,7 +171,7 @@ struct MyRAMMacRootView: View {
             currentEditorBody: { attributedText.string }
         )
         let boundarySurface = MacSyncIncomingLocalBoundarySurface(
-            flushPendingLocalObligation: { noteIDs in
+            prepareForIncomingBodyMutation: { noteIDs in
                 for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
                     if selectedNoteID == noteID, hasUnsavedChanges {
                         return await saveNoteForIncomingBoundary(id: noteID, attributedContent: attributedText)
@@ -181,10 +181,10 @@ struct MyRAMMacRootView: View {
                         adding: [],
                         affecting: noteID
                     ) {
-                        return obligation
+                        return .localObligation(obligation)
                     }
                 }
-                return nil
+                return .ready
             }
         )
         syncConvergenceCoordinator = MacSyncConvergenceCoordinator(
@@ -297,18 +297,27 @@ struct MyRAMMacRootView: View {
     private func saveNoteForIncomingBoundary(
         id noteID: UUID,
         attributedContent: NSAttributedString
-    ) async -> SyncConvergenceLocalObligation? {
+    ) async -> MacIncomingBoundaryResult {
         let adapter = MacNotePersistenceAdapter()
         let prepared: MacPreparedLocalNoteEdit
         do {
             prepared = try adapter.prepareLocalNoteEdit(noteID: noteID, proposedAttributedContent: attributedContent)
+        } catch MacPendingSaveFailure.noteMissing {
+            saveError = "Unable to save note: note was not found."
+            return .failed(.noteMissing(noteID: noteID))
+        } catch {
+            saveError = "Unable to save note: local edit capture failed."
+            return .failed(.captureFailed(noteID: noteID))
+        }
+
+        do {
             try adapter.persistPreparedLocalNoteEdit(prepared)
         } catch MacPendingSaveFailure.noteMissing {
             saveError = "Unable to save note: note was not found."
-            return nil
+            return .failed(.noteMissing(noteID: noteID))
         } catch {
-            saveError = "Unable to save note: local edit capture failed."
-            return nil
+            saveError = "Unable to save note: \(error.localizedDescription)"
+            return .failed(.persistenceFailed(noteID: noteID))
         }
 
         let obligation = await syncController.recordAndTakeBoundaryObligation(
@@ -326,7 +335,11 @@ struct MyRAMMacRootView: View {
             hasUnsavedChanges = false
         }
         saveError = nil
-        return obligation
+
+        if let obligation {
+            return .localObligation(obligation)
+        }
+        return prepared.hasBodyMutation ? .invariantViolation(noteID: noteID) : .ready
     }
 
     private func saveNote(

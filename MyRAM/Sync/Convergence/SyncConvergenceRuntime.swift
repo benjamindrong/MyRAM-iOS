@@ -12,7 +12,21 @@ enum SyncConvergenceRuntimeOutcome {
 
 protocol SyncConvergenceIncomingLocalBoundaryAdapter: AnyObject {
     @MainActor
-    func takePendingLocalObligationIfNeeded(beforeIncomingBodyMutationFor noteIDs: Set<UUID>) async -> SyncConvergenceLocalObligation?
+    func prepareForIncomingBodyMutation(
+        affecting noteIDs: Set<UUID>
+    ) async -> SyncConvergenceIncomingLocalBoundaryPreparation
+}
+
+enum SyncConvergenceIncomingLocalBoundaryPreparation {
+    case ready
+    case localObligation(SyncConvergenceLocalObligation)
+    case failed(SyncConvergenceIncomingLocalBoundaryFailure)
+}
+
+enum SyncConvergenceIncomingLocalBoundaryFailure: Equatable {
+    case localCaptureFailed(noteID: UUID)
+    case localPersistenceFailed(noteID: UUID)
+    case boundaryInvariantViolation(noteID: UUID)
 }
 
 enum SyncConvergenceIncomingLocalBoundaryOutcome {
@@ -394,12 +408,24 @@ final class SyncConvergenceRuntime {
 
     private func satisfyIncomingLocalBoundary(noteIDs: Set<UUID>) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
         guard !noteIDs.isEmpty, let incomingLocalBoundaryAdapter else { return .ready }
-        guard let obligation = await incomingLocalBoundaryAdapter.takePendingLocalObligationIfNeeded(
-            beforeIncomingBodyMutationFor: noteIDs
-        ) else {
+
+        switch await incomingLocalBoundaryAdapter.prepareForIncomingBodyMutation(affecting: noteIDs) {
+        case .ready:
             return .ready
+        case .localObligation(let obligation):
+            return await admitLocalObligationForIncomingBoundary(obligation)
+        case .failed(let failure):
+            return .cannotProceed(.blocked(Self.drainFailure(for: failure, noteIDs: noteIDs)))
         }
-        return await admitLocalObligationForIncomingBoundary(obligation)
+    }
+
+    private static func drainFailure(
+        for failure: SyncConvergenceIncomingLocalBoundaryFailure,
+        noteIDs: Set<UUID>
+    ) -> SyncBatchDrainFailure {
+        _ = failure
+        _ = noteIDs
+        return SyncBatchDrainFailure(batchID: nil, kind: .queuePersistence)
     }
 
     private func admitLocalObligationForIncomingBoundary(
