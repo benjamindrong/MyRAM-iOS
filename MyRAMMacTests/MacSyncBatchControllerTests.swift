@@ -122,6 +122,22 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertFalse(coordinatorSource.contains("kind: .corruptHistory"))
     }
 
+
+    func testSyncTargetMembershipIncludesSharedCaptureAndMacPresentationTests() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let project = try String(
+            contentsOf: repo.appendingPathComponent("MyRAM.xcodeproj/project.pbxproj"),
+            encoding: .utf8
+        )
+
+        XCTAssertGreaterThanOrEqual(project.countOccurrences(of: "SyncBatchNoteChangeCapture.swift in Sources"), 2)
+        XCTAssertTrue(project.contains("MacSyncConvergencePresentationAdapter.swift in Sources"))
+        XCTAssertTrue(project.contains("MacSyncConvergencePresentationAdapterTests.swift in Sources"))
+        XCTAssertTrue(project.contains("MacNotePersistenceAdapterTests.swift in Sources"))
+    }
+
     private func makeController(unsentBatchQueueFileURL: URL?) throws -> MacSyncBatchController {
         try makeController(unsentBatchQueueFileURL: unsentBatchQueueFileURL, unsentBatchQueue: nil)
     }
@@ -181,5 +197,12 @@ final class MacSyncBatchControllerTests: XCTestCase {
             for: Schema(MyRAMModelRegistry.models),
             configurations: configuration
         )
+    }
+}
+
+
+private extension String {
+    func countOccurrences(of needle: String) -> Int {
+        components(separatedBy: needle).count - 1
     }
 }
