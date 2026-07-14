@@ -89,25 +89,37 @@ final class MacSyncBatchControllerTests: XCTestCase {
             .deletingLastPathComponent()
             .deletingLastPathComponent()
         let checkedFiles = [
-            "MyRAM/Mac/Sync/MacSyncBatchController.swift",
             "MyRAM/Mac/MyRAMMacRootView.swift",
-            "MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift"
+            "MyRAM/Mac/Sync/MacSyncBatchController.swift",
+            "MyRAM/Mac/Sync/MacSyncBatchAccumulator.swift",
+            "MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift",
+            "MyRAM/Mac/Sync/MacSyncConvergencePresentationAdapter.swift"
         ]
+        let forbiddenTokens = [
+            "MacSyncBatchApplier",
+            "SyncBatchDrainCoordinator",
+            "drainPendingIncomingBatchesIfPossible",
+            "onBeforeApplyingRemoteBatch",
+            "onBatchApplied",
+            "handleAppliedSyncBatch",
+            "MacAppliedSyncBatch",
+            "submitLocalBatch(",
+            "bodyTextChanged(",
+            "import UIKit"
+        ]
+
+        for relativePath in checkedFiles {
+            let source = try String(contentsOf: repo.appendingPathComponent(relativePath), encoding: .utf8)
+            for token in forbiddenTokens {
+                XCTAssertFalse(source.contains(token), "\(relativePath) contains forbidden token \(token)")
+            }
+        }
 
         let coordinatorSource = try String(
             contentsOf: repo.appendingPathComponent("MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift"),
             encoding: .utf8
         )
         XCTAssertFalse(coordinatorSource.contains("kind: .corruptHistory"))
-        XCTAssertFalse(coordinatorSource.contains("submitLocalBatch("))
-
-        for relativePath in checkedFiles {
-            let source = try String(contentsOf: repo.appendingPathComponent(relativePath), encoding: .utf8)
-            XCTAssertFalse(source.contains("MacSyncBatchApplier"), relativePath)
-            XCTAssertFalse(source.contains("SyncBatchDrainCoordinator"), relativePath)
-            XCTAssertFalse(source.contains("drainPendingIncomingBatchesIfPossible"), relativePath)
-            XCTAssertFalse(source.contains("onBatchApplied"), relativePath)
-        }
     }
 
     private func makeController(unsentBatchQueueFileURL: URL?) throws -> MacSyncBatchController {
