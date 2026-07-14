@@ -52,10 +52,6 @@ actor MacSyncBatchAccumulator {
         return stream
     }
 
-    func record(_ change: MacSyncChange, at date: Date = .now) {
-        record(SyncConvergenceCapturedLocalChange(change: change, evidence: nil), at: date)
-    }
-
     func record(_ capturedChange: SyncConvergenceCapturedLocalChange, at date: Date = .now) {
         record([capturedChange], at: date)
     }

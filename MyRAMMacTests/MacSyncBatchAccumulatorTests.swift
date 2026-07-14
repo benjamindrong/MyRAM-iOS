@@ -4,26 +4,26 @@ import XCTest
 final class MacSyncBatchAccumulatorTests: XCTestCase {
     func testChangesAppendToPendingBatchAndPreserveOrdering() async {
         let accumulator = makeAccumulator()
-        let firstChange = titleChange("First")
-        let secondChange = titleChange("Second")
+        let firstChange = capturedTitleChange("First")
+        let secondChange = capturedTitleChange("Second")
         let start = Date(timeIntervalSince1970: 100)
 
         await accumulator.record(firstChange, at: start)
         await accumulator.record(secondChange, at: start.addingTimeInterval(1))
         let batch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
 
-        XCTAssertEqual(batch?.changes, [firstChange, secondChange])
+        XCTAssertEqual(batch?.changes, [firstChange.change, secondChange.change])
     }
 
     func testQuietWindowRearmsAndBatchIDStaysStable() async {
         let accumulator = makeAccumulator()
         let start = Date(timeIntervalSince1970: 200)
 
-        await accumulator.record(titleChange("First"), at: start)
+        await accumulator.record(capturedTitleChange("First"), at: start)
         let originalBatchID = await accumulator.pendingBatchID()
         let originalReadyAt = await accumulator.pendingReadyAt()
 
-        await accumulator.record(titleChange("Second"), at: start.addingTimeInterval(2))
+        await accumulator.record(capturedTitleChange("Second"), at: start.addingTimeInterval(2))
         let rearmedBatchID = await accumulator.pendingBatchID()
         let rearmedReadyAt = await accumulator.pendingReadyAt()
 
@@ -45,7 +45,7 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         }
         let start = Date(timeIntervalSince1970: 300)
 
-        await accumulator.record(titleChange("Ready"), at: start)
+        await accumulator.record(capturedTitleChange("Ready"), at: start)
         await accumulator.emitReadyBatches(at: start.addingTimeInterval(3))
 
         let batch = await nextBatchTask.value
@@ -61,13 +61,12 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         )
         let start = Date(timeIntervalSince1970: 500)
 
-        await accumulator.record(titleChange("First"), at: start)
-        await accumulator.record(titleChange("Second"), at: start.addingTimeInterval(1))
+        await accumulator.record(capturedTitleChange("First"), at: start)
+        await accumulator.record(capturedTitleChange("Second"), at: start.addingTimeInterval(1))
         let batch = await accumulator.takeReadyBatch(at: start.addingTimeInterval(5))
 
         XCTAssertEqual(batch?.batchSequence, 7)
     }
-
 
     func testBoundaryRecordAndTakeReturnsSuppliedBodyChangesExactlyOnce() async throws {
         let accumulator = makeAccumulator()
@@ -145,6 +144,10 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
             quietWindow: 3,
             batchIDProvider: { UUID(uuidString: "00000000-0000-0000-0000-000000000002")! }
         )
+    }
+
+    private func capturedTitleChange(_ title: String) -> SyncConvergenceCapturedLocalChange {
+        SyncConvergenceCapturedLocalChange(change: titleChange(title), evidence: nil)
     }
 
     private func titleChange(_ title: String) -> MacSyncChange {
