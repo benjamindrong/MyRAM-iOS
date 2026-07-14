@@ -5,6 +5,7 @@ import SwiftUI
 struct MyRAMMacRootView: View {
     @StateObject private var syncController = MacSyncBatchController(context: PersistenceManager.shared.context)
     @StateObject private var editorSyncBridge = MacEditorSyncBridge()
+    @State private var syncConvergenceCoordinator: MacSyncConvergenceCoordinator?
     @State private var notes: [Note] = []
     @State private var selectedNoteID: UUID?
     @State private var attributedText = NSAttributedString(string: "")
@@ -48,14 +49,7 @@ struct MyRAMMacRootView: View {
             handleColumnVisibilityChange(newValue)
         }
         .onAppear(perform: loadNotesIfNeeded)
-        .onAppear {
-            syncController.onBeforeApplyingRemoteBatch = {
-                flushPendingSave()
-            }
-            syncController.onBatchApplied = { appliedBatch in
-                handleAppliedSyncBatch(appliedBatch)
-            }
-        }
+        .onAppear(perform: configureSyncConvergenceIfNeeded)
         .onDisappear {
             _ = flushPendingSave()
         }
@@ -114,6 +108,7 @@ struct MyRAMMacRootView: View {
             } ?? NSAttributedString(string: "")
             hasUnsavedChanges = false
             loadError = nil
+            resumeSyncConvergence()
         } catch {
             loadError = "Unable to load notes: \(error.localizedDescription)"
         }
@@ -158,6 +153,43 @@ struct MyRAMMacRootView: View {
         }
     }
 
+    private func configureSyncConvergenceIfNeeded() {
+        guard syncConvergenceCoordinator == nil else { return }
+
+        let presentationSurface = MacSyncConvergencePresentationSurface(
+            selectedNoteID: { selectedNoteID },
+            hasUnsavedChanges: { hasUnsavedChanges },
+            refreshNotesList: { refreshNotesList() },
+            applyIncremental: { actions, noteID, authoritativeBody in
+                editorSyncBridge.applyBatch(actions, selectedNoteID: noteID, authoritativeBody: authoritativeBody)
+            },
+            reloadSelectedEditor: { noteID, authoritativeBody in
+                guard selectedNoteID == noteID else { return true }
+                reloadSelectedEditor(reason: .unsafeIncrementalApply)
+                return attributedText.string == authoritativeBody
+            },
+            currentEditorBody: { attributedText.string }
+        )
+        let boundarySurface = MacSyncIncomingLocalBoundarySurface(
+            flushPendingLocalObligation: { noteIDs in
+                guard let selectedNoteID, noteIDs.contains(selectedNoteID), hasUnsavedChanges else { return nil }
+                guard flushPendingSave() else { return nil }
+                return await syncController.takePendingLocalObligationIfAffecting(noteID: selectedNoteID)
+            }
+        )
+        syncConvergenceCoordinator = MacSyncConvergenceCoordinator(
+            context: PersistenceManager.shared.context,
+            syncController: syncController,
+            presentationSurface: presentationSurface,
+            incomingBoundarySurface: boundarySurface
+        )
+        resumeSyncConvergence()
+    }
+
+    private func resumeSyncConvergence() {
+        Task { await syncConvergenceCoordinator?.resumePendingWork() }
+    }
+
     private func reloadSelectedEditor(reason: MacSelectedEditorReloadReason) {
         let outcome = MacSelectedEditorReloader.reload(
             hasUnsavedChanges: hasUnsavedChanges,
@@ -176,42 +208,12 @@ struct MyRAMMacRootView: View {
         )
 
         guard outcome != .deferredForUnsavedChanges else {
-            // Defensive only: the pre-apply flush should have saved local edits before any fallback reload reason can fire.
             saveError = "Incoming sync is waiting for local edits to save."
             return
         }
 
         guard outcome == .reloaded else { return }
         saveError = nil
-    }
-
-    private func handleAppliedSyncBatch(_ appliedBatch: MacAppliedSyncBatch) {
-        let plan = MacIncomingSyncApplicationPolicy.plan(
-            appliedBatch: appliedBatch,
-            selectedNoteID: selectedNoteID,
-            editorState: hasUnsavedChanges ? .unsafeForIncrementalApply : .ready
-        )
-
-        if plan.shouldRefreshNotesList {
-            refreshNotesList()
-        }
-
-        if let reason = plan.reloadSelectedEditorReason {
-            reloadSelectedEditor(reason: reason)
-            return
-        }
-
-        guard let selectedNoteID,
-              !plan.editorActions.isEmpty,
-              let authoritativeBody = selectedNote?.content else { return }
-        let result = editorSyncBridge.applyBatch(
-            plan.editorActions,
-            selectedNoteID: selectedNoteID,
-            authoritativeBody: authoritativeBody
-        )
-        if case .requiresReload = result.disposition {
-            reloadSelectedEditor(reason: .unsafeIncrementalApply)
-        }
     }
 
     private func selectNote(_ note: Note) {
@@ -222,6 +224,7 @@ struct MyRAMMacRootView: View {
         attributedText = MacNotePersistenceAdapter().attributedContent(for: note)
         hasUnsavedChanges = false
         saveError = nil
+        resumeSyncConvergence()
     }
 
     private func createNote() {
@@ -245,6 +248,7 @@ struct MyRAMMacRootView: View {
             hasUnsavedChanges = false
             loadError = nil
             saveError = nil
+            resumeSyncConvergence()
         } catch {
             loadError = "Unable to create note: \(error.localizedDescription)"
         }
@@ -285,7 +289,7 @@ struct MyRAMMacRootView: View {
             notes = try adapter.loadNotesCreatingFirstIfNeeded()
             hasUnsavedChanges = selectedNoteID == noteID ? false : hasUnsavedChanges
             saveError = nil
-            syncController.drainPendingIncomingBatchesIfPossible()
+            resumeSyncConvergence()
             return true
         } catch {
             saveError = "Unable to save note: \(error.localizedDescription)"
@@ -309,7 +313,16 @@ struct MyRAMMacRootView: View {
             newBody: note.content,
             modifiedAt: note.modifiedAt
         ) {
-            syncController.record(change)
+            do {
+                let capturedChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+                    for: change,
+                    preBody: oldContent,
+                    postBody: note.content
+                )
+                syncController.record(capturedChange)
+            } catch {
+                syncController.record(change)
+            }
         }
     }
 

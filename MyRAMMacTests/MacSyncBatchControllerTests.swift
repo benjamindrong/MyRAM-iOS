@@ -4,135 +4,99 @@ import XCTest
 
 @MainActor
 final class MacSyncBatchControllerTests: XCTestCase {
-    func testReceiveQueuesBatchWhenPreApplyCallbackIsMissing() throws {
-        let queueURL = temporaryQueueFileURL()
-        let controller = try makeController(pendingIncomingBatchQueueFileURL: queueURL)
+    func testDisconnectedTransportAcceptsByDurablyEnqueuingUnsentBatch() async throws {
+        let unsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
+        let controller = try makeController(unsentBatchQueueFileURL: unsentURL)
         let batch = makeBatch(idSuffix: 1)
 
-        controller.receive(batch)
+        try await controller.acceptLocalBatch(batch)
 
-        XCTAssertEqual(controller.pendingIncomingBatchCount, 1)
-        XCTAssertEqual(controller.lastErrorMessage, "Incoming sync is waiting for local edits to save.")
-        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: queueURL).pendingBatches, [batch])
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: unsentURL).pendingBatches, [batch])
+        XCTAssertNil(controller.lastErrorMessage)
     }
 
-    func testReceiveDrainsQueuedBatchesFIFO() throws {
-        let queueURL = temporaryQueueFileURL()
-        let first = makeBatch(idSuffix: 1)
-        let second = makeBatch(idSuffix: 2)
-        FileBackedSyncBatchQueue(fileURL: queueURL).enqueue(first)
-        var appliedIDs: [UUID] = []
-        let controller = try makeController(pendingIncomingBatchQueueFileURL: queueURL) { batch in
-            appliedIDs.append(batch.id)
-            return MacAppliedSyncBatch(batchID: batch.id, changes: [])
+    func testFailedDurableUnsentEnqueueThrowsAndLeavesQueueUnchanged() async throws {
+        let unsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
+        let queue = FileBackedSyncBatchQueue(fileURL: unsentURL)
+        let existing = makeBatch(idSuffix: 1)
+        try queue.enqueueDurably(existing)
+        let before = queue.snapshot()
+        let beforeBytes = try Data(contentsOf: unsentURL)
+        let failingQueue = FileBackedSyncBatchQueue(fileURL: unsentURL)
+        failingQueue.injectPersistenceFailureForNextWrite()
+        let controller = try makeController(unsentBatchQueue: failingQueue)
+        let batch = makeBatch(idSuffix: 2)
+
+        var thrownError: Error?
+        do {
+            try await controller.acceptLocalBatch(batch)
+        } catch {
+            thrownError = error
         }
-        controller.onBeforeApplyingRemoteBatch = { true }
+        XCTAssertNotNil(thrownError)
+        XCTAssertEqual(failingQueue.snapshot().pendingBatches, before.pendingBatches)
+        XCTAssertEqual(try Data(contentsOf: unsentURL), beforeBytes)
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: unsentURL).snapshot(), before)
+    }
 
-        controller.receive(second)
+    func testReceiveDoesNotIndependentlyEnqueueRemoteBatchBeforeRuntimeSubmission() async throws {
+        let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
+        let controller = try makeController(unsentBatchQueueFileURL: nil)
+        let container = try makeInMemoryContainer()
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(flushPendingLocalObligation: { _ in nil }),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil
+        )
+        let emptyBatch = makeBatch(idSuffix: 1)
 
-        XCTAssertEqual(appliedIDs, [first.id, second.id])
+        controller.receive(emptyBatch)
+        try? await Task.sleep(nanoseconds: 50_000_000)
+        _ = coordinator
+
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches, [])
         XCTAssertEqual(controller.pendingIncomingBatchCount, 0)
-        XCTAssertTrue(FileBackedSyncBatchQueue(fileURL: queueURL).isEmpty)
-        XCTAssertEqual(controller.lastSyncAt, second.createdAt)
     }
 
-    func testDuplicateBufferedBatchIDIsNotQueuedTwice() throws {
-        let queueURL = temporaryQueueFileURL()
-        var applyCount = 0
-        let controller = try makeController(pendingIncomingBatchQueueFileURL: queueURL) { batch in
-            applyCount += 1
-            return MacAppliedSyncBatch(batchID: batch.id, changes: [])
+    func testProductionMacSyncFilesDoNotConstructOldDrainEngine() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let checkedFiles = [
+            "MyRAM/Mac/Sync/MacSyncBatchController.swift",
+            "MyRAM/Mac/MyRAMMacRootView.swift",
+            "MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift"
+        ]
+
+        for relativePath in checkedFiles {
+            let source = try String(contentsOf: repo.appendingPathComponent(relativePath), encoding: .utf8)
+            XCTAssertFalse(source.contains("MacSyncBatchApplier"), relativePath)
+            XCTAssertFalse(source.contains("SyncBatchDrainCoordinator"), relativePath)
+            XCTAssertFalse(source.contains("drainPendingIncomingBatchesIfPossible"), relativePath)
+            XCTAssertFalse(source.contains("onBatchApplied"), relativePath)
         }
-        controller.onBeforeApplyingRemoteBatch = { false }
-        let batch = makeBatch(idSuffix: 1)
-
-        controller.receive(batch)
-        controller.receive(batch)
-
-        XCTAssertEqual(controller.pendingIncomingBatchCount, 1)
-        XCTAssertEqual(applyCount, 0)
-        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: queueURL).pendingBatches, [batch])
     }
 
-    func testDrainStopsOnFirstApplyFailureAndPreservesRemainingQueue() throws {
-        let queueURL = temporaryQueueFileURL()
-        let first = makeBatch(idSuffix: 1)
-        let second = makeBatch(idSuffix: 2)
-        let queue = FileBackedSyncBatchQueue(fileURL: queueURL)
-        queue.enqueue(first)
-        queue.enqueue(second)
-        var appliedIDs: [UUID] = []
-        let controller = try makeController(pendingIncomingBatchQueueFileURL: queueURL) { batch in
-            appliedIDs.append(batch.id)
-            if batch.id == first.id {
-                throw TestApplyError.failed
-            }
-            return MacAppliedSyncBatch(batchID: batch.id, changes: [])
-        }
-        controller.onBeforeApplyingRemoteBatch = { true }
-
-        controller.drainPendingIncomingBatchesIfPossible()
-
-        XCTAssertEqual(appliedIDs, [first.id])
-        XCTAssertEqual(controller.pendingIncomingBatchCount, 2)
-        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: queueURL).pendingBatches, [first, second])
-        XCTAssertEqual(controller.lastErrorMessage, "Unable to save incoming sync changes.")
+    private func makeController(unsentBatchQueueFileURL: URL?) throws -> MacSyncBatchController {
+        try makeController(unsentBatchQueueFileURL: unsentBatchQueueFileURL, unsentBatchQueue: nil)
     }
 
-    func testDrainBlocksOnMismatchedHeadBatchWithoutApplyingLaterQueuedBatch() throws {
-        let queueURL = temporaryQueueFileURL()
-        let first = makeBatch(idSuffix: 1)
-        let second = makeBatch(idSuffix: 2)
-        let queue = FileBackedSyncBatchQueue(fileURL: queueURL)
-        queue.enqueue(first)
-        queue.enqueue(second)
-        var attemptedIDs: [UUID] = []
-        let controller = try makeController(pendingIncomingBatchQueueFileURL: queueURL) { batch in
-            attemptedIDs.append(batch.id)
-            throw SyncBatchApplyPreflightError.mismatchedBaseContentHash(
-                noteID: UUID(uuidString: "00000000-0000-0000-0000-000000000101")!,
-                expected: "expected",
-                actual: "actual"
-            )
-        }
-        controller.onBeforeApplyingRemoteBatch = { true }
-
-        controller.drainPendingIncomingBatchesIfPossible()
-
-        XCTAssertEqual(attemptedIDs, [first.id])
-        XCTAssertEqual(controller.pendingIncomingBatchCount, 2)
-        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: queueURL).pendingBatches, [first, second])
-        XCTAssertEqual(controller.lastErrorMessage, "Incoming changes are waiting for deterministic merge support.")
-    }
-
-    func testAlreadySeenZeroChangeBatchIsRemovedHarmlessly() throws {
-        let queueURL = temporaryQueueFileURL()
-        let batch = makeBatch(idSuffix: 1)
-        FileBackedSyncBatchQueue(fileURL: queueURL).enqueue(batch)
-        var appliedBatches: [MacAppliedSyncBatch] = []
-        let controller = try makeController(pendingIncomingBatchQueueFileURL: queueURL) { batch in
-            MacAppliedSyncBatch(batchID: batch.id, changes: [])
-        }
-        controller.onBeforeApplyingRemoteBatch = { true }
-        controller.onBatchApplied = { appliedBatches.append($0) }
-
-        controller.drainPendingIncomingBatchesIfPossible()
-
-        XCTAssertEqual(appliedBatches, [MacAppliedSyncBatch(batchID: batch.id, changes: [])])
-        XCTAssertEqual(controller.pendingIncomingBatchCount, 0)
-        XCTAssertTrue(FileBackedSyncBatchQueue(fileURL: queueURL).isEmpty)
+    private func makeController(unsentBatchQueue: FileBackedSyncBatchQueue) throws -> MacSyncBatchController {
+        try makeController(unsentBatchQueueFileURL: nil, unsentBatchQueue: unsentBatchQueue)
     }
 
     private func makeController(
-        pendingIncomingBatchQueueFileURL: URL,
-        applyBatch: ((MacSyncBatch) throws -> MacAppliedSyncBatch)? = nil
+        unsentBatchQueueFileURL: URL?,
+        unsentBatchQueue: FileBackedSyncBatchQueue?
     ) throws -> MacSyncBatchController {
-        try MacSyncBatchController(
-            context: makeInMemoryContainer().mainContext,
-            unsentBatchQueueFileURL: nil,
-            pendingIncomingBatchQueueFileURL: pendingIncomingBatchQueueFileURL,
-            startsNetworking: false,
-            applyBatch: applyBatch
+        MacSyncBatchController(
+            context: try makeInMemoryContainer().mainContext,
+            unsentBatchQueueFileURL: unsentBatchQueueFileURL,
+            unsentBatchQueue: unsentBatchQueue,
+            startsNetworking: false
         )
     }
 
@@ -145,35 +109,35 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
-    private func temporaryQueueFileURL() -> URL {
-        FileManager.default.temporaryDirectory
+    private func temporaryQueueFileURL(named filename: String) -> URL {
+        let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
-            .appendingPathComponent("mac-pending-incoming-batch-queue.json")
+        return directory.appendingPathComponent(filename)
+    }
+
+    private func completingPresentationSurface() -> MacSyncConvergencePresentationSurface {
+        MacSyncConvergencePresentationSurface(
+            selectedNoteID: { nil },
+            hasUnsavedChanges: { false },
+            refreshNotesList: {},
+            applyIncremental: { _, _, _ in
+                EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .noApplicableMutations)
+            },
+            reloadSelectedEditor: { _, _ in true },
+            currentEditorBody: { nil }
+        )
     }
 
     private func makeInMemoryContainer() throws -> ModelContainer {
-        let schema = Schema([
-            Folder.self,
-            Note.self,
-            NotePhotoAttachment.self,
-            PinnedThought.self
-        ])
         let configuration = ModelConfiguration(
             "MacSyncBatchControllerTests-\(UUID().uuidString)",
-            schema: schema,
+            schema: Schema(MyRAMModelRegistry.models),
             isStoredInMemoryOnly: true
         )
 
         return try ModelContainer(
-            for: Folder.self,
-            Note.self,
-            NotePhotoAttachment.self,
-            PinnedThought.self,
+            for: Schema(MyRAMModelRegistry.models),
             configurations: configuration
         )
     }
-}
-
-private enum TestApplyError: Error {
-    case failed
 }
