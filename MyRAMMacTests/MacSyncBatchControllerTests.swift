@@ -61,6 +61,29 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.pendingIncomingBatchCount, 0)
     }
 
+
+    func testQuarantinedConvergenceStatusPreservesWorkReason() throws {
+        let controller = try makeController(unsentBatchQueueFileURL: nil)
+        let item = SyncConvergenceQuarantinedItem(
+            domain: .localObligation,
+            batchID: UUID(uuidString: "00000000-0000-0000-0000-000000000201")!,
+            affectedNoteIDs: [UUID(uuidString: "00000000-0000-0000-0000-000000000202")!],
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000203")!,
+            reason: .localEvidenceBaseHashMismatch
+        )
+        let work = SyncConvergenceQuarantinedWork(items: [item])
+
+        controller.markConvergenceQuarantined(work)
+
+        XCTAssertEqual(controller.quarantinedWork, work)
+        XCTAssertNotEqual(
+            controller.lastErrorMessage,
+            SyncBatchDrainFailureClassifier.userMessage(
+                for: SyncBatchDrainFailure(batchID: item.batchID, kind: .corruptHistory)
+            )
+        )
+    }
+
     func testProductionMacSyncFilesDoNotConstructOldDrainEngine() throws {
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
@@ -70,6 +93,13 @@ final class MacSyncBatchControllerTests: XCTestCase {
             "MyRAM/Mac/MyRAMMacRootView.swift",
             "MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift"
         ]
+
+        let coordinatorSource = try String(
+            contentsOf: repo.appendingPathComponent("MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift"),
+            encoding: .utf8
+        )
+        XCTAssertFalse(coordinatorSource.contains("kind: .corruptHistory"))
+        XCTAssertFalse(coordinatorSource.contains("submitLocalBatch("))
 
         for relativePath in checkedFiles {
             let source = try String(contentsOf: repo.appendingPathComponent(relativePath), encoding: .utf8)

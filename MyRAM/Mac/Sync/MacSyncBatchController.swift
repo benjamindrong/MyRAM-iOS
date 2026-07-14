@@ -19,6 +19,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     @Published private(set) var lastConnectionEvent = "Browsing for nearby MyRAM devices"
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var lastSyncAt: Date?
+    @Published private(set) var quarantinedWork: SyncConvergenceQuarantinedWork?
 
     weak var convergenceCoordinator: MacSyncConvergenceCoordinator?
 
@@ -183,6 +184,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             lastSyncAt = batch.createdAt
         }
         lastErrorMessage = nil
+        quarantinedWork = nil
     }
 
     func markConvergenceWaiting() {
@@ -191,6 +193,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     func markConvergenceBlocked(_ failure: SyncBatchDrainFailure) {
         lastErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
+    }
+
+    func markConvergenceQuarantined(_ work: SyncConvergenceQuarantinedWork) {
+        quarantinedWork = work
+        lastErrorMessage = "Some nearby sync work is quarantined until local evidence can be inspected."
     }
 
     private func receiveLegacyEnvelope(_ envelope: SyncEnvelope, from peerID: MCPeerID) {

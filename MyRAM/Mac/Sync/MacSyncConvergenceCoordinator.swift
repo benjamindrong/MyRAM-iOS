@@ -59,8 +59,8 @@ final class MacSyncConvergenceCoordinator {
             syncController.markConvergenceWaiting()
         case .blocked(let failure):
             syncController.markConvergenceBlocked(failure)
-        case .quarantined:
-            syncController.markConvergenceBlocked(SyncBatchDrainFailure(batchID: sourceBatch?.id, kind: .corruptHistory))
+        case .quarantined(let work):
+            syncController.markConvergenceQuarantined(work)
         }
     }
 }
