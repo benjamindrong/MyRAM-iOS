@@ -66,6 +66,53 @@ final class MacSyncConvergencePresentationAdapterTests: XCTestCase {
         XCTAssertEqual(recorder.reloadCount, 0)
     }
 
+
+    func testIncrementalMalformedOperationPayloadFails() async {
+        let noteID = Self.uuid(9)
+        let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "Hello!")
+        let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
+        var malformed = request(noteID: noteID, routing: .incremental, body: "Hello!")
+        malformed = SyncConvergencePresentationRequest(
+            incorporationIdentity: malformed.incorporationIdentity,
+            noteID: malformed.noteID,
+            routing: malformed.routing,
+            expectedPreBodyHash: malformed.expectedPreBodyHash,
+            committedPostBodyHash: malformed.committedPostBodyHash,
+            incrementalOperations: [malformed.incrementalOperations[0].withoutInsertedText()],
+            rewriteSafetyReceipt: malformed.rewriteSafetyReceipt,
+            committedNote: malformed.committedNote,
+            committedBodyHash: malformed.committedBodyHash,
+            committedTitle: malformed.committedTitle
+        )
+
+        let result = await adapter.refreshPresentation(for: malformed)
+
+        XCTAssertEqual(result, .failed)
+        XCTAssertTrue(recorder.appliedIncremental.isEmpty)
+    }
+
+    func testIncrementalPostApplyBodyMismatchFails() async {
+        let noteID = Self.uuid(10)
+        let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "wrong")
+        recorder.applyResult = EditorRemoteBatchApplyResult(appliedCount: 1, disposition: .applied)
+        let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
+
+        let result = await adapter.refreshPresentation(for: request(noteID: noteID, routing: .incremental, body: "right"))
+
+        XCTAssertEqual(result, .failed)
+    }
+
+    func testWholeNoteFallbackReloadBodyMismatchFails() async {
+        let noteID = Self.uuid(11)
+        let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "wrong")
+        let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
+
+        let result = await adapter.refreshPresentation(for: request(noteID: noteID, routing: .wholeNoteFallback, body: "right"))
+
+        XCTAssertEqual(result, .failed)
+        XCTAssertEqual(recorder.reloadCount, 1)
+    }
+
     func testWholeNoteFallbackReloadsAndVerifiesAuthoritativeBody() async {
         let noteID = Self.uuid(6)
         let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "remote")
@@ -185,6 +232,24 @@ final class MacSyncConvergencePresentationAdapterTests: XCTestCase {
             ),
             committedBodyHash: postHash,
             committedTitle: "Title"
+        )
+    }
+}
+
+
+private extension SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload {
+    func withoutInsertedText() -> Self {
+        SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload(
+            noteID: noteID,
+            operationIndex: operationIndex,
+            kind: kind,
+            utf16Offset: utf16Offset,
+            utf16Length: utf16Length,
+            text: nil,
+            expectedText: expectedText,
+            baseContentHash: baseContentHash,
+            resultContentHash: resultContentHash,
+            operationIdentity: operationIdentity
         )
     }
 }
