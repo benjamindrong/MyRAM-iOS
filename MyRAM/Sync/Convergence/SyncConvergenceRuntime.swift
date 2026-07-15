@@ -61,6 +61,7 @@ final class SyncConvergenceLocalEvidenceMetrics {
 @MainActor
 final class SyncConvergenceRuntime {
     private let context: ModelContext
+    private let container: ModelContainer
     private let convergenceQueue: FileBackedSyncBatchQueue
     private let localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue
     private weak var localBatchTransportAdapter: SyncConvergenceLocalBatchTransportAdapter?
@@ -68,11 +69,11 @@ final class SyncConvergenceRuntime {
     private let planner = SyncConvergencePlanner()
     private let incorporationExecutor = SyncConvergenceIncorporationExecutor()
     private lazy var postCommitExecutor = SyncConvergencePostCommitExecutor(
-        store: SwiftDataSyncConvergencePostCommitStore(context: context),
+        store: SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container)),
         queueCleanupAdapter: convergenceQueue,
         presentationAdapter: presentationAdapter
     )
-    private lazy var pendingPostCommitSource = SwiftDataSyncConvergencePostCommitStore(context: context)
+    private lazy var pendingPostCommitSource = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
     private var isDraining = false
     private var drainRequestedWhileActive = false
     private let localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics?
@@ -88,6 +89,7 @@ final class SyncConvergenceRuntime {
         localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics? = nil
     ) {
         self.context = context
+        container = context.container
         self.convergenceQueue = convergenceQueue
         self.localObligationQueue = localObligationQueue
         self.localBatchTransportAdapter = localBatchTransportAdapter

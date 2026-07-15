@@ -93,14 +93,7 @@ final class NotesViewModel: ObservableObject {
     private var pinnedThoughtExpansionByNoteID: [UUID: Bool] = [:]
     private(set) var isApplyingRemoteSyncChange = false
     private var mountedActiveEditorNoteID: UUID?
-    private lazy var syncConvergenceRuntime = SyncConvergenceRuntime(
-        context: context,
-        convergenceQueue: pendingIncomingBatches,
-        localObligationQueue: pendingLocalConvergenceBatches,
-        localBatchTransportAdapter: syncController as? SyncConvergenceLocalBatchTransportAdapter,
-        presentationAdapter: NotesViewModelConvergencePresentationAdapter(viewModel: self),
-        incomingLocalBoundaryAdapter: self
-    )
+    private var syncConvergenceRuntime: SyncConvergenceRuntime!
     private var activeEditorPresentationAcknowledgment: ActiveEditorPresentationAcknowledgment?
     private var recentTextEditByNoteID: [UUID: Date] = [:]
     private var syncBatchReadyTask: Task<Void, Never>?
@@ -175,6 +168,14 @@ final class NotesViewModel: ObservableObject {
                 await statusController?.refreshPendingSyncStatus()
             }
         }
+        syncConvergenceRuntime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: pendingIncomingBatches,
+            localObligationQueue: pendingLocalConvergenceBatches,
+            localBatchTransportAdapter: syncController as? SyncConvergenceLocalBatchTransportAdapter,
+            presentationAdapter: NotesViewModelConvergencePresentationAdapter(viewModel: self),
+            incomingLocalBoundaryAdapter: self
+        )
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
             for await obligation in stream {
@@ -192,6 +193,7 @@ final class NotesViewModel: ObservableObject {
 
     deinit {
         syncBatchReadyTask?.cancel()
+        pendingConvergenceResumeTask?.cancel()
     }
 
     func undoLastAction() {
