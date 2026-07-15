@@ -20,9 +20,12 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         scrollView.drawsBackground = true
         scrollView.backgroundColor = .textBackgroundColor
 
-        let textView = NSTextView(frame: .zero)
+        let textView = AppearanceAwareTextView(frame: .zero)
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator
+        textView.effectiveAppearanceDidChange = { [weak coordinator = context.coordinator] in
+            coordinator?.refreshDisplayText()
+        }
         let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
         textView.textStorage?.setAttributedString(displayText)
         textView.isEditable = true
@@ -127,6 +130,27 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             attributedText.wrappedValue = NSAttributedString(attributedString: textView.attributedString())
             onTextChanged()
         }
+
+        func refreshDisplayText() {
+            guard let textView else { return }
+
+            let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText.wrappedValue)
+            let selectedRange = textView.selectedRange()
+            isApplyingSwiftUIUpdate = true
+            textView.textStorage?.setAttributedString(displayText)
+            textView.typingAttributes = MacEditorTextColorPolicy.normalizedTypingAttributes(textView.typingAttributes)
+            textView.setSelectedRange(selectedRange.macClamped(toLength: displayText.length))
+            isApplyingSwiftUIUpdate = false
+        }
+    }
+}
+
+private final class AppearanceAwareTextView: NSTextView {
+    var effectiveAppearanceDidChange: (() -> Void)?
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        effectiveAppearanceDidChange?()
     }
 }
 #endif

@@ -27,10 +27,9 @@ final class MacEditorTextColorPolicyTests: XCTestCase {
         XCTAssertTrue(text.isEqual(to: normalizedAgain))
     }
 
-    func testExistingAutoMarkerRefreshesToSuppliedDefault() {
+    func testDisplayNormalizationReplacesStoredForegroundWithSuppliedDefault() {
         let text = NSMutableAttributedString(string: "Auto")
         text.addAttribute(.foregroundColor, value: NSColor.systemRed, range: NSRange(location: 0, length: text.length))
-        text.addAttribute(.autoTextColorDisplay, value: true, range: NSRange(location: 0, length: text.length))
 
         let normalized = MacEditorTextColorPolicy.normalizedForDisplay(text, defaultTextColor: .textColor)
 
@@ -38,15 +37,26 @@ final class MacEditorTextColorPolicyTests: XCTestCase {
         XCTAssertEqual(normalized.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil) as? Bool, true)
     }
 
-    func testExplicitColorsSurviveUnchanged() {
-        assertExplicitColorSurvives(.systemRed)
-        assertExplicitColorSurvives(.systemBlue)
-        assertExplicitColorSurvives(.black)
-        assertExplicitColorSurvives(.white)
-        assertExplicitColorSurvives(.gray)
+    func testDisplayNormalizationPreservesNonColorAttributes() {
+        let text = NSMutableAttributedString(string: "Styled")
+        let range = NSRange(location: 0, length: text.length)
+        let paragraphStyle = NSMutableParagraphStyle()
+        paragraphStyle.firstLineHeadIndent = 12
+        text.addAttribute(.foregroundColor, value: NSColor.systemRed, range: range)
+        text.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: 18), range: range)
+        text.addAttribute(.paragraphStyle, value: paragraphStyle, range: range)
+        text.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+
+        let normalized = MacEditorTextColorPolicy.normalizedForDisplay(text)
+
+        XCTAssertEqual(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .textColor)
+        XCTAssertEqual(normalized.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil) as? Bool, true)
+        XCTAssertNotNil(normalized.attribute(.font, at: 0, effectiveRange: nil))
+        XCTAssertEqual(normalized.attribute(.paragraphStyle, at: 0, effectiveRange: nil) as? NSParagraphStyle, paragraphStyle)
+        XCTAssertEqual(normalized.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int, NSUnderlineStyle.single.rawValue)
     }
 
-    func testMixedAutoAndExplicitRangesRemainClassified() {
+    func testMixedStoredColorsBecomeAutoDisplayColor() {
         let text = NSMutableAttributedString(string: "AB")
         text.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: NSRange(location: 1, length: 1))
 
@@ -54,8 +64,8 @@ final class MacEditorTextColorPolicyTests: XCTestCase {
 
         XCTAssertEqual(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, .textColor)
         XCTAssertEqual(normalized.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil) as? Bool, true)
-        XCTAssertEqual(normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor, .systemBlue)
-        XCTAssertNil(normalized.attribute(.autoTextColorDisplay, at: 1, effectiveRange: nil))
+        XCTAssertEqual(normalized.attribute(.foregroundColor, at: 1, effectiveRange: nil) as? NSColor, .textColor)
+        XCTAssertEqual(normalized.attribute(.autoTextColorDisplay, at: 1, effectiveRange: nil) as? Bool, true)
     }
 
     func testPersistenceRemovesAutoForegroundAndMarkerOnly() {
@@ -121,21 +131,6 @@ final class MacEditorTextColorPolicyTests: XCTestCase {
         XCTAssertNil(attributes[.autoTextColorDisplay])
     }
 
-    private func assertExplicitColorSurvives(
-        _ color: NSColor,
-        file: StaticString = #filePath,
-        line: UInt = #line
-    ) {
-        let text = NSMutableAttributedString(string: "Color")
-        text.addAttribute(.foregroundColor, value: color, range: NSRange(location: 0, length: text.length))
-
-        let normalized = MacEditorTextColorPolicy.normalizedForDisplay(text)
-        let sanitized = MacEditorTextColorPolicy.sanitizedForPersistence(normalized)
-
-        XCTAssertEqual(normalized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, color, file: file, line: line)
-        XCTAssertNil(normalized.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil), file: file, line: line)
-        XCTAssertEqual(sanitized.attribute(.foregroundColor, at: 0, effectiveRange: nil) as? NSColor, color, file: file, line: line)
-    }
 }
 
 private extension NSColor {
