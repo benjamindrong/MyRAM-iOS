@@ -3703,11 +3703,12 @@ final class MyRAMTests: XCTestCase {
         let localObligationQueueURL = temporarySyncBatchQueueFileURL()
         let localObligationQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: localObligationQueueURL)
         let batch = makeTitleOnlyBatch(idSuffix: 127500, title: "Unsatisfied")
+        let localBatchTransportAdapter = FailingLocalBatchTransport(error: FileBackedSyncBatchQueue.QueueError.persistenceFailed)
         let runtime = SyncConvergenceRuntime(
             context: context,
             convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
             localObligationQueue: localObligationQueue,
-            localBatchTransportAdapter: FailingLocalBatchTransport(error: FileBackedSyncBatchQueue.QueueError.persistenceFailed),
+            localBatchTransportAdapter: localBatchTransportAdapter,
             presentationAdapter: CompletingPresentationAdapter()
         )
 
