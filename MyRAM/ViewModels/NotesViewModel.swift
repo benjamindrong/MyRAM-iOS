@@ -40,10 +40,23 @@ private struct PreparedLocalNoteEdit {
     }
 }
 
+private struct LegacyIncomingNoteSnapshot {
+    let id: UUID
+    let title: String
+    let content: String
+    let richTextContentData: Data?
+    let isPinned: Bool?
+    let createdAt: Date
+    let modifiedAt: Date
+    let deletedAt: Date?
+    let folderID: UUID?
+}
+
 private struct LegacyIncomingIsolatedApplyResult {
     let syncConflicts: [SyncConflictVersion]
     let preservedConflicts: [SyncConflictVersion]
     let bufferedEffects: LegacyIncomingBufferedEffects
+    let noteSnapshot: LegacyIncomingNoteSnapshot?
     let deletedCurrentNoteID: UUID?
     let currentFolderReplacementID: UUID?
     let shouldRefreshActiveNote: Bool
@@ -1617,7 +1630,7 @@ final class NotesViewModel: ObservableObject {
 
             do {
                 try commitLegacyIncomingEffects(applyResult.bufferedEffects)
-                try refreshMainContextAfterLegacyIncomingApply(change)
+                try refreshMainContextAfterLegacyIncomingApply(change, noteSnapshot: applyResult.noteSnapshot)
             } catch {
                 dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired))
                 continue
@@ -1655,6 +1668,7 @@ final class NotesViewModel: ObservableObject {
     ) throws -> LegacyIncomingIsolatedApplyResult {
         let isolatedContext = ModelContext(context.container)
         try verifyLegacyIncomingPersistedRowsAreVisible(change, in: isolatedContext)
+        try refreshIsolatedNoteFromMainContextIfNeeded(for: change, in: isolatedContext)
         let bufferedConflictStore = BufferedSyncConflictStore(base: syncConflictStore)
         let applier = MyRAMSyncChangeApplier(
             context: isolatedContext,
@@ -1669,11 +1683,34 @@ final class NotesViewModel: ObservableObject {
             currentNoteID: currentNoteID,
             currentFolderID: currentFolderID
         )
+        var noteSnapshot = try legacyIncomingNoteSnapshot(for: change, in: isolatedContext)
+        if let cleanBaseSnapshot = try cleanBaseLegacyIncomingNoteSnapshot(for: change),
+           result.preservedConflicts.isEmpty {
+            // Some SwiftData contexts keep a stale row after boundary admission.
+            // When the clean main note exactly matches the incoming base, this is
+            // the same apply decision the isolated applier would make from fresh state.
+            noteSnapshot = cleanBaseSnapshot
+            try applyLegacyIncomingNoteSnapshot(cleanBaseSnapshot, in: isolatedContext)
+            bufferedConflictStore.saveNoteTitleBaseline(
+                noteID: cleanBaseSnapshot.id,
+                title: cleanBaseSnapshot.title,
+                modifiedAt: cleanBaseSnapshot.modifiedAt,
+                originDeviceID: change.originDeviceID
+            )
+            bufferedConflictStore.saveNoteContentBaseline(
+                noteID: cleanBaseSnapshot.id,
+                content: cleanBaseSnapshot.content,
+                richTextContentData: cleanBaseSnapshot.richTextContentData,
+                modifiedAt: cleanBaseSnapshot.modifiedAt,
+                originDeviceID: change.originDeviceID
+            )
+        }
         try saveLegacyIncomingApplyContext(isolatedContext)
         return LegacyIncomingIsolatedApplyResult(
             syncConflicts: applier.syncConflicts,
             preservedConflicts: result.preservedConflicts,
             bufferedEffects: bufferedConflictStore.effects,
+            noteSnapshot: noteSnapshot,
             deletedCurrentNoteID: result.deletedCurrentNoteID,
             currentFolderReplacementID: result.currentFolderReplacementID,
             shouldRefreshActiveNote: result.shouldRefreshActiveNote
@@ -1735,7 +1772,10 @@ final class NotesViewModel: ObservableObject {
         try store.commitLegacyIncomingEffectsChecked(effects)
     }
 
-    private func refreshMainContextAfterLegacyIncomingApply(_ change: SyncChange) throws {
+    private func refreshMainContextAfterLegacyIncomingApply(
+        _ change: SyncChange,
+        noteSnapshot: LegacyIncomingNoteSnapshot?
+    ) throws {
         switch change.entityType {
         case .collection:
             if let payload = try? MyRAMSyncPayloadCoding.decodeFolder(from: change.payload) {
@@ -1745,11 +1785,8 @@ final class NotesViewModel: ObservableObject {
                 }
             }
         case .item:
-            if let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload) {
-                _ = try fetchNote(withID: payload.id, in: context)
-                if let folderID = payload.folderID {
-                    _ = try fetchFolder(withID: folderID, in: context)
-                }
+            if let noteSnapshot {
+                try applyLegacyIncomingNoteSnapshot(noteSnapshot, in: context)
             }
         case .marker:
             if let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) {
@@ -1777,6 +1814,101 @@ final class NotesViewModel: ObservableObject {
                     _ = try fetchPinnedThought(withID: conflict.entityID, in: context)
                 }
             }
+        }
+    }
+
+    private func cleanBaseLegacyIncomingNoteSnapshot(for change: SyncChange) throws -> LegacyIncomingNoteSnapshot? {
+        guard change.entityType == .item,
+              let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload),
+              let mainNote = try fetchNote(withID: payload.id, in: context),
+              mainNote.title == payload.baseTitle,
+              mainNote.content == payload.baseContent,
+              mainNote.richTextContentData == payload.baseRichTextContentData else {
+            return nil
+        }
+        return LegacyIncomingNoteSnapshot(
+            id: payload.id,
+            title: payload.title,
+            content: payload.content,
+            richTextContentData: payload.richTextContentData,
+            isPinned: payload.isPinned,
+            createdAt: payload.createdAt,
+            modifiedAt: payload.modifiedAt,
+            deletedAt: payload.deletedAt,
+            folderID: payload.folderID
+        )
+    }
+
+    private func refreshIsolatedNoteFromMainContextIfNeeded(
+        for change: SyncChange,
+        in isolatedContext: ModelContext
+    ) throws {
+        guard change.entityType == .item,
+              let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload),
+              let mainNote = try fetchNote(withID: payload.id, in: context),
+              try fetchNote(withID: payload.id, in: isolatedContext) != nil else {
+            return
+        }
+        isolatedContext.rollback()
+        let snapshot = LegacyIncomingNoteSnapshot(
+            id: mainNote.id,
+            title: mainNote.title,
+            content: mainNote.content,
+            richTextContentData: mainNote.richTextContentData,
+            isPinned: mainNote.isPinned,
+            createdAt: mainNote.createdAt,
+            modifiedAt: mainNote.modifiedAt,
+            deletedAt: mainNote.deletedAt,
+            folderID: mainNote.folder?.id
+        )
+        try applyLegacyIncomingNoteSnapshot(snapshot, in: isolatedContext)
+    }
+
+    private func legacyIncomingNoteSnapshot(
+        for change: SyncChange,
+        in context: ModelContext
+    ) throws -> LegacyIncomingNoteSnapshot? {
+        guard change.entityType == .item,
+              let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload),
+              let note = try fetchNote(withID: payload.id, in: context) else {
+            return nil
+        }
+        return LegacyIncomingNoteSnapshot(
+            id: note.id,
+            title: note.title,
+            content: note.content,
+            richTextContentData: note.richTextContentData,
+            isPinned: note.isPinned,
+            createdAt: note.createdAt,
+            modifiedAt: note.modifiedAt,
+            deletedAt: note.deletedAt,
+            folderID: note.folder?.id
+        )
+    }
+
+    private func applyLegacyIncomingNoteSnapshot(
+        _ snapshot: LegacyIncomingNoteSnapshot,
+        in context: ModelContext
+    ) throws {
+        let note = try fetchNote(withID: snapshot.id, in: context) ?? Note()
+        if note.modelContext == nil {
+            note.id = snapshot.id
+            context.insert(note)
+        }
+        note.title = snapshot.title
+        note.content = snapshot.content
+        note.richTextContentData = snapshot.richTextContentData
+        note.isPinned = snapshot.isPinned
+        note.createdAt = snapshot.createdAt
+        note.modifiedAt = snapshot.modifiedAt
+        note.deletedAt = snapshot.deletedAt
+        if let folderID = snapshot.folderID {
+            note.folder = try fetchFolder(withID: folderID, in: context)
+        } else {
+            note.folder = nil
+        }
+        if context.hasChanges {
+            try context.save()
         }
     }
 

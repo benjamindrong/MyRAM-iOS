@@ -3479,6 +3479,40 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(localRetainedOperations.map(\.batchID), [localBatch.id])
     }
 
+    func testLegacyIncomingApplierAppliesRemoteWhenLocalMatchesIncomingBase() throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-0000001275CF")!
+        let note = Note(title: "Shared", content: "Hello local")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer { try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent()) }
+        let baseConflictStore = SyncConflictStore(fileURL: conflictFileURL)
+        let applier = MyRAMSyncChangeApplier(
+            context: context,
+            conflictStore: BufferedSyncConflictStore(base: baseConflictStore)
+        )
+
+        let result = applier.apply(
+            [try legacyNoteChange(
+                noteID: noteID,
+                title: "Shared",
+                content: "Hello local remote",
+                baseTitle: "Shared",
+                baseContent: "Hello local",
+                modifiedAt: Date(timeIntervalSince1970: 4_000_000_000)
+            )],
+            activeNoteID: nil as UUID?,
+            currentNoteID: nil as UUID?,
+            currentFolderID: nil as UUID?
+        )
+
+        XCTAssertTrue(result.preservedConflicts.isEmpty)
+        XCTAssertEqual(note.content, "Hello local remote")
+    }
+
     func testLegacyIncomingMutationAppliesOnlyAfterExactLocalEvidenceRegistration() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -3500,17 +3534,23 @@ final class MyRAMTests: XCTestCase {
         await Task.yield()
         await Task.yield()
 
-        _ = await viewModel.applyIncomingSyncChanges([
+        let dispositions = await viewModel.applyIncomingSyncChanges([
             try legacyNoteChange(
                 noteID: noteID,
                 title: "Shared",
                 content: "Hello local remote",
                 baseTitle: "Shared",
                 baseContent: "Hello local",
-                modifiedAt: Date.now.addingTimeInterval(10)
+                modifiedAt: Date(timeIntervalSince1970: 4_000_000_000)
             )
         ])
 
+        XCTAssertEqual(dispositions.map(\.disposition), [.applied])
+        XCTAssertTrue(viewModel.syncConflicts.isEmpty)
+        let refreshedNote = try XCTUnwrap(context.fetch(FetchDescriptor<Note>(
+            predicate: #Predicate { candidate in candidate.id == noteID }
+        )).first)
+        XCTAssertEqual(refreshedNote.content, "Hello local remote")
         XCTAssertEqual(note.content, "Hello local remote")
         XCTAssertNil(viewModel.syncBatchErrorMessage)
         let pendingBatchID = await viewModel.capturePendingLocalBatchForRecovery()
@@ -3553,7 +3593,7 @@ final class MyRAMTests: XCTestCase {
                 content: "Hello local remote",
                 baseTitle: "Shared",
                 baseContent: "Hello local",
-                modifiedAt: Date.now.addingTimeInterval(10)
+                modifiedAt: Date(timeIntervalSince1970: 4_000_000_000)
             )
         ])
 
