@@ -78,6 +78,38 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertTrue(captured.isEmpty)
     }
 
+
+    func testIPhoneBodyCaptureMatchesSharedCapturedOperationSequence() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000124211")!
+        let modifiedAt = Date(timeIntervalSince1970: 23)
+        let oldBody = "ab-cd-ef"
+        let newBody = "ax-cd-yf"
+
+        let iPhoneOperations = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: oldBody,
+            newBody: newBody,
+            modifiedAt: modifiedAt,
+            bodyHashCapabilityEnabled: true
+        )
+        let sharedCaptured = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: noteID,
+            oldBody: oldBody,
+            newBody: newBody,
+            modifiedAt: modifiedAt,
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertEqual(sharedCaptured.map(\.change), iPhoneOperations)
+        var body = oldBody
+        for capturedChange in sharedCaptured {
+            XCTAssertEqual(capturedChange.evidence?.preBodyHash, SyncBatchContentHash.sha256Hex(for: body))
+            body = try SyncConvergenceLocalEvidenceCapture.apply(capturedChange.change, to: body)
+            XCTAssertEqual(capturedChange.evidence?.postBodyHash, SyncBatchContentHash.sha256Hex(for: body))
+        }
+        XCTAssertEqual(body, newBody)
+    }
+
     func testQuietWindowRearmsAndBatchIDStaysStable() async {
         let accumulator = makeAccumulator()
         let start = Date(timeIntervalSince1970: 200)
