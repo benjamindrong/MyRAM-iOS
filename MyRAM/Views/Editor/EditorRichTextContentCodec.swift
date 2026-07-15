@@ -158,9 +158,6 @@ private extension UIColor {
     }
 }
 
-extension NSAttributedString.Key {
-    static let autoTextColorDisplay = NSAttributedString.Key("com.myram.autoTextColorDisplay")
-}
 
 private struct EditorRGBAComponents {
     let red: CGFloat

@@ -151,8 +151,10 @@ final class MacNotePersistenceAdapter {
             throw MacNotePersistenceError.deletedNote
         }
 
-        note.content = attributedContent.string
-        note.richTextContentData = RTFCoding.encode(attributedContent)
+        let storageText = MacEditorTextColorPolicy.sanitizedForPersistence(attributedContent)
+        assert(storageText.string == attributedContent.string, "Mac Auto-color persistence sanitization changed note text")
+        note.content = storageText.string
+        note.richTextContentData = RTFCoding.encode(storageText)
         note.modifiedAt = .now
         try context.save()
     }
