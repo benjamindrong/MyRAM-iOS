@@ -366,6 +366,9 @@ enum SyncBatchDrainFailureKind: Equatable {
     case persistence
     case queueCapacity
     case queuePersistence
+    case localBoundaryCapture
+    case localBoundaryPersistence
+    case localBoundaryInvariant
     case corruptHistory
     case invalidMergePlan
     case inconsistentIncorporationState
@@ -442,6 +445,12 @@ enum SyncBatchDrainFailureClassifier {
             "Incoming sync queue is full; newest batch could not be retained."
         case .queuePersistence:
             "Unable to persist incoming sync batch."
+        case .localBoundaryCapture:
+            "Local edits could not be captured safely before incoming sync."
+        case .localBoundaryPersistence:
+            "Local edits could not be saved before incoming sync."
+        case .localBoundaryInvariant:
+            "Local sync-boundary state is inconsistent and requires repair."
         case .corruptHistory:
             "Incoming sync history cannot be replayed safely."
         case .invalidMergePlan:

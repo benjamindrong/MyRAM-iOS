@@ -6,13 +6,19 @@ import SwiftData
 @MainActor
 final class MacNotePersistenceAdapter {
     private let context: ModelContext
+    private let saveOperation: (ModelContext) throws -> Void
 
     init() {
         self.context = PersistenceManager.shared.context
+        self.saveOperation = { try $0.save() }
     }
 
-    init(context: ModelContext) {
+    init(
+        context: ModelContext,
+        saveOperation: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) {
         self.context = context
+        self.saveOperation = saveOperation
     }
 
     func loadNotes() throws -> [Note] {
@@ -129,14 +135,13 @@ final class MacNotePersistenceAdapter {
             note.content = prepared.proposedBody
             note.richTextContentData = prepared.proposedRichTextContentData
             note.modifiedAt = prepared.modifiedAt
-            try context.save()
+            try saveOperation(context)
         } catch {
             // Restore only the fields mutated by this save so unrelated pending context work is preserved.
             note.title = currentTitle
             note.content = currentBody
             note.richTextContentData = currentRichTextContentData
             note.modifiedAt = currentModifiedAt
-            try? context.save()
             throw error
         }
     }
@@ -177,6 +182,7 @@ enum MacPendingSaveResult: Equatable {
     case noChanges
     case savedWithoutBodyMutation
     case savedWithPendingBodyMutation(noteID: UUID)
+    case superseded(noteID: UUID)
     case failed(MacPendingSaveFailure)
 }
 

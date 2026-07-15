@@ -81,6 +81,8 @@ final class MacSyncIncomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBou
             return .ready
         case .localObligation(let obligation):
             return .localObligation(obligation)
+        case .staleLocalState(let noteID):
+            return .failed(.localStateChanged(noteID: noteID))
         case .failed(let failure):
             return .failed(failure.sharedBoundaryFailure)
         case .invariantViolation(let noteID):
@@ -92,6 +94,7 @@ final class MacSyncIncomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBou
 enum MacIncomingBoundaryResult {
     case ready
     case localObligation(SyncConvergenceLocalObligation)
+    case staleLocalState(noteID: UUID)
     case failed(MacPendingSaveFailure)
     case invariantViolation(noteID: UUID)
 }
@@ -110,5 +113,34 @@ private extension MacPendingSaveFailure {
 @MainActor
 struct MacSyncIncomingLocalBoundarySurface {
     let prepareForIncomingBodyMutation: (Set<UUID>) async -> MacIncomingBoundaryResult
+}
+
+/// Performs the ordered Mac-side admission check before an incoming body mutation is planned.
+@MainActor
+struct MacIncomingBoundaryPreparer {
+    let selectedNoteID: () -> UUID?
+    let hasUnsavedChanges: () -> Bool
+    let saveSelectedNoteForBoundary: (UUID) async -> MacIncomingBoundaryResult
+    let takePendingObligation: (UUID) async -> SyncConvergenceLocalObligation?
+
+    func prepare(affecting noteIDs: Set<UUID>) async -> MacIncomingBoundaryResult {
+        for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            if selectedNoteID() == noteID, hasUnsavedChanges() {
+                let result = await saveSelectedNoteForBoundary(noteID)
+                switch result {
+                case .ready:
+                    // A no-body result only clears this note; later affected notes still need admission.
+                    continue
+                case .localObligation, .staleLocalState, .failed, .invariantViolation:
+                    return result
+                }
+            }
+
+            if let obligation = await takePendingObligation(noteID) {
+                return .localObligation(obligation)
+            }
+        }
+        return .ready
+    }
 }
 #endif

@@ -227,6 +227,33 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertEqual(note.richTextContentData, prepared.proposedRichTextContentData)
     }
 
+    func testFailedPreparedSaveRestoresOnlyAttemptedNoteWithoutRecoverySave() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        context.autosaveEnabled = false
+        let target = Note(title: "Target", content: "Before")
+        let unrelated = Note(title: "Unrelated", content: "Original")
+        context.insert(target)
+        context.insert(unrelated)
+        try context.save()
+
+        unrelated.content = "Dirty but unsaved"
+        var saveAttempts = 0
+        let adapter = MacNotePersistenceAdapter(context: context, saveOperation: { _ in
+            saveAttempts += 1
+            throw MacNotePersistenceAdapterTestError.injectedSaveFailure
+        })
+        let prepared = try adapter.prepareLocalNoteEdit(
+            noteID: target.id,
+            proposedAttributedContent: NSAttributedString(string: "After")
+        )
+
+        XCTAssertThrowsError(try adapter.persistPreparedLocalNoteEdit(prepared))
+        XCTAssertEqual(target.content, "Before")
+        XCTAssertEqual(unrelated.content, "Dirty but unsaved")
+        XCTAssertEqual(saveAttempts, 1, "Failure recovery must not issue a second shared-context save.")
+    }
+
     func testPrepareLocalNoteEditRichTextOnlyChangeHasNoAuthoritativeMutation() throws {
         let container = try makeInMemoryContainer()
         let context = container.mainContext
@@ -520,6 +547,10 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertEqual(decodedComponents.blue, expectedComponents.blue, accuracy: 0.01, file: file, line: line)
         XCTAssertEqual(decodedComponents.alpha, expectedComponents.alpha, accuracy: 0.01, file: file, line: line)
     }
+}
+
+private enum MacNotePersistenceAdapterTestError: Error {
+    case injectedSaveFailure
 }
 
 private extension NSColor {

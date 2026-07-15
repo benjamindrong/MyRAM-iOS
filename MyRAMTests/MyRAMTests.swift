@@ -3404,7 +3404,8 @@ final class MyRAMTests: XCTestCase {
         guard case .blocked(let failure) = outcome else {
             return XCTFail("Expected boundary preparation failure to block incoming work")
         }
-        XCTAssertEqual(failure.kind, .queuePersistence)
+        XCTAssertEqual(failure.batchID, remoteBatch.id)
+        XCTAssertEqual(failure.kind, .localBoundaryCapture)
         XCTAssertEqual(note.content, "Hello")
         XCTAssertEqual(incomingQueue.pendingBatches.map(\.id), [remoteBatch.id])
     }

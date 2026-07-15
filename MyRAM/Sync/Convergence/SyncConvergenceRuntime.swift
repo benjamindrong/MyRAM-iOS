@@ -27,6 +27,7 @@ enum SyncConvergenceIncomingLocalBoundaryFailure: Equatable {
     case localCaptureFailed(noteID: UUID)
     case localPersistenceFailed(noteID: UUID)
     case boundaryInvariantViolation(noteID: UUID)
+    case localStateChanged(noteID: UUID)
 }
 
 enum SyncConvergenceIncomingLocalBoundaryOutcome {
@@ -213,7 +214,10 @@ final class SyncConvergenceRuntime {
                 blockedOrigins: blockedOrigins
             ) {
                 let batch = convergenceQueue.pendingBatches[candidateIndex]
-                switch await satisfyIncomingLocalBoundary(noteIDs: Self.bodyMutationNoteIDs(in: batch)) {
+                switch await satisfyIncomingLocalBoundary(
+                    batchID: batch.id,
+                    noteIDs: Self.bodyMutationNoteIDs(in: batch)
+                ) {
                 case .ready:
                     break
                 case .evidenceRegistered:
@@ -408,7 +412,10 @@ final class SyncConvergenceRuntime {
         return deferredItems.isEmpty ? .complete : .deferred(deferredItems)
     }
 
-    private func satisfyIncomingLocalBoundary(noteIDs: Set<UUID>) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
+    private func satisfyIncomingLocalBoundary(
+        batchID: UUID,
+        noteIDs: Set<UUID>
+    ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
         guard !noteIDs.isEmpty, let incomingLocalBoundaryAdapter else { return .ready }
 
         switch await incomingLocalBoundaryAdapter.prepareForIncomingBodyMutation(affecting: noteIDs) {
@@ -417,17 +424,26 @@ final class SyncConvergenceRuntime {
         case .localObligation(let obligation):
             return await admitLocalObligationForIncomingBoundary(obligation)
         case .failed(let failure):
-            return .cannotProceed(.blocked(Self.drainFailure(for: failure, noteIDs: noteIDs)))
+            return .cannotProceed(.blocked(Self.drainFailure(for: failure, batchID: batchID)))
         }
     }
 
     private static func drainFailure(
         for failure: SyncConvergenceIncomingLocalBoundaryFailure,
-        noteIDs: Set<UUID>
+        batchID: UUID
     ) -> SyncBatchDrainFailure {
-        _ = failure
-        _ = noteIDs
-        return SyncBatchDrainFailure(batchID: nil, kind: .queuePersistence)
+        let kind: SyncBatchDrainFailureKind
+        switch failure {
+        case .localCaptureFailed:
+            kind = .localBoundaryCapture
+        case .localPersistenceFailed:
+            kind = .localBoundaryPersistence
+        case .boundaryInvariantViolation:
+            kind = .localBoundaryInvariant
+        case .localStateChanged:
+            kind = .staleAuthoritativeState
+        }
+        return SyncBatchDrainFailure(batchID: batchID, kind: kind)
     }
 
     private func admitLocalObligationForIncomingBoundary(

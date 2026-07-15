@@ -86,6 +86,46 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         XCTAssertEqual(result.failure, .boundaryInvariantViolation(noteID: noteID))
     }
 
+    func testStaleLocalStateMapsToSharedStaleStateFailure() async {
+        let noteID = Self.noteID(7)
+        let adapter = MacSyncIncomingLocalBoundaryAdapter(
+            surface: MacSyncIncomingLocalBoundarySurface(prepareForIncomingBodyMutation: { _ in
+                .staleLocalState(noteID: noteID)
+            })
+        )
+
+        let result = await adapter.prepareForIncomingBodyMutation(affecting: [noteID])
+
+        XCTAssertEqual(result.failure, .localStateChanged(noteID: noteID))
+    }
+
+    func testBoundaryPreparerContinuesAfterSelectedNoBodyResult() async throws {
+        let selectedID = Self.noteID(10)
+        let laterID = Self.noteID(11)
+        let obligation = try makeCapturedObligation(noteID: laterID)
+        var visitedNoteIDs: [UUID] = []
+        let preparer = MacIncomingBoundaryPreparer(
+            selectedNoteID: { selectedID },
+            hasUnsavedChanges: { true },
+            saveSelectedNoteForBoundary: { noteID in
+                XCTAssertEqual(noteID, selectedID)
+                return .ready
+            },
+            takePendingObligation: { noteID in
+                visitedNoteIDs.append(noteID)
+                return noteID == laterID ? obligation : nil
+            }
+        )
+
+        let result = await preparer.prepare(affecting: [selectedID, laterID])
+
+        guard case .localObligation(let returnedObligation) = result else {
+            return XCTFail("Expected the later note's pending body obligation")
+        }
+        XCTAssertEqual(returnedObligation, obligation)
+        XCTAssertEqual(visitedNoteIDs, [laterID])
+    }
+
     private static func noteID(_ suffix: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", suffix))!
     }
