@@ -1690,7 +1690,7 @@ final class NotesViewModel: ObservableObject {
             // When the clean main note exactly matches the incoming base, this is
             // the same apply decision the isolated applier would make from fresh state.
             noteSnapshot = cleanBaseSnapshot
-            try applyLegacyIncomingNoteSnapshot(cleanBaseSnapshot, in: isolatedContext)
+            try applyLegacyIncomingNoteSnapshot(cleanBaseSnapshot, in: isolatedContext, savesContext: false)
             bufferedConflictStore.saveNoteTitleBaseline(
                 noteID: cleanBaseSnapshot.id,
                 title: cleanBaseSnapshot.title,
@@ -1861,7 +1861,7 @@ final class NotesViewModel: ObservableObject {
             deletedAt: mainNote.deletedAt,
             folderID: mainNote.folder?.id
         )
-        try applyLegacyIncomingNoteSnapshot(snapshot, in: isolatedContext)
+        try applyLegacyIncomingNoteSnapshot(snapshot, in: isolatedContext, savesContext: false)
     }
 
     private func legacyIncomingNoteSnapshot(
@@ -1888,7 +1888,8 @@ final class NotesViewModel: ObservableObject {
 
     private func applyLegacyIncomingNoteSnapshot(
         _ snapshot: LegacyIncomingNoteSnapshot,
-        in context: ModelContext
+        in context: ModelContext,
+        savesContext: Bool = true
     ) throws {
         let note = try fetchNote(withID: snapshot.id, in: context) ?? Note()
         if note.modelContext == nil {
@@ -1907,7 +1908,7 @@ final class NotesViewModel: ObservableObject {
         } else {
             note.folder = nil
         }
-        if context.hasChanges {
+        if savesContext, context.hasChanges {
             try context.save()
         }
     }
