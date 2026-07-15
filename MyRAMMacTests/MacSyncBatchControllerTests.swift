@@ -135,6 +135,8 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(project.countOccurrences(of: "SyncBatchNoteChangeCapture.swift in Sources"), 2)
         XCTAssertTrue(project.contains("MacSyncConvergencePresentationAdapter.swift in Sources"))
         XCTAssertTrue(project.contains("MacSyncConvergencePresentationAdapterTests.swift in Sources"))
+        XCTAssertTrue(project.contains("MacSyncConvergenceCoordinatorTests.swift in Sources"))
+        XCTAssertTrue(project.contains("MacSyncIncomingLocalBoundaryTests.swift in Sources"))
         XCTAssertTrue(project.contains("MacNotePersistenceAdapterTests.swift in Sources"))
     }
 
