@@ -12,7 +12,22 @@ enum SyncConvergenceRuntimeOutcome {
 
 protocol SyncConvergenceIncomingLocalBoundaryAdapter: AnyObject {
     @MainActor
-    func takePendingLocalObligationIfNeeded(beforeIncomingBodyMutationFor noteIDs: Set<UUID>) async -> SyncConvergenceLocalObligation?
+    func prepareForIncomingBodyMutation(
+        affecting noteIDs: Set<UUID>
+    ) async -> SyncConvergenceIncomingLocalBoundaryPreparation
+}
+
+enum SyncConvergenceIncomingLocalBoundaryPreparation {
+    case ready
+    case localObligation(SyncConvergenceLocalObligation)
+    case failed(SyncConvergenceIncomingLocalBoundaryFailure)
+}
+
+enum SyncConvergenceIncomingLocalBoundaryFailure: Equatable {
+    case localCaptureFailed(noteID: UUID)
+    case localPersistenceFailed(noteID: UUID)
+    case boundaryInvariantViolation(noteID: UUID)
+    case localStateChanged(noteID: UUID)
 }
 
 enum SyncConvergenceIncomingLocalBoundaryOutcome {
@@ -47,6 +62,7 @@ final class SyncConvergenceLocalEvidenceMetrics {
 @MainActor
 final class SyncConvergenceRuntime {
     private let context: ModelContext
+    private let container: ModelContainer
     private let convergenceQueue: FileBackedSyncBatchQueue
     private let localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue
     private weak var localBatchTransportAdapter: SyncConvergenceLocalBatchTransportAdapter?
@@ -54,11 +70,11 @@ final class SyncConvergenceRuntime {
     private let planner = SyncConvergencePlanner()
     private let incorporationExecutor = SyncConvergenceIncorporationExecutor()
     private lazy var postCommitExecutor = SyncConvergencePostCommitExecutor(
-        store: SwiftDataSyncConvergencePostCommitStore(context: context),
+        store: SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container)),
         queueCleanupAdapter: convergenceQueue,
         presentationAdapter: presentationAdapter
     )
-    private lazy var pendingPostCommitSource = SwiftDataSyncConvergencePostCommitStore(context: context)
+    private lazy var pendingPostCommitSource = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
     private var isDraining = false
     private var drainRequestedWhileActive = false
     private let localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics?
@@ -74,6 +90,7 @@ final class SyncConvergenceRuntime {
         localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics? = nil
     ) {
         self.context = context
+        container = context.container
         self.convergenceQueue = convergenceQueue
         self.localObligationQueue = localObligationQueue
         self.localBatchTransportAdapter = localBatchTransportAdapter
@@ -197,7 +214,10 @@ final class SyncConvergenceRuntime {
                 blockedOrigins: blockedOrigins
             ) {
                 let batch = convergenceQueue.pendingBatches[candidateIndex]
-                switch await satisfyIncomingLocalBoundary(noteIDs: Self.bodyMutationNoteIDs(in: batch)) {
+                switch await satisfyIncomingLocalBoundary(
+                    batchID: batch.id,
+                    noteIDs: Self.bodyMutationNoteIDs(in: batch)
+                ) {
                 case .ready:
                     break
                 case .evidenceRegistered:
@@ -392,14 +412,38 @@ final class SyncConvergenceRuntime {
         return deferredItems.isEmpty ? .complete : .deferred(deferredItems)
     }
 
-    private func satisfyIncomingLocalBoundary(noteIDs: Set<UUID>) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
+    private func satisfyIncomingLocalBoundary(
+        batchID: UUID,
+        noteIDs: Set<UUID>
+    ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
         guard !noteIDs.isEmpty, let incomingLocalBoundaryAdapter else { return .ready }
-        guard let obligation = await incomingLocalBoundaryAdapter.takePendingLocalObligationIfNeeded(
-            beforeIncomingBodyMutationFor: noteIDs
-        ) else {
+
+        switch await incomingLocalBoundaryAdapter.prepareForIncomingBodyMutation(affecting: noteIDs) {
+        case .ready:
             return .ready
+        case .localObligation(let obligation):
+            return await admitLocalObligationForIncomingBoundary(obligation)
+        case .failed(let failure):
+            return .cannotProceed(.blocked(Self.drainFailure(for: failure, batchID: batchID)))
         }
-        return await admitLocalObligationForIncomingBoundary(obligation)
+    }
+
+    private static func drainFailure(
+        for failure: SyncConvergenceIncomingLocalBoundaryFailure,
+        batchID: UUID
+    ) -> SyncBatchDrainFailure {
+        let kind: SyncBatchDrainFailureKind
+        switch failure {
+        case .localCaptureFailed:
+            kind = .localBoundaryCapture
+        case .localPersistenceFailed:
+            kind = .localBoundaryPersistence
+        case .boundaryInvariantViolation:
+            kind = .localBoundaryInvariant
+        case .localStateChanged:
+            kind = .staleAuthoritativeState
+        }
+        return SyncBatchDrainFailure(batchID: batchID, kind: kind)
     }
 
     private func admitLocalObligationForIncomingBoundary(

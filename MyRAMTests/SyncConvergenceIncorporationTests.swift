@@ -281,13 +281,17 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             from: root.postCommitStatePayloadData
         )
         let work = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(root.postCommitWorkPayloadData!)
-        XCTAssertFalse(state.presentationRefreshPending)
+        XCTAssertTrue(state.presentationRefreshPending)
         XCTAssertFalse(state.legacyCleanupPending)
-        XCTAssertTrue(work.presentationEntries.isEmpty)
+        let entry = try XCTUnwrap(work.presentationEntries.first)
+        XCTAssertEqual(work.presentationEntries.map(\.noteID), [noteID])
+        XCTAssertEqual(entry.routing, .none)
+        XCTAssertTrue(entry.incrementalOperations.isEmpty)
+        XCTAssertEqual(entry.committedPostBodyHash, String(repeating: "0", count: 64))
         XCTAssertEqual(work.derivedInitialState(), state)
         let reencodedWork = try work.encodedPayloadData()
         XCTAssertEqual(reencodedWork, root.postCommitWorkPayloadData)
-        XCTAssertEqual(sha256Hex(reencodedWork), "7441711fd109820ef330485c1e431b8f75b2c1d99037855189ed213b16d7e50b")
+        XCTAssertEqual(sha256Hex(reencodedWork), "4a6413d5e7022768128f4d04368b5d1a3b78cb023d9725d0844283646081f63f")
     }
 
     func testCreatePlusBodyUsesFinalBodyHashForPresentationWork() throws {
@@ -756,8 +760,9 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             committedAt: idempotent.committedAt,
             expectedRoutings: [idempotent.noteID: .none]
         )
-        XCTAssertTrue(idempotentResult.work.presentationEntries.isEmpty)
-        XCTAssertFalse(idempotentResult.state.presentationRefreshPending)
+        let idempotentEntry = try XCTUnwrap(idempotentResult.work.presentationEntries.first)
+        XCTAssertEqual(idempotentEntry.routing, .none)
+        XCTAssertTrue(idempotentResult.state.presentationRefreshPending)
 
         let mixedExecutable = try makeMixedIdempotentAndExecutableFixture()
         let mixedExecutableResult = try planIncorporateAndDecode(
@@ -835,7 +840,9 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             committedAt: titleOnly.committedAt,
             expectedRoutings: [titleOnly.noteID: .none]
         )
-        XCTAssertTrue(titleOnlyResult.work.presentationEntries.isEmpty)
+        let titleOnlyEntry = try XCTUnwrap(titleOnlyResult.work.presentationEntries.first)
+        XCTAssertEqual(titleOnlyEntry.routing, .none)
+        XCTAssertTrue(titleOnlyEntry.incrementalOperations.isEmpty)
 
         let reconstructed = try makeReconstructedSnapshotFixture()
         let reconstructedResult = try planIncorporateAndDecode(
@@ -856,7 +863,9 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             committedAt: missingBody.committedAt,
             expectedRoutings: [missingBody.noteID: .none]
         )
-        XCTAssertTrue(missingBodyResult.work.presentationEntries.isEmpty)
+        let missingBodyEntry = try XCTUnwrap(missingBodyResult.work.presentationEntries.first)
+        XCTAssertEqual(missingBodyEntry.routing, .none)
+        XCTAssertTrue(missingBodyEntry.incrementalOperations.isEmpty)
 
         let missingTitle = try makeMissingTitleFixture()
         let missingTitleResult = try planIncorporateAndDecode(
@@ -868,7 +877,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertTrue(missingTitleResult.work.presentationEntries.isEmpty)
     }
 
-    func testMYR134MixedRoutingsPersistOnlyNonNoneEntriesInDeterministicOrder() throws {
+    func testMYR134MixedRoutingsPersistAllEntriesInDeterministicOrder() throws {
         let fixture = try makeMYR134MixedRoutingFixture()
         let result = try planIncorporateAndDecode(
             input: fixture.input,
@@ -887,10 +896,15 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         )
         XCTAssertEqual(
             result.work.presentationEntries.map(\.noteID),
-            [fixture.incrementalNote, fixture.fallbackNote].sortedByUUIDStringForTest()
+            [fixture.noneNote, fixture.incrementalNote, fixture.fallbackNote].sortedByUUIDStringForTest()
         )
-        XCTAssertFalse(result.work.presentationEntries.map(\.noteID).contains(fixture.noneNote))
         XCTAssertTrue(result.state.presentationRefreshPending)
+
+        let noneEntry = try XCTUnwrap(
+            result.work.presentationEntries.first { $0.noteID == fixture.noneNote }
+        )
+        XCTAssertEqual(noneEntry.routing, .none)
+        XCTAssertTrue(noneEntry.incrementalOperations.isEmpty)
 
         let incrementalEntry = try XCTUnwrap(
             result.work.presentationEntries.first { $0.noteID == fixture.incrementalNote }
@@ -1501,7 +1515,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertEqual(work.derivedInitialState(), state, file: file, line: line)
         XCTAssertEqual(
             work.presentationEntries.map(\.noteID),
-            expectedRoutings.filter { $0.value != .none }.map(\.key).sortedByUUIDStringForTest(),
+            expectedRoutings.map(\.key).sortedByUUIDStringForTest(),
             file: file,
             line: line
         )

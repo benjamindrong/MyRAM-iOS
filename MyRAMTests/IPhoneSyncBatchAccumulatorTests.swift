@@ -44,6 +44,72 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertEqual(capturedChanges.first?.evidence?.postBodyHash, SyncBatchContentHash.sha256Hex(for: "Hello world"))
     }
 
+
+    func testSharedCapturedBodyChangesReturnEvidenceChain() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-00000012420F")!
+
+        let captured = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: noteID,
+            oldBody: "ab-cd-ef",
+            newBody: "ax-cd-yf",
+            modifiedAt: Date(timeIntervalSince1970: 21),
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertEqual(captured.count, 4)
+        var body = "ab-cd-ef"
+        for capturedChange in captured {
+            XCTAssertEqual(capturedChange.evidence?.preBodyHash, SyncBatchContentHash.sha256Hex(for: body))
+            body = try SyncConvergenceLocalEvidenceCapture.apply(capturedChange.change, to: body)
+            XCTAssertEqual(capturedChange.evidence?.postBodyHash, SyncBatchContentHash.sha256Hex(for: body))
+        }
+        XCTAssertEqual(body, "ax-cd-yf")
+    }
+
+    func testSharedCapturedBodyChangesReturnEmptyForNoOp() throws {
+        let captured = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: UUID(uuidString: "00000000-0000-0000-0000-000000124210")!,
+            oldBody: "same",
+            newBody: "same",
+            modifiedAt: Date(timeIntervalSince1970: 22),
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertTrue(captured.isEmpty)
+    }
+
+
+    func testIPhoneBodyCaptureMatchesSharedCapturedOperationSequence() throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000124211")!
+        let modifiedAt = Date(timeIntervalSince1970: 23)
+        let oldBody = "ab-cd-ef"
+        let newBody = "ax-cd-yf"
+
+        let iPhoneOperations = try IPhoneSyncBatchCaptureHook.bodyTextChanges(
+            noteID: noteID,
+            oldBody: oldBody,
+            newBody: newBody,
+            modifiedAt: modifiedAt,
+            bodyHashCapabilityEnabled: true
+        )
+        let sharedCaptured = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: noteID,
+            oldBody: oldBody,
+            newBody: newBody,
+            modifiedAt: modifiedAt,
+            bodyHashCapabilityEnabled: true
+        )
+
+        XCTAssertEqual(sharedCaptured.map(\.change), iPhoneOperations)
+        var body = oldBody
+        for capturedChange in sharedCaptured {
+            XCTAssertEqual(capturedChange.evidence?.preBodyHash, SyncBatchContentHash.sha256Hex(for: body))
+            body = try SyncConvergenceLocalEvidenceCapture.apply(capturedChange.change, to: body)
+            XCTAssertEqual(capturedChange.evidence?.postBodyHash, SyncBatchContentHash.sha256Hex(for: body))
+        }
+        XCTAssertEqual(body, newBody)
+    }
+
     func testQuietWindowRearmsAndBatchIDStaysStable() async {
         let accumulator = makeAccumulator()
         let start = Date(timeIntervalSince1970: 200)

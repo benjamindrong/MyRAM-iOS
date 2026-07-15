@@ -3103,7 +3103,7 @@ struct SyncConvergenceIncorporationExecutor {
             let postCommitState = SyncConvergencePostCommitState(
                 queueCleanupPending: input.plan.cleanupPlan.retryQueueCleanup || !input.plan.cleanupPlan.batchIDs.isEmpty,
                 legacyCleanupPending: input.plan.cleanupPlan.retryLegacyCleanup,
-                presentationRefreshPending: input.plan.presentationPlan.noteRoutings.contains { $0.value != .none }
+                presentationRefreshPending: !input.plan.presentationPlan.noteRoutings.isEmpty
             )
             let postCommitWorkPayload: SyncConvergencePostCommitWorkPayloadV1
             do {
@@ -3191,11 +3191,7 @@ struct SyncConvergenceIncorporationExecutor {
             }
 
             let identityAuthority = try makeOperationIdentityAuthority(input: input)
-            let expectedRoutedNoteIDs = Set(
-                input.plan.presentationPlan.noteRoutings
-                    .filter { $0.value != .none }
-                    .map(\.key)
-            )
+            let expectedRoutedNoteIDs = Set(input.plan.presentationPlan.noteRoutings.keys)
             let entries = try expectedRoutedNoteIDs
                 .sorted { $0.uuidString < $1.uuidString }
                 .map { noteID -> SyncConvergencePostCommitWorkPayloadV1.PresentationEntry in

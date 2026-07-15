@@ -45,6 +45,30 @@ actor IPhoneSyncBatchAccumulator {
     }
 
     func record(_ capturedChange: SyncConvergenceCapturedLocalChange, at date: Date = .now) {
+        record([capturedChange], at: date)
+    }
+
+    func record(_ capturedChanges: [SyncConvergenceCapturedLocalChange], at date: Date = .now) {
+        guard !capturedChanges.isEmpty else { return }
+        appendCapturedChanges(capturedChanges, at: date)
+    }
+
+    func recordAndTakeBoundaryObligation(
+        adding capturedChanges: [SyncConvergenceCapturedLocalChange],
+        affecting noteID: UUID,
+        at date: Date = .now
+    ) -> SyncConvergenceLocalObligation? {
+        appendCapturedChanges(capturedChanges, at: date)
+        return extractPendingBatch { pendingBatch in
+            pendingBatch.capturedChanges.contains { captured in
+                guard SyncConvergenceLocalEvidenceCapture.isBodyTextOperation(captured.change) else { return false }
+                return SyncConvergenceLocalEvidenceCapture.noteID(for: captured.change) == noteID
+            }
+        }
+    }
+
+    private func appendCapturedChanges(_ capturedChanges: [SyncConvergenceCapturedLocalChange], at date: Date) {
+        guard !capturedChanges.isEmpty else { return }
         if pendingBatch == nil {
             let reservation = batchSequenceProvider()
             let batchSequence: UInt64?
@@ -66,7 +90,7 @@ actor IPhoneSyncBatchAccumulator {
             )
         }
 
-        pendingBatch?.capturedChanges.append(capturedChange)
+        pendingBatch?.capturedChanges.append(contentsOf: capturedChanges)
         pendingBatch?.readyAt = date.addingTimeInterval(quietWindow)
         scheduleReadyEmission(batchID: pendingBatch?.id, readyAt: pendingBatch?.readyAt)
     }

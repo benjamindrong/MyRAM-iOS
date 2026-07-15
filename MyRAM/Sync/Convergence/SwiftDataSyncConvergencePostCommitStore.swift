@@ -3,6 +3,7 @@ import SwiftData
 
 final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitStateStore {
     private let context: ModelContext
+    private let container: ModelContainer
 
     #if DEBUG
     enum TestOnlySaveSite {
@@ -23,6 +24,7 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
 
     init(context: ModelContext) {
         self.context = context
+        container = context.container
     }
 
     func loadState(
@@ -297,7 +299,7 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
         #if DEBUG
         testOnlyLastCandidateFetchCount = 0
         testOnlyLastBackfillSaveCount = 0
-        let isolatedStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(context.container))
+        let isolatedStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
         isolatedStore.testOnlyFailNextSaveAt = testOnlyFailNextSaveAt
         defer {
             testOnlyLastCandidateFetchCount = isolatedStore.testOnlyLastCandidateFetchCount
@@ -306,7 +308,7 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
         }
         return try isolatedStore.loadPendingPostCommitRequestsInCurrentContext()
         #else
-        let isolatedStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(context.container))
+        let isolatedStore = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
         return try isolatedStore.loadPendingPostCommitRequestsInCurrentContext()
         #endif
     }

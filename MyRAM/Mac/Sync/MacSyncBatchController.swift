@@ -13,15 +13,15 @@ struct MacSyncDiscoveredPeer: Identifiable, Equatable {
 }
 
 @MainActor
-final class MacSyncBatchController: NSObject, ObservableObject {
+final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceLocalBatchTransportAdapter {
     @Published private(set) var availablePeers: [MacSyncDiscoveredPeer] = []
     @Published private(set) var connectedPeers: [String] = []
     @Published private(set) var lastConnectionEvent = "Browsing for nearby MyRAM devices"
     @Published private(set) var lastErrorMessage: String?
     @Published private(set) var lastSyncAt: Date?
+    @Published private(set) var quarantinedWork: SyncConvergenceQuarantinedWork?
 
-    var onBeforeApplyingRemoteBatch: (() -> Bool)?
-    var onBatchApplied: ((MacAppliedSyncBatch) -> Void)?
+    weak var convergenceCoordinator: MacSyncConvergenceCoordinator?
 
     private let serviceType = "myram-sync"
     private let peerID: MCPeerID
@@ -32,17 +32,13 @@ final class MacSyncBatchController: NSObject, ObservableObject {
     private let context: ModelContext
     private var readyBatchTask: Task<Void, Never>?
     private let unsentBatches: FileBackedSyncBatchQueue
-    private let pendingIncomingBatches: FileBackedSyncBatchQueue
-    private let applyBatch: (MacSyncBatch) throws -> MacAppliedSyncBatch
     private let legacyReceiver: MacLegacySyncReceiver
-    private var isDrainingPendingIncomingBatches = false
 
     init(
         context: ModelContext,
         unsentBatchQueueFileURL: URL? = MacSyncBatchController.unsentBatchQueueFileURL(),
-        pendingIncomingBatchQueueFileURL: URL? = MacSyncBatchController.pendingIncomingBatchQueueFileURL(),
+        unsentBatchQueue: FileBackedSyncBatchQueue? = nil,
         startsNetworking: Bool = true,
-        applyBatch: ((MacSyncBatch) throws -> MacAppliedSyncBatch)? = nil,
         legacyReceiver: MacLegacySyncReceiver? = nil
     ) {
         let identity = MacSyncDeviceIdentityProvider().currentIdentity()
@@ -52,11 +48,7 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         browser = MCNearbyServiceBrowser(peer: peerID, serviceType: serviceType)
         accumulator = MacSyncBatchAccumulator(originDeviceID: identity.id)
         self.context = context
-        unsentBatches = FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
-        pendingIncomingBatches = FileBackedSyncBatchQueue(fileURL: pendingIncomingBatchQueueFileURL)
-        self.applyBatch = applyBatch ?? { batch in
-            try MacSyncBatchApplier(context: context).apply(batch)
-        }
+        unsentBatches = unsentBatchQueue ?? FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
         self.legacyReceiver = legacyReceiver ?? MacLegacySyncReceiver(context: context)
 
         super.init()
@@ -70,9 +62,9 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         }
 
         readyBatchTask = Task { [weak self, accumulator] in
-            let stream = await accumulator.readyBatches()
-            for await batch in stream {
-                await self?.send(batch)
+            let stream = await accumulator.readyLocalObligations()
+            for await obligation in stream {
+                await self?.convergenceCoordinator?.submitLocalObligation(obligation)
             }
         }
     }
@@ -97,12 +89,36 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         browser.invitePeer(peer.peerID, to: session, withContext: nil, timeout: 12)
     }
 
-    func record(_ change: MacSyncChange) {
-        Task {
-            await accumulator.record(change)
-            if let issue = await accumulator.takeLastSequenceReservationIssue() {
-                lastErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
-            }
+    func record(_ capturedChanges: [SyncConvergenceCapturedLocalChange], at date: Date = .now) async {
+        await accumulator.record(capturedChanges, at: date)
+        await updateSequenceReservationIssue()
+    }
+
+    func record(_ capturedChange: SyncConvergenceCapturedLocalChange, at date: Date = .now) async {
+        await record([capturedChange], at: date)
+    }
+
+    func recordAndTakeBoundaryObligation(
+        adding capturedChanges: [SyncConvergenceCapturedLocalChange],
+        affecting noteID: UUID,
+        at date: Date = .now
+    ) async -> SyncConvergenceLocalObligation? {
+        let obligation = await accumulator.recordAndTakeBoundaryObligation(
+            adding: capturedChanges,
+            affecting: noteID,
+            at: date
+        )
+        await updateSequenceReservationIssue()
+        return obligation
+    }
+
+    func takePendingLocalObligationIfAffecting(noteID: UUID) async -> SyncConvergenceLocalObligation? {
+        await accumulator.takePendingObligationIfAffecting(noteID: noteID)
+    }
+
+    private func updateSequenceReservationIssue() async {
+        if let issue = await accumulator.takeLastSequenceReservationIssue() {
+            lastErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
         }
     }
 
@@ -110,19 +126,23 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         Task {
             await accumulator.emitReadyBatches(at: .now)
             await flushUnsentBatches()
+            await convergenceCoordinator?.resumePendingWork()
         }
     }
 
-    private func send(_ batch: MacSyncBatch) async {
+    func acceptLocalBatch(_ batch: SyncBatch) async throws {
         let sent = await sendQueuedBatch(batch)
-        if sent {
-            unsentBatches.removeAll(withIDs: [batch.id])
-        } else {
-            enqueueUnsent(batch)
+        if sent { return }
+
+        do {
+            try unsentBatches.enqueueDurably(batch)
+        } catch {
+            lastErrorMessage = "Unable to save nearby sync changes for retry."
+            throw error
         }
     }
 
-    private func sendQueuedBatch(_ batch: MacSyncBatch) async -> Bool {
+    private func sendQueuedBatch(_ batch: SyncBatch) async -> Bool {
         let peers = session.connectedPeers
         guard !peers.isEmpty else {
             return false
@@ -151,58 +171,33 @@ final class MacSyncBatchController: NSObject, ObservableObject {
         }
     }
 
-    private func enqueueUnsent(_ batch: MacSyncBatch) {
-        unsentBatches.enqueue(batch)
-    }
-
     func receive(_ batch: MacSyncBatch) {
-        if !pendingIncomingBatches.contains(batch.id) {
-            do {
-                try pendingIncomingBatches.enqueueIncoming(batch)
-            } catch {
-                let failure = SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id)
-                lastErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
-                return
-            }
-        }
-        drainPendingIncomingBatchesIfPossible()
-    }
-
-    func drainPendingIncomingBatchesIfPossible() {
-        // Admission must happen, and `isDrainingPendingIncomingBatches` must be fully owned,
-        // before calling into the coordinator. `didApply`/`onBatchApplied` can synchronously
-        // trigger a reentrant call, and holding this flag open via `inout` across that call
-        // would trip Swift's exclusivity enforcement. A rejected nested call must also skip
-        // `onBeforeApplyingRemoteBatch`'s side effects (for example flushing a pending save).
-        guard !isDrainingPendingIncomingBatches else { return }
-
-        guard onBeforeApplyingRemoteBatch?() ?? false else {
-            lastErrorMessage = "Incoming sync is waiting for local edits to save."
-            return
-        }
-
-        isDrainingPendingIncomingBatches = true
-        defer { isDrainingPendingIncomingBatches = false }
-
-        let result = SyncBatchDrainCoordinator.drain(
-            nextBatch: { [pendingIncomingBatches] in pendingIncomingBatches.first },
-            apply: { [applyBatch] batch in try applyBatch(batch) },
-            remove: { [pendingIncomingBatches] batchID in pendingIncomingBatches.remove(batchID) },
-            didApply: { [weak self] batch, appliedBatch in
-                guard let self else { return }
-                lastSyncAt = batch.createdAt
-                lastErrorMessage = nil
-                onBatchApplied?(appliedBatch)
-            }
-        )
-
-        if case .blocked(let failure) = result {
-            lastErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
-        }
+        Task { await convergenceCoordinator?.submitRemoteBatch(batch) }
     }
 
     var pendingIncomingBatchCount: Int {
-        pendingIncomingBatches.pendingBatches.count
+        convergenceCoordinator?.pendingIncomingBatchCount ?? 0
+    }
+
+    func clearConvergenceStatus(appliedBatch batch: SyncBatch?) {
+        if let batch {
+            lastSyncAt = batch.createdAt
+        }
+        lastErrorMessage = nil
+        quarantinedWork = nil
+    }
+
+    func markConvergenceWaiting() {
+        lastErrorMessage = nil
+    }
+
+    func markConvergenceBlocked(_ failure: SyncBatchDrainFailure) {
+        lastErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
+    }
+
+    func markConvergenceQuarantined(_ work: SyncConvergenceQuarantinedWork) {
+        quarantinedWork = work
+        lastErrorMessage = "Some nearby sync work is quarantined until local evidence can be inspected."
     }
 
     private func receiveLegacyEnvelope(_ envelope: SyncEnvelope, from peerID: MCPeerID) {
@@ -252,9 +247,6 @@ final class MacSyncBatchController: NSObject, ObservableObject {
             .appendingPathComponent("mac-unsent-batch-queue.json")
     }
 
-    nonisolated private static func pendingIncomingBatchQueueFileURL() -> URL? {
-        SyncBatchQueueFileLocation.pendingIncoming(for: .nativeMac)
-    }
 }
 
 extension MacSyncBatchController: MCSessionDelegate {
@@ -265,6 +257,7 @@ extension MacSyncBatchController: MCSessionDelegate {
             if state == .connected {
                 remember(peerID)
                 await flushUnsentBatches()
+                await convergenceCoordinator?.resumePendingWork()
             }
         }
     }

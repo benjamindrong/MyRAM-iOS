@@ -6,13 +6,19 @@ import SwiftData
 @MainActor
 final class MacNotePersistenceAdapter {
     private let context: ModelContext
+    private let saveOperation: (ModelContext) throws -> Void
 
     init() {
         self.context = PersistenceManager.shared.context
+        self.saveOperation = { try $0.save() }
     }
 
-    init(context: ModelContext) {
+    init(
+        context: ModelContext,
+        saveOperation: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) {
         self.context = context
+        self.saveOperation = saveOperation
     }
 
     func loadNotes() throws -> [Note] {
@@ -73,6 +79,73 @@ final class MacNotePersistenceAdapter {
         return NSAttributedString(string: note.content)
     }
 
+
+    func prepareLocalNoteEdit(
+        noteID: UUID,
+        proposedAttributedContent: NSAttributedString
+    ) throws -> MacPreparedLocalNoteEdit {
+        guard let note = try loadNote(id: noteID) else {
+            throw MacPendingSaveFailure.noteMissing(noteID: noteID)
+        }
+
+        let modifiedAt = Date()
+        let proposedBody = proposedAttributedContent.string
+        let proposedRichTextContentData = RTFCoding.encode(proposedAttributedContent)
+        let titleChange = SyncBatchNoteChangeCapture.titleChanged(
+            noteID: note.id,
+            oldTitle: note.title,
+            newTitle: note.title,
+            modifiedAt: modifiedAt
+        ).map { SyncConvergenceCapturedLocalChange(change: $0, evidence: nil) }
+        let bodyChanges = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: note.id,
+            oldBody: note.content,
+            newBody: proposedBody,
+            modifiedAt: modifiedAt
+        )
+
+        return MacPreparedLocalNoteEdit(
+            noteID: note.id,
+            modifiedAt: modifiedAt,
+            previousTitle: note.title,
+            previousBody: note.content,
+            previousRichTextContentData: note.richTextContentData,
+            previousModifiedAt: note.modifiedAt,
+            proposedTitle: note.title,
+            proposedBody: proposedBody,
+            proposedRichTextContentData: proposedRichTextContentData,
+            capturedChanges: (titleChange.map { [$0] } ?? []) + bodyChanges,
+            hasTitleMutation: titleChange != nil,
+            hasBodyMutation: !bodyChanges.isEmpty
+        )
+    }
+
+    func persistPreparedLocalNoteEdit(_ prepared: MacPreparedLocalNoteEdit) throws {
+        guard let note = try loadNote(id: prepared.noteID) else {
+            throw MacPendingSaveFailure.noteMissing(noteID: prepared.noteID)
+        }
+
+        let currentTitle = note.title
+        let currentBody = note.content
+        let currentRichTextContentData = note.richTextContentData
+        let currentModifiedAt = note.modifiedAt
+
+        do {
+            note.title = prepared.proposedTitle
+            note.content = prepared.proposedBody
+            note.richTextContentData = prepared.proposedRichTextContentData
+            note.modifiedAt = prepared.modifiedAt
+            try saveOperation(context)
+        } catch {
+            // Restore only the fields mutated by this save so unrelated pending context work is preserved.
+            note.title = currentTitle
+            note.content = currentBody
+            note.richTextContentData = currentRichTextContentData
+            note.modifiedAt = currentModifiedAt
+            throw error
+        }
+    }
+
     func save(note: Note, attributedContent: NSAttributedString) throws {
         guard note.deletedAt == nil else {
             throw MacNotePersistenceError.deletedNote
@@ -85,6 +158,40 @@ final class MacNotePersistenceAdapter {
         note.modifiedAt = .now
         try context.save()
     }
+}
+
+
+struct MacPreparedLocalNoteEdit {
+    let noteID: UUID
+    let modifiedAt: Date
+    let previousTitle: String
+    let previousBody: String
+    let previousRichTextContentData: Data?
+    let previousModifiedAt: Date
+    let proposedTitle: String
+    let proposedBody: String
+    let proposedRichTextContentData: Data?
+    let capturedChanges: [SyncConvergenceCapturedLocalChange]
+    let hasTitleMutation: Bool
+    let hasBodyMutation: Bool
+
+    var hasAnyAuthoritativeMutation: Bool {
+        hasTitleMutation || hasBodyMutation
+    }
+}
+
+enum MacPendingSaveResult: Equatable {
+    case noChanges
+    case savedWithoutBodyMutation
+    case savedWithPendingBodyMutation(noteID: UUID)
+    case superseded(noteID: UUID)
+    case failed(MacPendingSaveFailure)
+}
+
+enum MacPendingSaveFailure: Error, Equatable {
+    case noteMissing(noteID: UUID)
+    case captureFailed(noteID: UUID)
+    case persistenceFailed(noteID: UUID)
 }
 
 enum MacNotePersistenceError: Error, Equatable {
