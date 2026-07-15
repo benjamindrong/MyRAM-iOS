@@ -2091,8 +2091,10 @@ final class NotesViewModel: ObservableObject {
             syncBatchErrorMessage = nil
         case .pending:
             break
-        case .deferred:
-            break
+        case .deferred(let deferred):
+            if let message = Self.syncErrorMessage(for: deferred) {
+                syncBatchErrorMessage = message
+            }
         case .quarantined:
             syncBatchErrorMessage = "Pending local sync evidence needs recovery before this note can continue syncing."
         case .alreadyDraining:
@@ -2101,6 +2103,22 @@ final class NotesViewModel: ObservableObject {
             syncBatchErrorMessage = SyncBatchDrainFailureClassifier.userMessage(for: failure)
         }
         await refreshPendingSyncStatusForLocalConvergenceMutation?()
+    }
+
+    private static func syncErrorMessage(for deferred: SyncConvergenceDeferredWork) -> String? {
+        let items = deferred.incoming + deferred.localObligations
+        for item in items {
+            guard case .planning(let reason) = item.reason else { continue }
+            switch reason {
+            case .unreconstructableBase:
+                return SyncBatchDrainFailureClassifier.userMessage(
+                    for: SyncBatchDrainFailure(batchID: item.batchID, kind: .mismatchedBase)
+                )
+            case .unsupportedReconciliation, .historyPressure:
+                continue
+            }
+        }
+        return nil
     }
 
     func acknowledgeActiveEditorSyncUpdate(
