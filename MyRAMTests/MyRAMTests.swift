@@ -3887,7 +3887,28 @@ final class MyRAMTests: XCTestCase {
         context.insert(note)
         try context.save()
 
-        let queuedBatches = (0..<5).map { index in
+        let baseBody = note.content
+        let presentationBatch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000156001")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            batchSequence: 1,
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteID,
+                    title: "Remote 1",
+                    modifiedAt: Date(timeIntervalSince1970: 1)
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: baseBody.utf16.count,
+                    text: "[presentation]",
+                    modifiedAt: Date(timeIntervalSince1970: 1),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: baseBody)
+                ))
+            ]
+        )
+        let queuedBatches = [presentationBatch] + (1..<5).map { index in
             makeTitleBatch(
                 noteID: noteID,
                 sequence: UInt64(index + 1),
@@ -3925,7 +3946,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(queue.isEmpty)
         XCTAssertEqual(appliedBatchIDs, Set(queuedBatches.map(\.id) + [reentrantBatch.id]))
         XCTAssertEqual(note.title, "Remote 6")
-        XCTAssertEqual(note.content, String(repeating: "large note\n", count: 2_000))
+        XCTAssertEqual(note.content, baseBody + "[presentation]")
     }
 
     func testKDelayedBatchDrainAppliesBodyInsertionsExactlyOnceAcrossRegionsAndRejectsDuplicateIncorporation() async throws {
