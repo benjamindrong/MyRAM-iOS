@@ -138,6 +138,11 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertTrue(project.contains("MacSyncConvergenceCoordinatorTests.swift in Sources"))
         XCTAssertTrue(project.contains("MacSyncIncomingLocalBoundaryTests.swift in Sources"))
         XCTAssertTrue(project.contains("MacNotePersistenceAdapterTests.swift in Sources"))
+
+        let macAppSources = try XCTUnwrap(project.section(startingWith: "BCA105040000000000000001 /* Sources */"))
+        let macTestSources = try XCTUnwrap(project.section(startingWith: "BCA107040000000000000001 /* Sources */"))
+        XCTAssertFalse(macAppSources.contains("MacSyncBatchApplier.swift in Sources"))
+        XCTAssertFalse(macTestSources.contains("MacSyncBatchApplierTests.swift in Sources"))
     }
 
     private func makeController(unsentBatchQueueFileURL: URL?) throws -> MacSyncBatchController {
@@ -206,5 +211,13 @@ final class MacSyncBatchControllerTests: XCTestCase {
 private extension String {
     func countOccurrences(of needle: String) -> Int {
         components(separatedBy: needle).count - 1
+    }
+
+    func section(startingWith marker: String) -> String? {
+        guard let startRange = range(of: marker),
+              let endRange = range(of: "\n\t\t};", range: startRange.upperBound..<endIndex) else {
+            return nil
+        }
+        return String(self[startRange.lowerBound..<endRange.upperBound])
     }
 }
