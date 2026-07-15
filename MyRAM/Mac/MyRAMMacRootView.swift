@@ -15,7 +15,7 @@ struct MyRAMMacRootView: View {
     @State private var saveTask: Task<Void, Never>?
     @State private var hasUnsavedChanges = false
     @State private var editorRevision = UUID()
-    @State private var activeSaveOperation: MacActiveSaveOperation?
+    @State private var saveSingleFlight = MacNoteSaveSingleFlight()
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var sidebarCollapseState: MacSidebarCollapsePolicy.CollapseState = .expanded
     @State private var isApplyingAutomaticVisibilityChange = false
@@ -338,25 +338,11 @@ struct MyRAMMacRootView: View {
         _ attempt: MacEditorSaveAttempt,
         publication: MacLocalSavePublication
     ) async -> MacNoteSaveOperationCompletion {
-        if let activeSaveOperation, activeSaveOperation.attempt.noteID == attempt.noteID {
-            let completion = await activeSaveOperation.task.value
-            if activeSaveOperation.attempt.editorRevision != attempt.editorRevision,
-               stillOwnsEditorState(attempt) {
-                // A newer revision waited behind the prior publication; it must now persist in order.
-                return await completeSaveAttempt(attempt, publication: publication)
-            }
-            return completion
-        }
-
-        let task = Task { @MainActor in
-            let completion = await executeSaveAttempt(attempt, publication: publication)
-            if activeSaveOperation?.attempt.id == attempt.id {
-                activeSaveOperation = nil
-            }
-            return completion
-        }
-        activeSaveOperation = MacActiveSaveOperation(attempt: attempt, task: task)
-        return await task.value
+        await saveSingleFlight.complete(
+            attempt: attempt,
+            stillOwnsAttempt: { stillOwnsEditorState(attempt) },
+            operation: { await executeSaveAttempt(attempt, publication: publication) }
+        )
     }
 
     private func executeSaveAttempt(
@@ -718,37 +704,4 @@ private enum MacLocalSavePublication {
     case incomingBoundary
 }
 
-private struct MacEditorSaveAttempt {
-    let id = UUID()
-    let noteID: UUID
-    let editorRevision: UUID
-    let attributedContent: NSAttributedString
-}
-
-private enum MacNoteSaveMutationKind {
-    case none
-    case nonBodyOnly
-    case body
-}
-
-private enum MacNoteSavePublicationOutcome {
-    case none
-    case ordinaryRecorded
-    case boundaryExtracted(SyncConvergenceLocalObligation?)
-}
-
-private enum MacNoteSaveOperationCompletion {
-    case completed(
-        attempt: MacEditorSaveAttempt,
-        mutationKind: MacNoteSaveMutationKind,
-        publication: MacNoteSavePublicationOutcome
-    )
-    case supersededBeforeStart(attempt: MacEditorSaveAttempt)
-    case failed(attempt: MacEditorSaveAttempt, failure: MacPendingSaveFailure)
-}
-
-private struct MacActiveSaveOperation {
-    let attempt: MacEditorSaveAttempt
-    let task: Task<MacNoteSaveOperationCompletion, Never>
-}
 #endif

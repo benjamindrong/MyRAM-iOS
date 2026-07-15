@@ -143,4 +143,81 @@ struct MacIncomingBoundaryPreparer {
         return .ready
     }
 }
+
+/// Serializes persistence and accumulator publication for one note while allowing later revisions to wait safely.
+@MainActor
+final class MacNoteSaveSingleFlight {
+    private var activeOperations: [UUID: ActiveOperation] = [:]
+
+    func complete(
+        attempt: MacEditorSaveAttempt,
+        stillOwnsAttempt: @escaping @MainActor () -> Bool,
+        operation: @escaping @MainActor () async -> MacNoteSaveOperationCompletion
+    ) async -> MacNoteSaveOperationCompletion {
+        if let active = activeOperations[attempt.noteID] {
+            let completion = await active.task.value
+            if active.editorRevision != attempt.editorRevision {
+                guard stillOwnsAttempt() else {
+                    return .supersededBeforeStart(attempt: attempt)
+                }
+                // The current revision waited behind an older publication and now owns the slot.
+                return await complete(
+                    attempt: attempt,
+                    stillOwnsAttempt: stillOwnsAttempt,
+                    operation: operation
+                )
+            }
+            return completion
+        }
+
+        let task = Task { @MainActor in
+            let completion = await operation()
+            if activeOperations[attempt.noteID]?.attemptID == attempt.id {
+                activeOperations[attempt.noteID] = nil
+            }
+            return completion
+        }
+        activeOperations[attempt.noteID] = ActiveOperation(
+            attemptID: attempt.id,
+            editorRevision: attempt.editorRevision,
+            task: task
+        )
+        return await task.value
+    }
+
+    private struct ActiveOperation {
+        let attemptID: UUID
+        let editorRevision: UUID
+        let task: Task<MacNoteSaveOperationCompletion, Never>
+    }
+}
+
+struct MacEditorSaveAttempt {
+    let id = UUID()
+    let noteID: UUID
+    let editorRevision: UUID
+    let attributedContent: NSAttributedString
+}
+
+enum MacNoteSaveMutationKind {
+    case none
+    case nonBodyOnly
+    case body
+}
+
+enum MacNoteSavePublicationOutcome {
+    case none
+    case ordinaryRecorded
+    case boundaryExtracted(SyncConvergenceLocalObligation?)
+}
+
+enum MacNoteSaveOperationCompletion {
+    case completed(
+        attempt: MacEditorSaveAttempt,
+        mutationKind: MacNoteSaveMutationKind,
+        publication: MacNoteSavePublicationOutcome
+    )
+    case supersededBeforeStart(attempt: MacEditorSaveAttempt)
+    case failed(attempt: MacEditorSaveAttempt, failure: MacPendingSaveFailure)
+}
 #endif

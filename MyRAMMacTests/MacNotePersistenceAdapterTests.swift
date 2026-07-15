@@ -227,11 +227,12 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertEqual(note.richTextContentData, prepared.proposedRichTextContentData)
     }
 
-    func testFailedPreparedSaveRestoresOnlyAttemptedNoteWithoutRecoverySave() throws {
+    func testFailedPreparedSaveRestoresTargetFieldsWithoutSavingUnrelatedDirtyState() throws {
         let container = try makeInMemoryContainer()
         let context = container.mainContext
         context.autosaveEnabled = false
         let target = Note(title: "Target", content: "Before")
+        target.modifiedAt = Date(timeIntervalSince1970: 100)
         let unrelated = Note(title: "Unrelated", content: "Original")
         context.insert(target)
         context.insert(unrelated)
@@ -249,8 +250,11 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         )
 
         XCTAssertThrowsError(try adapter.persistPreparedLocalNoteEdit(prepared))
+        XCTAssertEqual(target.title, "Target")
         XCTAssertEqual(target.content, "Before")
+        XCTAssertEqual(target.modifiedAt, Date(timeIntervalSince1970: 100))
         XCTAssertEqual(unrelated.content, "Dirty but unsaved")
+        XCTAssertTrue(context.hasChanges)
         XCTAssertEqual(saveAttempts, 1, "Failure recovery must not issue a second shared-context save.")
     }
 

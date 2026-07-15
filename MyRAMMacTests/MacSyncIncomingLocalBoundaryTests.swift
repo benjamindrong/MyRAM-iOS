@@ -126,6 +126,158 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         XCTAssertEqual(visitedNoteIDs, [laterID])
     }
 
+    func testMultiNoteBoundaryReturnsReadyOnlyAfterEveryAffectedNoteIsChecked() async {
+        let firstID = Self.noteID(12)
+        let selectedID = Self.noteID(13)
+        let lastID = Self.noteID(14)
+        var visitedNoteIDs: [UUID] = []
+        let preparer = MacIncomingBoundaryPreparer(
+            selectedNoteID: { selectedID },
+            hasUnsavedChanges: { true },
+            saveSelectedNoteForBoundary: { _ in .ready },
+            takePendingObligation: { noteID in
+                visitedNoteIDs.append(noteID)
+                return nil
+            }
+        )
+
+        let result = await preparer.prepare(affecting: [lastID, selectedID, firstID])
+
+        guard case .ready = result else {
+            return XCTFail("Expected ready only after the complete ordered scan")
+        }
+        XCTAssertEqual(visitedNoteIDs, [firstID, lastID])
+    }
+
+    func testMultiNoteBoundaryStopsOnSemanticFailureBeforeLaterNote() async {
+        let selectedID = Self.noteID(15)
+        let laterID = Self.noteID(16)
+        var extractedLaterNote = false
+        let preparer = MacIncomingBoundaryPreparer(
+            selectedNoteID: { selectedID },
+            hasUnsavedChanges: { true },
+            saveSelectedNoteForBoundary: { _ in .staleLocalState(noteID: selectedID) },
+            takePendingObligation: { noteID in
+                if noteID == laterID { extractedLaterNote = true }
+                return nil
+            }
+        )
+
+        let result = await preparer.prepare(affecting: [selectedID, laterID])
+
+        guard case .staleLocalState(let noteID) = result else {
+            return XCTFail("Expected the semantic boundary result to end this pass")
+        }
+        XCTAssertEqual(noteID, selectedID)
+        XCTAssertFalse(extractedLaterNote)
+    }
+
+    func testNewerRevisionCannotPersistOrPublishBeforeOlderRevisionCompletesPublication() async {
+        let coordinator = MacNoteSaveSingleFlight()
+        let noteID = Self.noteID(20)
+        let firstRevision = Self.noteID(21)
+        let secondRevision = Self.noteID(22)
+        let gate = MacSaveTestGate()
+        var events: [String] = []
+
+        let firstAttempt = makeAttempt(noteID: noteID, revision: firstRevision, body: "A")
+        let first = Task { @MainActor in
+            await coordinator.complete(
+                attempt: firstAttempt,
+                stillOwnsAttempt: { true },
+                operation: {
+                    events.append("A started")
+                    await gate.waitForRelease()
+                    events.append("A published")
+                    return self.completed(firstAttempt)
+                }
+            )
+        }
+        await gate.waitUntilBlocked()
+
+        let secondAttempt = makeAttempt(noteID: noteID, revision: secondRevision, body: "B")
+        let second = Task { @MainActor in
+            await coordinator.complete(
+                attempt: secondAttempt,
+                stillOwnsAttempt: { true },
+                operation: {
+                    events.append("B started")
+                    events.append("B published")
+                    return self.completed(secondAttempt)
+                }
+            )
+        }
+
+        XCTAssertEqual(events, ["A started"])
+        await gate.release()
+        _ = await first.value
+        _ = await second.value
+        XCTAssertEqual(events, ["A started", "A published", "B started", "B published"])
+    }
+
+    func testQueuedSupersededRevisionDoesNotPersistWhenItObtainsTheSaveSlot() async {
+        let coordinator = MacNoteSaveSingleFlight()
+        let noteID = Self.noteID(30)
+        let gate = MacSaveTestGate()
+        var secondOperationRan = false
+        let firstAttempt = makeAttempt(noteID: noteID, revision: Self.noteID(31), body: "A")
+        let first = Task { @MainActor in
+            await coordinator.complete(
+                attempt: firstAttempt,
+                stillOwnsAttempt: { true },
+                operation: {
+                    await gate.waitForRelease()
+                    return self.completed(firstAttempt)
+                }
+            )
+        }
+        await gate.waitUntilBlocked()
+
+        let secondAttempt = makeAttempt(noteID: noteID, revision: Self.noteID(32), body: "B")
+        let second = Task { @MainActor in
+            await coordinator.complete(
+                attempt: secondAttempt,
+                stillOwnsAttempt: { false },
+                operation: {
+                    secondOperationRan = true
+                    return self.completed(secondAttempt)
+                }
+            )
+        }
+        await gate.release()
+        _ = await first.value
+        let completion = await second.value
+
+        guard case .supersededBeforeStart(let attempt) = completion else {
+            return XCTFail("Expected queued revision to be rejected before persistence")
+        }
+        XCTAssertEqual(attempt.id, secondAttempt.id)
+        XCTAssertFalse(secondOperationRan)
+    }
+
+    func testBoundaryInitiatedSaveCarriesExtractedObligationThroughCommonCompletion() async throws {
+        let coordinator = MacNoteSaveSingleFlight()
+        let noteID = Self.noteID(40)
+        let attempt = makeAttempt(noteID: noteID, revision: Self.noteID(41), body: "A")
+        let obligation = try makeCapturedObligation(noteID: noteID)
+        let completion = await coordinator.complete(
+            attempt: attempt,
+            stillOwnsAttempt: { true },
+            operation: {
+                .completed(
+                    attempt: attempt,
+                    mutationKind: .body,
+                    publication: .boundaryExtracted(obligation)
+                )
+            }
+        )
+
+        guard case .completed(_, _, .boundaryExtracted(let returnedObligation)) = completion else {
+            return XCTFail("Expected the boundary extraction to remain on the shared completion")
+        }
+        XCTAssertEqual(returnedObligation, obligation)
+    }
+
     private static func noteID(_ suffix: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", suffix))!
     }
@@ -151,6 +303,45 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
             changes: [change]
         )
         return SyncConvergenceLocalObligation(batch: batch, capturedChanges: [captured])
+    }
+
+    private func makeAttempt(noteID: UUID, revision: UUID, body: String) -> MacEditorSaveAttempt {
+        MacEditorSaveAttempt(
+            noteID: noteID,
+            editorRevision: revision,
+            attributedContent: NSAttributedString(string: body)
+        )
+    }
+
+    private func completed(_ attempt: MacEditorSaveAttempt) -> MacNoteSaveOperationCompletion {
+        .completed(attempt: attempt, mutationKind: .body, publication: .ordinaryRecorded)
+    }
+}
+
+private actor MacSaveTestGate {
+    private var isBlocked = false
+    private var blockedContinuation: CheckedContinuation<Void, Never>?
+    private var releaseContinuation: CheckedContinuation<Void, Never>?
+
+    func waitForRelease() async {
+        await withCheckedContinuation { continuation in
+            isBlocked = true
+            blockedContinuation?.resume()
+            blockedContinuation = nil
+            releaseContinuation = continuation
+        }
+    }
+
+    func waitUntilBlocked() async {
+        guard !isBlocked else { return }
+        await withCheckedContinuation { continuation in
+            blockedContinuation = continuation
+        }
+    }
+
+    func release() {
+        releaseContinuation?.resume()
+        releaseContinuation = nil
     }
 }
 
