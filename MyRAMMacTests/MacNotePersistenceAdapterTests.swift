@@ -258,6 +258,34 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertEqual(saveAttempts, 1, "Failure recovery must not issue a second shared-context save.")
     }
 
+    func testFailedPreparedSaveLeavesMountedEditorUnsavedAndRetryable() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Target", content: "Before")
+        context.insert(note)
+        try context.save()
+
+        var shouldFail = true
+        let adapter = MacNotePersistenceAdapter(context: context, saveOperation: { context in
+            if shouldFail {
+                throw MacNotePersistenceAdapterTestError.injectedSaveFailure
+            }
+            try context.save()
+        })
+        let prepared = try adapter.prepareLocalNoteEdit(
+            noteID: note.id,
+            proposedAttributedContent: NSAttributedString(string: "After")
+        )
+
+        XCTAssertThrowsError(try adapter.persistPreparedLocalNoteEdit(prepared))
+        XCTAssertEqual(note.content, "Before")
+        XCTAssertFalse(prepared.capturedChanges.isEmpty)
+
+        shouldFail = false
+        try adapter.persistPreparedLocalNoteEdit(prepared)
+        XCTAssertEqual(note.content, "After")
+    }
+
     func testPrepareLocalNoteEditRichTextOnlyChangeHasNoAuthoritativeMutation() throws {
         let container = try makeInMemoryContainer()
         let context = container.mainContext

@@ -298,12 +298,7 @@ struct MyRAMMacRootView: View {
 
         guard hasUnsavedChanges, let selectedNoteID else { return true }
         let result = await saveNote(id: selectedNoteID, attributedContent: attributedText, publication: .ordinary)
-        switch result {
-        case .noChanges, .savedWithoutBodyMutation, .savedWithPendingBodyMutation:
-            return true
-        case .superseded, .failed:
-            return false
-        }
+        return MacEditorSaveOwnership.flushMayProceed(for: result)
     }
 
 
@@ -411,7 +406,15 @@ struct MyRAMMacRootView: View {
             return .superseded(noteID: requestedAttempt.noteID)
         case .completed(let attempt, let mutationKind, _):
             refreshNotesAfterSave()
-            guard stillOwnsEditorState(requestedAttempt), stillOwnsEditorState(attempt) else {
+            guard MacEditorSaveOwnership.owns(
+                selectedNoteID: selectedNoteID,
+                editorRevision: editorRevision,
+                attempt: requestedAttempt
+            ), MacEditorSaveOwnership.owns(
+                selectedNoteID: selectedNoteID,
+                editorRevision: editorRevision,
+                attempt: attempt
+            ) else {
                 return .superseded(noteID: requestedAttempt.noteID)
             }
             hasUnsavedChanges = false
@@ -438,7 +441,7 @@ struct MyRAMMacRootView: View {
             return .failed(failure)
         case .supersededBeforeStart:
             return .staleLocalState(noteID: requestedAttempt.noteID)
-        case .completed(let attempt, let mutationKind, let publication):
+        case .completed(let attempt, _, let publication):
             refreshNotesAfterSave()
             let obligation: SyncConvergenceLocalObligation?
             switch publication {
@@ -451,23 +454,26 @@ struct MyRAMMacRootView: View {
                     affecting: attempt.noteID
                 )
             }
-            if let obligation {
-                return .localObligation(obligation)
+            let result = MacIncomingBoundaryCompletionPolicy.result(
+                for: completion,
+                obligation: obligation,
+                requestedAttemptStillOwnsEditor: stillOwnsEditorState(requestedAttempt),
+                completingAttemptStillOwnsEditor: stillOwnsEditorState(attempt)
+            )
+            if case .ready = result {
+                hasUnsavedChanges = false
+                saveError = nil
             }
-            if mutationKind == .body {
-                return .invariantViolation(noteID: attempt.noteID)
-            }
-            guard stillOwnsEditorState(requestedAttempt), stillOwnsEditorState(attempt) else {
-                return .staleLocalState(noteID: requestedAttempt.noteID)
-            }
-            hasUnsavedChanges = false
-            saveError = nil
-            return .ready
+            return result
         }
     }
 
     private func stillOwnsEditorState(_ attempt: MacEditorSaveAttempt) -> Bool {
-        selectedNoteID == attempt.noteID && editorRevision == attempt.editorRevision
+        MacEditorSaveOwnership.owns(
+            selectedNoteID: selectedNoteID,
+            editorRevision: editorRevision,
+            attempt: attempt
+        )
     }
 
     private func setSaveError(for attempt: MacEditorSaveAttempt, failure: MacPendingSaveFailure) {

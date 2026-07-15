@@ -220,4 +220,50 @@ enum MacNoteSaveOperationCompletion {
     case supersededBeforeStart(attempt: MacEditorSaveAttempt)
     case failed(attempt: MacEditorSaveAttempt, failure: MacPendingSaveFailure)
 }
+
+enum MacEditorSaveOwnership {
+    static func owns(
+        selectedNoteID: UUID?,
+        editorRevision: UUID,
+        attempt: MacEditorSaveAttempt
+    ) -> Bool {
+        selectedNoteID == attempt.noteID && editorRevision == attempt.editorRevision
+    }
+
+    static func flushMayProceed(for result: MacPendingSaveResult) -> Bool {
+        switch result {
+        case .noChanges, .savedWithoutBodyMutation, .savedWithPendingBodyMutation:
+            true
+        case .superseded, .failed:
+            false
+        }
+    }
+}
+
+enum MacIncomingBoundaryCompletionPolicy {
+    static func result(
+        for completion: MacNoteSaveOperationCompletion,
+        obligation: SyncConvergenceLocalObligation?,
+        requestedAttemptStillOwnsEditor: Bool,
+        completingAttemptStillOwnsEditor: Bool
+    ) -> MacIncomingBoundaryResult {
+        switch completion {
+        case .failed(_, let failure):
+            return .failed(failure)
+        case .supersededBeforeStart(let attempt):
+            return .staleLocalState(noteID: attempt.noteID)
+        case .completed(let attempt, let mutationKind, _):
+            if let obligation {
+                return .localObligation(obligation)
+            }
+            if mutationKind == .body {
+                return .invariantViolation(noteID: attempt.noteID)
+            }
+            guard requestedAttemptStillOwnsEditor, completingAttemptStillOwnsEditor else {
+                return .staleLocalState(noteID: attempt.noteID)
+            }
+            return .ready
+        }
+    }
+}
 #endif

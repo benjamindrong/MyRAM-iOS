@@ -278,6 +278,148 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         XCTAssertEqual(returnedObligation, obligation)
     }
 
+    func testOrdinarySaveCompletionDoesNotClearNewerUnsavedRevision() {
+        let noteID = Self.noteID(50)
+        let savedAttempt = makeAttempt(noteID: noteID, revision: Self.noteID(51), body: "A")
+
+        XCTAssertFalse(MacEditorSaveOwnership.owns(
+            selectedNoteID: noteID,
+            editorRevision: Self.noteID(52),
+            attempt: savedAttempt
+        ))
+    }
+
+    func testStaleSaveCompletionDoesNotClearNewerSaveError() {
+        let noteID = Self.noteID(53)
+        let staleAttempt = makeAttempt(noteID: noteID, revision: Self.noteID(54), body: "A")
+
+        XCTAssertFalse(MacEditorSaveOwnership.owns(
+            selectedNoteID: noteID,
+            editorRevision: Self.noteID(55),
+            attempt: staleAttempt
+        ))
+    }
+
+    func testAttemptWithoutCurrentEditorOwnershipCannotSetOrClearSaveError() {
+        let staleAttempt = makeAttempt(noteID: Self.noteID(56), revision: Self.noteID(57), body: "A")
+
+        XCTAssertFalse(MacEditorSaveOwnership.owns(
+            selectedNoteID: Self.noteID(58),
+            editorRevision: Self.noteID(57),
+            attempt: staleAttempt
+        ))
+    }
+
+    func testCurrentRevisionPersistenceFailureReturnsFailedAndSetsSaveError() {
+        let noteID = Self.noteID(59)
+        let attempt = makeAttempt(noteID: noteID, revision: Self.noteID(60), body: "A")
+
+        XCTAssertTrue(MacEditorSaveOwnership.owns(
+            selectedNoteID: noteID,
+            editorRevision: attempt.editorRevision,
+            attempt: attempt
+        ))
+    }
+
+    func testFlushWaitsForInFlightSameRevisionPublicationBeforeReportingSuccess() {
+        XCTAssertFalse(MacEditorSaveOwnership.flushMayProceed(for: .superseded(noteID: Self.noteID(61))))
+        XCTAssertTrue(MacEditorSaveOwnership.flushMayProceed(for: .savedWithPendingBodyMutation(noteID: Self.noteID(61))))
+    }
+
+    func testFlushSavesCurrentRevisionAfterCancellingItsDebounceWhileOlderRevisionIsActive() {
+        XCTAssertFalse(MacEditorSaveOwnership.flushMayProceed(for: .superseded(noteID: Self.noteID(62))))
+        XCTAssertTrue(MacEditorSaveOwnership.flushMayProceed(for: .savedWithoutBodyMutation))
+    }
+
+    func testIncomingBoundaryCannotBypassInFlightOrdinarySaveForSameNote() async {
+        let coordinator = MacNoteSaveSingleFlight()
+        let noteID = Self.noteID(63)
+        let revision = Self.noteID(64)
+        let gate = MacSaveTestGate()
+        var operationCount = 0
+        let attempt = makeAttempt(noteID: noteID, revision: revision, body: "A")
+        let ordinary = Task { @MainActor in
+            await coordinator.complete(
+                attempt: attempt,
+                stillOwnsAttempt: { true },
+                operation: {
+                    operationCount += 1
+                    await gate.waitForRelease()
+                    return self.completed(attempt)
+                }
+            )
+        }
+        await gate.waitUntilBlocked()
+        let boundary = Task { @MainActor in
+            await coordinator.complete(
+                attempt: attempt,
+                stillOwnsAttempt: { true },
+                operation: {
+                    operationCount += 1
+                    return self.completed(attempt)
+                }
+            )
+        }
+        await gate.release()
+        _ = await ordinary.value
+        _ = await boundary.value
+        XCTAssertEqual(operationCount, 1)
+    }
+
+    func testMissingBodyObligationRemainsInvariantWhenCompletedAttemptIsSuperseded() {
+        let attempt = makeAttempt(noteID: Self.noteID(65), revision: Self.noteID(66), body: "A")
+        let result = MacIncomingBoundaryCompletionPolicy.result(
+            for: completed(attempt),
+            obligation: nil,
+            requestedAttemptStillOwnsEditor: false,
+            completingAttemptStillOwnsEditor: false
+        )
+
+        guard case .invariantViolation(let noteID) = result else {
+            return XCTFail("A missing body obligation must remain an invariant violation")
+        }
+        XCTAssertEqual(noteID, attempt.noteID)
+    }
+
+    func testBoundarySaveSupersededByNewerEditCannotReturnReady() {
+        let attempt = makeAttempt(noteID: Self.noteID(67), revision: Self.noteID(68), body: "A")
+        let completion = MacNoteSaveOperationCompletion.completed(
+            attempt: attempt,
+            mutationKind: .nonBodyOnly,
+            publication: .boundaryExtracted(nil)
+        )
+        let result = MacIncomingBoundaryCompletionPolicy.result(
+            for: completion,
+            obligation: nil,
+            requestedAttemptStillOwnsEditor: false,
+            completingAttemptStillOwnsEditor: false
+        )
+
+        guard case .staleLocalState(let noteID) = result else {
+            return XCTFail("Superseded boundary completion must not report ready")
+        }
+        XCTAssertEqual(noteID, attempt.noteID)
+    }
+
+    func testSupersededIncomingBoundaryIsAdmittedAfterNewerRevisionSaves() {
+        let attempt = makeAttempt(noteID: Self.noteID(69), revision: Self.noteID(70), body: "A")
+        let completion = MacNoteSaveOperationCompletion.completed(
+            attempt: attempt,
+            mutationKind: .nonBodyOnly,
+            publication: .ordinaryRecorded
+        )
+        let result = MacIncomingBoundaryCompletionPolicy.result(
+            for: completion,
+            obligation: nil,
+            requestedAttemptStillOwnsEditor: true,
+            completingAttemptStillOwnsEditor: true
+        )
+
+        guard case .ready = result else {
+            return XCTFail("A later current revision may satisfy the re-evaluated boundary")
+        }
+    }
+
     private static func noteID(_ suffix: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", suffix))!
     }
