@@ -23,7 +23,8 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         let textView = NSTextView(frame: .zero)
         textView.delegate = context.coordinator
         textView.textStorage?.delegate = context.coordinator
-        textView.textStorage?.setAttributedString(attributedText)
+        let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
+        textView.textStorage?.setAttributedString(displayText)
         textView.isEditable = true
         textView.isSelectable = true
         textView.allowsUndo = true
@@ -34,6 +35,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         textView.textColor = .textColor
         textView.backgroundColor = .textBackgroundColor
         textView.insertionPointColor = .controlAccentColor
+        textView.typingAttributes = MacEditorTextColorPolicy.normalizedTypingAttributes(textView.typingAttributes)
         textView.textContainerInset = NSSize(width: 24, height: 20)
         textView.minSize = NSSize(width: 0, height: 0)
         textView.maxSize = NSSize(
@@ -69,12 +71,14 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.register(textView)
         textView.textStorage?.delegate = context.coordinator
+        let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
         let currentText = textView.attributedString()
-        if !currentText.isEqual(to: attributedText) {
+        if !currentText.isEqual(to: displayText) {
             let selectedRange = textView.selectedRange()
             context.coordinator.isApplyingSwiftUIUpdate = true
-            textView.textStorage?.setAttributedString(attributedText)
-            textView.setSelectedRange(selectedRange.macClamped(toLength: attributedText.length))
+            textView.textStorage?.setAttributedString(displayText)
+            textView.typingAttributes = MacEditorTextColorPolicy.normalizedTypingAttributes(textView.typingAttributes)
+            textView.setSelectedRange(selectedRange.macClamped(toLength: displayText.length))
             context.coordinator.isApplyingSwiftUIUpdate = false
         }
     }

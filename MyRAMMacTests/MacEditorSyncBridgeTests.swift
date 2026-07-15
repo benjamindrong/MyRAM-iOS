@@ -343,6 +343,25 @@ final class MacEditorSyncBridgeTests: XCTestCase {
         XCTAssertEqual(metrics.wholeNoteReloadCount, 0)
     }
 
+    func testRemoteInsertionBesideAutoTextRetainsMarker() {
+        let attributed = MacEditorTextColorPolicy.normalizedForDisplay(NSAttributedString(string: "A"))
+
+        let attributes = MacRemoteInsertionAttributePolicy.attributesForRemoteInsertion(in: attributed, at: 1)
+
+        XCTAssertEqual(attributes[.foregroundColor] as? NSColor, .textColor)
+        XCTAssertEqual(attributes[.autoTextColorDisplay] as? Bool, true)
+    }
+
+    func testRemoteInsertionBesideExplicitTextRetainsExplicitColor() {
+        let attributed = NSMutableAttributedString(string: "A")
+        attributed.addAttribute(.foregroundColor, value: NSColor.systemRed, range: NSRange(location: 0, length: 1))
+
+        let attributes = MacRemoteInsertionAttributePolicy.attributesForRemoteInsertion(in: attributed, at: 1)
+
+        XCTAssertEqual(attributes[.foregroundColor] as? NSColor, .systemRed)
+        XCTAssertNil(attributes[.autoTextColorDisplay])
+    }
+
     private func makeTextView(_ string: String) -> NSTextView {
         let textView = NSTextView()
         textView.textStorage?.setAttributedString(NSAttributedString(string: string))

@@ -220,6 +220,50 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         try assertColor(decodedText.attribute(.foregroundColor, at: 0, effectiveRange: nil), matches: .systemBlue)
     }
 
+    func testSaveRemovesAutoDisplayColorAndMarkerFromPersistedRTF() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Auto", content: "")
+        context.insert(note)
+        try context.save()
+
+        let attributedText = NSMutableAttributedString(string: "Auto body")
+        let fullRange = NSRange(location: 0, length: attributedText.length)
+        attributedText.addAttribute(.font, value: NSFont.boldSystemFont(ofSize: 18), range: fullRange)
+        attributedText.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: fullRange)
+        attributedText.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
+        attributedText.addAttribute(.autoTextColorDisplay, value: true, range: fullRange)
+
+        try MacNotePersistenceAdapter(context: context).save(note: note, attributedContent: attributedText)
+
+        XCTAssertEqual(note.content, "Auto body")
+        let decodedText = try decodeRawStoredRTF(from: note)
+        XCTAssertEqual(decodedText.string, "Auto body")
+        XCTAssertNil(decodedText.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        XCTAssertNil(decodedText.attribute(.autoTextColorDisplay, at: 0, effectiveRange: nil))
+        XCTAssertNotNil(decodedText.attribute(.font, at: 0, effectiveRange: nil))
+        XCTAssertEqual(decodedText.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int, NSUnderlineStyle.single.rawValue)
+    }
+
+    func testSavePreservesExplicitColorBesideAutoText() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Mixed", content: "")
+        context.insert(note)
+        try context.save()
+
+        let attributedText = NSMutableAttributedString(string: "AB")
+        attributedText.addAttribute(.foregroundColor, value: NSColor.textColor, range: NSRange(location: 0, length: 1))
+        attributedText.addAttribute(.autoTextColorDisplay, value: true, range: NSRange(location: 0, length: 1))
+        attributedText.addAttribute(.foregroundColor, value: NSColor.systemRed, range: NSRange(location: 1, length: 1))
+
+        try MacNotePersistenceAdapter(context: context).save(note: note, attributedContent: attributedText)
+
+        let decodedText = try decodeRawStoredRTF(from: note)
+        XCTAssertNil(decodedText.attribute(.foregroundColor, at: 0, effectiveRange: nil))
+        try assertColor(decodedText.attribute(.foregroundColor, at: 1, effectiveRange: nil), matches: .systemRed)
+    }
+
     func testSavePreservesExplicitNonDefaultColor() throws {
         let container = try makeInMemoryContainer()
         let context = container.mainContext
@@ -324,6 +368,15 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
             NotePhotoAttachment.self,
             PinnedThought.self,
             configurations: configuration
+        )
+    }
+
+    private func decodeRawStoredRTF(from note: Note) throws -> NSAttributedString {
+        let data = try XCTUnwrap(note.richTextContentData)
+        return try NSAttributedString(
+            data: data,
+            options: [.documentType: NSAttributedString.DocumentType.rtf],
+            documentAttributes: nil
         )
     }
 
