@@ -3410,6 +3410,66 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(incomingQueue.pendingBatches.map(\.id), [remoteBatch.id])
     }
 
+    func testRuntimePreservesEveryIncomingBoundaryFailureClassificationAndBatchID() async throws {
+        let cases: [(SyncConvergenceIncomingLocalBoundaryFailure, SyncBatchDrainFailureKind)] = [
+            (.localCaptureFailed(noteID: UUID()), .localBoundaryCapture),
+            (.localPersistenceFailed(noteID: UUID()), .localBoundaryPersistence),
+            (.boundaryInvariantViolation(noteID: UUID()), .localBoundaryInvariant),
+            (.localStateChanged(noteID: UUID()), .staleAuthoritativeState)
+        ]
+
+        for (boundaryFailure, expectedKind) in cases {
+            let container = try makeContainer(isStoredInMemoryOnly: true)
+            let context = container.mainContext
+            let noteID: UUID
+            switch boundaryFailure {
+            case .localCaptureFailed(let id), .localPersistenceFailed(let id),
+                 .boundaryInvariantViolation(let id), .localStateChanged(let id):
+                noteID = id
+            }
+            let note = Note(title: "Shared", content: "Hello")
+            note.id = noteID
+            context.insert(note)
+            try context.save()
+
+            let incomingQueue = FileBackedSyncBatchQueue(fileURL: nil)
+            let presentation = RecordingPresentationAdapter()
+            let boundary = FailingIncomingLocalBoundaryAdapter(failure: boundaryFailure)
+            let runtime = SyncConvergenceRuntime(
+                context: context,
+                convergenceQueue: incomingQueue,
+                localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+                localBatchTransportAdapter: AcceptingLocalBatchTransport(),
+                presentationAdapter: presentation,
+                incomingLocalBoundaryAdapter: boundary
+            )
+            let batch = SyncBatch(
+                id: UUID(),
+                originDeviceID: UUID(),
+                createdAt: Date(timeIntervalSince1970: 20),
+                changes: [.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: "Hello".utf16.count,
+                    text: " remote",
+                    modifiedAt: Date(timeIntervalSince1970: 20),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello")
+                ))]
+            )
+
+            let outcome = await runtime.submitRemoteBatch(batch)
+
+            guard case .blocked(let failure) = outcome else {
+                return XCTFail("Expected boundary failure to block incoming planning")
+            }
+            XCTAssertEqual(failure.batchID, batch.id)
+            XCTAssertEqual(failure.kind, expectedKind)
+            XCTAssertEqual(note.content, "Hello")
+            XCTAssertEqual(incomingQueue.pendingBatches.map(\.id), [batch.id])
+            XCTAssertEqual(try context.fetchCount(FetchDescriptor<IncorporatedSyncBatch>()), 0)
+            XCTAssertEqual(presentation.requestCount, 0)
+        }
+    }
+
     func testRuntimeRegistersPendingLocalEvidenceBeforeIncomingPlanningWhenTransportUnavailable() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -8649,6 +8709,18 @@ private struct CompletingPresentationAdapter: SyncConvergencePresentationAdapter
         for request: SyncConvergencePresentationRequest
     ) async -> SyncConvergencePostCommitAdapterResult {
         .verifiedComplete
+    }
+}
+
+@MainActor
+private final class RecordingPresentationAdapter: SyncConvergencePresentationAdapter {
+    private(set) var requestCount = 0
+
+    func refreshPresentation(
+        for request: SyncConvergencePresentationRequest
+    ) async -> SyncConvergencePostCommitAdapterResult {
+        requestCount += 1
+        return .verifiedComplete
     }
 }
 

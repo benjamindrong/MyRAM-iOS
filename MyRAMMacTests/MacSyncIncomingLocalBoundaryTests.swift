@@ -99,7 +99,7 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         XCTAssertEqual(result.failure, .localStateChanged(noteID: noteID))
     }
 
-    func testBoundaryPreparerContinuesAfterSelectedNoBodyResult() async throws {
+    func testMultiNoteBoundaryContinuesAfterSelectedNoBodySaveAndExtractsLaterPendingBodyObligation() async throws {
         let selectedID = Self.noteID(10)
         let laterID = Self.noteID(11)
         let obligation = try makeCapturedObligation(noteID: laterID)
@@ -149,7 +149,7 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         XCTAssertEqual(visitedNoteIDs, [firstID, lastID])
     }
 
-    func testMultiNoteBoundaryStopsOnSemanticFailureBeforeLaterNote() async {
+    func testMultiNoteBoundaryStopsOnSemanticFailureBeforeLaterPlanning() async {
         let selectedID = Self.noteID(15)
         let laterID = Self.noteID(16)
         var extractedLaterNote = false
