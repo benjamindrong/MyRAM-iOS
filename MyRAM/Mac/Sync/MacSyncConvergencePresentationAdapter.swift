@@ -22,7 +22,7 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
     func refreshPresentation(for request: SyncConvergencePresentationRequest) async -> SyncConvergencePostCommitAdapterResult {
         guard request.noteID == request.committedNote.noteID else { return .failed }
         guard request.committedBodyHash == SyncBatchContentHash.sha256Hex(for: request.committedNote.body) else { return .failed }
-        guard request.committedPostBodyHash == SyncBatchContentHash.sha256Hex(for: request.committedNote.body) else { return .failed }
+        guard request.routing == .none || request.committedPostBodyHash == SyncBatchContentHash.sha256Hex(for: request.committedNote.body) else { return .failed }
 
         surface.refreshNotesList()
 
