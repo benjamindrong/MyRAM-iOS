@@ -1762,6 +1762,7 @@ final class MyRAMTests: XCTestCase {
         note.id = UUID()
         note.modifiedAt = Date(timeIntervalSince1970: 100)
         context.insert(note)
+        try context.save()
         let acknowledgedChange = SyncChange(
             entityType: .item,
             entityID: note.id.uuidString,
