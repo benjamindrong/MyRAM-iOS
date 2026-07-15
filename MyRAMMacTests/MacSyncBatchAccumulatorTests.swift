@@ -138,6 +138,73 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         XCTAssertEqual(ready?.changes, [title.change])
     }
 
+
+    func testLaterSaveCanQueueAfterEarlierObligationWasExtracted() async throws {
+        let accumulator = makeAccumulator()
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000304")!
+        let firstDate = Date(timeIntervalSince1970: 900)
+        let secondDate = Date(timeIntervalSince1970: 910)
+        let first = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: noteID,
+            oldBody: "A",
+            newBody: "AB",
+            modifiedAt: firstDate,
+            bodyHashCapabilityEnabled: true
+        )
+        let second = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: noteID,
+            oldBody: "AB",
+            newBody: "ABC",
+            modifiedAt: secondDate,
+            bodyHashCapabilityEnabled: true
+        )
+
+        await accumulator.record(first, at: firstDate)
+        let firstObligation = await accumulator.recordAndTakeBoundaryObligation(
+            adding: [],
+            affecting: noteID,
+            at: firstDate.addingTimeInterval(1)
+        )
+        await accumulator.record(second, at: secondDate)
+        let secondObligation = await accumulator.takeReadyBatch(at: secondDate.addingTimeInterval(5))
+
+        XCTAssertEqual(firstObligation?.batch.changes, first.map(\.change))
+        XCTAssertEqual(secondObligation?.changes, second.map(\.change))
+    }
+
+    func testDisjointLaterSaveCanProgressAfterEarlierBoundaryExtraction() async throws {
+        let accumulator = makeAccumulator()
+        let firstNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000000305")!
+        let secondNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000000306")!
+        let firstDate = Date(timeIntervalSince1970: 920)
+        let secondDate = Date(timeIntervalSince1970: 930)
+        let first = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: firstNoteID,
+            oldBody: "one",
+            newBody: "one!",
+            modifiedAt: firstDate,
+            bodyHashCapabilityEnabled: true
+        )
+        let second = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+            noteID: secondNoteID,
+            oldBody: "two",
+            newBody: "two!",
+            modifiedAt: secondDate,
+            bodyHashCapabilityEnabled: true
+        )
+
+        await accumulator.record(first, at: firstDate)
+        _ = await accumulator.recordAndTakeBoundaryObligation(
+            adding: [],
+            affecting: firstNoteID,
+            at: firstDate.addingTimeInterval(1)
+        )
+        await accumulator.record(second, at: secondDate)
+        let secondObligation = await accumulator.takeReadyBatch(at: secondDate.addingTimeInterval(5))
+
+        XCTAssertEqual(secondObligation?.changes, second.map(\.change))
+    }
+
     private func makeAccumulator() -> MacSyncBatchAccumulator {
         MacSyncBatchAccumulator(
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
