@@ -240,6 +240,71 @@ enum MacEditorSaveOwnership {
     }
 }
 
+/// Owns the editor-visible consequences of a save completion so stale work cannot mutate newer state.
+struct MacEditorSaveState {
+    let selectedNoteID: UUID?
+    let editorRevision: UUID
+    var hasUnsavedChanges: Bool
+    var saveError: String?
+
+    mutating func pendingResult(
+        for completion: MacNoteSaveOperationCompletion,
+        requestedAttempt: MacEditorSaveAttempt
+    ) -> MacPendingSaveResult {
+        switch completion {
+        case .failed(let attempt, let failure):
+            setSaveError(for: attempt, failure: failure)
+            return .failed(failure)
+        case .supersededBeforeStart:
+            return .superseded(noteID: requestedAttempt.noteID)
+        case .completed(let attempt, let mutationKind, _):
+            guard owns(requestedAttempt), owns(attempt) else {
+                return .superseded(noteID: requestedAttempt.noteID)
+            }
+            hasUnsavedChanges = false
+            saveError = nil
+            switch mutationKind {
+            case .none:
+                return .noChanges
+            case .nonBodyOnly:
+                return .savedWithoutBodyMutation
+            case .body:
+                return .savedWithPendingBodyMutation(noteID: attempt.noteID)
+            }
+        }
+    }
+
+    mutating func setSaveError(for attempt: MacEditorSaveAttempt, failure: MacPendingSaveFailure) {
+        guard owns(attempt) else { return }
+        switch failure {
+        case .noteMissing:
+            saveError = "Unable to save note: note was not found."
+        case .captureFailed:
+            saveError = "Unable to save note: local edit capture failed."
+        case .persistenceFailed:
+            saveError = "Unable to save note: local edit persistence failed."
+        }
+    }
+
+    mutating func markBoundaryReadyIfOwned(
+        requestedAttempt: MacEditorSaveAttempt,
+        completingAttempt: MacEditorSaveAttempt,
+        result: MacIncomingBoundaryResult
+    ) {
+        guard case .ready = result, owns(requestedAttempt), owns(completingAttempt) else { return }
+        hasUnsavedChanges = false
+        saveError = nil
+    }
+
+    private func owns(_ attempt: MacEditorSaveAttempt) -> Bool {
+        MacEditorSaveOwnership.owns(
+            selectedNoteID: selectedNoteID,
+            editorRevision: editorRevision,
+            attempt: attempt
+        )
+    }
+}
+
 enum MacIncomingBoundaryCompletionPolicy {
     static func result(
         for completion: MacNoteSaveOperationCompletion,

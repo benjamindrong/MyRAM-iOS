@@ -398,37 +398,19 @@ struct MyRAMMacRootView: View {
         for completion: MacNoteSaveOperationCompletion,
         requestedAttempt: MacEditorSaveAttempt
     ) -> MacPendingSaveResult {
-        switch completion {
-        case .failed(let attempt, let failure):
-            setSaveError(for: attempt, failure: failure)
-            return .failed(failure)
-        case .supersededBeforeStart:
-            return .superseded(noteID: requestedAttempt.noteID)
-        case .completed(let attempt, let mutationKind, _):
+        if case .completed = completion {
             refreshNotesAfterSave()
-            guard MacEditorSaveOwnership.owns(
-                selectedNoteID: selectedNoteID,
-                editorRevision: editorRevision,
-                attempt: requestedAttempt
-            ), MacEditorSaveOwnership.owns(
-                selectedNoteID: selectedNoteID,
-                editorRevision: editorRevision,
-                attempt: attempt
-            ) else {
-                return .superseded(noteID: requestedAttempt.noteID)
-            }
-            hasUnsavedChanges = false
-            saveError = nil
-            resumeSyncConvergence()
-            switch mutationKind {
-            case .none:
-                return .noChanges
-            case .nonBodyOnly:
-                return .savedWithoutBodyMutation
-            case .body:
-                return .savedWithPendingBodyMutation(noteID: attempt.noteID)
-            }
         }
+        var state = editorSaveState
+        let result = state.pendingResult(for: completion, requestedAttempt: requestedAttempt)
+        applyEditorSaveState(state)
+        switch result {
+        case .noChanges, .savedWithoutBodyMutation, .savedWithPendingBodyMutation:
+            resumeSyncConvergence()
+        case .superseded, .failed:
+            break
+        }
+        return result
     }
 
     private func boundaryResult(
@@ -437,7 +419,9 @@ struct MyRAMMacRootView: View {
     ) async -> MacIncomingBoundaryResult {
         switch completion {
         case .failed(let attempt, let failure):
-            setSaveError(for: attempt, failure: failure)
+            var state = editorSaveState
+            state.setSaveError(for: attempt, failure: failure)
+            applyEditorSaveState(state)
             return .failed(failure)
         case .supersededBeforeStart:
             return .staleLocalState(noteID: requestedAttempt.noteID)
@@ -460,10 +444,13 @@ struct MyRAMMacRootView: View {
                 requestedAttemptStillOwnsEditor: stillOwnsEditorState(requestedAttempt),
                 completingAttemptStillOwnsEditor: stillOwnsEditorState(attempt)
             )
-            if case .ready = result {
-                hasUnsavedChanges = false
-                saveError = nil
-            }
+            var state = editorSaveState
+            state.markBoundaryReadyIfOwned(
+                requestedAttempt: requestedAttempt,
+                completingAttempt: attempt,
+                result: result
+            )
+            applyEditorSaveState(state)
             return result
         }
     }
@@ -476,16 +463,18 @@ struct MyRAMMacRootView: View {
         )
     }
 
-    private func setSaveError(for attempt: MacEditorSaveAttempt, failure: MacPendingSaveFailure) {
-        guard stillOwnsEditorState(attempt) else { return }
-        switch failure {
-        case .noteMissing:
-            saveError = "Unable to save note: note was not found."
-        case .captureFailed:
-            saveError = "Unable to save note: local edit capture failed."
-        case .persistenceFailed:
-            saveError = "Unable to save note: local edit persistence failed."
-        }
+    private var editorSaveState: MacEditorSaveState {
+        MacEditorSaveState(
+            selectedNoteID: selectedNoteID,
+            editorRevision: editorRevision,
+            hasUnsavedChanges: hasUnsavedChanges,
+            saveError: saveError
+        )
+    }
+
+    private func applyEditorSaveState(_ state: MacEditorSaveState) {
+        hasUnsavedChanges = state.hasUnsavedChanges
+        saveError = state.saveError
     }
 
     private func refreshNotesAfterSave() {

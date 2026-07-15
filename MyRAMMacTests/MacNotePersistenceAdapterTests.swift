@@ -256,6 +256,14 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertEqual(unrelated.content, "Dirty but unsaved")
         XCTAssertTrue(context.hasChanges)
         XCTAssertEqual(saveAttempts, 1, "Failure recovery must not issue a second shared-context save.")
+
+        let targetID = target.id
+        let unrelatedID = unrelated.id
+        let freshContext = ModelContext(container)
+        let persistedTarget = try XCTUnwrap(freshContext.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == targetID })).first)
+        let persistedUnrelated = try XCTUnwrap(freshContext.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == unrelatedID })).first)
+        XCTAssertEqual(persistedTarget.content, "Before")
+        XCTAssertEqual(persistedUnrelated.content, "Original")
     }
 
     func testFailedPreparedSaveLeavesMountedEditorUnsavedAndRetryable() throws {

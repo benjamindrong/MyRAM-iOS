@@ -3470,6 +3470,53 @@ final class MyRAMTests: XCTestCase {
         }
     }
 
+    func testRuntimeReevaluatesQueuedIncomingBatchAfterStaleBoundaryResumes() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let note = Note(title: "Shared", content: "Hello")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        let queue = FileBackedSyncBatchQueue(fileURL: nil)
+        let boundary = SequencedIncomingLocalBoundaryAdapter(results: [
+            .failed(.localStateChanged(noteID: noteID)),
+            .ready
+        ])
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: queue,
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: AcceptingLocalBatchTransport(),
+            presentationAdapter: CompletingPresentationAdapter(),
+            incomingLocalBoundaryAdapter: boundary
+        )
+        let batch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 20),
+            changes: [.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                noteID: noteID,
+                utf16Offset: "Hello".utf16.count,
+                text: " remote",
+                modifiedAt: Date(timeIntervalSince1970: 20),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello")
+            ))]
+        )
+
+        guard case .blocked = await runtime.submitRemoteBatch(batch) else {
+            return XCTFail("The stale boundary must keep the incoming batch queued")
+        }
+        XCTAssertEqual(queue.pendingBatches.map(\.id), [batch.id])
+
+        _ = await runtime.resumePendingWork()
+
+        XCTAssertEqual(boundary.prepareCount, 2)
+        XCTAssertTrue(queue.pendingBatches.isEmpty)
+        XCTAssertEqual(note.content, "Hello remote")
+    }
+
     func testRuntimeRegistersPendingLocalEvidenceBeforeIncomingPlanningWhenTransportUnavailable() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -8628,6 +8675,24 @@ private final class FailingIncomingLocalBoundaryAdapter: SyncConvergenceIncoming
         affecting noteIDs: Set<UUID>
     ) async -> SyncConvergenceIncomingLocalBoundaryPreparation {
         .failed(failure)
+    }
+}
+
+@MainActor
+private final class SequencedIncomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter {
+    private var results: [SyncConvergenceIncomingLocalBoundaryPreparation]
+    private(set) var prepareCount = 0
+
+    init(results: [SyncConvergenceIncomingLocalBoundaryPreparation]) {
+        self.results = results
+    }
+
+    func prepareForIncomingBodyMutation(
+        affecting noteIDs: Set<UUID>
+    ) async -> SyncConvergenceIncomingLocalBoundaryPreparation {
+        prepareCount += 1
+        guard !results.isEmpty else { return .ready }
+        return results.removeFirst()
     }
 }
 

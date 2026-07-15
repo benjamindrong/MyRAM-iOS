@@ -281,54 +281,131 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
     func testOrdinarySaveCompletionDoesNotClearNewerUnsavedRevision() {
         let noteID = Self.noteID(50)
         let savedAttempt = makeAttempt(noteID: noteID, revision: Self.noteID(51), body: "A")
-
-        XCTAssertFalse(MacEditorSaveOwnership.owns(
+        let mountedBody = NSAttributedString(string: "B")
+        var state = MacEditorSaveState(
             selectedNoteID: noteID,
             editorRevision: Self.noteID(52),
-            attempt: savedAttempt
-        ))
+            hasUnsavedChanges: true,
+            saveError: nil
+        )
+
+        let result = state.pendingResult(for: completed(savedAttempt), requestedAttempt: savedAttempt)
+
+        XCTAssertEqual(result, .superseded(noteID: noteID))
+        XCTAssertTrue(state.hasUnsavedChanges)
+        XCTAssertNil(state.saveError)
+        XCTAssertEqual(mountedBody.string, "B")
     }
 
     func testStaleSaveCompletionDoesNotClearNewerSaveError() {
         let noteID = Self.noteID(53)
         let staleAttempt = makeAttempt(noteID: noteID, revision: Self.noteID(54), body: "A")
-
-        XCTAssertFalse(MacEditorSaveOwnership.owns(
+        var state = MacEditorSaveState(
             selectedNoteID: noteID,
             editorRevision: Self.noteID(55),
-            attempt: staleAttempt
-        ))
+            hasUnsavedChanges: true,
+            saveError: "Newer save failed"
+        )
+
+        XCTAssertEqual(state.pendingResult(for: completed(staleAttempt), requestedAttempt: staleAttempt), .superseded(noteID: noteID))
+        XCTAssertEqual(state.saveError, "Newer save failed")
     }
 
     func testAttemptWithoutCurrentEditorOwnershipCannotSetOrClearSaveError() {
         let staleAttempt = makeAttempt(noteID: Self.noteID(56), revision: Self.noteID(57), body: "A")
-
-        XCTAssertFalse(MacEditorSaveOwnership.owns(
+        var state = MacEditorSaveState(
             selectedNoteID: Self.noteID(58),
             editorRevision: Self.noteID(57),
-            attempt: staleAttempt
-        ))
+            hasUnsavedChanges: true,
+            saveError: "Current error"
+        )
+
+        state.setSaveError(for: staleAttempt, failure: .persistenceFailed(noteID: staleAttempt.noteID))
+        XCTAssertEqual(state.saveError, "Current error")
     }
 
     func testCurrentRevisionPersistenceFailureReturnsFailedAndSetsSaveError() {
         let noteID = Self.noteID(59)
         let attempt = makeAttempt(noteID: noteID, revision: Self.noteID(60), body: "A")
-
-        XCTAssertTrue(MacEditorSaveOwnership.owns(
+        var state = MacEditorSaveState(
             selectedNoteID: noteID,
             editorRevision: attempt.editorRevision,
-            attempt: attempt
-        ))
+            hasUnsavedChanges: true,
+            saveError: nil
+        )
+
+        let result = state.pendingResult(
+            for: .failed(attempt: attempt, failure: .persistenceFailed(noteID: noteID)),
+            requestedAttempt: attempt
+        )
+        XCTAssertEqual(result, .failed(.persistenceFailed(noteID: noteID)))
+        XCTAssertEqual(state.saveError, "Unable to save note: local edit persistence failed.")
+        XCTAssertTrue(state.hasUnsavedChanges)
     }
 
-    func testFlushWaitsForInFlightSameRevisionPublicationBeforeReportingSuccess() {
-        XCTAssertFalse(MacEditorSaveOwnership.flushMayProceed(for: .superseded(noteID: Self.noteID(61))))
-        XCTAssertTrue(MacEditorSaveOwnership.flushMayProceed(for: .savedWithPendingBodyMutation(noteID: Self.noteID(61))))
+    func testFlushWaitsForInFlightSameRevisionPublicationBeforeReportingSuccess() async {
+        let coordinator = MacNoteSaveSingleFlight()
+        let noteID = Self.noteID(61)
+        let revision = Self.noteID(62)
+        let attempt = makeAttempt(noteID: noteID, revision: revision, body: "A")
+        let gate = MacSaveTestGate()
+        var persistenceCount = 0
+        var publicationFinished = false
+
+        let save = Task { @MainActor in
+            await coordinator.complete(attempt: attempt, stillOwnsAttempt: { true }) {
+                persistenceCount += 1
+                await gate.waitForRelease()
+                publicationFinished = true
+                return self.completed(attempt)
+            }
+        }
+        await gate.waitUntilBlocked()
+        let flush = Task { @MainActor in
+            await coordinator.complete(attempt: attempt, stillOwnsAttempt: { true }) {
+                persistenceCount += 1
+                return self.completed(attempt)
+            }
+        }
+
+        XCTAssertEqual(persistenceCount, 1)
+        XCTAssertFalse(publicationFinished)
+        await gate.release()
+        let completion = await flush.value
+        _ = await save.value
+        XCTAssertTrue(publicationFinished)
+        XCTAssertEqual(persistenceCount, 1)
+        XCTAssertTrue(MacEditorSaveOwnership.flushMayProceed(for: pendingResult(for: completion)))
     }
 
-    func testFlushSavesCurrentRevisionAfterCancellingItsDebounceWhileOlderRevisionIsActive() {
-        XCTAssertFalse(MacEditorSaveOwnership.flushMayProceed(for: .superseded(noteID: Self.noteID(62))))
-        XCTAssertTrue(MacEditorSaveOwnership.flushMayProceed(for: .savedWithoutBodyMutation))
+    func testFlushSavesCurrentRevisionAfterCancellingItsDebounceWhileOlderRevisionIsActive() async {
+        let coordinator = MacNoteSaveSingleFlight()
+        let noteID = Self.noteID(63)
+        let gate = MacSaveTestGate()
+        let older = makeAttempt(noteID: noteID, revision: Self.noteID(64), body: "A")
+        let current = makeAttempt(noteID: noteID, revision: Self.noteID(65), body: "B")
+        var persistedBodies: [String] = []
+
+        let oldSave = Task { @MainActor in
+            await coordinator.complete(attempt: older, stillOwnsAttempt: { false }) {
+                persistedBodies.append("A")
+                await gate.waitForRelease()
+                return self.completed(older)
+            }
+        }
+        await gate.waitUntilBlocked()
+        let flush = Task { @MainActor in
+            await coordinator.complete(attempt: current, stillOwnsAttempt: { true }) {
+                persistedBodies.append("B")
+                return self.completed(current)
+            }
+        }
+        await gate.release()
+        _ = await oldSave.value
+        let completion = await flush.value
+
+        XCTAssertEqual(persistedBodies, ["A", "B"])
+        XCTAssertEqual(pendingResult(for: completion), .savedWithPendingBodyMutation(noteID: noteID))
     }
 
     func testIncomingBoundaryCannotBypassInFlightOrdinarySaveForSameNote() async {
@@ -457,6 +534,24 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
 
     private func completed(_ attempt: MacEditorSaveAttempt) -> MacNoteSaveOperationCompletion {
         .completed(attempt: attempt, mutationKind: .body, publication: .ordinaryRecorded)
+    }
+
+    private func pendingResult(for completion: MacNoteSaveOperationCompletion) -> MacPendingSaveResult {
+        switch completion {
+        case .completed(let attempt, let mutationKind, _):
+            switch mutationKind {
+            case .none:
+                return .noChanges
+            case .nonBodyOnly:
+                return .savedWithoutBodyMutation
+            case .body:
+                return .savedWithPendingBodyMutation(noteID: attempt.noteID)
+            }
+        case .supersededBeforeStart(let attempt):
+            return .superseded(noteID: attempt.noteID)
+        case .failed(_, let failure):
+            return .failed(failure)
+        }
     }
 }
 
