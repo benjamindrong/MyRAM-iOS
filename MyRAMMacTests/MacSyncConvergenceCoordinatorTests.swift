@@ -112,6 +112,58 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         )
     }
 
+    func testRelaunchResumesDurableLocalObligationAfterFailedTransportEnqueue() async throws {
+        let localObligationURL = temporaryQueueFileURL(named: "mac-local-obligation-queue.json")
+        let unsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
+        let failingUnsentQueue = FileBackedSyncBatchQueue(fileURL: unsentURL)
+        failingUnsentQueue.injectPersistenceFailureForNextWrite()
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let noteID = Self.uuid(5)
+        let note = Note(title: "Before", content: "Body")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+        note.title = "After relaunch"
+        try context.save()
+        let batch = titleBatch(idSuffix: 23, noteID: noteID, title: "After relaunch")
+        let obligation = SyncConvergenceLocalObligation(
+            batch: batch,
+            capturedChanges: [SyncConvergenceCapturedLocalChange(change: batch.changes[0], evidence: nil)]
+        )
+        let failingController = try makeController(unsentBatchQueue: failingUnsentQueue)
+        let firstCoordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: failingController,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: readyBoundarySurface(),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: localObligationURL
+        )
+        await firstCoordinator.submitLocalObligation(obligation)
+        XCTAssertEqual(
+            FileBackedSyncConvergenceLocalObligationQueue(fileURL: localObligationURL).pendingObligations,
+            [obligation]
+        )
+
+        let resumedController = try makeController(unsentBatchQueueFileURL: unsentURL)
+        let resumedCoordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: resumedController,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: readyBoundarySurface(),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: localObligationURL
+        )
+        await resumedCoordinator.resumePendingWork()
+
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: unsentURL).pendingBatches, [batch])
+        XCTAssertEqual(
+            FileBackedSyncConvergenceLocalObligationQueue(fileURL: localObligationURL).pendingObligations,
+            []
+        )
+    }
+
     private static func uuid(_ suffix: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", suffix))!
     }
@@ -149,9 +201,13 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
     }
 
     private func makeController() throws -> MacSyncBatchController {
+        try makeController(unsentBatchQueueFileURL: nil)
+    }
+
+    private func makeController(unsentBatchQueueFileURL: URL?) throws -> MacSyncBatchController {
         MacSyncBatchController(
             context: try makeInMemoryContainer().mainContext,
-            unsentBatchQueueFileURL: nil,
+            unsentBatchQueueFileURL: unsentBatchQueueFileURL,
             startsNetworking: false
         )
     }
