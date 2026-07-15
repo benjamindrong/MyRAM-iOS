@@ -90,6 +90,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             .deletingLastPathComponent()
         let checkedFiles = [
             "MyRAM/Mac/MyRAMMacRootView.swift",
+            "MyRAM/Mac/MacNotePersistenceAdapter.swift",
             "MyRAM/Mac/Sync/MacSyncBatchController.swift",
             "MyRAM/Mac/Sync/MacSyncBatchAccumulator.swift",
             "MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift",
@@ -105,6 +106,8 @@ final class MacSyncBatchControllerTests: XCTestCase {
             "MacAppliedSyncBatch",
             "submitLocalBatch(",
             "bodyTextChanged(",
+            "record(_ change: SyncBatchChange",
+            "func record(_ change",
             "import UIKit"
         ]
 
