@@ -64,6 +64,7 @@
 		BCA12201000000000000000B /* MacSyncBatchControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */; };
 		BCA162010000000000101 /* MacSyncConvergencePresentationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000101 /* MacSyncConvergencePresentationAdapterTests.swift */; };
 		BCA162010000000000102 /* MacSyncConvergenceCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000102 /* MacSyncConvergenceCoordinatorTests.swift */; };
+		BCA162010000000000103 /* MacSyncIncomingLocalBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000103 /* MacSyncIncomingLocalBoundaryTests.swift */; };
 		C07100342FF1600000000001 /* MacLegacySyncReceiverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100352FF1600000000001 /* MacLegacySyncReceiverTests.swift */; };
 		BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000001 /* SyncBatchPayload.swift */; };
 		BCA123010000000000000002 /* SyncBatchEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000002 /* SyncBatchEnvelope.swift */; };
@@ -287,6 +288,7 @@
 		BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchControllerTests.swift; sourceTree = "<group>"; };
 		BCA162020000000000101 /* MacSyncConvergencePresentationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConvergencePresentationAdapterTests.swift; sourceTree = "<group>"; };
 		BCA162020000000000102 /* MacSyncConvergenceCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConvergenceCoordinatorTests.swift; sourceTree = "<group>"; };
+		BCA162020000000000103 /* MacSyncIncomingLocalBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncIncomingLocalBoundaryTests.swift; sourceTree = "<group>"; };
 		C07100352FF1600000000001 /* MacLegacySyncReceiverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLegacySyncReceiverTests.swift; sourceTree = "<group>"; };
 		BCA123020000000000000001 /* SyncBatchPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchPayload.swift; sourceTree = "<group>"; };
 		BCA123020000000000000002 /* SyncBatchEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchEnvelope.swift; sourceTree = "<group>"; };
@@ -660,6 +662,7 @@
 				BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */,
 				BCA162020000000000101 /* MacSyncConvergencePresentationAdapterTests.swift */,
 				BCA162020000000000102 /* MacSyncConvergenceCoordinatorTests.swift */,
+				BCA162020000000000103 /* MacSyncIncomingLocalBoundaryTests.swift */,
 				C07100352FF1600000000001 /* MacLegacySyncReceiverTests.swift */,
 				BCA132020000000000000014 /* SyncConvergenceIncorporationTests.swift */,
 				BCA132020000000000000055 /* SyncConvergencePostCommitTests.swift */,
@@ -1196,6 +1199,7 @@
 				BCA12201000000000000000B /* MacSyncBatchControllerTests.swift in Sources */,
 				BCA162010000000000101 /* MacSyncConvergencePresentationAdapterTests.swift in Sources */,
 				BCA162010000000000102 /* MacSyncConvergenceCoordinatorTests.swift in Sources */,
+				BCA162010000000000103 /* MacSyncIncomingLocalBoundaryTests.swift in Sources */,
 				C07100342FF1600000000001 /* MacLegacySyncReceiverTests.swift in Sources */,
 				BCA123010000000000000025 /* SyncBatchUnsentQueueTests.swift in Sources */,
 				BCA132010000000000000015 /* SyncConvergencePlanningTests.swift in Sources */,
