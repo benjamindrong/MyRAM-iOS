@@ -73,6 +73,45 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         XCTAssertEqual(coordinator.pendingIncomingBatchCount, 1)
     }
 
+    func testLocalObligationSurvivesFailedDurableTransportEnqueue() async throws {
+        let localObligationURL = temporaryQueueFileURL(named: "mac-local-obligation-queue.json")
+        let unsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
+        let failingUnsentQueue = FileBackedSyncBatchQueue(fileURL: unsentURL)
+        failingUnsentQueue.injectPersistenceFailureForNextWrite()
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let noteID = Self.uuid(4)
+        let note = Note(title: "Before", content: "Body")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+        note.title = "After"
+        try context.save()
+        let controller = try makeController(unsentBatchQueue: failingUnsentQueue)
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: readyBoundarySurface(),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: localObligationURL
+        )
+        let batch = titleBatch(idSuffix: 22, noteID: noteID, title: "After")
+        let obligation = SyncConvergenceLocalObligation(
+            batch: batch,
+            capturedChanges: [SyncConvergenceCapturedLocalChange(change: batch.changes[0], evidence: nil)]
+        )
+
+        await coordinator.submitLocalObligation(obligation)
+
+        XCTAssertEqual(note.title, "After")
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: unsentURL).pendingBatches, [])
+        XCTAssertEqual(
+            FileBackedSyncConvergenceLocalObligationQueue(fileURL: localObligationURL).pendingObligations,
+            [obligation]
+        )
+    }
+
     private static func uuid(_ suffix: Int) -> UUID {
         UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", suffix))!
     }
@@ -113,6 +152,15 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         MacSyncBatchController(
             context: try makeInMemoryContainer().mainContext,
             unsentBatchQueueFileURL: nil,
+            startsNetworking: false
+        )
+    }
+
+    private func makeController(unsentBatchQueue: FileBackedSyncBatchQueue) throws -> MacSyncBatchController {
+        MacSyncBatchController(
+            context: try makeInMemoryContainer().mainContext,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: unsentBatchQueue,
             startsNetworking: false
         )
     }
