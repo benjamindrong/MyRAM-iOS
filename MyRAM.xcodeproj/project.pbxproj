@@ -27,6 +27,10 @@
 		BC9F1BCF2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */; };
 		BCA104010000000000000001 /* RTFCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA104020000000000000001 /* RTFCoding.swift */; };
 		BCA104010000000000000002 /* RTFCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA104020000000000000001 /* RTFCoding.swift */; };
+		BCA164010000000000000001 /* AttributedTextStorageKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000001 /* AttributedTextStorageKeys.swift */; };
+		BCA164010000000000000002 /* AttributedTextStorageKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000001 /* AttributedTextStorageKeys.swift */; };
+		BCA164010000000000000003 /* MacEditorTextColorPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */; };
+		BCA164010000000000000004 /* MacEditorTextColorPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */; };
 		BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000002 /* MyRAMMacApp.swift */; };
 		BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000003 /* MyRAMMacRootView.swift */; };
 		BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
@@ -250,6 +254,7 @@
 		BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITestsLaunchTests.swift; sourceTree = "<group>"; };
 		BCA105020000000000000001 /* MyRAMMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyRAMMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BCA104020000000000000001 /* RTFCoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTFCoding.swift; sourceTree = "<group>"; };
+		BCA164020000000000000001 /* AttributedTextStorageKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttributedTextStorageKeys.swift; sourceTree = "<group>"; };
 		BCA105020000000000000002 /* MyRAMMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacApp.swift; sourceTree = "<group>"; };
 		BCA105020000000000000003 /* MyRAMMacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacRootView.swift; sourceTree = "<group>"; };
 		BCA106020000000000000001 /* MacNoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteEditorView.swift; sourceTree = "<group>"; };
@@ -259,6 +264,7 @@
 		BCA106020000000000000006 /* MacIncomingSyncApplicationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacIncomingSyncApplicationPolicy.swift; sourceTree = "<group>"; };
 		BCA106020000000000000007 /* MacEditorSyncBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSyncBridge.swift; sourceTree = "<group>"; };
 		BCA106020000000000000008 /* MacNSRangeClamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNSRangeClamp.swift; sourceTree = "<group>"; };
+		BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorTextColorPolicy.swift; sourceTree = "<group>"; };
 		BCA107020000000000000001 /* MacEditorSampleDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSampleDocumentTests.swift; sourceTree = "<group>"; };
 		BCA107020000000000000002 /* MyRAMMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyRAMMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BCA107020000000000000003 /* MacEditorSelectionMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSelectionMapperTests.swift; sourceTree = "<group>"; };
@@ -267,6 +273,7 @@
 		BCA107020000000000000006 /* MacEditorSyncBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSyncBridgeTests.swift; sourceTree = "<group>"; };
 		BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotePersistenceAdapter.swift; sourceTree = "<group>"; };
 		BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotePersistenceAdapterTests.swift; sourceTree = "<group>"; };
+		BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorTextColorPolicyTests.swift; sourceTree = "<group>"; };
 		BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSidebarCollapsePolicy.swift; sourceTree = "<group>"; };
 		BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSidebarCollapsePolicyTests.swift; sourceTree = "<group>"; };
 		BCA122020000000000000001 /* MacSyncModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncModels.swift; sourceTree = "<group>"; };
@@ -488,6 +495,7 @@
 			isa = PBXGroup;
 			children = (
 				BCA104020000000000000001 /* RTFCoding.swift */,
+				BCA164020000000000000001 /* AttributedTextStorageKeys.swift */,
 			);
 			path = Persistence;
 			sourceTree = "<group>";
@@ -505,6 +513,7 @@
 				BCA106020000000000000006 /* MacIncomingSyncApplicationPolicy.swift */,
 				BCA106020000000000000007 /* MacEditorSyncBridge.swift */,
 				BCA106020000000000000008 /* MacNSRangeClamp.swift */,
+				BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */,
 				BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */,
 				BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */,
 			);
@@ -641,6 +650,7 @@
 				BCA107020000000000000005 /* MacIncomingSyncApplicationPolicyTests.swift */,
 				BCA107020000000000000006 /* MacEditorSyncBridgeTests.swift */,
 				BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */,
+				BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */,
 				BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */,
 				BCA122020000000000000006 /* MacSyncDeviceIdentityTests.swift */,
 				BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */,
@@ -973,6 +983,7 @@
 			files = (
 				BC9F1BB42EA47D2F0045FD72 /* Item.swift in Sources */,
 				BCA104010000000000000001 /* RTFCoding.swift in Sources */,
+				BCA164010000000000000001 /* AttributedTextStorageKeys.swift in Sources */,
 				BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */,
 				BCA123010000000000000002 /* SyncBatchEnvelope.swift in Sources */,
 				BCA123010000000000000003 /* MultipeerSyncMessageEnvelope.swift in Sources */,
@@ -1110,7 +1121,9 @@
 				BCA106010000000000000008 /* MacNSRangeClamp.swift in Sources */,
 				BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */,
 				BCA104010000000000000002 /* RTFCoding.swift in Sources */,
+				BCA164010000000000000002 /* AttributedTextStorageKeys.swift in Sources */,
 				BCA109010000000000000001 /* MacNotePersistenceAdapter.swift in Sources */,
+				BCA164010000000000000003 /* MacEditorTextColorPolicy.swift in Sources */,
 				BCA109010000000000000002 /* Note.swift in Sources */,
 				BCA109010000000000000003 /* Folder.swift in Sources */,
 				BCA132010000000000000006 /* MyRAMSchema.swift in Sources */,
@@ -1173,6 +1186,7 @@
 				BCA107010000000000000005 /* MacIncomingSyncApplicationPolicyTests.swift in Sources */,
 				BCA107010000000000000006 /* MacEditorSyncBridgeTests.swift in Sources */,
 				BCA109010000000000000005 /* MacNotePersistenceAdapterTests.swift in Sources */,
+				BCA164010000000000000004 /* MacEditorTextColorPolicyTests.swift in Sources */,
 				BCA10A010000000000000002 /* MacSidebarCollapsePolicyTests.swift in Sources */,
 				BCA122010000000000000006 /* MacSyncDeviceIdentityTests.swift in Sources */,
 				BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */,
