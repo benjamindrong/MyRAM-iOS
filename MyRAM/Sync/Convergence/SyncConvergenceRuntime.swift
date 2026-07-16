@@ -128,7 +128,7 @@ final class SyncConvergenceRuntime {
             case .complete:
                 return .drained(appliedBatchIDs: [])
             case .deferred(let deferred):
-                return .deferred(SyncConvergenceDeferredWork(incoming: [], localObligations: deferred))
+                return .deferred(SyncConvergenceDeferredWork(incoming: [], localObligations: deferred, postCommit: []))
             case .quarantined(let quarantined):
                 return .quarantined(SyncConvergenceQuarantinedWork(items: quarantined))
             case .blocked(let failure):
@@ -197,17 +197,23 @@ final class SyncConvergenceRuntime {
             } catch {
                 return .blocked(SyncBatchDrainFailure(batchID: nil, kind: .corruptHistory))
             }
+            var blockedNoteIDs: Set<UUID> = []
+            var blockedOrigins: Set<UUID> = []
+            var deferredItems: [SyncConvergenceDeferredItem] = []
             for request in pendingRequests {
+                guard request.affectedNoteIDs.isDisjoint(with: blockedNoteIDs) else { continue }
                 let outcome = await postCommitExecutor.execute(request)
-                if let terminal = Self.terminalOutcome(forPostCommit: outcome, batchID: request.sourceBatchID) {
+                if let terminal = Self.handlePostCommitOutcome(
+                    outcome,
+                    for: request,
+                    blockedNoteIDs: &blockedNoteIDs,
+                    deferredItems: &deferredItems
+                ) {
                     return terminal
                 }
             }
 
             var attemptedBatchIDs: Set<UUID> = []
-            var blockedNoteIDs: Set<UUID> = []
-            var blockedOrigins: Set<UUID> = []
-            var deferredItems: [SyncConvergenceDeferredItem] = []
             var madeIncomingProgress = false
 
             while let candidateIndex = SyncConvergenceDrainPassScheduler.nextEligibleIndex(
@@ -252,13 +258,23 @@ final class SyncConvergenceRuntime {
                         appliedBatchIDs.insert(result.batchID)
                         madeIncomingProgress = true
                         let postCommit = await postCommitExecutor.execute(SyncConvergencePostCommitRequest(result: result))
-                        if let terminal = Self.terminalOutcome(forPostCommit: postCommit, batchID: batch.id) {
+                        if let terminal = Self.handlePostCommitOutcome(
+                            postCommit,
+                            for: SyncConvergencePostCommitRequest(result: result),
+                            blockedNoteIDs: &blockedNoteIDs,
+                            deferredItems: &deferredItems
+                        ) {
                             return terminal
                         }
                     case .alreadyIncorporated(let result):
                         madeIncomingProgress = true
                         let postCommit = await postCommitExecutor.execute(SyncConvergencePostCommitRequest(result: result))
-                        if let terminal = Self.terminalOutcome(forPostCommit: postCommit, batchID: batch.id) {
+                        if let terminal = Self.handlePostCommitOutcome(
+                            postCommit,
+                            for: SyncConvergencePostCommitRequest(result: result),
+                            blockedNoteIDs: &blockedNoteIDs,
+                            deferredItems: &deferredItems
+                        ) {
                             return terminal
                         }
                     case .failedBeforeCommit(let failure), .failedAndRolledBack(let failure):
@@ -271,7 +287,12 @@ final class SyncConvergenceRuntime {
                             switch try pendingPostCommitSource.loadPostCommitStatus(forBatchID: cleanupBatchID) {
                             case .pending(let request), .tombstone(let request):
                                 let outcome = await postCommitExecutor.execute(request)
-                                if let terminal = Self.terminalOutcome(forPostCommit: outcome, batchID: cleanupBatchID) {
+                                if let terminal = Self.handlePostCommitOutcome(
+                                    outcome,
+                                    for: request,
+                                    blockedNoteIDs: &blockedNoteIDs,
+                                    deferredItems: &deferredItems
+                                ) {
                                     return terminal
                                 }
                             case .completed:
@@ -306,16 +327,15 @@ final class SyncConvergenceRuntime {
                 drainRequestedWhileActive = true
             } else if !deferredItems.isEmpty || !localDeferredItems.isEmpty {
                 return .deferred(SyncConvergenceDeferredWork(
-                    incoming: deferredItems,
-                    localObligations: localDeferredItems
+                    incoming: deferredItems.filter { $0.domain == .incoming },
+                    localObligations: localDeferredItems,
+                    postCommit: deferredItems.filter { $0.domain == .postCommit }
                 ))
             }
         } while drainRequestedWhileActive
         return .drained(appliedBatchIDs: appliedBatchIDs)
     }
 
-    /// Maps a post-commit executor outcome to a terminal `drain()` result, or `nil` when
-    /// draining should continue with the next queued item.
     private func preserveLifecycleConflicts(in plan: SyncConvergenceBatchPlan) {
         for notePlan in plan.affectedNotePlans {
             guard let effect = notePlan.lifecycleEffect, effect.verdict == .preserveLiveNote else { continue }
@@ -331,17 +351,29 @@ final class SyncConvergenceRuntime {
         }
     }
 
-    private static func terminalOutcome(
-        forPostCommit outcome: SyncConvergencePostCommitOutcome,
-        batchID: UUID?
+    /// Defers presentation-only work by note while preserving globally blocking durability failures.
+    private static func handlePostCommitOutcome(
+        _ outcome: SyncConvergencePostCommitOutcome,
+        for request: SyncConvergencePostCommitRequest,
+        blockedNoteIDs: inout Set<UUID>,
+        deferredItems: inout [SyncConvergenceDeferredItem]
     ) -> SyncConvergenceRuntimeOutcome? {
         switch outcome {
         case .complete:
             return nil
-        case .pending(let pending):
-            return .pending(pending)
+        case .pending(let blocking, let outstanding) where blocking == .presentationRefresh:
+            blockedNoteIDs.formUnion(request.affectedNoteIDs)
+            deferredItems.append(SyncConvergenceDeferredItem(
+                domain: .postCommit,
+                batchID: request.sourceBatchID,
+                affectedNoteIDs: request.affectedNoteIDs,
+                reason: .postCommitPending(outstanding)
+            ))
+            return nil
+        case .pending(_, let outstanding):
+            return .pending(outstanding)
         case .failedBeforeWork:
-            return .blocked(SyncBatchDrainFailure(batchID: batchID, kind: .persistence))
+            return .blocked(SyncBatchDrainFailure(batchID: request.sourceBatchID, kind: .persistence))
         }
     }
 

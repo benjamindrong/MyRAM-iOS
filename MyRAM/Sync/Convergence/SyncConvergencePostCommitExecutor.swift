@@ -105,7 +105,7 @@ actor SyncConvergencePostCommitExecutor {
             }
         }
 
-        return pendingOutcome(for: current.postCommitState)
+        return .complete
     }
 
     private func executePresentationIfNeeded(
@@ -126,7 +126,7 @@ actor SyncConvergencePostCommitExecutor {
             acknowledgedPresentations.formUnion(acknowledged)
             return persistCompletedWork(.presentationRefresh, request: request, loaded: loaded)
         case .stillPending:
-            return pendingOutcome(for: loaded.postCommitState)
+            return pendingOutcome(blocking: .presentationRefresh, for: loaded.postCommitState)
         case .failed:
             return .failedBeforeWork(.persistence)
         }
@@ -137,10 +137,10 @@ actor SyncConvergencePostCommitExecutor {
         loaded: SyncConvergencePostCommitFullRootState
     ) async -> SyncConvergencePostCommitOutcome {
         guard let legacyCleanupAdapter else {
-            return pendingOutcome(for: loaded.postCommitState)
+            return pendingOutcome(blocking: .legacyCleanup, for: loaded.postCommitState)
         }
         guard await legacyCleanupAdapter.performLegacyCleanup(for: request) == .verifiedComplete else {
-            return pendingOutcome(for: loaded.postCommitState)
+            return pendingOutcome(blocking: .legacyCleanup, for: loaded.postCommitState)
         }
         return persistCompletedWork(.legacyCleanup, request: request, loaded: loaded)
     }
@@ -152,10 +152,10 @@ actor SyncConvergencePostCommitExecutor {
     ) -> SyncConvergencePostCommitOutcome {
         do {
             guard try performQueueCleanup(batchIDs: Set(workPayload.queueCleanupBatchIDs)) else {
-                return pendingOutcome(for: loaded.postCommitState)
+                return pendingOutcome(blocking: .queueCleanup, for: loaded.postCommitState)
             }
         } catch {
-            return pendingOutcome(for: loaded.postCommitState)
+            return pendingOutcome(blocking: .queueCleanup, for: loaded.postCommitState)
         }
         return persistCompletedWork(.queueCleanup, request: request, loaded: loaded)
     }
@@ -191,7 +191,7 @@ actor SyncConvergencePostCommitExecutor {
             }
             var pending = original.pendingWork
             pending.insert(.postCommitStatePersistence)
-            return .pending(pending)
+            return .pending(blocking: .postCommitStatePersistence, outstanding: pending)
         }
     }
 
@@ -211,10 +211,10 @@ actor SyncConvergencePostCommitExecutor {
         do {
             queueCleanupComplete = try performQueueCleanup(batchIDs: [request.sourceBatchID])
         } catch {
-            return .pending([.queueCleanup])
+            return .pending(blocking: .queueCleanup, outstanding: [.queueCleanup])
         }
         guard queueCleanupComplete else {
-            return .pending([.queueCleanup])
+            return .pending(blocking: .queueCleanup, outstanding: [.queueCleanup])
         }
         return .complete
     }
@@ -297,9 +297,12 @@ actor SyncConvergencePostCommitExecutor {
         }
     }
 
-    private func pendingOutcome(for state: SyncConvergencePostCommitState) -> SyncConvergencePostCommitOutcome {
-        let pending = state.pendingWork
-        return pending.isEmpty ? .complete : .pending(pending)
+    private func pendingOutcome(
+        blocking: SyncConvergencePostCommitPendingWork,
+        for state: SyncConvergencePostCommitState
+    ) -> SyncConvergencePostCommitOutcome {
+        let outstanding = state.pendingWork
+        return outstanding.isEmpty ? .complete : .pending(blocking: blocking, outstanding: outstanding)
     }
 
     private func acknowledgedPresentationIdentities(

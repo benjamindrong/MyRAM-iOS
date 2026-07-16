@@ -2115,15 +2115,19 @@ final class NotesViewModel: ObservableObject {
     }
 
     private static func syncErrorMessage(for deferred: SyncConvergenceDeferredWork) -> String? {
-        let items = deferred.incoming + deferred.localObligations
+        let items = deferred.incoming + deferred.localObligations + deferred.postCommit
         for item in items {
-            guard case .planning(let reason) = item.reason else { continue }
-            switch reason {
+            switch item.reason {
+            case .planning(let reason):
+                switch reason {
             case .unreconstructableBase:
                 return SyncBatchDrainFailureClassifier.userMessage(
                     for: SyncBatchDrainFailure(batchID: item.batchID, kind: .mismatchedBase)
                 )
             case .unsupportedReconciliation, .historyPressure:
+                continue
+                }
+            case .legacyLocalEvidenceStale, .transportUnavailable, .postCommitPending:
                 continue
             }
         }
