@@ -798,18 +798,22 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             input: creationOnly.input,
             notes: [:],
             committedAt: creationOnly.committedAt,
-            expectedRoutings: [:]
+            expectedRoutings: [creationOnly.noteID: .none]
         )
-        XCTAssertTrue(creationOnlyResult.work.presentationEntries.isEmpty)
+        let creationOnlyEntry = try XCTUnwrap(creationOnlyResult.work.presentationEntries.first)
+        XCTAssertEqual(creationOnlyEntry.routing, .none)
+        XCTAssertTrue(creationOnlyEntry.incrementalOperations.isEmpty)
 
         let creationIdempotent = try makeCreationOnlyFixture(existing: true)
         let creationIdempotentResult = try planIncorporateAndDecode(
             input: creationIdempotent.input,
             notes: [creationIdempotent.noteID: creationIdempotent.initialNote],
             committedAt: creationIdempotent.committedAt,
-            expectedRoutings: [:]
+            expectedRoutings: [creationIdempotent.noteID: .none]
         )
-        XCTAssertTrue(creationIdempotentResult.work.presentationEntries.isEmpty)
+        let creationIdempotentEntry = try XCTUnwrap(creationIdempotentResult.work.presentationEntries.first)
+        XCTAssertEqual(creationIdempotentEntry.routing, .none)
+        XCTAssertTrue(creationIdempotentEntry.incrementalOperations.isEmpty)
 
         let createPlusBody = try makeCreatePlusBodyFixture(existingCreation: false)
         let createPlusBodyResult = try planIncorporateAndDecode(
