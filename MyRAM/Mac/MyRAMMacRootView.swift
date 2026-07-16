@@ -165,6 +165,13 @@ struct MyRAMMacRootView: View {
             selectedNoteID: { selectedNoteID },
             hasUnsavedChanges: { hasUnsavedChanges },
             refreshNotesList: { refreshNotesList() },
+            closeRemovedSelectedEditor: { noteID in
+                guard selectedNoteID == noteID else { return }
+                selectedNoteID = nil
+                attributedText = NSAttributedString(string: "")
+                hasUnsavedChanges = false
+                editorRevision = UUID()
+            },
             applyIncremental: { actions, noteID, authoritativeBody in
                 editorSyncBridge.applyBatch(actions, selectedNoteID: noteID, authoritativeBody: authoritativeBody)
             },

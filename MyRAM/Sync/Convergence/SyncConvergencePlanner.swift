@@ -198,6 +198,43 @@ struct SyncConvergencePlanner {
 
             case .noteBodyReconciled:
                 break
+
+            case .noteLifecycleChanged(let lifecycle):
+                let identity = operationIdentity(
+                    for: change,
+                    in: input.incomingBatch,
+                    operationIndex: operationIndex,
+                    kind: "lifecycle"
+                )
+                let matchesBase = noteStates[lifecycle.noteID].map {
+                    SyncBatchContentHash.sha256Hex(for: $0.title) == lifecycle.baseTitleHash &&
+                    SyncBatchContentHash.sha256Hex(for: $0.body) == lifecycle.baseBodyHash
+                } ?? false
+                let evidence = SyncConvergenceResultEvidence(
+                    batchID: input.incomingBatch.id,
+                    noteID: lifecycle.noteID,
+                    kind: .lifecycle,
+                    preHash: lifecycle.baseBodyHash,
+                    postHash: lifecycle.baseBodyHash,
+                    canonicalReplayKey: identity.canonicalReplayKey
+                )
+                notePlans[lifecycle.noteID, default: PartialNotePlan(noteID: lifecycle.noteID)].lifecycleEffect = SyncConvergenceLifecycleEffect(
+                    verdict: matchesBase ? .apply : .preserveLiveNote,
+                    noteID: lifecycle.noteID,
+                    deletedAt: lifecycle.deletedAt,
+                    modifiedAt: lifecycle.modifiedAt,
+                    title: lifecycle.title,
+                    body: lifecycle.body,
+                    baseTitleHash: lifecycle.baseTitleHash,
+                    baseBodyHash: lifecycle.baseBodyHash,
+                    operationIdentity: identity,
+                    resultEvidence: evidence
+                )
+                operationIdentities.append(identity)
+                resultEvidence.append(evidence)
+                routings[lifecycle.noteID] = !matchesBase || lifecycle.deletedAt == nil
+                    ? SyncConvergencePresentationRouting.none
+                    : .noteRemoved
             }
         }
 
@@ -713,6 +750,7 @@ struct CanonicalPayloadDigestFormatV1 {
         static let insert: UInt32 = 0x00000003
         static let delete: UInt32 = 0x00000004
         static let reconciliation: UInt32 = 0x00000005
+        static let lifecycle: UInt32 = 0x00000006
         static let committedResultSchemaVersion: UInt32 = 0x00000001
         static let committedBodyResult: UInt32 = 0x00000001
         static let committedTitleResult: UInt32 = 0x00000002
@@ -767,6 +805,15 @@ struct CanonicalPayloadDigestFormatV1 {
                 appendString(reconciliation.replacementBody)
                 appendString(reconciliation.replacementContentHash)
                 appendUInt64(SyncConvergenceDateBits.bitPattern(for: reconciliation.modifiedAt))
+            case .noteLifecycleChanged(let lifecycle):
+                appendUInt32(Domain.lifecycle)
+                try appendUUID(lifecycle.noteID)
+                appendOptionalUInt64(lifecycle.deletedAt.map(SyncConvergenceDateBits.bitPattern(for:)))
+                appendUInt64(SyncConvergenceDateBits.bitPattern(for: lifecycle.modifiedAt))
+                appendString(lifecycle.title)
+                appendString(lifecycle.body)
+                appendString(lifecycle.baseTitleHash)
+                appendString(lifecycle.baseBodyHash)
             }
         }
     }
@@ -1994,7 +2041,7 @@ struct SyncConvergencePlanValidator {
         var expectedSnapshotAdditions: [SyncConvergenceSnapshotAddition] = []
         var expectedResultEvidence: [SyncConvergenceResultEvidence] = []
         for notePlan in plan.affectedNotePlans {
-            guard notePlan.creationEffect != nil || notePlan.bodyEffect != nil || notePlan.titleEffect != nil else {
+            guard notePlan.creationEffect != nil || notePlan.bodyEffect != nil || notePlan.titleEffect != nil || notePlan.lifecycleEffect != nil else {
                 return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
             }
             let routing = plan.presentationPlan.noteRoutings[notePlan.noteID]
@@ -2103,8 +2150,8 @@ struct SyncConvergencePlanValidator {
                 expectedResultEvidence.append(bodyPlan.resultEvidence)
             case nil:
                 guard routing == nil || (
-                    routing == SyncConvergencePresentationRouting.none &&
-                    (notePlan.titleEffect != nil || notePlan.creationEffect != nil)
+                    (routing == SyncConvergencePresentationRouting.none || routing == .noteRemoved) &&
+                    (notePlan.titleEffect != nil || notePlan.creationEffect != nil || notePlan.lifecycleEffect != nil)
                 ) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
@@ -2134,6 +2181,21 @@ struct SyncConvergencePlanValidator {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
                 expectedResultEvidence.append(titleEffect.resultEvidence)
+            }
+            if let lifecycleEffect = notePlan.lifecycleEffect {
+                guard lifecycleEffect.noteID == notePlan.noteID,
+                      lifecycleEffect.resultEvidence.kind == .lifecycle,
+                      lifecycleEffect.resultEvidence.noteID == notePlan.noteID,
+                      lifecycleEffect.resultEvidence.batchID == plan.batchID,
+                      lifecycleEffect.resultEvidence.preHash == lifecycleEffect.baseBodyHash,
+                      lifecycleEffect.resultEvidence.postHash == lifecycleEffect.baseBodyHash,
+                      plannedIdentityKeys.contains(lifecycleEffect.operationIdentity.planIdentityKey),
+                      routing == (lifecycleEffect.verdict == .apply && lifecycleEffect.deletedAt != nil
+                          ? SyncConvergencePresentationRouting.noteRemoved
+                          : .none) else {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+                expectedResultEvidence.append(lifecycleEffect.resultEvidence)
             }
         }
         // Incorporation result-evidence rows must be exactly the rows owned by the
@@ -2206,13 +2268,15 @@ private struct PartialNotePlan {
     var creationEffect: SyncConvergenceCreationEffect?
     var bodyEffect: SyncConvergenceBodyEffect?
     var titleEffect: SyncConvergenceTitleEffect?
+    var lifecycleEffect: SyncConvergenceLifecycleEffect?
 
     func finalPlan() -> SyncConvergenceNotePlan {
         SyncConvergenceNotePlan(
             noteID: noteID,
             creationEffect: creationEffect,
             bodyEffect: bodyEffect,
-            titleEffect: titleEffect
+            titleEffect: titleEffect,
+            lifecycleEffect: lifecycleEffect
         )
     }
 }
@@ -2388,6 +2452,8 @@ private extension SyncBatchChange {
             return change.noteID
         case .noteBodyReconciled(let change):
             return change.noteID
+        case .noteLifecycleChanged(let change):
+            return change.noteID
         }
     }
 
@@ -2414,6 +2480,8 @@ private extension SyncBatchChange {
             return "delete"
         case .noteBodyReconciled:
             return "reconciliation"
+        case .noteLifecycleChanged:
+            return "lifecycle"
         }
     }
 
@@ -2421,7 +2489,7 @@ private extension SyncBatchChange {
         switch self {
         case .noteBodyTextInserted, .noteBodyTextDeleted:
             return true
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return false
         }
     }
@@ -2432,7 +2500,7 @@ private extension SyncBatchChange {
             return change.utf16Offset
         case .noteBodyTextDeleted(let change):
             return change.utf16Offset
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return 0
         }
     }
@@ -2441,7 +2509,7 @@ private extension SyncBatchChange {
         switch self {
         case .noteBodyTextDeleted(let change):
             return change.utf16Length
-        case .noteCreated, .noteTitleChanged, .noteBodyTextInserted, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyTextInserted, .noteBodyReconciled, .noteLifecycleChanged:
             return nil
         }
     }
@@ -2450,7 +2518,7 @@ private extension SyncBatchChange {
         switch self {
         case .noteBodyTextInserted(let change):
             return change.text
-        case .noteCreated, .noteTitleChanged, .noteBodyTextDeleted, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyTextDeleted, .noteBodyReconciled, .noteLifecycleChanged:
             return nil
         }
     }
@@ -2459,7 +2527,7 @@ private extension SyncBatchChange {
         switch self {
         case .noteBodyTextDeleted(let change):
             return change.expectedText
-        case .noteCreated, .noteTitleChanged, .noteBodyTextInserted, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyTextInserted, .noteBodyReconciled, .noteLifecycleChanged:
             return nil
         }
     }
@@ -2928,11 +2996,17 @@ struct SyncConvergenceIncorporationExecutor {
             let current = try transaction.loadNote(id: plan.noteID)
             let currentTitle = current?.title ?? plan.creationEffect?.title ?? ""
             let currentBody = current?.body ?? plan.creationEffect?.body ?? ""
+            let lifecycleDeletedAt: Date?? = if let lifecycle = plan.lifecycleEffect, lifecycle.verdict == .apply {
+                .some(lifecycle.deletedAt)
+            } else {
+                nil
+            }
             try transaction.updateNote(SyncConvergenceUpdatedNoteRecord(
                 noteID: plan.noteID,
                 title: plan.plannedResultingTitle ?? currentTitle,
                 body: plan.plannedFinalBody ?? currentBody,
-                modifiedAt: plan.plannedModifiedAt ?? current?.modifiedAt ?? Date(timeIntervalSinceReferenceDate: 0)
+                modifiedAt: plan.plannedModifiedAt ?? current?.modifiedAt ?? Date(timeIntervalSinceReferenceDate: 0),
+                deletedAt: lifecycleDeletedAt
             ))
         }
     }
@@ -3552,7 +3626,7 @@ private extension SyncConvergenceNotePlan {
         return plan.rewriteSafetyReceipt
     }
     var hasMutableNoteEffect: Bool {
-        plannedFinalBody != nil || plannedResultingTitle != nil
+        plannedFinalBody != nil || plannedResultingTitle != nil || lifecycleEffect?.verdict == .apply
     }
 
     var plannedFinalBody: String? {
@@ -3592,7 +3666,7 @@ private extension SyncConvergenceNotePlan {
         if let titleEffect, titleEffect.verdict == .apply {
             return titleEffect.candidateCanonicalKey.modifiedAt
         }
-        return latestBodyModifiedAt
+        return lifecycleEffect?.verdict == .apply ? lifecycleEffect?.modifiedAt ?? latestBodyModifiedAt : latestBodyModifiedAt
     }
 
     var latestBodyModifiedAt: Date? {
@@ -3757,7 +3831,7 @@ private extension SyncConvergenceNotePlan {
     }
 
     func committedPostBodyHash(for routing: SyncConvergencePresentationRouting) throws -> String {
-        if routing == .none {
+        if routing == .none || routing == .noteRemoved {
             return String(repeating: "0", count: 64)
         }
         return try requiredFinalBodyHash()
@@ -3765,7 +3839,7 @@ private extension SyncConvergenceNotePlan {
 
     func expectedPreBodyHash(for routing: SyncConvergencePresentationRouting) throws -> String? {
         switch routing {
-        case .none:
+        case .none, .noteRemoved:
             return nil
         case .incremental:
             switch bodyEffect {

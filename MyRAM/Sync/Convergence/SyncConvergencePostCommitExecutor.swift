@@ -1,7 +1,7 @@
 import Foundation
 
 actor SyncConvergencePostCommitExecutor {
-    private let store: SyncConvergencePostCommitStateStore
+    private let store: SyncConvergencePostCommitStateStore & SyncConvergencePendingPostCommitSource
     private let queueCleanupAdapter: SyncConvergenceQueueCleanupAdapter
     private let legacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapter?
     private let presentationAdapter: SyncConvergencePresentationAdapter
@@ -9,7 +9,7 @@ actor SyncConvergencePostCommitExecutor {
     private var acknowledgedPresentations: Set<AcknowledgedPresentation> = []
 
     init(
-        store: SyncConvergencePostCommitStateStore,
+        store: SyncConvergencePostCommitStateStore & SyncConvergencePendingPostCommitSource,
         queueCleanupAdapter: SyncConvergenceQueueCleanupAdapter,
         legacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapter? = nil,
         presentationAdapter: SyncConvergencePresentationAdapter
@@ -235,8 +235,18 @@ actor SyncConvergencePostCommitExecutor {
         entries: [SyncConvergencePostCommitWorkPayloadV1.PresentationEntry]
     ) async -> SyncConvergencePostCommitAdapterResult {
         guard !entries.isEmpty else { return .failed }
-        for entry in entries.sorted(by: { $0.noteID.uuidString < $1.noteID.uuidString }) {
-            do {
+        do {
+            let pendingRequests = try store.loadPendingPostCommitRequests()
+            let laterPendingPresentationNoteIDs = pendingPresentationNoteIDs(
+                after: request,
+                in: pendingRequests
+            )
+            for entry in entries.sorted(by: { $0.noteID.uuidString < $1.noteID.uuidString }) {
+                // A later pending request for this note owns the current presentation state. Its
+                // own entry will catch the UI up, so the older entry is already satisfied.
+                if laterPendingPresentationNoteIDs.contains(entry.noteID) {
+                    continue
+                }
                 // The note may be gone by the time presentation catches up (deleted, or never
                 // locally present). There's nothing left to refresh for it, so treat it as satisfied
                 // rather than failing the whole batch.
@@ -259,11 +269,32 @@ actor SyncConvergencePostCommitExecutor {
                 guard result == .verifiedComplete else {
                     return result
                 }
-            } catch {
-                return .failed
             }
+        } catch {
+            return .failed
         }
         return .verifiedComplete
+    }
+
+    private func pendingPresentationNoteIDs(
+        after request: SyncConvergencePostCommitRequest,
+        in pendingRequests: [SyncConvergencePostCommitRequest]
+    ) -> Set<UUID> {
+        guard let requestIndex = pendingRequests.firstIndex(where: {
+            $0.persistedIncorporationIdentity == request.persistedIncorporationIdentity
+        }), requestIndex < pendingRequests.index(before: pendingRequests.endIndex) else {
+            return []
+        }
+        return pendingRequests[(requestIndex + 1)...].reduce(into: Set()) { noteIDs, pendingRequest in
+            guard pendingRequest.cleanupPlan.retryPresentationRefresh else { return }
+            // Only a routing that actually re-establishes editor content (or closes the editor
+            // entirely) can be relied on to catch the UI up. A later .none entry only refreshes
+            // list metadata, so it can't stand in for an older incremental/whole-note refresh.
+            for noteID in pendingRequest.affectedNoteIDs {
+                guard let routing = pendingRequest.presentationPlan.noteRoutings[noteID], routing != .none else { continue }
+                noteIDs.insert(noteID)
+            }
+        }
     }
 
     private func pendingOutcome(for state: SyncConvergencePostCommitState) -> SyncConvergencePostCommitOutcome {

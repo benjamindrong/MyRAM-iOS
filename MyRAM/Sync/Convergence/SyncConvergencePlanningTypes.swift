@@ -140,6 +140,35 @@ struct SyncConvergenceNotePlan: Equatable {
     let creationEffect: SyncConvergenceCreationEffect?
     let bodyEffect: SyncConvergenceBodyEffect?
     let titleEffect: SyncConvergenceTitleEffect?
+    let lifecycleEffect: SyncConvergenceLifecycleEffect?
+
+    init(
+        noteID: UUID,
+        creationEffect: SyncConvergenceCreationEffect?,
+        bodyEffect: SyncConvergenceBodyEffect?,
+        titleEffect: SyncConvergenceTitleEffect?,
+        lifecycleEffect: SyncConvergenceLifecycleEffect? = nil
+    ) {
+        self.noteID = noteID
+        self.creationEffect = creationEffect
+        self.bodyEffect = bodyEffect
+        self.titleEffect = titleEffect
+        self.lifecycleEffect = lifecycleEffect
+    }
+}
+
+struct SyncConvergenceLifecycleEffect: Equatable {
+    enum Verdict: Equatable { case apply, preserveLiveNote }
+    let verdict: Verdict
+    let noteID: UUID
+    let deletedAt: Date?
+    let modifiedAt: Date
+    let title: String
+    let body: String
+    let baseTitleHash: String
+    let baseBodyHash: String
+    let operationIdentity: OperationIdentityPayload
+    let resultEvidence: SyncConvergenceResultEvidence
 }
 
 struct SyncConvergenceCreationEffect: Equatable {
@@ -275,6 +304,8 @@ struct SyncConvergencePresentationPlan: Equatable {
 enum SyncConvergencePresentationRouting: Equatable {
     case incremental
     case wholeNoteFallback
+    /// A soft deletion must close any editor still showing the removed note.
+    case noteRemoved
     case none
 }
 
@@ -283,6 +314,7 @@ struct SyncConvergenceResultEvidence: Codable, Equatable, Sendable {
         case body
         case title
         case creation
+        case lifecycle
     }
 
     let batchID: UUID
@@ -294,7 +326,7 @@ struct SyncConvergenceResultEvidence: Codable, Equatable, Sendable {
 }
 
 enum SyncConvergenceNoteEffectKindMembership {
-    static let supportedKinds: Set<String> = ["body", "creation", "title"]
+    static let supportedKinds: Set<String> = ["body", "creation", "title", "lifecycle"]
 
     static func validate(_ kinds: [String], expected: Set<String>? = nil) -> Bool {
         guard Set(kinds).count == kinds.count,
@@ -347,6 +379,17 @@ struct SyncConvergenceMutableNoteRecord: Equatable {
     let body: String
     let createdAt: Date
     let modifiedAt: Date
+    let deletedAt: Date?
+
+    init(noteID: UUID, folderID: UUID?, title: String, body: String, createdAt: Date, modifiedAt: Date, deletedAt: Date? = nil) {
+        self.noteID = noteID
+        self.folderID = folderID
+        self.title = title
+        self.body = body
+        self.createdAt = createdAt
+        self.modifiedAt = modifiedAt
+        self.deletedAt = deletedAt
+    }
 }
 
 struct SyncConvergenceNewNoteRecord: Equatable {
@@ -363,6 +406,16 @@ struct SyncConvergenceUpdatedNoteRecord: Equatable {
     let title: String
     let body: String
     let modifiedAt: Date
+    /// `nil` leaves lifecycle untouched; `.some(nil)` restores a soft-deleted note.
+    let deletedAt: Date??
+
+    init(noteID: UUID, title: String, body: String, modifiedAt: Date, deletedAt: Date?? = nil) {
+        self.noteID = noteID
+        self.title = title
+        self.body = body
+        self.modifiedAt = modifiedAt
+        self.deletedAt = deletedAt
+    }
 }
 
 struct SyncConvergenceRetainedSnapshot: Equatable {

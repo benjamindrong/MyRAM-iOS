@@ -66,6 +66,18 @@ final class MacSyncConvergencePresentationAdapterTests: XCTestCase {
         XCTAssertEqual(recorder.reloadCount, 0)
     }
 
+    func testRemovedSelectedNoteClosesEditorAfterRefreshingList() async {
+        let noteID = Self.uuid(55)
+        let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "body")
+        let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
+
+        let result = await adapter.refreshPresentation(for: request(noteID: noteID, routing: .noteRemoved, body: "body"))
+
+        XCTAssertEqual(result, .verifiedComplete)
+        XCTAssertEqual(recorder.refreshCount, 1)
+        XCTAssertEqual(recorder.closedRemovedNoteIDs, [noteID])
+    }
+
 
     func testIncrementalMalformedOperationPayloadFails() async {
         let noteID = Self.uuid(9)
@@ -270,6 +282,7 @@ private final class PresentationSurfaceRecorder {
     var refreshCount = 0
     var appliedIncremental: [IncrementalCall] = []
     var reloads: [ReloadCall] = []
+    var closedRemovedNoteIDs: [UUID] = []
     var reloadResult = true
     private let selectedNoteID: UUID?
     private let hasUnsavedChanges: Bool
@@ -288,6 +301,7 @@ private final class PresentationSurfaceRecorder {
             selectedNoteID: { self.selectedNoteID },
             hasUnsavedChanges: { self.hasUnsavedChanges },
             refreshNotesList: { self.refreshCount += 1 },
+            closeRemovedSelectedEditor: { self.closedRemovedNoteIDs.append($0) },
             applyIncremental: { actions, noteID, authoritativeBody in
                 self.appliedIncremental.append(IncrementalCall(noteID: noteID, authoritativeBody: authoritativeBody))
                 XCTAssertFalse(actions.isEmpty)

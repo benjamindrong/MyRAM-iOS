@@ -67,7 +67,8 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
                 title: $0.title,
                 body: $0.content,
                 createdAt: $0.createdAt,
-                modifiedAt: $0.modifiedAt
+                modifiedAt: $0.modifiedAt,
+                deletedAt: $0.deletedAt
             )
         }
     }
@@ -404,7 +405,10 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
         root: SyncConvergenceIncorporatedRootProjection,
         state: SyncConvergencePostCommitState
     ) throws -> SyncConvergencePostCommitRequest {
-        _ = try decodeWorkPayload(root: root, state: state)
+        let workPayload = try decodeWorkPayload(root: root, state: state)
+        let noteRoutings = Dictionary(
+            uniqueKeysWithValues: (workPayload?.presentationEntries ?? []).map { ($0.noteID, $0.routing.routing) }
+        )
         return SyncConvergencePostCommitRequest(
             sourceBatchID: root.batchID,
             affectedNoteIDs: try SyncConvergenceAffectedNotesPayloadV1.decodeData(root.affectedNotesPayloadData).noteIDs,
@@ -414,7 +418,7 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
                 retryLegacyCleanup: state.legacyCleanupPending,
                 retryPresentationRefresh: state.presentationRefreshPending
             ),
-            presentationPlan: SyncConvergencePresentationPlan(noteRoutings: [:]),
+            presentationPlan: SyncConvergencePresentationPlan(noteRoutings: noteRoutings),
             persistedIncorporationIdentity: root.persistedIdentity
         )
     }

@@ -8,6 +8,27 @@ import XCTest
 #endif
 
 final class SyncConvergencePlanningTests: XCTestCase {
+    func testLifecycleDivergencePreservesLiveNoteWithoutBlockingPlan() {
+        let noteID = uuid("00000000-0000-0000-0000-000000165101")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000165102"), originDeviceID: uuid("00000000-0000-0000-0000-000000165103"), createdAt: date(1),
+            changes: [.noteLifecycleChanged(.init(noteID: noteID, deletedAt: date(1), modifiedAt: date(1), baseTitleHash: SyncBatchContentHash.sha256Hex(for: "old"), baseBodyHash: SyncBatchContentHash.sha256Hex(for: "old")))]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: .init(incomingBatch: batch, currentNotes: [projectedNote(noteID: noteID, title: "edited", body: "edited")]))
+        guard case .planned(let input) = outcome,
+              let effect = input.plan.affectedNotePlans.first?.lifecycleEffect else { return XCTFail("Expected non-blocking lifecycle plan, got \(outcome)") }
+        XCTAssertEqual(effect.verdict, .preserveLiveNote)
+        XCTAssertEqual(input.plan.presentationPlan.noteRoutings[noteID], SyncConvergencePresentationRouting.none)
+    }
+
+    func testLifecycleForMissingNoteIsConsumedWithoutBlockingPlan() {
+        let noteID = uuid("00000000-0000-0000-0000-000000165111")
+        let batch = SyncBatch(id: uuid("00000000-0000-0000-0000-000000165112"), originDeviceID: uuid("00000000-0000-0000-0000-000000165113"), createdAt: date(1), changes: [.noteLifecycleChanged(.init(noteID: noteID, deletedAt: date(1), modifiedAt: date(1), baseTitleHash: "a", baseBodyHash: "b"))])
+        let outcome = SyncConvergencePlanner().plan(input: .init(incomingBatch: batch))
+        guard case .planned(let input) = outcome else { return XCTFail("Expected missing lifecycle plan, got \(outcome)") }
+        XCTAssertEqual(input.plan.affectedNotePlans.first?.lifecycleEffect?.verdict, .preserveLiveNote)
+    }
+
     func testPlanningSuccessReturnsPlannedOutcome() {
         let noteID = uuid("00000000-0000-0000-0000-000000132201")
         let batch = SyncBatch(

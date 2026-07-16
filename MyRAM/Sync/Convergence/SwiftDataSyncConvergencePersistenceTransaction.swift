@@ -16,7 +16,8 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
                 title: $0.title,
                 body: $0.content,
                 createdAt: $0.createdAt,
-                modifiedAt: $0.modifiedAt
+                modifiedAt: $0.modifiedAt,
+                deletedAt: $0.deletedAt
             )
         }
     }
@@ -37,6 +38,9 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
         note.title = record.title
         note.content = record.body
         note.modifiedAt = record.modifiedAt
+        if let deletedAt = record.deletedAt {
+            note.deletedAt = deletedAt
+        }
     }
 
     func loadTitleWinner(noteID: UUID) throws -> SyncConvergenceTitleWinnerProjection? {

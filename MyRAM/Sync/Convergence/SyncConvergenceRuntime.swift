@@ -79,6 +79,7 @@ final class SyncConvergenceRuntime {
     private var drainRequestedWhileActive = false
     private let localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics?
     private weak var incomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter?
+    private let conflictStore: SyncConflictStoring
 
     init(
         context: ModelContext,
@@ -87,6 +88,7 @@ final class SyncConvergenceRuntime {
         localBatchTransportAdapter: SyncConvergenceLocalBatchTransportAdapter?,
         presentationAdapter: SyncConvergencePresentationAdapter,
         incomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter? = nil,
+        conflictStore: SyncConflictStoring = SyncConflictStore(),
         localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics? = nil
     ) {
         self.context = context
@@ -96,6 +98,7 @@ final class SyncConvergenceRuntime {
         self.localBatchTransportAdapter = localBatchTransportAdapter
         self.presentationAdapter = presentationAdapter
         self.incomingLocalBoundaryAdapter = incomingLocalBoundaryAdapter
+        self.conflictStore = conflictStore
         self.localEvidenceMetrics = localEvidenceMetrics
     }
 
@@ -238,6 +241,7 @@ final class SyncConvergenceRuntime {
                 let planning = planner.plan(input: input)
                 switch planning {
                 case .planned(let incorporationInput):
+                    preserveLifecycleConflicts(in: incorporationInput.plan)
                     let incorporation = incorporationExecutor.incorporate(
                         input: incorporationInput,
                         transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
@@ -312,6 +316,21 @@ final class SyncConvergenceRuntime {
 
     /// Maps a post-commit executor outcome to a terminal `drain()` result, or `nil` when
     /// draining should continue with the next queued item.
+    private func preserveLifecycleConflicts(in plan: SyncConvergenceBatchPlan) {
+        for notePlan in plan.affectedNotePlans {
+            guard let effect = notePlan.lifecycleEffect, effect.verdict == .preserveLiveNote else { continue }
+            let noteID = effect.noteID
+            guard let note = try? context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })).first else { continue }
+            let expiry = Date().addingTimeInterval(30 * 24 * 60 * 60)
+            if note.title != effect.title {
+                _ = conflictStore.preserve(SyncConflictVersion(entityType: .note, entityID: note.id, noteID: note.id, field: .noteTitle, localText: note.title, remoteText: effect.title, remoteModifiedAt: effect.modifiedAt, expiresAt: expiry))
+            }
+            if note.content != effect.body {
+                _ = conflictStore.preserve(SyncConflictVersion(entityType: .note, entityID: note.id, noteID: note.id, field: .noteContent, localText: note.content, remoteText: effect.body, remoteModifiedAt: effect.modifiedAt, expiresAt: expiry))
+            }
+        }
+    }
+
     private static func terminalOutcome(
         forPostCommit outcome: SyncConvergencePostCommitOutcome,
         batchID: UUID?
@@ -614,7 +633,7 @@ final class SyncConvergenceRuntime {
             switch change {
             case .noteBodyTextInserted, .noteBodyTextDeleted:
                 return (index, change)
-            case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+            case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
                 return nil
             }
         }
@@ -739,7 +758,7 @@ final class SyncConvergenceRuntime {
                 canonicalReplayKey: replayKey,
                 modifiedAt: deleted.modifiedAt
             )
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: Self.noteID(for: change))
         }
     }
@@ -765,7 +784,7 @@ final class SyncConvergenceRuntime {
             let mutable = NSMutableString(string: currentBody)
             mutable.insert(expectedText, at: deleted.utf16Offset)
             return String(mutable)
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: Self.noteID(for: change))
         }
     }
@@ -780,7 +799,7 @@ final class SyncConvergenceRuntime {
         case .noteBodyTextDeleted(let deleted):
             declared = deleted.baseContentHash
             noteID = deleted.noteID
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return
         }
         if let declared, declared != reconstructedBaseHash {
@@ -1037,6 +1056,8 @@ final class SyncConvergenceRuntime {
                 return payload.noteID
             case .noteBodyReconciled(let payload):
                 return payload.noteID
+            case .noteLifecycleChanged(let payload):
+                return payload.noteID
             case .noteTitleChanged:
                 return nil
             }
@@ -1055,6 +1076,8 @@ final class SyncConvergenceRuntime {
             return change.noteID
         case .noteBodyReconciled(let change):
             return change.noteID
+        case .noteLifecycleChanged(let change):
+            return change.noteID
         }
     }
 
@@ -1070,6 +1093,8 @@ final class SyncConvergenceRuntime {
             return "delete"
         case .noteBodyReconciled:
             return "reconcile"
+        case .noteLifecycleChanged:
+            return "lifecycle"
         }
     }
 
@@ -1145,12 +1170,15 @@ final class NotesViewModelConvergencePresentationAdapter: SyncConvergencePresent
         // Keep the visible notes list current even for notes that aren't the open editor note.
         viewModel.refreshCurrentFolderContent()
         guard viewModel.currentNote?.id == request.noteID else { return .verifiedComplete }
-        guard request.routing == .none || request.committedBodyHash == request.committedPostBodyHash else {
+        guard request.routing == .none || request.routing == .noteRemoved || request.committedBodyHash == request.committedPostBodyHash else {
             return .verifiedComplete
         }
 
         let disposition: ActiveEditorSyncDisposition
         switch request.routing {
+        case .noteRemoved:
+            viewModel.currentNote = nil
+            return .verifiedComplete
         case .incremental:
             let mutations = request.incrementalOperations.compactMap(AppliedEditorMutation.init(postCommitOperation:))
             guard mutations.count == request.incrementalOperations.count else { return .failed }

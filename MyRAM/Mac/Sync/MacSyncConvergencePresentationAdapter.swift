@@ -6,6 +6,7 @@ struct MacSyncConvergencePresentationSurface {
     let selectedNoteID: () -> UUID?
     let hasUnsavedChanges: () -> Bool
     let refreshNotesList: () -> Void
+    let closeRemovedSelectedEditor: (UUID) -> Void
     let applyIncremental: ([MacSelectedEditorAction], UUID, String) -> EditorRemoteBatchApplyResult
     let reloadSelectedEditor: (UUID, String) -> Bool
     let currentEditorBody: () -> String?
@@ -22,7 +23,7 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
     func refreshPresentation(for request: SyncConvergencePresentationRequest) async -> SyncConvergencePostCommitAdapterResult {
         guard request.noteID == request.committedNote.noteID else { return .failed }
         guard request.committedBodyHash == SyncBatchContentHash.sha256Hex(for: request.committedNote.body) else { return .failed }
-        guard request.routing == .none || request.committedPostBodyHash == SyncBatchContentHash.sha256Hex(for: request.committedNote.body) else { return .failed }
+        guard request.routing == .none || request.routing == .noteRemoved || request.committedPostBodyHash == SyncBatchContentHash.sha256Hex(for: request.committedNote.body) else { return .failed }
 
         surface.refreshNotesList()
 
@@ -32,6 +33,9 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
 
         switch request.routing {
         case .none:
+            return .verifiedComplete
+        case .noteRemoved:
+            surface.closeRemovedSelectedEditor(request.noteID)
             return .verifiedComplete
         case .incremental:
             return refreshIncrementalPresentation(for: request)
