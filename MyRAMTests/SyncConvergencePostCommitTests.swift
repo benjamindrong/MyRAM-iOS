@@ -1692,6 +1692,92 @@ final class SyncConvergencePostCommitTests: XCTestCase {
     }
 
     @MainActor
+    func testMYR165IdempotentRedeliveryRetriesScopedPostCommitWithoutBlockingOtherWork() async throws {
+        let container = try makeMYR158Container()
+        let seedContext = ModelContext(container)
+        let noteID = postCommitUUID("00000000-0000-0000-0000-000000165531")
+        let unrelatedNoteID = postCommitUUID("00000000-0000-0000-0000-000000165534")
+        let batch = SyncBatch(
+            id: postCommitUUID("00000000-0000-0000-0000-000000165532"),
+            originDeviceID: postCommitUUID("00000000-0000-0000-0000-000000165533"),
+            createdAt: Date(timeIntervalSince1970: 1),
+            batchSequence: 1,
+            changes: [.noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                noteID: noteID,
+                title: "Remote",
+                modifiedAt: Date(timeIntervalSince1970: 1)
+            ))]
+        )
+        let state = SyncConvergencePostCommitState(
+            queueCleanupPending: false,
+            legacyCleanupPending: false,
+            presentationRefreshPending: true
+        )
+        let payload = try SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: [],
+            legacyCleanupRequired: false,
+            presentationEntries: [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: noteID,
+                    routing: .noteRemoved,
+                    expectedPreBodyHash: nil,
+                    committedPostBodyHash: String(repeating: "0", count: 64),
+                    incrementalOperations: []
+                )
+            ]
+        ).encodedPayloadData()
+        let note = Note(title: "Local", content: "Body")
+        note.id = noteID
+        let unrelatedNote = Note(title: "Other", content: "Body")
+        unrelatedNote.id = unrelatedNoteID
+        seedContext.insert(note)
+        seedContext.insert(unrelatedNote)
+        seedContext.insert(try makeMYR158Root(
+            batchID: batch.id,
+            index: 531,
+            state: state,
+            hasPendingPostCommitWork: true,
+            canonicalPayloadDigest: try SyncConvergenceCanonicalBatchDigest.digest(for: batch, formatVersion: 1),
+            affectedNoteIDs: [],
+            postCommitWorkPayloadData: payload
+        ))
+        try seedContext.save()
+
+        let queue = FileBackedSyncBatchQueue(fileURL: nil)
+        try queue.enqueueIncoming(batch)
+        let unrelatedBatch = SyncBatch(
+            id: postCommitUUID("00000000-0000-0000-0000-000000165535"),
+            originDeviceID: batch.originDeviceID,
+            createdAt: Date(timeIntervalSince1970: 2),
+            batchSequence: 2,
+            changes: [.noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                noteID: unrelatedNoteID,
+                title: "Remote other",
+                modifiedAt: Date(timeIntervalSince1970: 2)
+            ))]
+        )
+        try queue.enqueueIncoming(unrelatedBatch)
+        let presentation = MYR165SelectivePresentationAdapter(pendingNoteID: noteID)
+        let runtime = SyncConvergenceRuntime(
+            context: ModelContext(container),
+            convergenceQueue: queue,
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: presentation
+        )
+
+        let outcome = await runtime.resumePendingWork()
+
+        guard case .deferred(let deferred) = outcome else {
+            return XCTFail("Expected redelivery post-commit work to remain deferred")
+        }
+        XCTAssertEqual(presentation.requestedNoteIDs, [noteID, noteID])
+        XCTAssertEqual(deferred.postCommit.map(\.batchID), [batch.id, batch.id])
+        XCTAssertEqual(queue.pendingBatches.map(\.id), [batch.id])
+        XCTAssertEqual(unrelatedNote.title, "Remote other")
+    }
+
+    @MainActor
     func testMYR165PostCommitDeferredWorkDoesNotSurfaceAnIOSError() {
         let deferred = SyncConvergenceDeferredWork(
             incoming: [],
@@ -3433,6 +3519,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         state: SyncConvergencePostCommitState,
         committedAt: Date? = nil,
         hasPendingPostCommitWork: Bool,
+        canonicalPayloadDigest: String? = nil,
         affectedNoteIDs: Set<UUID> = [],
         postCommitWorkPayloadData: Data? = nil
     ) throws -> IncorporatedSyncBatch {
@@ -3454,7 +3541,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             batchSequence: UInt64(index),
             schemaVersion: 1,
             committedAt: committedAt ?? Date(timeIntervalSince1970: TimeInterval(159_000 + index)),
-            canonicalPayloadDigest: String(format: "%064d", index),
+            canonicalPayloadDigest: canonicalPayloadDigest ?? String(format: "%064d", index),
             canonicalPayloadDigestFormatVersion: 1,
             committedResultDigest: String(format: "%064d", index + 1_000),
             committedResultDigestFormatVersion: 1,

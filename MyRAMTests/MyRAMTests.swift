@@ -3840,6 +3840,66 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(queue.pendingBatches.map(\.id), [deferredBatch.id])
     }
 
+    func testMYR165FreshPresentationPendingDoesNotBlockDisjointBatchesFromAnyOrigin() async throws {
+        for sameOrigin in [true, false] {
+            let container = try makeContainer(isStoredInMemoryOnly: true)
+            let context = container.mainContext
+            let noteAID = UUID()
+            let noteBID = UUID()
+            let noteA = Note(title: "A", content: "A")
+            noteA.id = noteAID
+            let noteB = Note(title: "B", content: "B")
+            noteB.id = noteBID
+            context.insert(noteA)
+            context.insert(noteB)
+            try context.save()
+
+            let originA = UUID()
+            let pendingBatch = SyncBatch(
+                id: UUID(),
+                originDeviceID: originA,
+                createdAt: Date(timeIntervalSince1970: 1),
+                batchSequence: 1,
+                changes: [.noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteAID,
+                    title: "Remote A",
+                    modifiedAt: Date(timeIntervalSince1970: 1)
+                ))]
+            )
+            let disjointBatch = SyncBatch(
+                id: UUID(),
+                originDeviceID: sameOrigin ? originA : UUID(),
+                createdAt: Date(timeIntervalSince1970: 2),
+                batchSequence: 2,
+                changes: [.noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteBID,
+                    title: "Remote B",
+                    modifiedAt: Date(timeIntervalSince1970: 2)
+                ))]
+            )
+            let queue = FileBackedSyncBatchQueue(fileURL: nil)
+            try queue.enqueueIncoming(pendingBatch)
+            try queue.enqueueIncoming(disjointBatch)
+            let runtime = SyncConvergenceRuntime(
+                context: context,
+                convergenceQueue: queue,
+                localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+                localBatchTransportAdapter: nil,
+                presentationAdapter: MYR165SelectiveRuntimePresentationAdapter(pendingNoteID: noteAID)
+            )
+
+            let outcome = await runtime.resumePendingWork()
+
+            guard case .deferred(let deferred) = outcome else {
+                return XCTFail("Expected presentation work to defer")
+            }
+            XCTAssertEqual(deferred.postCommit.map(\.batchID), [pendingBatch.id])
+            XCTAssertEqual(noteA.title, "Remote A")
+            XCTAssertEqual(noteB.title, "Remote B")
+            XCTAssertEqual(queue.pendingBatches.map(\.id), [pendingBatch.id])
+        }
+    }
+
     func testLocalObligationRemainsDurableWhenTransportAcceptanceThrows() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -8835,6 +8895,21 @@ private final class RecordingPresentationAdapter: SyncConvergencePresentationAda
     ) async -> SyncConvergencePostCommitAdapterResult {
         requestCount += 1
         return .verifiedComplete
+    }
+}
+
+@MainActor
+private final class MYR165SelectiveRuntimePresentationAdapter: SyncConvergencePresentationAdapter {
+    private let pendingNoteID: UUID
+
+    init(pendingNoteID: UUID) {
+        self.pendingNoteID = pendingNoteID
+    }
+
+    func refreshPresentation(
+        for request: SyncConvergencePresentationRequest
+    ) async -> SyncConvergencePostCommitAdapterResult {
+        request.noteID == pendingNoteID ? .stillPending : .verifiedComplete
     }
 }
 
