@@ -2996,7 +2996,7 @@ struct SyncConvergenceIncorporationExecutor {
             let current = try transaction.loadNote(id: plan.noteID)
             let currentTitle = current?.title ?? plan.creationEffect?.title ?? ""
             let currentBody = current?.body ?? plan.creationEffect?.body ?? ""
-            let lifecycleDeletedAt: Date?? = if let lifecycle = plan.lifecycleEffect {
+            let lifecycleDeletedAt: Date?? = if let lifecycle = plan.lifecycleEffect, lifecycle.verdict == .apply {
                 .some(lifecycle.deletedAt)
             } else {
                 nil

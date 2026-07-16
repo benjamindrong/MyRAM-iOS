@@ -614,6 +614,45 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertEqual(laterRequest.cleanupPlan.retryPresentationRefresh, true)
     }
 
+    func testMYR165PresentationNotSupersededByLaterMetadataOnlyRequest() async {
+        let identity = testIdentity()
+        let state = SyncConvergencePostCommitState(
+            queueCleanupPending: false,
+            legacyCleanupPending: false,
+            presentationRefreshPending: true
+        )
+        let originalRequest = request(identity: identity, state: state)
+        let laterIdentity = SyncConvergencePersistedIncorporationIdentity(
+            batchID: postCommitUUID("00000000-0000-0000-0000-000000165402"),
+            canonicalPayloadDigest: "later-canonical",
+            canonicalPayloadDigestFormatVersion: 1,
+            committedResultDigest: "later-committed",
+            committedResultDigestFormatVersion: 1
+        )
+        // A later request whose routing for this note is .none only refreshes list metadata —
+        // it must not be treated as satisfying an older .wholeNoteFallback/.incremental entry
+        // that still owes the open editor real content.
+        let laterRequest = request(
+            identity: laterIdentity,
+            state: state,
+            presentationPlan: SyncConvergencePresentationPlan(noteRoutings: [TestIDs.noteA: .none])
+        )
+        let store = FakePostCommitStore(state: .fullRoot(fullRootState(identity: identity, state: state)))
+        store.pendingPostCommitRequests = [originalRequest, laterRequest]
+        let presentation = FakePresentationAdapter(result: .verifiedComplete)
+        let executor = SyncConvergencePostCommitExecutor(
+            store: store,
+            queueCleanupAdapter: FakeQueueCleanupAdapter(),
+            presentationAdapter: presentation
+        )
+
+        let outcome = await executor.execute(originalRequest)
+
+        XCTAssertEqual(outcome, .complete)
+        XCTAssertEqual(presentation.requests.map(\.noteID), [TestIDs.noteA])
+        XCTAssertEqual(store.committedNoteLoadRequests, [TestIDs.noteA])
+    }
+
     func testMYR137PresentationScriptedFailureReplaysDomainIdempotently() async {
         let identity = testIdentity()
         let state = SyncConvergencePostCommitState(

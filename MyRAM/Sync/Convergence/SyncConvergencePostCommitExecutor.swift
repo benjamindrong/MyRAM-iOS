@@ -287,7 +287,13 @@ actor SyncConvergencePostCommitExecutor {
         }
         return pendingRequests[(requestIndex + 1)...].reduce(into: Set()) { noteIDs, pendingRequest in
             guard pendingRequest.cleanupPlan.retryPresentationRefresh else { return }
-            noteIDs.formUnion(pendingRequest.affectedNoteIDs)
+            // Only a routing that actually re-establishes editor content (or closes the editor
+            // entirely) can be relied on to catch the UI up. A later .none entry only refreshes
+            // list metadata, so it can't stand in for an older incremental/whole-note refresh.
+            for noteID in pendingRequest.affectedNoteIDs {
+                guard let routing = pendingRequest.presentationPlan.noteRoutings[noteID], routing != .none else { continue }
+                noteIDs.insert(noteID)
+            }
         }
     }
 

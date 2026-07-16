@@ -48,6 +48,55 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertEqual(transaction.notes[noteID]?.body, "Local body")
     }
 
+    func testDivergedLifecycleDeleteAlongsideApplyingTitleChangeDoesNotDeleteNote() {
+        let noteID = uuid("00000000-0000-0000-0000-000000165301")
+        let initial = SyncConvergenceMutableNoteRecord(
+            noteID: noteID, folderID: nil, title: "Original Title", body: "Local unsynced body edit", createdAt: date(1), modifiedAt: date(2)
+        )
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000165302"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000165303"),
+            createdAt: date(3),
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteID,
+                    title: "Renamed",
+                    modifiedAt: date(3)
+                )),
+                .noteLifecycleChanged(.init(
+                    noteID: noteID,
+                    deletedAt: date(3),
+                    modifiedAt: date(3),
+                    title: "Renamed",
+                    body: "Remote body",
+                    baseTitleHash: SyncBatchContentHash.sha256Hex(for: "Renamed"),
+                    baseBodyHash: SyncBatchContentHash.sha256Hex(for: "Remote body")
+                ))
+            ]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: batch,
+            currentNotes: [.init(noteID: noteID, folderID: nil, title: initial.title, body: initial.body, createdAt: initial.createdAt, modifiedAt: initial.modifiedAt)]
+        ))
+        guard case .planned(let input) = outcome else {
+            return XCTFail("Expected non-blocking compound plan, got \(outcome)")
+        }
+
+        let transaction = InMemoryConvergenceTransaction(notes: [noteID: initial])
+        let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: input, transaction: transaction, committedAt: date(4)
+        )
+
+        guard case .incorporated = incorporation else {
+            return XCTFail("Expected compound plan to be incorporated, got \(incorporation)")
+        }
+        // The title change applies on its own merits; the diverged lifecycle change must not
+        // ride along on the compound plan's hasMutableNoteEffect and delete the note anyway.
+        XCTAssertNil(transaction.notes[noteID]?.deletedAt)
+        XCTAssertEqual(transaction.notes[noteID]?.title, "Renamed")
+        XCTAssertEqual(transaction.notes[noteID]?.body, "Local unsynced body edit")
+    }
+
     func testLifecycleDeleteAndRestorePersistThroughConvergence() {
         let noteID = uuid("00000000-0000-0000-0000-000000165001")
         let title = "Title"
