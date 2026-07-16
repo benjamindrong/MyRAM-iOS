@@ -8777,6 +8777,8 @@ private final class SinglePendingLocalBoundaryAdapter: SyncConvergenceIncomingLo
                 return payload.noteID
             case .noteBodyReconciled(let payload):
                 return payload.noteID
+            case .noteLifecycleChanged(let payload):
+                return payload.noteID
             }
         })
     }

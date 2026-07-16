@@ -437,6 +437,8 @@ private extension SyncBatchChange {
             change.noteID
         case .noteBodyReconciled(let change):
             change.noteID
+        case .noteLifecycleChanged(let change):
+            change.noteID
         }
     }
 }

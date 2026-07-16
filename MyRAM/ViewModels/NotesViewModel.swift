@@ -174,7 +174,8 @@ final class NotesViewModel: ObservableObject {
             localObligationQueue: pendingLocalConvergenceBatches,
             localBatchTransportAdapter: syncController as? SyncConvergenceLocalBatchTransportAdapter,
             presentationAdapter: NotesViewModelConvergencePresentationAdapter(viewModel: self),
-            incomingLocalBoundaryAdapter: self
+            incomingLocalBoundaryAdapter: self,
+            conflictStore: syncConflictStore
         )
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
@@ -930,7 +931,10 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
-        recordNoteSyncChange(note, operation: .delete)
+        recordSyncBatchChange(SyncConvergenceCapturedLocalChange(
+            change: IPhoneSyncBatchCaptureHook.lifecycleChanged(note),
+            evidence: nil
+        ))
         if let folder = note.folder {
             recordFolderSyncChange(folder)
         }
@@ -973,7 +977,10 @@ final class NotesViewModel: ObservableObject {
         note.modifiedAt = .now
         note.folder?.modifiedAt = .now
         try? context.save()
-        recordNoteSyncChange(note)
+        recordSyncBatchChange(SyncConvergenceCapturedLocalChange(
+            change: IPhoneSyncBatchCaptureHook.lifecycleChanged(note),
+            evidence: nil
+        ))
         if let folder = note.folder {
             recordFolderSyncChange(folder)
         }
@@ -1377,7 +1384,7 @@ final class NotesViewModel: ObservableObject {
                 return payload.noteID
             case .noteBodyReconciled(let payload):
                 return payload.noteID
-            case .noteTitleChanged:
+            case .noteTitleChanged, .noteLifecycleChanged:
                 return nil
             }
         })

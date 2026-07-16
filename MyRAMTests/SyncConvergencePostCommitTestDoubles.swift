@@ -854,7 +854,7 @@ private func physicalEffectCount(_ key: String) -> Int {
 }
 }
 
-final class FakePostCommitStore: SyncConvergencePostCommitStateStore {
+final class FakePostCommitStore: SyncConvergencePostCommitStateStore, SyncConvergencePendingPostCommitSource {
 enum LoadBehavior {
     case current
     case returnState(SyncConvergencePostCommitLoadedState)
@@ -885,6 +885,7 @@ var writeCount = 0
 var loadBehavior: LoadBehavior = .current
 var casBehavior: CASBehavior = .succeed
 var committedNoteLoadBehavior: CommittedNoteLoadBehavior = .currentNotes
+var pendingPostCommitRequests: [SyncConvergencePostCommitRequest] = []
 var loadCallCount = 0
 var committedNoteLoadRequests: [UUID] = []
 var casAttemptCount = 0
@@ -961,6 +962,14 @@ func loadCommittedNote(id: UUID) throws -> SyncConvergenceMutableNoteRecord? {
     case .fail:
         throw CommittedNoteLoadError()
     }
+}
+
+func loadPendingPostCommitRequests() throws -> [SyncConvergencePostCommitRequest] {
+    pendingPostCommitRequests
+}
+
+func loadPostCommitStatus(forBatchID batchID: UUID) throws -> SyncConvergencePersistedPostCommitStatus {
+    .missing
 }
 
 func compareAndSetPostCommitState(

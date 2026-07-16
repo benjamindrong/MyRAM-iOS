@@ -34,6 +34,7 @@ enum SyncBatchChange: Codable, Equatable, Sendable {
     case noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange)
     case noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange)
     case noteBodyReconciled(SyncBatchNoteBodyReconciledChange)
+    case noteLifecycleChanged(SyncBatchNoteLifecycleChangedChange)
 }
 
 struct SyncBatchNoteCreatedChange: Codable, Equatable, Sendable {
@@ -105,6 +106,22 @@ struct SyncBatchNoteBodyReconciledChange: Codable, Equatable, Sendable {
     let replacementBody: String
     let replacementContentHash: String
     let modifiedAt: Date
+}
+
+/// Transports only user-visible note lifecycle state. `deletedAt == nil` restores the note.
+struct SyncBatchNoteLifecycleChangedChange: Codable, Equatable, Sendable {
+    let noteID: SyncBatchNoteID
+    let deletedAt: Date?
+    let modifiedAt: Date
+    let title: String
+    let body: String
+    let baseTitleHash: String
+    let baseBodyHash: String
+
+    init(noteID: SyncBatchNoteID, deletedAt: Date?, modifiedAt: Date, title: String = "", body: String = "", baseTitleHash: String, baseBodyHash: String) {
+        self.noteID = noteID; self.deletedAt = deletedAt; self.modifiedAt = modifiedAt
+        self.title = title; self.body = body; self.baseTitleHash = baseTitleHash; self.baseBodyHash = baseBodyHash
+    }
 }
 
 enum SyncBatchContentHash {
@@ -573,6 +590,9 @@ struct SyncBatchPreflight {
             case .noteTitleChanged:
                 continue
 
+            case .noteLifecycleChanged:
+                continue
+
             case .noteBodyTextInserted(let change):
                 guard var body = try workingBody(
                     noteID: change.noteID,
@@ -749,6 +769,8 @@ extension SyncBatchChange {
         case .noteBodyTextDeleted(let change):
             change.modifiedAt
         case .noteBodyReconciled(let change):
+            change.modifiedAt
+        case .noteLifecycleChanged(let change):
             change.modifiedAt
         }
     }

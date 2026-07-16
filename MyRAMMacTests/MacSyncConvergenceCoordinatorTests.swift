@@ -226,6 +226,7 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
             selectedNoteID: { nil },
             hasUnsavedChanges: { false },
             refreshNotesList: {},
+            closeRemovedSelectedEditor: { _ in },
             applyIncremental: { _, _, _ in
                 EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .noApplicableMutations)
             },

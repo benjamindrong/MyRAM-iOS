@@ -8,6 +8,98 @@ import CryptoKit
 #endif
 
 final class SyncConvergenceIncorporationTests: XCTestCase {
+    func testDivergedLifecycleDeleteIncorporatesWithoutChangingDeletedAt() {
+        let noteID = uuid("00000000-0000-0000-0000-000000165201")
+        let initial = SyncConvergenceMutableNoteRecord(
+            noteID: noteID, folderID: nil, title: "Local edit", body: "Local body", createdAt: date(1), modifiedAt: date(2)
+        )
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000165202"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000165203"),
+            createdAt: date(3),
+            changes: [.noteLifecycleChanged(.init(
+                noteID: noteID,
+                deletedAt: date(3),
+                modifiedAt: date(3),
+                title: "Remote title",
+                body: "Remote body",
+                baseTitleHash: SyncBatchContentHash.sha256Hex(for: "Remote title"),
+                baseBodyHash: SyncBatchContentHash.sha256Hex(for: "Remote body")
+            ))]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: batch,
+            currentNotes: [.init(noteID: noteID, folderID: nil, title: initial.title, body: initial.body, createdAt: initial.createdAt, modifiedAt: initial.modifiedAt)]
+        ))
+        guard case .planned(let input) = outcome else {
+            return XCTFail("Expected non-blocking lifecycle plan, got \(outcome)")
+        }
+
+        let transaction = InMemoryConvergenceTransaction(notes: [noteID: initial])
+        let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: input, transaction: transaction, committedAt: date(4)
+        )
+
+        guard case .incorporated = incorporation else {
+            return XCTFail("Expected divergence to be incorporated, got \(incorporation)")
+        }
+        XCTAssertNil(transaction.notes[noteID]?.deletedAt)
+        XCTAssertEqual(transaction.notes[noteID]?.title, "Local edit")
+        XCTAssertEqual(transaction.notes[noteID]?.body, "Local body")
+    }
+
+    func testLifecycleDeleteAndRestorePersistThroughConvergence() {
+        let noteID = uuid("00000000-0000-0000-0000-000000165001")
+        let title = "Title"
+        let body = "Body"
+        let initial = SyncConvergenceMutableNoteRecord(
+            noteID: noteID, folderID: nil, title: title, body: body, createdAt: date(1), modifiedAt: date(1)
+        )
+        let delete = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000165002"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000165003"),
+            createdAt: date(2),
+            changes: [.noteLifecycleChanged(.init(
+                noteID: noteID, deletedAt: date(2), modifiedAt: date(2),
+                baseTitleHash: SyncBatchContentHash.sha256Hex(for: title),
+                baseBodyHash: SyncBatchContentHash.sha256Hex(for: body)
+            ))]
+        )
+        let transaction = InMemoryConvergenceTransaction(notes: [noteID: initial])
+        let deleteOutcome = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: delete,
+            currentNotes: [.init(noteID: noteID, folderID: nil, title: title, body: body, createdAt: date(1), modifiedAt: date(1))]
+        ))
+        guard case .planned(let deleteInput) = deleteOutcome else {
+            return XCTFail("Expected delete lifecycle plan, got \(deleteOutcome)")
+        }
+        let deleteIncorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: deleteInput, transaction: transaction, committedAt: date(3)
+        )
+        guard case .incorporated = deleteIncorporation else {
+            return XCTFail("Expected delete lifecycle incorporation, got \(deleteIncorporation)")
+        }
+        XCTAssertEqual(transaction.notes[noteID]?.deletedAt, date(2))
+
+        let restore = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000165004"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000165003"),
+            createdAt: date(4),
+            changes: [.noteLifecycleChanged(.init(
+                noteID: noteID, deletedAt: nil, modifiedAt: date(4),
+                baseTitleHash: SyncBatchContentHash.sha256Hex(for: title),
+                baseBodyHash: SyncBatchContentHash.sha256Hex(for: body)
+            ))]
+        )
+        guard case .planned(let restoreInput) = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: restore,
+            currentNotes: [.init(noteID: noteID, folderID: nil, title: title, body: body, createdAt: date(1), modifiedAt: date(2))]
+        )), case .incorporated = SyncConvergenceIncorporationExecutor().incorporate(
+            input: restoreInput, transaction: transaction, committedAt: date(5)
+        ) else { return XCTFail("Expected restore lifecycle incorporation") }
+        XCTAssertNil(transaction.notes[noteID]?.deletedAt)
+    }
+
     func testStaleAuthoritativeStateMapsToDedicatedDrainFailure() {
         let batchID = uuid("00000000-0000-0000-0000-000000132c01")
         let failure = SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: nil)
@@ -4119,7 +4211,8 @@ private final class InMemoryConvergenceTransaction: SyncConvergencePersistenceTr
             title: record.title,
             body: record.body,
             createdAt: existing?.createdAt ?? record.modifiedAt,
-            modifiedAt: record.modifiedAt
+            modifiedAt: record.modifiedAt,
+            deletedAt: record.deletedAt ?? existing?.deletedAt
         )
         if failAfterUpdateNote {
             throw SyncConvergenceTransactionFailure.swiftDataSave

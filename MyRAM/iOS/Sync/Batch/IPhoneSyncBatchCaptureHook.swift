@@ -12,6 +12,18 @@ enum IPhoneSyncBatchCaptureHook {
         )
     }
 
+    static func lifecycleChanged(_ note: Note) -> SyncBatchChange {
+        .noteLifecycleChanged(SyncBatchNoteLifecycleChangedChange(
+            noteID: note.id,
+            deletedAt: note.deletedAt,
+            modifiedAt: note.modifiedAt,
+            title: note.title,
+            body: note.content,
+            baseTitleHash: SyncBatchContentHash.sha256Hex(for: note.title),
+            baseBodyHash: SyncBatchContentHash.sha256Hex(for: note.content)
+        ))
+    }
+
     static func titleChanged(noteID: UUID, oldTitle: String, newTitle: String, modifiedAt: Date) -> SyncBatchChange? {
         SyncBatchNoteChangeCapture.titleChanged(noteID: noteID, oldTitle: oldTitle, newTitle: newTitle, modifiedAt: modifiedAt)
     }

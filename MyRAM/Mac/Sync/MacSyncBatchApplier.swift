@@ -70,6 +70,8 @@ final class MacSyncBatchApplier {
             return try applyBodyTextDeleted(change, rollbackSnapshots: &rollbackSnapshots)
         case .noteBodyReconciled(let change):
             throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
+        case .noteLifecycleChanged(let change):
+            throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
         }
     }
 

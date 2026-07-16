@@ -67,7 +67,8 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
                 title: $0.title,
                 body: $0.content,
                 createdAt: $0.createdAt,
-                modifiedAt: $0.modifiedAt
+                modifiedAt: $0.modifiedAt,
+                deletedAt: $0.deletedAt
             )
         }
     }

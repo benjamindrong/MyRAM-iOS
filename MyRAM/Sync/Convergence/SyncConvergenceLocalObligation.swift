@@ -77,7 +77,7 @@ enum SyncConvergenceLocalEvidenceCapture {
                 deletedText: deletedText(for: change)
             )
             return SyncConvergenceCapturedLocalChange(change: change, evidence: evidence)
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return SyncConvergenceCapturedLocalChange(change: change, evidence: nil)
         }
     }
@@ -147,7 +147,7 @@ enum SyncConvergenceLocalEvidenceCapture {
             let mutable = NSMutableString(string: body)
             mutable.deleteCharacters(in: range)
             return String(mutable)
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return body
         }
     }
@@ -164,6 +164,8 @@ enum SyncConvergenceLocalEvidenceCapture {
             payload.noteID
         case .noteBodyReconciled(let payload):
             payload.noteID
+        case .noteLifecycleChanged(let payload):
+            payload.noteID
         }
     }
 
@@ -173,7 +175,7 @@ enum SyncConvergenceLocalEvidenceCapture {
             payload.baseContentHash
         case .noteBodyTextDeleted(let payload):
             payload.baseContentHash
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             nil
         }
     }
@@ -192,7 +194,7 @@ enum SyncConvergenceLocalEvidenceCapture {
         switch change {
         case .noteBodyTextInserted, .noteBodyTextDeleted:
             true
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             false
         }
     }

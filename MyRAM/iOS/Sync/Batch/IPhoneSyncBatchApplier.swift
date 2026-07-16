@@ -109,6 +109,9 @@ final class IPhoneSyncBatchApplier {
             return AppliedSyncBatchChangeResult(editorMutation: try applyBodyTextDeleted(change))
         case .noteBodyReconciled(let change):
             throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
+        case .noteLifecycleChanged(let change):
+            try applyLifecycleChanged(change)
+            return AppliedSyncBatchChangeResult()
         }
     }
 
@@ -167,6 +170,14 @@ final class IPhoneSyncBatchApplier {
             deletedText: targetText,
             modifiedAt: change.modifiedAt
         ))
+    }
+
+    private func applyLifecycleChanged(_ change: SyncBatchNoteLifecycleChangedChange) throws {
+        let noteID = change.noteID
+        let descriptor = FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })
+        guard let note = try context.fetch(descriptor).first else { return }
+        note.deletedAt = change.deletedAt
+        note.modifiedAt = change.modifiedAt
     }
 
     private func loadNote(id: UUID) throws -> Note? {
