@@ -1501,6 +1501,48 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertNil(store.testOnlyPostSaveMutation)
     }
 
+    func testMYR165RealStoreThreadsPresentationRoutingThroughPendingRequests() throws {
+        let container = try makeMYR158Container()
+        let seedContext = ModelContext(container)
+        let noteID = postCommitUUID("00000000-0000-0000-0000-000000165501")
+        let batchID = postCommitUUID("00000000-0000-0000-0000-000000165502")
+        let state = SyncConvergencePostCommitState(
+            queueCleanupPending: false,
+            legacyCleanupPending: false,
+            presentationRefreshPending: true
+        )
+        let workPayloadData = try SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: [],
+            legacyCleanupRequired: false,
+            presentationEntries: [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: noteID,
+                    routing: .noteRemoved,
+                    expectedPreBodyHash: nil,
+                    committedPostBodyHash: String(repeating: "0", count: 64),
+                    incrementalOperations: []
+                )
+            ]
+        ).encodedPayloadData()
+        seedContext.insert(try makeMYR158Root(
+            batchID: batchID,
+            index: 501,
+            state: state,
+            hasPendingPostCommitWork: true,
+            postCommitWorkPayloadData: workPayloadData
+        ))
+        try seedContext.save()
+
+        let store = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
+        let requests = try store.loadPendingPostCommitRequests()
+
+        // This exercises the real persistence-backed loader (not FakePostCommitStore) so a
+        // presentation entry's routing actually round-trips into presentationPlan.noteRoutings,
+        // which SyncConvergencePostCommitExecutor's supersession check depends on.
+        let request = try XCTUnwrap(requests.first(where: { $0.sourceBatchID == batchID }))
+        XCTAssertEqual(request.presentationPlan.noteRoutings[noteID], .noteRemoved)
+    }
+
     func testMYR158IndexedPendingSelectionSkipsCompletedHistory() throws {
         let container = try makeMYR158Container()
         let seedContext = ModelContext(container)
