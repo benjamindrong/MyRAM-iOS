@@ -237,8 +237,11 @@ actor SyncConvergencePostCommitExecutor {
         guard !entries.isEmpty else { return .failed }
         for entry in entries.sorted(by: { $0.noteID.uuidString < $1.noteID.uuidString }) {
             do {
+                // The note may be gone by the time presentation catches up (deleted, or never
+                // locally present). There's nothing left to refresh for it, so treat it as satisfied
+                // rather than failing the whole batch.
                 guard let note = try store.loadCommittedNote(id: entry.noteID) else {
-                    return .failed
+                    continue
                 }
                 let presentationRequest = SyncConvergencePresentationRequest(
                     incorporationIdentity: request.persistedIncorporationIdentity,
