@@ -97,6 +97,60 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertEqual(transaction.notes[noteID]?.body, "Local unsynced body edit")
     }
 
+    func testDivergedLifecycleDeleteAlongsideApplyingBodyEditDoesNotClobberIncrementalRouting() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000165311")
+        let initial = SyncConvergenceMutableNoteRecord(
+            noteID: noteID, folderID: nil, title: "Original Title", body: "Local body", createdAt: date(1), modifiedAt: date(2)
+        )
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000165312"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000165313"),
+            createdAt: date(3),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: "Local body".utf16.count,
+                    text: " more",
+                    modifiedAt: date(3),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Local body")
+                )),
+                .noteLifecycleChanged(.init(
+                    noteID: noteID,
+                    deletedAt: date(3),
+                    modifiedAt: date(3),
+                    title: "Some other title",
+                    body: "Some other body",
+                    baseTitleHash: SyncBatchContentHash.sha256Hex(for: "Some other title"),
+                    baseBodyHash: SyncBatchContentHash.sha256Hex(for: "Some other body")
+                ))
+            ]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: batch,
+            currentNotes: [.init(noteID: noteID, folderID: nil, title: initial.title, body: initial.body, createdAt: initial.createdAt, modifiedAt: initial.modifiedAt)]
+        ))
+        guard case .planned(let input) = outcome else {
+            return XCTFail("Expected non-blocking compound plan, got \(outcome)")
+        }
+        // The bug this covers: the lifecycle branch used to unconditionally overwrite
+        // routing, clobbering the body effect's .incremental need down to .none, which
+        // then failed plan validation (invalidMergePlan) and permanently blocked the
+        // runtime for every subsequent incoming batch.
+        XCTAssertEqual(input.plan.presentationPlan.noteRoutings[noteID], .incremental)
+
+        let transaction = InMemoryConvergenceTransaction(notes: [noteID: initial])
+        let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: input, transaction: transaction, committedAt: date(4)
+        )
+
+        guard case .incorporated = incorporation else {
+            return XCTFail("Expected compound plan to be incorporated, got \(incorporation)")
+        }
+        XCTAssertNil(transaction.notes[noteID]?.deletedAt)
+        XCTAssertEqual(transaction.notes[noteID]?.body, "Local body more")
+        XCTAssertEqual(transaction.notes[noteID]?.title, "Original Title")
+    }
+
     func testLifecycleDeleteAndRestorePersistThroughConvergence() {
         let noteID = uuid("00000000-0000-0000-0000-000000165001")
         let title = "Title"

@@ -232,9 +232,13 @@ struct SyncConvergencePlanner {
                 )
                 operationIdentities.append(identity)
                 resultEvidence.append(evidence)
-                routings[lifecycle.noteID] = !matchesBase || lifecycle.deletedAt == nil
-                    ? SyncConvergencePresentationRouting.none
-                    : .noteRemoved
+                // A co-occurring body/title effect in this same batch (e.g. an edit bundled
+                // with a delete) already claimed the routing it needs and validates it
+                // independently; the lifecycle change must never clobber that. It only
+                // decides routing when nothing else in this batch already has.
+                routings[lifecycle.noteID] = routings[lifecycle.noteID] ?? (
+                    (matchesBase && lifecycle.deletedAt != nil) ? .noteRemoved : .none
+                )
             }
         }
 
@@ -2189,11 +2193,21 @@ struct SyncConvergencePlanValidator {
                       lifecycleEffect.resultEvidence.batchID == plan.batchID,
                       lifecycleEffect.resultEvidence.preHash == lifecycleEffect.baseBodyHash,
                       lifecycleEffect.resultEvidence.postHash == lifecycleEffect.baseBodyHash,
-                      plannedIdentityKeys.contains(lifecycleEffect.operationIdentity.planIdentityKey),
-                      routing == (lifecycleEffect.verdict == .apply && lifecycleEffect.deletedAt != nil
-                          ? SyncConvergencePresentationRouting.noteRemoved
-                          : .none) else {
+                      plannedIdentityKeys.contains(lifecycleEffect.operationIdentity.planIdentityKey) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+                // When a body/title/creation effect is also present on this note, it already
+                // claimed and independently validated the routing above; the lifecycle change
+                // only owns routing when it's the sole effect on this note plan.
+                let noteHasNoOtherEffect = notePlan.bodyEffect == nil
+                    && notePlan.titleEffect == nil
+                    && notePlan.creationEffect == nil
+                if noteHasNoOtherEffect {
+                    guard routing == (lifecycleEffect.verdict == .apply && lifecycleEffect.deletedAt != nil
+                        ? SyncConvergencePresentationRouting.noteRemoved
+                        : .none) else {
+                        return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                    }
                 }
                 expectedResultEvidence.append(lifecycleEffect.resultEvidence)
             }
