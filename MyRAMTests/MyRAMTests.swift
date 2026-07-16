@@ -4427,6 +4427,53 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(recorder.recordedBatches.isEmpty)
     }
 
+    func testIncomingBatchForUnopenedNoteRefreshesNotesListWithoutFurtherAction() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let queueFileURL = temporarySyncBatchQueueFileURL()
+        let localQueueFileURL = temporarySyncBatchQueueFileURL()
+        let conflictFileURL = temporarySyncConflictFileURL()
+        defer {
+            try? FileManager.default.removeItem(at: queueFileURL.deletingLastPathComponent())
+            try? FileManager.default.removeItem(at: conflictFileURL.deletingLastPathComponent())
+        }
+        let openNote = Note(title: "Currently Open", content: "body")
+        openNote.id = UUID(uuidString: "00000000-0000-0000-0000-000000129101")!
+        context.insert(openNote)
+        try context.save()
+        let vm = NotesViewModel(
+            context: context,
+            syncController: nil,
+            syncConflictStore: SyncConflictStore(fileURL: conflictFileURL),
+            pendingIncomingBatchQueueFileURL: queueFileURL,
+            pendingLocalConvergenceBatchQueueFileURL: localQueueFileURL,
+            syncBatchQuietWindow: 0
+        )
+        vm.selectNote(openNote)
+
+        let newNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000129102")!
+        await vm.applyIncomingSyncBatch(SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: newNoteID,
+                    title: "",
+                    body: "From another device",
+                    folderID: nil,
+                    createdAt: Date(timeIntervalSince1970: 1),
+                    modifiedAt: Date(timeIntervalSince1970: 1)
+                ))
+            ]
+        ))
+
+        // The new note isn't the open editor note, but it should still show up in the list
+        // immediately rather than waiting for some unrelated local action to trigger a refetch.
+        XCTAssertNil(vm.syncBatchErrorMessage)
+        XCTAssertTrue(vm.notes.contains { $0.id == newNoteID })
+    }
+
     func testActiveNoteMixedTitleAndBodyIncomingBatchPublishesCompositeEditorUpdate() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext

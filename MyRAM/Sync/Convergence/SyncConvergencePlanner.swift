@@ -105,6 +105,7 @@ struct SyncConvergencePlanner {
                         canonicalReplayKey: identity.canonicalReplayKey
                     )
                 )
+                routings[created.noteID] = routings[created.noteID] ?? SyncConvergencePresentationRouting.none
 
             case .noteTitleChanged(let titleChange):
                 let candidateIdentity = operationIdentity(
@@ -2101,7 +2102,10 @@ struct SyncConvergencePlanValidator {
                 }
                 expectedResultEvidence.append(bodyPlan.resultEvidence)
             case nil:
-                guard routing == nil || (routing == SyncConvergencePresentationRouting.none && notePlan.titleEffect != nil) else {
+                guard routing == nil || (
+                    routing == SyncConvergencePresentationRouting.none &&
+                    (notePlan.titleEffect != nil || notePlan.creationEffect != nil)
+                ) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
             }

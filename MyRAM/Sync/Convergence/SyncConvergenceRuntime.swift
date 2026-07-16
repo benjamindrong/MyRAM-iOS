@@ -1142,6 +1142,8 @@ final class NotesViewModelConvergencePresentationAdapter: SyncConvergencePresent
     @MainActor
     func refreshPresentation(for request: SyncConvergencePresentationRequest) async -> SyncConvergencePostCommitAdapterResult {
         guard let viewModel else { return .verifiedComplete }
+        // Keep the visible notes list current even for notes that aren't the open editor note.
+        viewModel.refreshCurrentFolderContent()
         guard viewModel.currentNote?.id == request.noteID else { return .verifiedComplete }
         guard request.routing == .none || request.committedBodyHash == request.committedPostBodyHash else {
             return .verifiedComplete
