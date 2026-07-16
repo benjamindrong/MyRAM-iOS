@@ -352,7 +352,7 @@ final class SyncConvergenceRuntime {
     }
 
     /// Defers presentation-only work by note while preserving globally blocking durability failures.
-    private static func handlePostCommitOutcome(
+    static func handlePostCommitOutcome(
         _ outcome: SyncConvergencePostCommitOutcome,
         for request: SyncConvergencePostCommitRequest,
         blockedNoteIDs: inout Set<UUID>,

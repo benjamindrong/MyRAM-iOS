@@ -2114,7 +2114,7 @@ final class NotesViewModel: ObservableObject {
         await refreshPendingSyncStatusForLocalConvergenceMutation?()
     }
 
-    private static func syncErrorMessage(for deferred: SyncConvergenceDeferredWork) -> String? {
+    static func syncErrorMessage(for deferred: SyncConvergenceDeferredWork) -> String? {
         let items = deferred.incoming + deferred.localObligations + deferred.postCommit
         for item in items {
             switch item.reason {

@@ -1637,6 +1637,78 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertEqual(try myr158Root(batchID: unblockedBatchID, container: container).hasPendingPostCommitWork, false)
     }
 
+    @MainActor
+    func testMYR165RuntimeScopesOnlyPresentationPendingWork() {
+        let request = SyncConvergencePostCommitRequest(
+            sourceBatchID: postCommitUUID("00000000-0000-0000-0000-000000165521"),
+            affectedNoteIDs: [postCommitUUID("00000000-0000-0000-0000-000000165522")],
+            cleanupPlan: SyncConvergenceCleanupPlan(
+                batchIDs: [],
+                retryQueueCleanup: false,
+                retryLegacyCleanup: false,
+                retryPresentationRefresh: false
+            ),
+            presentationPlan: SyncConvergencePresentationPlan(noteRoutings: [:]),
+            persistedIncorporationIdentity: SyncConvergencePersistedIncorporationIdentity(
+                batchID: postCommitUUID("00000000-0000-0000-0000-000000165521"),
+                canonicalPayloadDigest: String(repeating: "a", count: 64),
+                canonicalPayloadDigestFormatVersion: 1,
+                committedResultDigest: String(repeating: "b", count: 64),
+                committedResultDigestFormatVersion: 1
+            )
+        )
+        var blockedNoteIDs: Set<UUID> = []
+        var deferredItems: [SyncConvergenceDeferredItem] = []
+
+        XCTAssertNil(SyncConvergenceRuntime.handlePostCommitOutcome(
+            .pending(blocking: .presentationRefresh, outstanding: [.presentationRefresh, .queueCleanup]),
+            for: request,
+            blockedNoteIDs: &blockedNoteIDs,
+            deferredItems: &deferredItems
+        ))
+        XCTAssertEqual(blockedNoteIDs, request.affectedNoteIDs)
+        XCTAssertEqual(deferredItems.first?.reason, .postCommitPending([.presentationRefresh, .queueCleanup]))
+
+        for blocking in [
+            SyncConvergencePostCommitPendingWork.queueCleanup,
+            .legacyCleanup,
+            .postCommitStatePersistence
+        ] {
+            var unrelatedBlockedNotes: Set<UUID> = []
+            var unrelatedDeferredItems: [SyncConvergenceDeferredItem] = []
+            let outcome = SyncConvergenceRuntime.handlePostCommitOutcome(
+                .pending(blocking: blocking, outstanding: [blocking]),
+                for: request,
+                blockedNoteIDs: &unrelatedBlockedNotes,
+                deferredItems: &unrelatedDeferredItems
+            )
+            guard case .pending(let outstanding) = outcome else {
+                return XCTFail("\(blocking) must remain globally blocking")
+            }
+            XCTAssertEqual(outstanding, [blocking])
+            XCTAssertTrue(unrelatedBlockedNotes.isEmpty)
+            XCTAssertTrue(unrelatedDeferredItems.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testMYR165PostCommitDeferredWorkDoesNotSurfaceAnIOSError() {
+        let deferred = SyncConvergenceDeferredWork(
+            incoming: [],
+            localObligations: [],
+            postCommit: [
+                SyncConvergenceDeferredItem(
+                    domain: .postCommit,
+                    batchID: postCommitUUID("00000000-0000-0000-0000-000000165523"),
+                    affectedNoteIDs: [],
+                    reason: .postCommitPending([.presentationRefresh, .queueCleanup])
+                )
+            ]
+        )
+
+        XCTAssertNil(NotesViewModel.syncErrorMessage(for: deferred))
+    }
+
     func testMYR158IndexedPendingSelectionSkipsCompletedHistory() throws {
         let container = try makeMYR158Container()
         let seedContext = ModelContext(container)
