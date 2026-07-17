@@ -57,7 +57,13 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
             guard surface.currentEditorBody() == request.committedNote.body else { return .failed }
             return .verifiedComplete
         case .requiresReload:
-            return .stillPending
+            // The incremental apply couldn't proceed (e.g. the live text view wasn't
+            // wired up yet). Retrying the same incremental apply would hit the same
+            // wall forever, so fall back to a full reload from the already-committed
+            // note instead of waiting on a condition that may never change.
+            guard surface.reloadSelectedEditor(request.noteID, request.committedNote.body) else { return .stillPending }
+            guard surface.currentEditorBody() == request.committedNote.body else { return .failed }
+            return .verifiedComplete
         }
     }
 
