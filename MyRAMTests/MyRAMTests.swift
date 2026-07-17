@@ -85,6 +85,7 @@ final class MyRAMTests: XCTestCase {
         var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])?
         var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
         var onBatchReceived: ((SyncBatch) async -> Void)?
+        var onDurablyCaptureIncomingBatch: ((SyncBatch) async -> Bool)?
         private(set) var recordedChanges: [SyncChange] = []
         private(set) var recordedBatches: [SyncBatch] = []
 

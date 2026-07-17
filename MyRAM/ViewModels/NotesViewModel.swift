@@ -157,6 +157,9 @@ final class NotesViewModel: ObservableObject {
         self.syncController?.onBatchReceived = { [weak self] batch in
             await self?.applyIncomingSyncBatch(batch)
         }
+        self.syncController?.onDurablyCaptureIncomingBatch = { [weak self] batch in
+            self?.durablyCaptureIncomingBatch(batch) ?? false
+        }
         if let statusController = syncController as? MyRAMSyncConvergenceStatusConfiguring {
             statusController.localConvergencePendingCountProvider = { [weak self] in
                 self?.pendingLocalConvergenceBatches.pendingCount ?? 0
@@ -1962,6 +1965,22 @@ final class NotesViewModel: ObservableObject {
         guard !batch.changes.isEmpty else { return }
         let outcome = await syncConvergenceRuntime.submitRemoteBatch(batch)
         await handleConvergenceRuntimeOutcome(outcome)
+    }
+
+    /// Durably persists an incoming batch's raw bytes, independent of whatever
+    /// `applyIncomingSyncBatch` later does with them. This is what the transport
+    /// layer checks before acknowledging receipt back to the sender: once this
+    /// returns true, the sender no longer needs to keep the batch around for
+    /// redelivery, even if convergence processing of its contents is deferred or blocked.
+    func durablyCaptureIncomingBatch(_ batch: SyncBatch) -> Bool {
+        guard !batch.changes.isEmpty else { return true }
+        if pendingIncomingBatches.contains(batch.id) { return true }
+        do {
+            try pendingIncomingBatches.enqueueIncoming(batch)
+            return true
+        } catch {
+            return false
+        }
     }
 
     func localConvergenceQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot {

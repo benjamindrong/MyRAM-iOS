@@ -39,6 +39,34 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         XCTAssertEqual(note.content, "local")
     }
 
+    // Regression coverage for MYR-165: the transport layer must be able to confirm
+    // a batch is durably captured (and thus safe to acknowledge to the sender)
+    // independent of whatever submitRemoteBatch/drain later does with it.
+    func testDurablyCaptureIncomingBatchPersistsBeforeSubmission() async throws {
+        let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
+        let container = try makeInMemoryContainer()
+        let noteID = Self.uuid(30)
+        let controller = try makeController()
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: readyBoundarySurface(),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil
+        )
+        let batch = titleBatch(idSuffix: 31, noteID: noteID, title: "Renamed")
+
+        XCTAssertTrue(coordinator.durablyCaptureIncomingBatch(batch))
+
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id), [batch.id])
+        XCTAssertEqual(coordinator.pendingIncomingBatchCount, 1)
+
+        // Calling it again (as the retry path does) must stay idempotent.
+        XCTAssertTrue(coordinator.durablyCaptureIncomingBatch(batch))
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id), [batch.id])
+    }
+
     func testDeferredIncomingDoesNotBlockDisjointEligibleBatch() async throws {
         let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
         let container = try makeInMemoryContainer()
