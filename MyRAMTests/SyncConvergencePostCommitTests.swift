@@ -1738,7 +1738,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             state: state,
             hasPendingPostCommitWork: true,
             canonicalPayloadDigest: try SyncConvergenceCanonicalBatchDigest.digest(for: batch, formatVersion: 1),
-            affectedNoteIDs: [],
+            affectedNoteIDs: [noteID],
             postCommitWorkPayloadData: payload
         ))
         try seedContext.save()
@@ -1759,7 +1759,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         try queue.enqueueIncoming(unrelatedBatch)
         let presentation = MYR165SelectivePresentationAdapter(pendingNoteID: noteID)
         let runtime = SyncConvergenceRuntime(
-            context: ModelContext(container),
+            context: seedContext,
             convergenceQueue: queue,
             localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
             localBatchTransportAdapter: nil,
@@ -1771,12 +1771,16 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         guard case .deferred(let deferred) = outcome else {
             return XCTFail("Expected redelivery post-commit work to remain deferred")
         }
-        XCTAssertEqual(presentation.requestedNoteIDs, [noteID, noteID])
-        XCTAssertEqual(deferred.postCommit.map(\.batchID), [batch.id, batch.id])
+        // The stuck note's backlog request is re-attempted once per drain pass (it never clears),
+        // and a second pass runs because the unrelated batch made progress in the first one; the
+        // first pass's own deferred bookkeeping is superseded, not reported, once that happens.
+        XCTAssertEqual(presentation.requestedNoteIDs, [noteID, unrelatedNoteID, noteID])
+        XCTAssertEqual(deferred.postCommit.map(\.batchID), [batch.id])
         XCTAssertEqual(queue.pendingBatches.map(\.id), [batch.id])
         XCTAssertEqual(unrelatedNote.title, "Remote other")
     }
 
+    #if !os(macOS)
     @MainActor
     func testMYR165PostCommitDeferredWorkDoesNotSurfaceAnIOSError() {
         let deferred = SyncConvergenceDeferredWork(
@@ -1794,6 +1798,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         XCTAssertNil(NotesViewModel.syncErrorMessage(for: deferred))
     }
+    #endif
 
     func testMYR158IndexedPendingSelectionSkipsCompletedHistory() throws {
         let container = try makeMYR158Container()
