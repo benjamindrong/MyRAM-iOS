@@ -1194,6 +1194,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 finalBody: bodyPlan.finalBody,
                 finalBodyHash: bodyPlan.finalBodyHash,
                 retainedOperationAdditions: bodyPlan.retainedOperationAdditions,
+                mergedOperations: bodyPlan.mergedOperations,
                 snapshotAdditions: bodyPlan.snapshotAdditions,
                 resultEvidence: bodyPlan.resultEvidence,
                 presentationRouting: bodyPlan.presentationRouting,
@@ -1253,6 +1254,14 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             malformedRetainedOperations = bodyPlan.retainedOperationAdditions.map { operation in
                 operation.kind == .delete ? wrongNoteOperation : operation
             }
+            // The fixture's only delete is an already-retained remote operation, so
+            // it's absent from retainedOperationAdditions (only genuinely-new
+            // operations are persisted there) but present in mergedOperations, which
+            // is what verifyBodyPrecondition now reads to reconstruct delete
+            // evidence — the malformed substitution must target that list too.
+            let malformedMergedOperations = bodyPlan.mergedOperations.map { operation in
+                operation.kind == .delete ? wrongNoteOperation : operation
+            }
             return .reconstructedConflict(ReconstructedConflictBodyPlan(
                 noteID: bodyPlan.noteID,
                 reconstructedBaseBody: bodyPlan.reconstructedBaseBody,
@@ -1263,6 +1272,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 finalBody: bodyPlan.finalBody,
                 finalBodyHash: bodyPlan.finalBodyHash,
                 retainedOperationAdditions: malformedRetainedOperations,
+                mergedOperations: malformedMergedOperations,
                 snapshotAdditions: bodyPlan.snapshotAdditions,
                 resultEvidence: bodyPlan.resultEvidence,
                 presentationRouting: bodyPlan.presentationRouting,

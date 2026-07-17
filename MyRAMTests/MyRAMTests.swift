@@ -4047,6 +4047,132 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.content.components(separatedBy: "TOP").count - 1, 1)
     }
 
+    // Diagnostic for a live two-device repro: a local edit stays unacknowledged
+    // (peer never sent an ack yet) while TWO separate remote batches from that
+    // same peer arrive, each requiring reconstruction because the peer never saw
+    // this device's local edit. Does the still-retained-and-already-persisted
+    // local operation get safely reused on the second reconstruction, or does it
+    // get re-proposed as a "new" retained-operation addition and trip the
+    // inconsistentIncorporationState guard (or silently diverge)?
+    func testLocalOperationSurvivesTwoSeparateReconstructionsAgainstSamePeer() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true, configurationName: "DeviceA-\(UUID())")
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000165301")!
+        let note = Note(title: "Shared", content: "Hello World")
+        note.id = noteID
+        context.insert(note)
+        // A note already synced between both devices before either makes a new
+        // edit has a recorded snapshot of that shared base — without this, the
+        // reconstructor has nothing to walk back to and defers as
+        // unreconstructableBase rather than exercising the merge path at all.
+        context.insert(NoteContentSnapshot(
+            noteID: noteID,
+            contentHash: SyncBatchContentHash.sha256Hex(for: "Hello World"),
+            body: "Hello World",
+            generation: 1
+        ))
+        try context.save()
+
+        let deviceAID = UUID(uuidString: "00000000-0000-0000-0000-000000165302")!
+        let deviceBID = UUID(uuidString: "00000000-0000-0000-0000-000000165303")!
+
+        let transport = AcceptingLocalBatchTransport()
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: transport,
+            presentationAdapter: CompletingPresentationAdapter()
+        )
+
+        // Device A makes a local edit while offline from Device B. This is never
+        // acknowledged by B in this test (mirroring "B never received this yet").
+        let localChange = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+            noteID: noteID,
+            utf16Offset: "Hello World".utf16.count,
+            text: "A",
+            modifiedAt: Date(timeIntervalSince1970: 1),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello World")
+        ))
+        let capturedLocalChange = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+            for: localChange,
+            preBody: "Hello World",
+            postBody: "Hello WorldA"
+        )
+        let localBatch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000165304")!,
+            originDeviceID: deviceAID,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [localChange]
+        )
+        // submitLocalObligation only records evidence/history and hands off to
+        // transport — it does not itself mutate the note. In real usage the
+        // editor's persistence adapter (e.g. MacNotePersistenceAdapter) writes
+        // note.content directly before the sync layer is ever invoked.
+        note.content = "Hello WorldA"
+        try context.save()
+        let localOutcome = await runtime.submitLocalObligation(
+            SyncConvergenceLocalObligation(batch: localBatch, capturedChanges: [capturedLocalChange])
+        )
+        guard case .drained = localOutcome else {
+            return XCTFail("Expected local obligation to drain, got \(localOutcome)")
+        }
+        XCTAssertEqual(note.content, "Hello WorldA")
+
+        // Device B's first edit, declared against the ORIGINAL shared base (B has
+        // never seen A's edit). This forces reconstruction and must fold in A's
+        // still-unacknowledged local operation.
+        let remoteBatch1 = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000165305")!,
+            originDeviceID: deviceBID,
+            createdAt: Date(timeIntervalSince1970: 2),
+            changes: [.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                noteID: noteID,
+                utf16Offset: 0,
+                text: "B1",
+                modifiedAt: Date(timeIntervalSince1970: 2),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello World")
+            ))]
+        )
+        let firstRemoteOutcome = await runtime.submitRemoteBatch(remoteBatch1)
+        guard case .drained = firstRemoteOutcome else {
+            return XCTFail("Expected first reconstruction to drain, got \(firstRemoteOutcome)")
+        }
+        let bodyAfterFirstMerge = note.content
+        XCTAssertTrue(bodyAfterFirstMerge.contains("A"), "First merge should retain A's local insertion")
+        XCTAssertTrue(bodyAfterFirstMerge.contains("B1"), "First merge should retain B's insertion")
+
+        // Device B's SECOND edit, made locally on B's own copy before B ever
+        // received A's edit — so it's declared against B's post-B1 state, which
+        // still doesn't know about A's "A" insertion. This is the scenario that
+        // requires A's *already-persisted* local operation to be folded into a
+        // second, separate reconstruction.
+        let remoteBatch2 = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000165306")!,
+            originDeviceID: deviceBID,
+            createdAt: Date(timeIntervalSince1970: 3),
+            changes: [.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                noteID: noteID,
+                utf16Offset: "B1Hello World".utf16.count,
+                text: "B2",
+                modifiedAt: Date(timeIntervalSince1970: 3),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "B1Hello World")
+            ))]
+        )
+        let secondRemoteOutcome = await runtime.submitRemoteBatch(remoteBatch2)
+
+        switch secondRemoteOutcome {
+        case .drained:
+            let finalBody = note.content
+            XCTAssertTrue(finalBody.contains("A"), "Second merge dropped A's local insertion: \(finalBody)")
+            XCTAssertTrue(finalBody.contains("B1"), "Second merge dropped B's first insertion: \(finalBody)")
+            XCTAssertTrue(finalBody.contains("B2"), "Second merge dropped B's second insertion: \(finalBody)")
+            XCTAssertEqual(finalBody.components(separatedBy: "A").count - 1, 1, "A's insertion was duplicated: \(finalBody)")
+        default:
+            XCTFail("Second reconstruction involving an already-persisted local operation did not drain cleanly: \(secondRemoteOutcome)")
+        }
+    }
+
     func testDelayedBatchDrainRepeatsForReentrantSubmissionWithoutStrandingWork() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
