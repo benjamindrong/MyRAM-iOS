@@ -4173,6 +4173,289 @@ final class MyRAMTests: XCTestCase {
         }
     }
 
+    // Fuller live-repro fidelity: two independent runtimes ("Mac" and "sim"),
+    // each with its own note/context, exchange a couple of ordinary
+    // non-conflicting edits first (mirroring "confirmed sync working" in the
+    // real repro — this builds real retained history on both sides without
+    // ever going through planReconstructed, since neither side has diverged
+    // yet), THEN both devices edit locally while mutually disconnected, THEN
+    // each delivers its edit to the other (a true bidirectional exchange, not
+    // one side passively receiving batches from an unmodeled peer). Both
+    // sides must converge to the identical final string with nothing dropped.
+    func testBidirectionalConcurrentEditsAfterPriorSyncedHistoryConvergeIdentically() async throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000165401")!
+        let macDeviceID = UUID(uuidString: "00000000-0000-0000-0000-000000165402")!
+        let simDeviceID = UUID(uuidString: "00000000-0000-0000-0000-000000165403")!
+        let base = "Hello World"
+
+        func makeDevice(name: String) throws -> (context: ModelContext, note: Note, runtime: SyncConvergenceRuntime, transport: AcceptingLocalBatchTransport) {
+            let container = try makeContainer(isStoredInMemoryOnly: true, configurationName: "\(name)-\(UUID())")
+            let context = container.mainContext
+            let note = Note(title: "Shared", content: base)
+            note.id = noteID
+            context.insert(note)
+            context.insert(NoteContentSnapshot(
+                noteID: noteID,
+                contentHash: SyncBatchContentHash.sha256Hex(for: base),
+                body: base,
+                generation: 1
+            ))
+            try context.save()
+            let transport = AcceptingLocalBatchTransport()
+            let runtime = SyncConvergenceRuntime(
+                context: context,
+                convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+                localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+                localBatchTransportAdapter: transport,
+                presentationAdapter: CompletingPresentationAdapter()
+            )
+            return (context, note, runtime, transport)
+        }
+
+        func localEdit(
+            noteID: UUID,
+            deviceID: UUID,
+            batchID: UUID,
+            offset: Int,
+            text: String,
+            modifiedAt: Date,
+            preBody: String,
+            postBody: String
+        ) throws -> (batch: SyncBatch, capturedChange: SyncConvergenceCapturedLocalChange) {
+            let change = SyncBatchChange.noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                noteID: noteID,
+                utf16Offset: offset,
+                text: text,
+                modifiedAt: modifiedAt,
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: preBody)
+            ))
+            let captured = try SyncConvergenceLocalEvidenceCapture.capturedChange(
+                for: change,
+                preBody: preBody,
+                postBody: postBody
+            )
+            let batch = SyncBatch(id: batchID, originDeviceID: deviceID, createdAt: modifiedAt, changes: [change])
+            return (batch, captured)
+        }
+
+        let mac = try makeDevice(name: "Mac")
+        let sim = try makeDevice(name: "Sim")
+
+        // Round 1 & 2: ordinary non-conflicting edits captured on sim and
+        // delivered to Mac — neither side has diverged, so these incorporate
+        // via the simple matching-base path, not reconstruction. This is what
+        // "confirmed sync working" / "sync still working" look like.
+        for (index, insertionText) in ["1", "2"].enumerated() {
+            let preBody = sim.note.content
+            let postBody = insertionText + preBody
+            let (batch, capturedChange) = try localEdit(
+                noteID: noteID,
+                deviceID: simDeviceID,
+                batchID: UUID(uuidString: String(format: "00000000-0000-0000-0000-0000001654%02d", 10 + index))!,
+                offset: 0,
+                text: insertionText,
+                modifiedAt: Date(timeIntervalSince1970: Double(index + 1)),
+                preBody: preBody,
+                postBody: postBody
+            )
+            // submitLocalObligation only records evidence/history; the caller (in
+            // real code, the platform's persistence adapter) must write the note's
+            // fields directly before invoking the sync layer.
+            sim.note.content = postBody
+            sim.note.modifiedAt = Date(timeIntervalSince1970: Double(index + 1))
+            let simOutcome = await sim.runtime.submitLocalObligation(
+                SyncConvergenceLocalObligation(batch: batch, capturedChanges: [capturedChange])
+            )
+            guard case .drained = simOutcome else {
+                return XCTFail("Expected sim's round \(index) local edit to drain, got \(simOutcome)")
+            }
+            let macOutcome = await mac.runtime.submitRemoteBatch(batch)
+            guard case .drained = macOutcome else {
+                return XCTFail("Expected mac to cleanly incorporate sim's round \(index) edit, got \(macOutcome)")
+            }
+        }
+        XCTAssertEqual(mac.note.content, sim.note.content, "Prior rounds should already agree")
+        let convergedBase = sim.note.content // "21Hello World"
+
+        // Round 3: both devices edit locally, mutually offline from each other.
+        let (simBatch, simCapturedChange) = try localEdit(
+            noteID: noteID,
+            deviceID: simDeviceID,
+            batchID: UUID(uuidString: "00000000-0000-0000-0000-000000165420")!,
+            offset: 0,
+            text: "A",
+            modifiedAt: Date(timeIntervalSince1970: 10),
+            preBody: convergedBase,
+            postBody: "A" + convergedBase
+        )
+        sim.note.content = "A" + convergedBase
+        sim.note.modifiedAt = Date(timeIntervalSince1970: 10)
+        let simLocalOutcome = await sim.runtime.submitLocalObligation(
+            SyncConvergenceLocalObligation(batch: simBatch, capturedChanges: [simCapturedChange])
+        )
+        guard case .drained = simLocalOutcome else {
+            return XCTFail("Expected sim's divergent local edit to drain, got \(simLocalOutcome)")
+        }
+
+        let (macBatch, macCapturedChange) = try localEdit(
+            noteID: noteID,
+            deviceID: macDeviceID,
+            batchID: UUID(uuidString: "00000000-0000-0000-0000-000000165421")!,
+            offset: convergedBase.utf16.count,
+            text: "B",
+            modifiedAt: Date(timeIntervalSince1970: 11),
+            preBody: convergedBase,
+            postBody: convergedBase + "B"
+        )
+        mac.note.content = convergedBase + "B"
+        mac.note.modifiedAt = Date(timeIntervalSince1970: 11)
+        let macLocalOutcome = await mac.runtime.submitLocalObligation(
+            SyncConvergenceLocalObligation(batch: macBatch, capturedChanges: [macCapturedChange])
+        )
+        guard case .drained = macLocalOutcome else {
+            return XCTFail("Expected mac's divergent local edit to drain, got \(macLocalOutcome)")
+        }
+
+        // Exchange: each device receives the other's divergent edit. Mac must
+        // reconstruct (its own B already retained, sim's A incoming, unaware of
+        // each other). Sim must independently reconstruct the mirror image.
+        let macReceivesSimOutcome = await mac.runtime.submitRemoteBatch(simBatch)
+        guard case .drained = macReceivesSimOutcome else {
+            return XCTFail("Expected mac to reconcile sim's divergent edit, got \(macReceivesSimOutcome)")
+        }
+        let simReceivesMacOutcome = await sim.runtime.submitRemoteBatch(macBatch)
+        guard case .drained = simReceivesMacOutcome else {
+            return XCTFail("Expected sim to reconcile mac's divergent edit, got \(simReceivesMacOutcome)")
+        }
+
+        let macFinal = mac.note.content
+        let simFinal = sim.note.content
+        XCTAssertEqual(macFinal, simFinal, "Mac and sim converged to different text: mac=\(macFinal) sim=\(simFinal)")
+        XCTAssertEqual(macFinal.filter { $0 == "A" }.count, 1, "A's insertion missing or duplicated: \(macFinal)")
+        XCTAssertEqual(macFinal.filter { $0 == "B" }.count, 1, "B's insertion missing or duplicated: \(macFinal)")
+        XCTAssertEqual(macFinal.utf16.count, convergedBase.utf16.count + 2, "Character count mismatch, something was dropped or duplicated: \(macFinal)")
+    }
+
+    // Live-repro diagnostic: unlike the split-location edits above, this
+    // mirrors "select all, then type over it" on both devices — a full-body
+    // delete covering the *entire* shared text, immediately followed by an
+    // insert, on both sides, from the identical base. Both devices' deletes
+    // target the exact same range, not just non-overlapping regions. This
+    // uses the real SyncBatchNoteChangeCapture.capturedBodyChanges diff (not
+    // hand-built operations) so the captured shape matches production exactly.
+    func testConcurrentFullBodyReplacementsFromBothDevices() async throws {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000165501")!
+        let macDeviceID = UUID(uuidString: "00000000-0000-0000-0000-000000165502")!
+        let simDeviceID = UUID(uuidString: "00000000-0000-0000-0000-000000165503")!
+        let base = "test sync received on Mac and iPhone"
+
+        func makeDevice(name: String) throws -> (context: ModelContext, note: Note, runtime: SyncConvergenceRuntime, transport: AcceptingLocalBatchTransport) {
+            let container = try makeContainer(isStoredInMemoryOnly: true, configurationName: "\(name)-\(UUID())")
+            let context = container.mainContext
+            let note = Note(title: "Shared", content: base)
+            note.id = noteID
+            context.insert(note)
+            context.insert(NoteContentSnapshot(
+                noteID: noteID,
+                contentHash: SyncBatchContentHash.sha256Hex(for: base),
+                body: base,
+                generation: 1
+            ))
+            try context.save()
+            let transport = AcceptingLocalBatchTransport()
+            let runtime = SyncConvergenceRuntime(
+                context: context,
+                convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+                localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+                localBatchTransportAdapter: transport,
+                presentationAdapter: CompletingPresentationAdapter()
+            )
+            return (context, note, runtime, transport)
+        }
+
+        func fullReplaceEdit(
+            deviceID: UUID,
+            batchID: UUID,
+            newText: String,
+            modifiedAt: Date
+        ) throws -> (batch: SyncBatch, capturedChanges: [SyncConvergenceCapturedLocalChange]) {
+            // SyncBatchBodyHashCapability.defaultEnabled is currently false (staged
+            // rollout: body-hash emission stays off until "PR 3"), so real captures
+            // never set baseContentHash and route through the naive .legacyPositional
+            // path instead of reconstruction — that's the actual live bug. This test
+            // exercises the capability as it's meant to work once enabled, to prove
+            // this session's reconstruction fixes actually resolve it.
+            let captured = try SyncBatchNoteChangeCapture.capturedBodyChanges(
+                noteID: noteID,
+                oldBody: base,
+                newBody: newText,
+                modifiedAt: modifiedAt,
+                bodyHashCapabilityEnabled: true
+            )
+            let batch = SyncBatch(
+                id: batchID,
+                originDeviceID: deviceID,
+                createdAt: modifiedAt,
+                changes: captured.map(\.change)
+            )
+            return (batch, captured)
+        }
+
+        let mac = try makeDevice(name: "Mac")
+        let sim = try makeDevice(name: "Sim")
+
+        let (macBatch, macCapturedChanges) = try fullReplaceEdit(
+            deviceID: macDeviceID,
+            batchID: UUID(uuidString: "00000000-0000-0000-0000-000000165510")!,
+            newText: "HAHA",
+            modifiedAt: Date(timeIntervalSince1970: 10)
+        )
+        mac.note.content = "HAHA"
+        mac.note.modifiedAt = Date(timeIntervalSince1970: 10)
+        let macLocalOutcome = await mac.runtime.submitLocalObligation(
+            SyncConvergenceLocalObligation(batch: macBatch, capturedChanges: macCapturedChanges)
+        )
+        guard case .drained = macLocalOutcome else {
+            return XCTFail("Expected mac's full-replace local edit to drain, got \(macLocalOutcome)")
+        }
+
+        let (simBatch, simCapturedChanges) = try fullReplaceEdit(
+            deviceID: simDeviceID,
+            batchID: UUID(uuidString: "00000000-0000-0000-0000-000000165511")!,
+            newText: "GONE",
+            modifiedAt: Date(timeIntervalSince1970: 11)
+        )
+        sim.note.content = "GONE"
+        sim.note.modifiedAt = Date(timeIntervalSince1970: 11)
+        let simLocalOutcome = await sim.runtime.submitLocalObligation(
+            SyncConvergenceLocalObligation(batch: simBatch, capturedChanges: simCapturedChanges)
+        )
+        guard case .drained = simLocalOutcome else {
+            return XCTFail("Expected sim's full-replace local edit to drain, got \(simLocalOutcome)")
+        }
+
+        // Both devices replaced the *entire* shared text with unrelated content —
+        // a genuine, irreconcilable overlap (not just concurrent edits in
+        // different regions). With the capability enabled, the rewrite-safety
+        // policy correctly recognizes it cannot prove no text was silently lost
+        // and blocks rather than guessing — this is what stops the corruption
+        // seen live ("GONEHAHA" / "HAHAGONE"-style concatenation) once this
+        // capability ships: the batch is safely blocked instead of silently
+        // merged into garbage.
+        let macReceivesSimOutcome = await mac.runtime.submitRemoteBatch(simBatch)
+        guard case .blocked(let failure) = macReceivesSimOutcome, failure.kind == .unprovenTextLoss else {
+            return XCTFail("Expected mac to safely block on sim's fully-overlapping replace, got \(macReceivesSimOutcome)")
+        }
+        let simReceivesMacOutcome = await sim.runtime.submitRemoteBatch(macBatch)
+        guard case .blocked(let simFailure) = simReceivesMacOutcome, simFailure.kind == .unprovenTextLoss else {
+            return XCTFail("Expected sim to safely block on mac's fully-overlapping replace, got \(simReceivesMacOutcome)")
+        }
+
+        // Crucially, neither device silently corrupted its own text while blocked.
+        XCTAssertEqual(mac.note.content, "HAHA")
+        XCTAssertEqual(sim.note.content, "GONE")
+    }
+
     func testDelayedBatchDrainRepeatsForReentrantSubmissionWithoutStrandingWork() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
