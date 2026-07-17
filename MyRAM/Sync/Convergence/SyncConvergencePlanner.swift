@@ -1288,15 +1288,37 @@ private struct SyncOperationReplayEngine {
     ) -> BodyPlanningResult {
         var body = base.body
         var plannedOperations: [SyncConvergencePlannedBodyOperation] = []
+        // Each operation's utf16Offset was recorded relative to its own device's body
+        // state at capture time, which never accounted for the other device's
+        // concurrent edits. Replaying those raw offsets against a body already
+        // mutated by earlier operations in this loop silently reorders or drops
+        // text. Rebasing against every already-applied operation from a *different*
+        // origin device (same-device operations are already self-consistent, since
+        // each one was captured after its own predecessors) keeps both peers'
+        // canonically-ordered replay producing the identical result.
+        var appliedForeignEvents: [SyncConvergenceAppliedRebaseEvent] = []
         for operation in operations {
-            switch replaySingle(
+            let rebasedChange = Self.rebasedChange(
                 operation.change,
+                for: operation.identity.originDeviceIDLowercase,
+                against: appliedForeignEvents
+            )
+            switch replaySingle(
+                rebasedChange,
                 identity: operation.identity,
                 body: body,
                 noteID: projectedCurrent.noteID,
                 mode: .replayingConflictUnion
             ) {
             case .success(let replay):
+                let utf16LengthDelta = replay.finalBody.utf16.count - body.utf16.count
+                if utf16LengthDelta != 0 {
+                    appliedForeignEvents.append(SyncConvergenceAppliedRebaseEvent(
+                        originDeviceIDLowercase: operation.identity.originDeviceIDLowercase,
+                        appliedOffset: Self.utf16Offset(of: rebasedChange),
+                        utf16LengthDelta: utf16LengthDelta
+                    ))
+                }
                 body = replay.finalBody
                 plannedOperations.append(contentsOf: replay.retainedAdditions)
             case .deferred(let reason):
@@ -1495,6 +1517,89 @@ private struct SyncOperationReplayEngine {
             return .failed(.invalidMergePlan(noteID: noteID))
         }
     }
+
+    /// Adjusts `change`'s utf16Offset by every already-applied `SyncBatchChange`
+    /// event whose origin device differs from `originDeviceIDLowercase` (same-device
+    /// events are already reflected in the offset it was captured with). Applying
+    /// events in the order they were actually applied is what makes this correct:
+    /// each transform compounds onto the position produced by the ones before it.
+    private static func rebasedChange(
+        _ change: SyncBatchChange,
+        for originDeviceIDLowercase: String,
+        against appliedForeignEvents: [SyncConvergenceAppliedRebaseEvent]
+    ) -> SyncBatchChange {
+        let rebased = rebasedOffset(
+            utf16Offset(of: change),
+            excludingOriginDeviceIDLowercase: originDeviceIDLowercase,
+            against: appliedForeignEvents
+        )
+        switch change {
+        case .noteBodyTextInserted(let insert):
+            guard rebased != insert.utf16Offset else { return change }
+            return .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                noteID: insert.noteID,
+                utf16Offset: rebased,
+                text: insert.text,
+                modifiedAt: insert.modifiedAt,
+                baseContentHash: insert.baseContentHash
+            ))
+        case .noteBodyTextDeleted(let delete):
+            guard rebased != delete.utf16Offset else { return change }
+            return .noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
+                noteID: delete.noteID,
+                utf16Offset: rebased,
+                utf16Length: delete.utf16Length,
+                expectedText: delete.expectedText,
+                modifiedAt: delete.modifiedAt,
+                baseContentHash: delete.baseContentHash
+            ))
+        default:
+            return change
+        }
+    }
+
+    private static func utf16Offset(of change: SyncBatchChange) -> Int {
+        switch change {
+        case .noteBodyTextInserted(let insert):
+            insert.utf16Offset
+        case .noteBodyTextDeleted(let delete):
+            delete.utf16Offset
+        default:
+            0
+        }
+    }
+
+    private static func rebasedOffset(
+        _ offset: Int,
+        excludingOriginDeviceIDLowercase originDeviceIDLowercase: String,
+        against appliedForeignEvents: [SyncConvergenceAppliedRebaseEvent]
+    ) -> Int {
+        var adjusted = offset
+        for event in appliedForeignEvents where event.originDeviceIDLowercase != originDeviceIDLowercase {
+            if event.utf16LengthDelta > 0 {
+                if event.appliedOffset <= adjusted {
+                    adjusted += event.utf16LengthDelta
+                }
+            } else {
+                let deletedLength = -event.utf16LengthDelta
+                let deletionEnd = event.appliedOffset + deletedLength
+                if event.appliedOffset >= adjusted {
+                    continue
+                } else if deletionEnd <= adjusted {
+                    adjusted -= deletedLength
+                } else {
+                    adjusted = event.appliedOffset
+                }
+            }
+        }
+        return max(0, adjusted)
+    }
+}
+
+private struct SyncConvergenceAppliedRebaseEvent {
+    let originDeviceIDLowercase: String
+    let appliedOffset: Int
+    let utf16LengthDelta: Int
 }
 
 private enum SyncOperationReplayMode: Equatable {
