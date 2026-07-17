@@ -232,13 +232,16 @@ struct SyncConvergencePlanner {
                 )
                 operationIdentities.append(identity)
                 resultEvidence.append(evidence)
-                // A co-occurring body/title effect in this same batch (e.g. an edit bundled
-                // with a delete) already claimed the routing it needs and validates it
-                // independently; the lifecycle change must never clobber that. It only
-                // decides routing when nothing else in this batch already has.
-                routings[lifecycle.noteID] = routings[lifecycle.noteID] ?? (
-                    (matchesBase && lifecycle.deletedAt != nil) ? .noteRemoved : .none
-                )
+                // A delete that actually applies always wins and closes the editor, even over a
+                // co-occurring body/title effect in this same batch (e.g. an edit bundled with a
+                // delete) — the note is going away, so pushing incremental content to it is wrong.
+                // Otherwise (a conflict that preserves the live note, or a successful restore) the
+                // lifecycle change does not itself require any specific routing, so a co-occurring
+                // effect's routing (e.g. .incremental from a body edit bundled into the same
+                // batch) must not be clobbered back down to .none.
+                routings[lifecycle.noteID] = (matchesBase && lifecycle.deletedAt != nil)
+                    ? .noteRemoved
+                    : (routings[lifecycle.noteID] ?? .none)
             }
         }
 
@@ -2078,6 +2081,12 @@ struct SyncConvergencePlanValidator {
                     }
                 }
             }
+            // A delete that actually applies always wins presentation routing (see the planner's
+            // lifecycle-routing assignment above), even over a body effect that would otherwise
+            // require .incremental/.wholeNoteFallback — the note is going away, so the editor must
+            // close rather than receive more content for it.
+            let lifecycleAppliesDelete = notePlan.lifecycleEffect?.verdict == .apply
+                && notePlan.lifecycleEffect?.deletedAt != nil
             switch notePlan.bodyEffect {
             case .matchingBaseIncremental(let bodyPlan):
                 guard bodyPlan.noteID == notePlan.noteID,
@@ -2088,7 +2097,8 @@ struct SyncConvergencePlanValidator {
                       bodyPlan.resultEvidence.batchID == plan.batchID,
                       bodyPlan.resultEvidence.preHash == bodyPlan.initialBodyHash,
                       bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
-                      routing == (bodyPlan.operations.isEmpty ? SyncConvergencePresentationRouting.none : .incremental),
+                      routing == (bodyPlan.operations.isEmpty ? SyncConvergencePresentationRouting.none : .incremental)
+                          || (lifecycleAppliesDelete && routing == .noteRemoved),
                       bodyPlan.operations.allSatisfy({ $0.noteID == notePlan.noteID }),
                       bodyPlan.operations.allSatisfy({ plannedIdentityKeys.contains($0.operationIdentity.planIdentityKey) }) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
@@ -2106,7 +2116,7 @@ struct SyncConvergencePlanValidator {
                       bodyPlan.resultEvidence.batchID == plan.batchID,
                       bodyPlan.resultEvidence.preHash == bodyPlan.projectedPreMergeCurrentHash,
                       bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
-                      routing == .wholeNoteFallback else {
+                      routing == .wholeNoteFallback || (lifecycleAppliesDelete && routing == .noteRemoved) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
                 guard bodyPlan.retainedOperationAdditions.allSatisfy({ $0.noteID == notePlan.noteID }) else {
@@ -2135,7 +2145,7 @@ struct SyncConvergencePlanValidator {
                       bodyPlan.resultEvidence.batchID == plan.batchID,
                       bodyPlan.resultEvidence.preHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.initialBody),
                       bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
-                      routing == .incremental,
+                      routing == .incremental || (lifecycleAppliesDelete && routing == .noteRemoved),
                       bodyPlan.operations.allSatisfy({ $0.noteID == notePlan.noteID }) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
