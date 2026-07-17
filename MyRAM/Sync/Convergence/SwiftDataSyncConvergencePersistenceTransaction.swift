@@ -36,6 +36,11 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
             throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: record.noteID)
         }
         note.title = record.title
+        if note.content != record.body {
+            // The merge only produces plain text; stale rich text from before the
+            // merge would otherwise keep rendering in the editor over the top of it.
+            note.richTextContentData = nil
+        }
         note.content = record.body
         note.modifiedAt = record.modifiedAt
         if let deletedAt = record.deletedAt {

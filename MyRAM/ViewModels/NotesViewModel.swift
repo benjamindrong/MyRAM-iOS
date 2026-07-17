@@ -157,6 +157,9 @@ final class NotesViewModel: ObservableObject {
         self.syncController?.onBatchReceived = { [weak self] batch in
             await self?.applyIncomingSyncBatch(batch)
         }
+        self.syncController?.onDurablyCaptureIncomingBatch = { [weak self] batch in
+            self?.durablyCaptureIncomingBatch(batch) ?? false
+        }
         if let statusController = syncController as? MyRAMSyncConvergenceStatusConfiguring {
             statusController.localConvergencePendingCountProvider = { [weak self] in
                 self?.pendingLocalConvergenceBatches.pendingCount ?? 0
@@ -1964,6 +1967,22 @@ final class NotesViewModel: ObservableObject {
         await handleConvergenceRuntimeOutcome(outcome)
     }
 
+    /// Durably persists an incoming batch's raw bytes, independent of whatever
+    /// `applyIncomingSyncBatch` later does with them. This is what the transport
+    /// layer checks before acknowledging receipt back to the sender: once this
+    /// returns true, the sender no longer needs to keep the batch around for
+    /// redelivery, even if convergence processing of its contents is deferred or blocked.
+    func durablyCaptureIncomingBatch(_ batch: SyncBatch) -> Bool {
+        guard !batch.changes.isEmpty else { return true }
+        if pendingIncomingBatches.contains(batch.id) { return true }
+        do {
+            try pendingIncomingBatches.enqueueIncoming(batch)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     func localConvergenceQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot {
         pendingLocalConvergenceBatches.snapshot()
     }
@@ -2114,16 +2133,20 @@ final class NotesViewModel: ObservableObject {
         await refreshPendingSyncStatusForLocalConvergenceMutation?()
     }
 
-    private static func syncErrorMessage(for deferred: SyncConvergenceDeferredWork) -> String? {
-        let items = deferred.incoming + deferred.localObligations
+    static func syncErrorMessage(for deferred: SyncConvergenceDeferredWork) -> String? {
+        let items = deferred.incoming + deferred.localObligations + deferred.postCommit
         for item in items {
-            guard case .planning(let reason) = item.reason else { continue }
-            switch reason {
+            switch item.reason {
+            case .planning(let reason):
+                switch reason {
             case .unreconstructableBase:
                 return SyncBatchDrainFailureClassifier.userMessage(
                     for: SyncBatchDrainFailure(batchID: item.batchID, kind: .mismatchedBase)
                 )
             case .unsupportedReconciliation, .historyPressure:
+                continue
+                }
+            case .legacyLocalEvidenceStale, .transportUnavailable, .postCommitPending:
                 continue
             }
         }

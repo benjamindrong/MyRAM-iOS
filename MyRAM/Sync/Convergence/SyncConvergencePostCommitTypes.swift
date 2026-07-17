@@ -42,7 +42,12 @@ struct SyncConvergencePostCommitRequest: Equatable, Sendable {
 
 enum SyncConvergencePostCommitOutcome: Equatable, Sendable {
     case complete
-    case pending(Set<SyncConvergencePostCommitPendingWork>)
+    /// `blocking` identifies the gate that prevented this execution from finishing;
+    /// `outstanding` retains every remaining gate for diagnostics and retries.
+    case pending(
+        blocking: SyncConvergencePostCommitPendingWork,
+        outstanding: Set<SyncConvergencePostCommitPendingWork>
+    )
     case failedBeforeWork(SyncConvergencePostCommitFailure)
 }
 

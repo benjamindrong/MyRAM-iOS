@@ -15,3 +15,10 @@ struct SyncBatchEnvelope: Codable, Equatable, Sendable {
         schemaVersion <= Self.currentSchemaVersion
     }
 }
+
+/// Transport-level confirmation that a peer has durably captured a batch. It says
+/// nothing about whether the batch has been converged/applied yet — only that the
+/// sender no longer needs to keep retrying redelivery of these bytes.
+struct SyncBatchAcknowledgement: Codable, Equatable, Sendable {
+    let batchID: SyncBatchID
+}

@@ -3,6 +3,7 @@ import Foundation
 enum MultipeerSyncMessageKind: String, Codable, Equatable, Sendable {
     case legacySyncEnvelope = "myram.legacySyncEnvelope.v1"
     case batchSync = "myram.batchSync.v1"
+    case batchAcknowledgement = "myram.batchAcknowledgement.v1"
 }
 
 struct MultipeerSyncMessageEnvelope: Codable, Equatable, Sendable {

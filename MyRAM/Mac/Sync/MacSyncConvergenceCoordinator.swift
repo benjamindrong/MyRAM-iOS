@@ -39,6 +39,22 @@ final class MacSyncConvergenceCoordinator {
         pendingIncomingQueue.pendingCount
     }
 
+    /// Durably persists an incoming batch's raw bytes, independent of whatever
+    /// `submitRemoteBatch` later does with them. This is what the transport layer
+    /// checks before acknowledging receipt back to the sender: once this returns
+    /// true, the sender no longer needs to keep the batch around for redelivery,
+    /// even if convergence processing of its contents is deferred or blocked.
+    func durablyCaptureIncomingBatch(_ batch: SyncBatch) -> Bool {
+        guard !batch.changes.isEmpty else { return true }
+        if pendingIncomingQueue.contains(batch.id) { return true }
+        do {
+            try pendingIncomingQueue.enqueueIncoming(batch)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     func submitRemoteBatch(_ batch: SyncBatch) async {
         await handle(outcome: runtime.submitRemoteBatch(batch), sourceBatch: batch)
     }

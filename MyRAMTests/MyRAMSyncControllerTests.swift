@@ -339,6 +339,12 @@ final class MyRAMSyncControllerTests: XCTestCase {
         await waitUntil { transport.sentBatchEnvelopes.count == 1 }
 
         XCTAssertEqual(transport.sentBatchEnvelopes.map(\.batch), [batch])
+        // Sent, but not yet acknowledged: the batch must stay durable until the
+        // peer confirms receipt, otherwise a send followed immediately by
+        // termination would silently drop it.
+        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 1)
+
+        await deliverBatchAcknowledgement(to: controller, batchID: batch.id)
         await waitUntil { controller.pendingSyncStatus.unsentBatches == 0 }
     }
 
@@ -354,9 +360,15 @@ final class MyRAMSyncControllerTests: XCTestCase {
         transport.connectedPeers = [Self.remotePeerID]
         controller.flushPendingChanges()
 
+        await waitUntil { !transport.sentBatchEnvelopes.isEmpty }
+        XCTAssertEqual(transport.sentBatchEnvelopes.map(\.batch), [batch])
+        // Sent, but not yet acknowledged: still durably queued.
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
+        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 1)
+
+        await deliverBatchAcknowledgement(to: controller, batchID: batch.id)
         await waitUntil { controller.unsentBatchQueueSnapshot().pendingBatches.isEmpty }
         await waitUntil { controller.pendingSyncStatus.unsentBatches == 0 }
-        XCTAssertEqual(transport.sentBatchEnvelopes.map(\.batch), [batch])
     }
 
     func testDisconnectedAcceptLocalBatchRefreshesUnsentStatusBeforeReturning() async throws {
@@ -400,8 +412,13 @@ final class MyRAMSyncControllerTests: XCTestCase {
         )
     }
 
-    func testSuccessfulTransportFollowedByFailedDurableRemovalKeepsUnsentBatch() async throws {
-        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+    // Regression test for MYR-165: a `session.send()` call that doesn't throw only
+    // means the framework accepted the bytes, not that the peer received them. If
+    // the queue were cleared right after a successful send (the old behavior),
+    // terminating the app in the gap between "sent" and "acknowledged" would
+    // silently and permanently lose the batch. It must stay durable until acked.
+    func testSentBatchIsNotRemovedFromQueueWithoutAcknowledgement() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let controller = try makeController(
             unsentBatchQueueFileURL: temporaryQueueFileURL(),
             transport: transport
@@ -409,25 +426,53 @@ final class MyRAMSyncControllerTests: XCTestCase {
         let batch = makeBatch(idSuffix: 203)
 
         try await controller.acceptLocalBatch(batch)
-        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
-
-        transport.connectedPeers = [Self.remotePeerID]
-        controller.injectUnsentBatchPersistenceFailureForNextWrite()
-
-        do {
-            try await controller.acceptLocalBatch(batch)
-            XCTFail("Expected durable removal failure to propagate")
-        } catch {
-            XCTAssertEqual(error as? FileBackedSyncBatchQueue.QueueError, .persistenceFailed)
-        }
 
         XCTAssertEqual(transport.sentBatchEnvelopes.map(\.batch), [batch])
         XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
-        XCTAssertTrue(
-            controller.pendingSyncStatus.healthIssues.contains {
-                $0.domain == .unsentBatches
-            }
+        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 1)
+    }
+
+    func testAcknowledgementRemovesOnlyMatchingBatchFromUnsentQueue() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(),
+            transport: transport
         )
+        let firstBatch = makeBatch(idSuffix: 206)
+        let secondBatch = makeBatch(idSuffix: 207)
+
+        try await controller.acceptLocalBatch(firstBatch)
+        try await controller.acceptLocalBatch(secondBatch)
+        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 2)
+
+        await deliverBatchAcknowledgement(to: controller, batchID: firstBatch.id)
+
+        await waitUntil { controller.pendingSyncStatus.unsentBatches == 1 }
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [secondBatch])
+    }
+
+    func testIncomingBatchSyncSendsAcknowledgementWhenDurablyCaptured() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(transport: transport)
+        controller.onDurablyCaptureIncomingBatch = { _ in true }
+        let batch = makeBatch(idSuffix: 208)
+
+        await deliverBatchSync(to: controller, batch)
+
+        await waitUntil { !transport.sentBatchAcknowledgements.isEmpty }
+        XCTAssertEqual(transport.sentBatchAcknowledgements, [SyncBatchAcknowledgement(batchID: batch.id)])
+    }
+
+    func testIncomingBatchSyncDoesNotAcknowledgeWhenNotDurablyCaptured() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(transport: transport)
+        controller.onDurablyCaptureIncomingBatch = { _ in false }
+        let batch = makeBatch(idSuffix: 209)
+
+        await deliverBatchSync(to: controller, batch)
+        try? await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
     }
 
     func testLocalConvergenceReplacementRefreshesAggregateStatusImmediately() async throws {
@@ -479,6 +524,23 @@ final class MyRAMSyncControllerTests: XCTestCase {
         controller.session(dummySession, didReceive: data, fromPeer: Self.remotePeerID)
         // The delegate callback dispatches onto a Task; give it a turn to run
         // before returning control to the assertion.
+        await Task.yield()
+    }
+
+    private func deliverBatchSync(to controller: MyRAMSyncController, _ batch: SyncBatch) async {
+        let data = try! MultipeerSyncMessageCoding.encodeBatchEnvelope(SyncBatchEnvelope(batch: batch))
+        let dummySession = MCSession(peer: MCPeerID(displayName: "local|local-device"))
+        controller.session(dummySession, didReceive: data, fromPeer: Self.remotePeerID)
+        await Task.yield()
+    }
+
+    private func deliverBatchAcknowledgement(to controller: MyRAMSyncController, batchID: SyncBatchID) async {
+        let data = try! MultipeerSyncMessageCoding.encode(
+            kind: .batchAcknowledgement,
+            payload: JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
+        )
+        let dummySession = MCSession(peer: MCPeerID(displayName: "local|local-device"))
+        controller.session(dummySession, didReceive: data, fromPeer: Self.remotePeerID)
         await Task.yield()
     }
 
@@ -534,6 +596,7 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     var suspendLegacySends = false
     private(set) var sentLegacyEnvelopes: [SyncEnvelope] = []
     private(set) var sentBatchEnvelopes: [SyncBatchEnvelope] = []
+    private(set) var sentBatchAcknowledgements: [SyncBatchAcknowledgement] = []
     private(set) var activeLegacySendCount = 0
     private(set) var maximumConcurrentLegacySends = 0
     private var suspendedLegacySendContinuations: [CheckedContinuation<Void, Never>] = []
@@ -567,6 +630,8 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
             activeLegacySendCount -= 1
         case .batchSync:
             sentBatchEnvelopes.append(try JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload))
+        case .batchAcknowledgement:
+            sentBatchAcknowledgements.append(try JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload))
         }
     }
 

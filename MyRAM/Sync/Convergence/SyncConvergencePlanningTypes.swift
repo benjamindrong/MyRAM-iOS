@@ -216,6 +216,14 @@ struct ReconstructedConflictBodyPlan: Equatable {
     let finalBody: String
     let finalBodyHash: String
     let retainedOperationAdditions: [SyncConvergencePlannedBodyOperation]
+    /// Every operation replayed to produce finalBody, including ones already
+    /// durably retained from an earlier merge (and thus absent from
+    /// retainedOperationAdditions, which lists only genuinely new rows). Needed
+    /// to independently re-derive the same delete evidence — and therefore the
+    /// same rewrite-safety receipt — that planReconstructed originally computed,
+    /// since that computation is not reproducible from retainedOperationAdditions
+    /// alone once an already-retained operation has been excluded from it.
+    let mergedOperations: [SyncConvergencePlannedBodyOperation]
     let snapshotAdditions: [SyncConvergenceSnapshotAddition]
     let resultEvidence: SyncConvergenceResultEvidence
     let presentationRouting: SyncConvergencePresentationRouting
@@ -231,6 +239,7 @@ struct ReconstructedConflictBodyPlan: Equatable {
         finalBody: String,
         finalBodyHash: String,
         retainedOperationAdditions: [SyncConvergencePlannedBodyOperation],
+        mergedOperations: [SyncConvergencePlannedBodyOperation],
         snapshotAdditions: [SyncConvergenceSnapshotAddition],
         resultEvidence: SyncConvergenceResultEvidence,
         presentationRouting: SyncConvergencePresentationRouting,
@@ -245,6 +254,7 @@ struct ReconstructedConflictBodyPlan: Equatable {
         self.finalBody = finalBody
         self.finalBodyHash = finalBodyHash
         self.retainedOperationAdditions = retainedOperationAdditions
+        self.mergedOperations = mergedOperations
         self.snapshotAdditions = snapshotAdditions
         self.resultEvidence = resultEvidence
         self.presentationRouting = presentationRouting
@@ -352,7 +362,12 @@ struct SyncConvergencePlannedBodyOperation: Equatable {
     let text: String?
     let expectedText: String?
     let baseContentHash: String?
-    let resultContentHash: String
+    // nil when this operation was replayed as part of a multi-operation conflict
+    // union: the hash of "body after this op" is only meaningful within that one
+    // specific replay's ordering of concurrent operations, not a stable property
+    // of "applying this op to baseContentHash" that a later, differently-ordered
+    // reconstruction search could safely verify against.
+    let resultContentHash: String?
     let operationIdentity: OperationIdentityPayload
 }
 

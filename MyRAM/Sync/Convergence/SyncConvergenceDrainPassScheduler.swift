@@ -28,9 +28,10 @@ struct SyncConvergenceDrainPassScheduler {
 struct SyncConvergenceDeferredWork: Equatable {
     let incoming: [SyncConvergenceDeferredItem]
     let localObligations: [SyncConvergenceDeferredItem]
+    let postCommit: [SyncConvergenceDeferredItem]
 
     var isEmpty: Bool {
-        incoming.isEmpty && localObligations.isEmpty
+        incoming.isEmpty && localObligations.isEmpty && postCommit.isEmpty
     }
 }
 
@@ -61,6 +62,7 @@ struct SyncConvergenceDeferredItem: Equatable {
     enum Domain: Equatable {
         case incoming
         case localObligation
+        case postCommit
     }
 
     let domain: Domain
@@ -73,4 +75,5 @@ enum SyncConvergenceRuntimeDeferredReason: Equatable {
     case planning(SyncConvergenceDeferredReason)
     case legacyLocalEvidenceStale
     case transportUnavailable
+    case postCommitPending(Set<SyncConvergencePostCommitPendingWork>)
 }

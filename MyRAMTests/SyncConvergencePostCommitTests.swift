@@ -96,7 +96,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         let outcome = await executor.execute(request(identity: identity, state: state))
 
-        XCTAssertEqual(outcome, .pending([.queueCleanup]))
+        XCTAssertEqual(outcome, .pending(blocking: .queueCleanup, outstanding: [.queueCleanup]))
         XCTAssertEqual(store.persistedState?.queueCleanupPending, true)
         XCTAssertEqual(store.persistedState?.presentationRefreshPending, false)
         XCTAssertEqual(presentation.requests.map(\.noteID), [TestIDs.noteA])
@@ -284,7 +284,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         let failedOutcome = await executor.execute(request(identity: identity))
 
-        XCTAssertEqual(failedOutcome, .pending([.queueCleanup]))
+        XCTAssertEqual(failedOutcome, .pending(blocking: .queueCleanup, outstanding: [.queueCleanup]))
         XCTAssertEqual(queue.removalAttempts, 1)
         XCTAssertEqual(queue.removals, [])
         XCTAssertEqual(store.casAttemptCount, 0)
@@ -391,7 +391,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
             let outcome = await executor.execute(request(identity: identity, state: state))
 
-            XCTAssertEqual(outcome, .pending([.queueCleanup]), testCase.label)
+            XCTAssertEqual(outcome, .pending(blocking: .queueCleanup, outstanding: [.queueCleanup]), testCase.label)
             var expectedEvents: [PostCommitInvocationEvent] = [
                 .presentation(noteID: TestIDs.noteA),
                 .legacyCleanup(batchID: identity.batchID)
@@ -467,7 +467,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
             let outcome = await executor.execute(request(identity: identity, state: state))
 
-            XCTAssertEqual(outcome, .pending([.queueCleanup, .legacyCleanup]), testCase.label)
+            XCTAssertEqual(outcome, .pending(blocking: .legacyCleanup, outstanding: [.queueCleanup, .legacyCleanup]), testCase.label)
             XCTAssertEqual(recorder.events, [
                 .presentation(noteID: TestIDs.noteA),
                 .legacyCleanup(batchID: identity.batchID),
@@ -752,6 +752,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             let legacyStep: FakeLegacyCleanupAdapter.Step
             let presentationStep: FakePresentationAdapter.Step
             let expectedPending: Set<SyncConvergencePostCommitPendingWork>
+            let expectedBlocking: SyncConvergencePostCommitPendingWork
             let expectedCASAttempts: Int
             let expectedEvents: [PostCommitInvocationEvent]
         }
@@ -763,6 +764,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 legacyStep: .init(result: .stillPending, externalEffectOccurred: true),
                 presentationStep: .init(result: .verifiedComplete, externalEffectOccurred: true),
                 expectedPending: [.queueCleanup, .legacyCleanup],
+                expectedBlocking: .legacyCleanup,
                 expectedCASAttempts: 1,
                 expectedEvents: [
                     .presentation(noteID: TestIDs.noteA),
@@ -775,6 +777,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 legacyStep: .init(result: .failed, externalEffectOccurred: false),
                 presentationStep: .init(result: .failed, externalEffectOccurred: false),
                 expectedPending: [.queueCleanup, .legacyCleanup, .presentationRefresh],
+                expectedBlocking: .presentationRefresh,
                 expectedCASAttempts: 0,
                 expectedEvents: [
                     .presentation(noteID: TestIDs.noteA)
@@ -786,6 +789,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 legacyStep: .init(result: .verifiedComplete, externalEffectOccurred: true),
                 presentationStep: .init(result: .stillPending, externalEffectOccurred: true),
                 expectedPending: [.queueCleanup, .legacyCleanup, .presentationRefresh],
+                expectedBlocking: .presentationRefresh,
                 expectedCASAttempts: 0,
                 expectedEvents: [
                     .presentation(noteID: TestIDs.noteA)
@@ -797,6 +801,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
                 legacyStep: .init(result: .failed, externalEffectOccurred: false),
                 presentationStep: .init(result: .failed, externalEffectOccurred: false),
                 expectedPending: [.queueCleanup, .legacyCleanup, .presentationRefresh],
+                expectedBlocking: .presentationRefresh,
                 expectedCASAttempts: 0,
                 expectedEvents: [
                     .presentation(noteID: TestIDs.noteA)
@@ -833,7 +838,11 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             if testCase.label.contains("presentation failed") {
                 XCTAssertEqual(outcome, .failedBeforeWork(.persistence), testCase.label)
             } else {
-                XCTAssertEqual(outcome, .pending(testCase.expectedPending), testCase.label)
+                XCTAssertEqual(
+                    outcome,
+                    .pending(blocking: testCase.expectedBlocking, outstanding: testCase.expectedPending),
+                    testCase.label
+                )
             }
             XCTAssertEqual(recorder.events, testCase.expectedEvents, testCase.label)
             let expectsQueue = testCase.expectedEvents.contains {
@@ -930,7 +939,10 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
             XCTAssertEqual(
                 outcome,
-                .pending([.queueCleanup, .legacyCleanup, .presentationRefresh, .postCommitStatePersistence]),
+                .pending(
+                    blocking: .postCommitStatePersistence,
+                    outstanding: [.queueCleanup, .legacyCleanup, .presentationRefresh, .postCommitStatePersistence]
+                ),
                 testCase.0
             )
             XCTAssertEqual(queue.removalAttempts, 0, testCase.0)
@@ -995,7 +1007,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         let firstOutcome = await firstExecutor.execute(fixture.request)
 
-        XCTAssertEqual(firstOutcome, .pending([.queueCleanup, .legacyCleanup]))
+        XCTAssertEqual(firstOutcome, .pending(blocking: .legacyCleanup, outstanding: [.queueCleanup, .legacyCleanup]))
         XCTAssertEqual(firstRecorder.events, [
             .presentation(noteID: fixture.base.noteID),
             .legacyCleanup(batchID: fixture.request.sourceBatchID),
@@ -1543,6 +1555,251 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         XCTAssertEqual(request.presentationPlan.noteRoutings[noteID], .noteRemoved)
     }
 
+    @MainActor
+    func testMYR165PresentationPendingBacklogDefersOnlyItsNoteAndCompletesOtherWork() async throws {
+        let container = try makeMYR158Container()
+        let seedContext = ModelContext(container)
+        let blockedNoteID = postCommitUUID("00000000-0000-0000-0000-000000165511")
+        let unblockedNoteID = postCommitUUID("00000000-0000-0000-0000-000000165512")
+        let blockedBatchID = postCommitUUID("00000000-0000-0000-0000-000000165513")
+        let unblockedBatchID = postCommitUUID("00000000-0000-0000-0000-000000165514")
+        let blockedState = SyncConvergencePostCommitState(
+            queueCleanupPending: true,
+            legacyCleanupPending: false,
+            presentationRefreshPending: true
+        )
+        let blockedPayload = try SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: [blockedBatchID],
+            legacyCleanupRequired: false,
+            presentationEntries: [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: blockedNoteID,
+                    routing: .noteRemoved,
+                    expectedPreBodyHash: nil,
+                    committedPostBodyHash: String(repeating: "0", count: 64),
+                    incrementalOperations: []
+                )
+            ]
+        ).encodedPayloadData()
+        let unblockedState = SyncConvergencePostCommitState(
+            queueCleanupPending: true,
+            legacyCleanupPending: false,
+            presentationRefreshPending: false
+        )
+        let blockedNote = Note(title: "Blocked", content: "Body")
+        blockedNote.id = blockedNoteID
+        let unblockedNote = Note(title: "Unblocked", content: "Body")
+        unblockedNote.id = unblockedNoteID
+        seedContext.insert(blockedNote)
+        seedContext.insert(unblockedNote)
+        seedContext.insert(try makeMYR158Root(
+            batchID: blockedBatchID,
+            index: 511,
+            state: blockedState,
+            hasPendingPostCommitWork: true,
+            affectedNoteIDs: [blockedNoteID],
+            postCommitWorkPayloadData: blockedPayload
+        ))
+        seedContext.insert(try makeMYR158Root(
+            batchID: unblockedBatchID,
+            index: 512,
+            state: unblockedState,
+            hasPendingPostCommitWork: true,
+            affectedNoteIDs: [unblockedNoteID]
+        ))
+        try seedContext.save()
+
+        let presentation = MYR165SelectivePresentationAdapter(pendingNoteID: blockedNoteID)
+        let runtime = SyncConvergenceRuntime(
+            context: ModelContext(container),
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: presentation
+        )
+
+        let outcome = await runtime.resumePendingWork()
+
+        guard case .deferred(let deferred) = outcome else {
+            return XCTFail("Expected only presentation work to be deferred, got \(outcome)")
+        }
+        XCTAssertTrue(deferred.incoming.isEmpty)
+        XCTAssertTrue(deferred.localObligations.isEmpty)
+        XCTAssertEqual(deferred.postCommit, [
+            SyncConvergenceDeferredItem(
+                domain: .postCommit,
+                batchID: blockedBatchID,
+                affectedNoteIDs: [blockedNoteID],
+                reason: .postCommitPending([.presentationRefresh, .queueCleanup])
+            )
+        ])
+        XCTAssertEqual(presentation.requestedNoteIDs, [blockedNoteID])
+        XCTAssertEqual(try myr158Root(batchID: unblockedBatchID, container: container).hasPendingPostCommitWork, false)
+    }
+
+    @MainActor
+    func testMYR165RuntimeScopesOnlyPresentationPendingWork() {
+        let request = SyncConvergencePostCommitRequest(
+            sourceBatchID: postCommitUUID("00000000-0000-0000-0000-000000165521"),
+            affectedNoteIDs: [postCommitUUID("00000000-0000-0000-0000-000000165522")],
+            cleanupPlan: SyncConvergenceCleanupPlan(
+                batchIDs: [],
+                retryQueueCleanup: false,
+                retryLegacyCleanup: false,
+                retryPresentationRefresh: false
+            ),
+            presentationPlan: SyncConvergencePresentationPlan(noteRoutings: [:]),
+            persistedIncorporationIdentity: SyncConvergencePersistedIncorporationIdentity(
+                batchID: postCommitUUID("00000000-0000-0000-0000-000000165521"),
+                canonicalPayloadDigest: String(repeating: "a", count: 64),
+                canonicalPayloadDigestFormatVersion: 1,
+                committedResultDigest: String(repeating: "b", count: 64),
+                committedResultDigestFormatVersion: 1
+            )
+        )
+        var blockedNoteIDs: Set<UUID> = []
+        var deferredItems: [SyncConvergenceDeferredItem] = []
+
+        XCTAssertNil(SyncConvergenceRuntime.handlePostCommitOutcome(
+            .pending(blocking: .presentationRefresh, outstanding: [.presentationRefresh, .queueCleanup]),
+            for: request,
+            blockedNoteIDs: &blockedNoteIDs,
+            deferredItems: &deferredItems
+        ))
+        XCTAssertEqual(blockedNoteIDs, request.affectedNoteIDs)
+        XCTAssertEqual(deferredItems.first?.reason, .postCommitPending([.presentationRefresh, .queueCleanup]))
+
+        for blocking in [
+            SyncConvergencePostCommitPendingWork.queueCleanup,
+            .legacyCleanup,
+            .postCommitStatePersistence
+        ] {
+            var unrelatedBlockedNotes: Set<UUID> = []
+            var unrelatedDeferredItems: [SyncConvergenceDeferredItem] = []
+            let outcome = SyncConvergenceRuntime.handlePostCommitOutcome(
+                .pending(blocking: blocking, outstanding: [blocking]),
+                for: request,
+                blockedNoteIDs: &unrelatedBlockedNotes,
+                deferredItems: &unrelatedDeferredItems
+            )
+            guard case .pending(let outstanding) = outcome else {
+                return XCTFail("\(blocking) must remain globally blocking")
+            }
+            XCTAssertEqual(outstanding, [blocking])
+            XCTAssertTrue(unrelatedBlockedNotes.isEmpty)
+            XCTAssertTrue(unrelatedDeferredItems.isEmpty)
+        }
+    }
+
+    @MainActor
+    func testMYR165IdempotentRedeliveryRetriesScopedPostCommitWithoutBlockingOtherWork() async throws {
+        let container = try makeMYR158Container()
+        let seedContext = ModelContext(container)
+        let noteID = postCommitUUID("00000000-0000-0000-0000-000000165531")
+        let unrelatedNoteID = postCommitUUID("00000000-0000-0000-0000-000000165534")
+        let batch = SyncBatch(
+            id: postCommitUUID("00000000-0000-0000-0000-000000165532"),
+            originDeviceID: postCommitUUID("00000000-0000-0000-0000-000000165533"),
+            createdAt: Date(timeIntervalSince1970: 1),
+            batchSequence: 1,
+            changes: [.noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                noteID: noteID,
+                title: "Remote",
+                modifiedAt: Date(timeIntervalSince1970: 1)
+            ))]
+        )
+        let state = SyncConvergencePostCommitState(
+            queueCleanupPending: false,
+            legacyCleanupPending: false,
+            presentationRefreshPending: true
+        )
+        let payload = try SyncConvergencePostCommitWorkPayloadV1(
+            queueCleanupBatchIDs: [],
+            legacyCleanupRequired: false,
+            presentationEntries: [
+                SyncConvergencePostCommitWorkPayloadV1.PresentationEntry(
+                    noteID: noteID,
+                    routing: .noteRemoved,
+                    expectedPreBodyHash: nil,
+                    committedPostBodyHash: String(repeating: "0", count: 64),
+                    incrementalOperations: []
+                )
+            ]
+        ).encodedPayloadData()
+        let note = Note(title: "Local", content: "Body")
+        note.id = noteID
+        let unrelatedNote = Note(title: "Other", content: "Body")
+        unrelatedNote.id = unrelatedNoteID
+        seedContext.insert(note)
+        seedContext.insert(unrelatedNote)
+        seedContext.insert(try makeMYR158Root(
+            batchID: batch.id,
+            index: 531,
+            state: state,
+            hasPendingPostCommitWork: true,
+            canonicalPayloadDigest: try SyncConvergenceCanonicalBatchDigest.digest(for: batch, formatVersion: 1),
+            affectedNoteIDs: [noteID],
+            postCommitWorkPayloadData: payload
+        ))
+        try seedContext.save()
+
+        let queue = FileBackedSyncBatchQueue(fileURL: nil)
+        try queue.enqueueIncoming(batch)
+        let unrelatedBatch = SyncBatch(
+            id: postCommitUUID("00000000-0000-0000-0000-000000165535"),
+            originDeviceID: batch.originDeviceID,
+            createdAt: Date(timeIntervalSince1970: 2),
+            batchSequence: 2,
+            changes: [.noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                noteID: unrelatedNoteID,
+                title: "Remote other",
+                modifiedAt: Date(timeIntervalSince1970: 2)
+            ))]
+        )
+        try queue.enqueueIncoming(unrelatedBatch)
+        let presentation = MYR165SelectivePresentationAdapter(pendingNoteID: noteID)
+        let runtime = SyncConvergenceRuntime(
+            context: seedContext,
+            convergenceQueue: queue,
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: presentation
+        )
+
+        let outcome = await runtime.resumePendingWork()
+
+        guard case .deferred(let deferred) = outcome else {
+            return XCTFail("Expected redelivery post-commit work to remain deferred")
+        }
+        // The stuck note's backlog request is re-attempted once per drain pass (it never clears),
+        // and a second pass runs because the unrelated batch made progress in the first one; the
+        // first pass's own deferred bookkeeping is superseded, not reported, once that happens.
+        XCTAssertEqual(presentation.requestedNoteIDs, [noteID, unrelatedNoteID, noteID])
+        XCTAssertEqual(deferred.postCommit.map(\.batchID), [batch.id])
+        XCTAssertEqual(queue.pendingBatches.map(\.id), [batch.id])
+        XCTAssertEqual(unrelatedNote.title, "Remote other")
+    }
+
+    #if !os(macOS)
+    @MainActor
+    func testMYR165PostCommitDeferredWorkDoesNotSurfaceAnIOSError() {
+        let deferred = SyncConvergenceDeferredWork(
+            incoming: [],
+            localObligations: [],
+            postCommit: [
+                SyncConvergenceDeferredItem(
+                    domain: .postCommit,
+                    batchID: postCommitUUID("00000000-0000-0000-0000-000000165523"),
+                    affectedNoteIDs: [],
+                    reason: .postCommitPending([.presentationRefresh, .queueCleanup])
+                )
+            ]
+        )
+
+        XCTAssertNil(NotesViewModel.syncErrorMessage(for: deferred))
+    }
+    #endif
+
     func testMYR158IndexedPendingSelectionSkipsCompletedHistory() throws {
         let container = try makeMYR158Container()
         let seedContext = ModelContext(container)
@@ -1912,7 +2169,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         let outcome = await executor.execute(request(identity: identity, state: state))
 
-        XCTAssertEqual(outcome, .pending([.legacyCleanup]))
+        XCTAssertEqual(outcome, .pending(blocking: .legacyCleanup, outstanding: [.legacyCleanup]))
         XCTAssertEqual(store.writeCount, 0)
     }
 
@@ -2066,7 +2323,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
             var expectedPending = state.pendingWork
             expectedPending.remove(.presentationRefresh)
-            XCTAssertEqual(outcome, .pending(expectedPending))
+            XCTAssertEqual(outcome, .pending(blocking: .legacyCleanup, outstanding: expectedPending))
             var expectedEvents: [PostCommitInvocationEvent] = []
             if state.presentationRefreshPending {
                 expectedEvents.append(.presentation(noteID: TestIDs.noteA))
@@ -2186,7 +2443,13 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         let outcome = await executor.execute(request(identity: identity, state: state))
 
-        XCTAssertEqual(outcome, .pending([.queueCleanup, .legacyCleanup, .presentationRefresh, .postCommitStatePersistence]))
+        XCTAssertEqual(
+            outcome,
+            .pending(
+                blocking: .postCommitStatePersistence,
+                outstanding: [.queueCleanup, .legacyCleanup, .presentationRefresh, .postCommitStatePersistence]
+            )
+        )
         XCTAssertEqual(recorder.events, [.presentation(noteID: TestIDs.noteA)])
         XCTAssertEqual(store.writeCount, 1)
         XCTAssertEqual(store.persistedState, nil)
@@ -2256,7 +2519,13 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         let outcome = await executor.execute(request(identity: identity, state: state))
 
-        XCTAssertEqual(outcome, .pending([.queueCleanup, .legacyCleanup, .presentationRefresh, .postCommitStatePersistence]))
+        XCTAssertEqual(
+            outcome,
+            .pending(
+                blocking: .postCommitStatePersistence,
+                outstanding: [.queueCleanup, .legacyCleanup, .presentationRefresh, .postCommitStatePersistence]
+            )
+        )
         XCTAssertEqual(recorder.events, [.presentation(noteID: TestIDs.noteA)])
         XCTAssertEqual(store.writeCount, 1)
         XCTAssertEqual(store.persistedState, nil)
@@ -2341,7 +2610,13 @@ final class SyncConvergencePostCommitTests: XCTestCase {
 
         let outcome = await executor.execute(request(identity: identity, state: state))
 
-        XCTAssertEqual(outcome, .pending([.queueCleanup, .legacyCleanup, .postCommitStatePersistence]))
+        XCTAssertEqual(
+            outcome,
+            .pending(
+                blocking: .postCommitStatePersistence,
+                outstanding: [.queueCleanup, .legacyCleanup, .postCommitStatePersistence]
+            )
+        )
         guard case .fullRoot(let committedRoot) = store.state else {
             return XCTFail("Expected committed root after lost CAS response")
         }
@@ -3249,6 +3524,8 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         state: SyncConvergencePostCommitState,
         committedAt: Date? = nil,
         hasPendingPostCommitWork: Bool,
+        canonicalPayloadDigest: String? = nil,
+        affectedNoteIDs: Set<UUID> = [],
         postCommitWorkPayloadData: Data? = nil
     ) throws -> IncorporatedSyncBatch {
         let resolvedBatchID = batchID ?? postCommitUUID(String(format: "00000000-0000-0000-0000-%012d", 158_000 + index))
@@ -3269,11 +3546,11 @@ final class SyncConvergencePostCommitTests: XCTestCase {
             batchSequence: UInt64(index),
             schemaVersion: 1,
             committedAt: committedAt ?? Date(timeIntervalSince1970: TimeInterval(159_000 + index)),
-            canonicalPayloadDigest: String(format: "%064d", index),
+            canonicalPayloadDigest: canonicalPayloadDigest ?? String(format: "%064d", index),
             canonicalPayloadDigestFormatVersion: 1,
             committedResultDigest: String(format: "%064d", index + 1_000),
             committedResultDigestFormatVersion: 1,
-            affectedNotesPayloadData: try SyncConvergenceAffectedNotesPayloadV1(noteIDs: []).encodedData(),
+            affectedNotesPayloadData: try SyncConvergenceAffectedNotesPayloadV1(noteIDs: affectedNoteIDs).encodedData(),
             authoritativeChildCount: 0,
             authoritativeChildBytes: 0,
             authoritativeChildrenDigest: String(repeating: "c", count: 64),
@@ -3331,6 +3608,23 @@ private final class MYR158CountingPresentationAdapter: SyncConvergencePresentati
     ) async -> SyncConvergencePostCommitAdapterResult {
         requestCount += 1
         return .verifiedComplete
+    }
+}
+
+@MainActor
+private final class MYR165SelectivePresentationAdapter: SyncConvergencePresentationAdapter {
+    private let pendingNoteID: UUID
+    private(set) var requestedNoteIDs: [UUID] = []
+
+    init(pendingNoteID: UUID) {
+        self.pendingNoteID = pendingNoteID
+    }
+
+    func refreshPresentation(
+        for request: SyncConvergencePresentationRequest
+    ) async -> SyncConvergencePostCommitAdapterResult {
+        requestedNoteIDs.append(request.noteID)
+        return request.noteID == pendingNoteID ? .stillPending : .verifiedComplete
     }
 }
 

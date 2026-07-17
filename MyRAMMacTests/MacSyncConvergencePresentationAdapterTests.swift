@@ -42,15 +42,45 @@ final class MacSyncConvergencePresentationAdapterTests: XCTestCase {
         XCTAssertEqual(recorder.refreshCount, 1)
     }
 
-    func testIncrementalReloadRequiredRemainsPending() async {
+    // A `.requiresReload` disposition (e.g. the live text view wasn't wired up yet)
+    // must fall back to a full reload rather than retrying the same doomed
+    // incremental apply forever with no forward progress.
+    func testIncrementalReloadRequiredFallsBackToFullReloadAndCompletes() async {
         let noteID = Self.uuid(4)
-        let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "Hello")
+        let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "Hello!")
         recorder.applyResult = EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .requiresReload(.editorUnavailable))
         let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
 
         let result = await adapter.refreshPresentation(for: request(noteID: noteID, routing: .incremental, body: "Hello!"))
 
+        XCTAssertEqual(result, .verifiedComplete)
+        XCTAssertEqual(recorder.reloads.map(\.noteID), [noteID])
+        XCTAssertEqual(recorder.reloads.first?.authoritativeBody, "Hello!")
+    }
+
+    func testIncrementalReloadRequiredStaysPendingWhenFallbackReloadIsDeferred() async {
+        let noteID = Self.uuid(12)
+        let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "Hello")
+        recorder.applyResult = EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .requiresReload(.editorUnavailable))
+        recorder.reloadResult = false
+        let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
+
+        let result = await adapter.refreshPresentation(for: request(noteID: noteID, routing: .incremental, body: "Hello!"))
+
         XCTAssertEqual(result, .stillPending)
+        XCTAssertEqual(recorder.reloadCount, 1)
+    }
+
+    func testIncrementalReloadRequiredFallbackBodyMismatchFails() async {
+        let noteID = Self.uuid(13)
+        let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "still wrong")
+        recorder.applyResult = EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .requiresReload(.editorUnavailable))
+        let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
+
+        let result = await adapter.refreshPresentation(for: request(noteID: noteID, routing: .incremental, body: "Hello!"))
+
+        XCTAssertEqual(result, .failed)
+        XCTAssertEqual(recorder.reloadCount, 1)
     }
 
     func testNoneRefreshesMetadataWithoutRewritingSelectedEditorBody() async {

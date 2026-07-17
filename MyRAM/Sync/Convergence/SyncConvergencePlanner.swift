@@ -232,9 +232,16 @@ struct SyncConvergencePlanner {
                 )
                 operationIdentities.append(identity)
                 resultEvidence.append(evidence)
-                routings[lifecycle.noteID] = !matchesBase || lifecycle.deletedAt == nil
-                    ? SyncConvergencePresentationRouting.none
-                    : .noteRemoved
+                // A delete that actually applies always wins and closes the editor, even over a
+                // co-occurring body/title effect in this same batch (e.g. an edit bundled with a
+                // delete) — the note is going away, so pushing incremental content to it is wrong.
+                // Otherwise (a conflict that preserves the live note, or a successful restore) the
+                // lifecycle change does not itself require any specific routing, so a co-occurring
+                // effect's routing (e.g. .incremental from a body edit bundled into the same
+                // batch) must not be clobbered back down to .none.
+                routings[lifecycle.noteID] = (matchesBase && lifecycle.deletedAt != nil)
+                    ? .noteRemoved
+                    : (routings[lifecycle.noteID] ?? .none)
             }
         }
 
@@ -597,6 +604,9 @@ struct SyncConvergencePlanner {
         )
         switch union {
         case .success(let operations):
+            let alreadyRetainedIdentityKeys = Set(
+                (input.retainedLocalOperations + input.retainedRemoteOperations).map(\.identityKey)
+            )
             return SyncOperationReplayEngine().planReconstructed(
                 operations: operations,
                 base: base,
@@ -608,7 +618,8 @@ struct SyncConvergencePlanner {
                     createdAt: current.createdAt,
                     modifiedAt: current.modifiedAt
                 ),
-                batchID: input.incomingBatch.id
+                batchID: input.incomingBatch.id,
+                alreadyRetainedIdentityKeys: alreadyRetainedIdentityKeys
             )
         case .failure(let failure):
             return .failed(failure)
@@ -945,7 +956,7 @@ struct CanonicalPayloadDigestFormatV1 {
         appendOptionalString(operation.text)
         appendOptionalString(operation.expectedText)
         appendOptionalString(operation.baseContentHash)
-        appendString(operation.resultContentHash)
+        appendOptionalString(operation.resultContentHash)
         try appendOperationIdentity(operation.operationIdentity)
     }
 
@@ -1277,19 +1288,42 @@ private struct SyncOperationReplayEngine {
         operations: [SyncConvergenceBodyOperation],
         base: ReconstructedBase,
         projectedCurrent: SyncConvergenceProjectedNote,
-        batchID: UUID
+        batchID: UUID,
+        alreadyRetainedIdentityKeys: Set<String> = []
     ) -> BodyPlanningResult {
         var body = base.body
         var plannedOperations: [SyncConvergencePlannedBodyOperation] = []
+        // Each operation's utf16Offset was recorded relative to its own device's body
+        // state at capture time, which never accounted for the other device's
+        // concurrent edits. Replaying those raw offsets against a body already
+        // mutated by earlier operations in this loop silently reorders or drops
+        // text. Rebasing against every already-applied operation from a *different*
+        // origin device (same-device operations are already self-consistent, since
+        // each one was captured after its own predecessors) keeps both peers'
+        // canonically-ordered replay producing the identical result.
+        var appliedForeignEvents: [SyncConvergenceAppliedRebaseEvent] = []
         for operation in operations {
-            switch replaySingle(
+            let rebasedChange = Self.rebasedChange(
                 operation.change,
+                for: operation.identity.originDeviceIDLowercase,
+                against: appliedForeignEvents
+            )
+            switch replaySingle(
+                rebasedChange,
                 identity: operation.identity,
                 body: body,
                 noteID: projectedCurrent.noteID,
                 mode: .replayingConflictUnion
             ) {
             case .success(let replay):
+                let utf16LengthDelta = replay.finalBody.utf16.count - body.utf16.count
+                if utf16LengthDelta != 0 {
+                    appliedForeignEvents.append(SyncConvergenceAppliedRebaseEvent(
+                        originDeviceIDLowercase: operation.identity.originDeviceIDLowercase,
+                        appliedOffset: Self.utf16Offset(of: rebasedChange),
+                        utf16LengthDelta: utf16LengthDelta
+                    ))
+                }
                 body = replay.finalBody
                 plannedOperations.append(contentsOf: replay.retainedAdditions)
             case .deferred(let reason):
@@ -1327,6 +1361,18 @@ private struct SyncOperationReplayEngine {
                 resultContentHash: operation.resultContentHash
             )
         }
+        // An operation that's already durably retained (e.g. this device's own
+        // local edit, persisted the moment it was captured, long before any
+        // conflicting remote batch arrived) still needs to be replayed above to
+        // compute the correct body — but it must not be re-proposed as a "new"
+        // retained-operation addition. verifyHistory treats a pre-existing
+        // .local-sourced row being re-emitted as an invariant violation and fails
+        // the whole incorporation closed, even though this is an entirely
+        // ordinary case (any local edit concurrent with an incoming conflicting
+        // batch hits it). Only genuinely new operations need to be persisted here.
+        let newRetainedOperations = plannedOperations.filter {
+            !alreadyRetainedIdentityKeys.contains($0.operationIdentity.planIdentityKey)
+        }
         let safetyResult = SyncConvergenceRewriteSafetyPolicy().validate(SyncConvergenceRewriteSafetyInput(
             noteID: projectedCurrent.noteID,
             sourceBatchID: batchID,
@@ -1348,7 +1394,8 @@ private struct SyncOperationReplayEngine {
                 orderedOperationIdentities: operations.map(\.identity),
                 finalBody: body,
                 finalBodyHash: finalHash,
-                retainedOperationAdditions: plannedOperations,
+                retainedOperationAdditions: newRetainedOperations,
+                mergedOperations: plannedOperations,
                 snapshotAdditions: [snapshot],
                 resultEvidence: evidence,
                 presentationRouting: .wholeNoteFallback,
@@ -1357,7 +1404,7 @@ private struct SyncOperationReplayEngine {
             finalBody: body,
             operationIdentities: operations.map(\.identity),
             resultEvidence: evidence,
-            retainedAdditions: plannedOperations,
+            retainedAdditions: newRetainedOperations,
             snapshotAdditions: [snapshot],
             routing: .wholeNoteFallback
         ))
@@ -1386,7 +1433,8 @@ private struct SyncOperationReplayEngine {
                     kind: .insert,
                     offset: insert.utf16Offset,
                     text: insert.text,
-                    baseContentHash: insert.baseContentHash
+                    baseContentHash: insert.baseContentHash,
+                    resultContentHash: mode == .replayingConflictUnion ? nil : hash
                 ))
             }
             let safeOffset = body.syncBatchSafeInsertionOffset(fallingForwardFrom: insert.utf16Offset)
@@ -1405,7 +1453,7 @@ private struct SyncOperationReplayEngine {
                     text: insert.text,
                     expectedText: nil,
                     baseContentHash: insert.baseContentHash,
-                    resultContentHash: finalHash,
+                    resultContentHash: mode == .replayingConflictUnion ? nil : finalHash,
                     operationIdentity: identity
                 )
             ))
@@ -1425,7 +1473,8 @@ private struct SyncOperationReplayEngine {
                     offset: delete.utf16Offset,
                     length: delete.utf16Length,
                     expectedText: delete.expectedText,
-                    baseContentHash: delete.baseContentHash
+                    baseContentHash: delete.baseContentHash,
+                    resultContentHash: mode == .replayingConflictUnion ? nil : hash
                 ))
             }
             guard let range = body.syncBatchSafeUTF16Range(location: delete.utf16Offset, length: delete.utf16Length),
@@ -1443,7 +1492,8 @@ private struct SyncOperationReplayEngine {
                     offset: delete.utf16Offset,
                     length: delete.utf16Length,
                     expectedText: delete.expectedText,
-                    baseContentHash: delete.baseContentHash
+                    baseContentHash: delete.baseContentHash,
+                    resultContentHash: mode == .replayingConflictUnion ? nil : hash
                 ))
             }
             let actual = String(body[swiftRange])
@@ -1461,7 +1511,8 @@ private struct SyncOperationReplayEngine {
                     offset: delete.utf16Offset,
                     length: delete.utf16Length,
                     expectedText: delete.expectedText,
-                    baseContentHash: delete.baseContentHash
+                    baseContentHash: delete.baseContentHash,
+                    resultContentHash: mode == .replayingConflictUnion ? nil : hash
                 ))
             }
             var finalBody = body
@@ -1480,7 +1531,7 @@ private struct SyncOperationReplayEngine {
                     text: nil,
                     expectedText: delete.expectedText,
                     baseContentHash: delete.baseContentHash,
-                    resultContentHash: finalHash,
+                    resultContentHash: mode == .replayingConflictUnion ? nil : finalHash,
                     operationIdentity: identity
                 )
             ))
@@ -1488,6 +1539,89 @@ private struct SyncOperationReplayEngine {
             return .failed(.invalidMergePlan(noteID: noteID))
         }
     }
+
+    /// Adjusts `change`'s utf16Offset by every already-applied `SyncBatchChange`
+    /// event whose origin device differs from `originDeviceIDLowercase` (same-device
+    /// events are already reflected in the offset it was captured with). Applying
+    /// events in the order they were actually applied is what makes this correct:
+    /// each transform compounds onto the position produced by the ones before it.
+    private static func rebasedChange(
+        _ change: SyncBatchChange,
+        for originDeviceIDLowercase: String,
+        against appliedForeignEvents: [SyncConvergenceAppliedRebaseEvent]
+    ) -> SyncBatchChange {
+        let rebased = rebasedOffset(
+            utf16Offset(of: change),
+            excludingOriginDeviceIDLowercase: originDeviceIDLowercase,
+            against: appliedForeignEvents
+        )
+        switch change {
+        case .noteBodyTextInserted(let insert):
+            guard rebased != insert.utf16Offset else { return change }
+            return .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                noteID: insert.noteID,
+                utf16Offset: rebased,
+                text: insert.text,
+                modifiedAt: insert.modifiedAt,
+                baseContentHash: insert.baseContentHash
+            ))
+        case .noteBodyTextDeleted(let delete):
+            guard rebased != delete.utf16Offset else { return change }
+            return .noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
+                noteID: delete.noteID,
+                utf16Offset: rebased,
+                utf16Length: delete.utf16Length,
+                expectedText: delete.expectedText,
+                modifiedAt: delete.modifiedAt,
+                baseContentHash: delete.baseContentHash
+            ))
+        default:
+            return change
+        }
+    }
+
+    private static func utf16Offset(of change: SyncBatchChange) -> Int {
+        switch change {
+        case .noteBodyTextInserted(let insert):
+            insert.utf16Offset
+        case .noteBodyTextDeleted(let delete):
+            delete.utf16Offset
+        default:
+            0
+        }
+    }
+
+    private static func rebasedOffset(
+        _ offset: Int,
+        excludingOriginDeviceIDLowercase originDeviceIDLowercase: String,
+        against appliedForeignEvents: [SyncConvergenceAppliedRebaseEvent]
+    ) -> Int {
+        var adjusted = offset
+        for event in appliedForeignEvents where event.originDeviceIDLowercase != originDeviceIDLowercase {
+            if event.utf16LengthDelta > 0 {
+                if event.appliedOffset <= adjusted {
+                    adjusted += event.utf16LengthDelta
+                }
+            } else {
+                let deletedLength = -event.utf16LengthDelta
+                let deletionEnd = event.appliedOffset + deletedLength
+                if event.appliedOffset >= adjusted {
+                    continue
+                } else if deletionEnd <= adjusted {
+                    adjusted -= deletedLength
+                } else {
+                    adjusted = event.appliedOffset
+                }
+            }
+        }
+        return max(0, adjusted)
+    }
+}
+
+private struct SyncConvergenceAppliedRebaseEvent {
+    let originDeviceIDLowercase: String
+    let appliedOffset: Int
+    let utf16LengthDelta: Int
 }
 
 private enum SyncOperationReplayMode: Equatable {
@@ -2074,6 +2208,12 @@ struct SyncConvergencePlanValidator {
                     }
                 }
             }
+            // A delete that actually applies always wins presentation routing (see the planner's
+            // lifecycle-routing assignment above), even over a body effect that would otherwise
+            // require .incremental/.wholeNoteFallback — the note is going away, so the editor must
+            // close rather than receive more content for it.
+            let lifecycleAppliesDelete = notePlan.lifecycleEffect?.verdict == .apply
+                && notePlan.lifecycleEffect?.deletedAt != nil
             switch notePlan.bodyEffect {
             case .matchingBaseIncremental(let bodyPlan):
                 guard bodyPlan.noteID == notePlan.noteID,
@@ -2084,7 +2224,8 @@ struct SyncConvergencePlanValidator {
                       bodyPlan.resultEvidence.batchID == plan.batchID,
                       bodyPlan.resultEvidence.preHash == bodyPlan.initialBodyHash,
                       bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
-                      routing == (bodyPlan.operations.isEmpty ? SyncConvergencePresentationRouting.none : .incremental),
+                      routing == (bodyPlan.operations.isEmpty ? SyncConvergencePresentationRouting.none : .incremental)
+                          || (lifecycleAppliesDelete && routing == .noteRemoved),
                       bodyPlan.operations.allSatisfy({ $0.noteID == notePlan.noteID }),
                       bodyPlan.operations.allSatisfy({ plannedIdentityKeys.contains($0.operationIdentity.planIdentityKey) }) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
@@ -2102,7 +2243,7 @@ struct SyncConvergencePlanValidator {
                       bodyPlan.resultEvidence.batchID == plan.batchID,
                       bodyPlan.resultEvidence.preHash == bodyPlan.projectedPreMergeCurrentHash,
                       bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
-                      routing == .wholeNoteFallback else {
+                      routing == .wholeNoteFallback || (lifecycleAppliesDelete && routing == .noteRemoved) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
                 guard bodyPlan.retainedOperationAdditions.allSatisfy({ $0.noteID == notePlan.noteID }) else {
@@ -2131,7 +2272,7 @@ struct SyncConvergencePlanValidator {
                       bodyPlan.resultEvidence.batchID == plan.batchID,
                       bodyPlan.resultEvidence.preHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.initialBody),
                       bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
-                      routing == .incremental,
+                      routing == .incremental || (lifecycleAppliesDelete && routing == .noteRemoved),
                       bodyPlan.operations.allSatisfy({ $0.noteID == notePlan.noteID }) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
@@ -2189,11 +2330,21 @@ struct SyncConvergencePlanValidator {
                       lifecycleEffect.resultEvidence.batchID == plan.batchID,
                       lifecycleEffect.resultEvidence.preHash == lifecycleEffect.baseBodyHash,
                       lifecycleEffect.resultEvidence.postHash == lifecycleEffect.baseBodyHash,
-                      plannedIdentityKeys.contains(lifecycleEffect.operationIdentity.planIdentityKey),
-                      routing == (lifecycleEffect.verdict == .apply && lifecycleEffect.deletedAt != nil
-                          ? SyncConvergencePresentationRouting.noteRemoved
-                          : .none) else {
+                      plannedIdentityKeys.contains(lifecycleEffect.operationIdentity.planIdentityKey) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+                // When a body/title/creation effect is also present on this note, it already
+                // claimed and independently validated the routing above; the lifecycle change
+                // only owns routing when it's the sole effect on this note plan.
+                let noteHasNoOtherEffect = notePlan.bodyEffect == nil
+                    && notePlan.titleEffect == nil
+                    && notePlan.creationEffect == nil
+                if noteHasNoOtherEffect {
+                    guard routing == (lifecycleEffect.verdict == .apply && lifecycleEffect.deletedAt != nil
+                        ? SyncConvergencePresentationRouting.noteRemoved
+                        : .none) else {
+                        return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                    }
                 }
                 expectedResultEvidence.append(lifecycleEffect.resultEvidence)
             }
@@ -2350,7 +2501,8 @@ private struct PlannedBodyResult {
         length: Int? = nil,
         text: String? = nil,
         expectedText: String? = nil,
-        baseContentHash: String?
+        baseContentHash: String?,
+        resultContentHash: String?
     ) -> PlannedBodyResult {
         let operation = SyncConvergencePlannedBodyOperation(
             noteID: noteID,
@@ -2360,7 +2512,7 @@ private struct PlannedBodyResult {
             text: text,
             expectedText: expectedText,
             baseContentHash: baseContentHash,
-            resultContentHash: hash,
+            resultContentHash: resultContentHash,
             operationIdentity: identity
         )
         return single(noteID: noteID, initialBody: body, finalBody: body, finalHash: hash, operation: operation)
@@ -2833,7 +2985,12 @@ struct SyncConvergenceIncorporationExecutor {
                   plannedReceipt.candidateBodyHash == plan.finalBodyHash else {
                 throw ExecutorFailure(.unprovenTextLoss(noteID: plan.noteID))
             }
-            let deleteEvidence = plan.retainedOperationAdditions.compactMap { operation -> SyncConvergenceDeleteEvidence? in
+            // Must match planReconstructed's own evidence exactly, so this reads from
+            // mergedOperations (every operation replayed, including already-retained
+            // ones) rather than retainedOperationAdditions (only the newly-persisted
+            // subset) — otherwise an already-retained delete's evidence would be
+            // missing here even though it legitimately contributed to finalBody.
+            let deleteEvidence = plan.mergedOperations.compactMap { operation -> SyncConvergenceDeleteEvidence? in
                 guard operation.kind == .delete,
                       let utf16Length = operation.utf16Length,
                       let expectedText = operation.expectedText else { return nil }
@@ -3777,6 +3934,13 @@ private extension SyncConvergencePlannedBodyOperation {
         ) else {
             throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
         }
+        // Only .incremental-routed operations (matchingBaseIncremental/legacyPositional)
+        // ever reach this payload; those always carry a stable resultContentHash.
+        // A nil here means an operation from a conflict-union replay was routed
+        // through the incremental post-commit path, which is itself a plan bug.
+        guard let resultContentHash else {
+            throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+        }
 
         return SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload(
             noteID: noteID,
@@ -3926,7 +4090,10 @@ private extension SyncConvergenceBodyEffect {
         case .matchingBaseIncremental(let plan):
             return plan.operations.contains { $0.operationIdentity.canonicalReplayKey == key }
         case .reconstructedConflict(let plan):
-            return plan.retainedOperationAdditions.contains { $0.operationIdentity.canonicalReplayKey == key }
+            // orderedOperationIdentities covers every operation in the merged union,
+            // including ones already durably retained (and thus intentionally absent
+            // from retainedOperationAdditions, which only lists genuinely new rows).
+            return plan.orderedOperationIdentities.contains { $0.canonicalReplayKey == key }
         case .legacyPositional(let plan):
             return plan.operations.contains { $0.operationIdentity.canonicalReplayKey == key }
         case .compatibilityNoopMissingNote(let plan):

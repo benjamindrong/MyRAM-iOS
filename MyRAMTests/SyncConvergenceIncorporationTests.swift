@@ -97,6 +97,114 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertEqual(transaction.notes[noteID]?.body, "Local unsynced body edit")
     }
 
+    func testDivergedLifecycleDeleteAlongsideApplyingBodyEditDoesNotClobberIncrementalRouting() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000165311")
+        let initial = SyncConvergenceMutableNoteRecord(
+            noteID: noteID, folderID: nil, title: "Original Title", body: "Local body", createdAt: date(1), modifiedAt: date(2)
+        )
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000165312"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000165313"),
+            createdAt: date(3),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: "Local body".utf16.count,
+                    text: " more",
+                    modifiedAt: date(3),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Local body")
+                )),
+                .noteLifecycleChanged(.init(
+                    noteID: noteID,
+                    deletedAt: date(3),
+                    modifiedAt: date(3),
+                    title: "Some other title",
+                    body: "Some other body",
+                    baseTitleHash: SyncBatchContentHash.sha256Hex(for: "Some other title"),
+                    baseBodyHash: SyncBatchContentHash.sha256Hex(for: "Some other body")
+                ))
+            ]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: batch,
+            currentNotes: [.init(noteID: noteID, folderID: nil, title: initial.title, body: initial.body, createdAt: initial.createdAt, modifiedAt: initial.modifiedAt)]
+        ))
+        guard case .planned(let input) = outcome else {
+            return XCTFail("Expected non-blocking compound plan, got \(outcome)")
+        }
+        // The bug this covers: the lifecycle branch used to unconditionally overwrite
+        // routing, clobbering the body effect's .incremental need down to .none, which
+        // then failed plan validation (invalidMergePlan) and permanently blocked the
+        // runtime for every subsequent incoming batch.
+        XCTAssertEqual(input.plan.presentationPlan.noteRoutings[noteID], .incremental)
+
+        let transaction = InMemoryConvergenceTransaction(notes: [noteID: initial])
+        let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: input, transaction: transaction, committedAt: date(4)
+        )
+
+        guard case .incorporated = incorporation else {
+            return XCTFail("Expected compound plan to be incorporated, got \(incorporation)")
+        }
+        XCTAssertNil(transaction.notes[noteID]?.deletedAt)
+        XCTAssertEqual(transaction.notes[noteID]?.body, "Local body more")
+        XCTAssertEqual(transaction.notes[noteID]?.title, "Original Title")
+    }
+
+    func testApplyingLifecycleDeleteAlongsideApplyingBodyEditRoutesToNoteRemoved() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000165321")
+        let initial = SyncConvergenceMutableNoteRecord(
+            noteID: noteID, folderID: nil, title: "Original Title", body: "Local body", createdAt: date(1), modifiedAt: date(2)
+        )
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000165322"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000165323"),
+            createdAt: date(3),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: "Local body".utf16.count,
+                    text: " more",
+                    modifiedAt: date(3),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Local body")
+                )),
+                .noteLifecycleChanged(.init(
+                    noteID: noteID,
+                    deletedAt: date(3),
+                    modifiedAt: date(3),
+                    title: "Original Title",
+                    body: "Local body more",
+                    // Matches the note's state *after* the body edit in this same batch applies,
+                    // so this is a non-conflicting delete: it should win presentation routing.
+                    baseTitleHash: SyncBatchContentHash.sha256Hex(for: "Original Title"),
+                    baseBodyHash: SyncBatchContentHash.sha256Hex(for: "Local body more")
+                ))
+            ]
+        )
+        let outcome = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: batch,
+            currentNotes: [.init(noteID: noteID, folderID: nil, title: initial.title, body: initial.body, createdAt: initial.createdAt, modifiedAt: initial.modifiedAt)]
+        ))
+        guard case .planned(let input) = outcome else {
+            return XCTFail("Expected non-blocking compound plan, got \(outcome)")
+        }
+        // A delete that actually applies must win over the body effect's own .incremental want —
+        // the note is being deleted, so the editor must close rather than receive more content.
+        XCTAssertEqual(input.plan.presentationPlan.noteRoutings[noteID], .noteRemoved)
+
+        let transaction = InMemoryConvergenceTransaction(notes: [noteID: initial])
+        let incorporation = SyncConvergenceIncorporationExecutor().incorporate(
+            input: input, transaction: transaction, committedAt: date(4)
+        )
+
+        guard case .incorporated = incorporation else {
+            return XCTFail("Expected compound plan to be incorporated, got \(incorporation)")
+        }
+        XCTAssertEqual(transaction.notes[noteID]?.deletedAt, date(3))
+        XCTAssertEqual(transaction.notes[noteID]?.body, "Local body more")
+        XCTAssertEqual(transaction.notes[noteID]?.title, "Original Title")
+    }
+
     func testLifecycleDeleteAndRestorePersistThroughConvergence() {
         let noteID = uuid("00000000-0000-0000-0000-000000165001")
         let title = "Title"
@@ -1086,6 +1194,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 finalBody: bodyPlan.finalBody,
                 finalBodyHash: bodyPlan.finalBodyHash,
                 retainedOperationAdditions: bodyPlan.retainedOperationAdditions,
+                mergedOperations: bodyPlan.mergedOperations,
                 snapshotAdditions: bodyPlan.snapshotAdditions,
                 resultEvidence: bodyPlan.resultEvidence,
                 presentationRouting: bodyPlan.presentationRouting,
@@ -1145,6 +1254,14 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             malformedRetainedOperations = bodyPlan.retainedOperationAdditions.map { operation in
                 operation.kind == .delete ? wrongNoteOperation : operation
             }
+            // The fixture's only delete is an already-retained remote operation, so
+            // it's absent from retainedOperationAdditions (only genuinely-new
+            // operations are persisted there) but present in mergedOperations, which
+            // is what verifyBodyPrecondition now reads to reconstruct delete
+            // evidence — the malformed substitution must target that list too.
+            let malformedMergedOperations = bodyPlan.mergedOperations.map { operation in
+                operation.kind == .delete ? wrongNoteOperation : operation
+            }
             return .reconstructedConflict(ReconstructedConflictBodyPlan(
                 noteID: bodyPlan.noteID,
                 reconstructedBaseBody: bodyPlan.reconstructedBaseBody,
@@ -1155,6 +1272,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                 finalBody: bodyPlan.finalBody,
                 finalBodyHash: bodyPlan.finalBodyHash,
                 retainedOperationAdditions: malformedRetainedOperations,
+                mergedOperations: malformedMergedOperations,
                 snapshotAdditions: bodyPlan.snapshotAdditions,
                 resultEvidence: bodyPlan.resultEvidence,
                 presentationRouting: bodyPlan.presentationRouting,

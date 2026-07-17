@@ -1222,6 +1222,182 @@ final class SyncConvergencePlanningTests: XCTestCase {
         XCTAssertEqual(bodyPlan.finalBody.filter { ["x", "y", "z"].contains($0) }.count, 3)
     }
 
+    // Regression coverage for MYR-165: concurrent operations recorded relative to
+    // the shared base must be rebased against each other during replay, not applied
+    // with their raw offsets against an already-mutated body. Unlike the tests
+    // above (non-overlapping single-character inserts, which pass either way),
+    // this exercises an insert whose target position is only reachable by
+    // accounting for an earlier-replayed foreign insert's length.
+    func testConcurrentInsertsRebaseOffsetsInsteadOfCorruptingLaterText() {
+        let noteID = uuid("00000000-0000-0000-0000-000000165201")
+        let base = "Hello World"
+        let baseHash = SyncBatchContentHash.sha256Hex(for: base)
+        let retained = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000165202"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000165203"),
+            operationIndex: 0,
+            offset: 0,
+            text: "XXX",
+            modifiedAt: date(2),
+            baseBody: base,
+            resultBody: "XXXHello World"
+        )
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000165204"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000165205"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: base.utf16.count,
+                    text: "YYY",
+                    modifiedAt: date(3),
+                    baseContentHash: baseHash
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: "XXXHello World")],
+            retainedSnapshots: [SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: baseHash, body: base, generation: 1)],
+            retainedLocalOperations: [retained]
+        ))
+
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
+              case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected reconstructed concurrent plan, got \(outcome)")
+        }
+        // Without rebasing, the incoming insert's raw offset (11, the end of the
+        // original 11-character base) lands in the middle of "World" once the
+        // retained "XXX" has already shifted everything forward by three
+        // characters, corrupting the text to "XXXHello WoYYYrld".
+        XCTAssertEqual(bodyPlan.finalBody, "XXXHello WorldYYY")
+    }
+
+    // A delete that shifts text backward must also rebase a later concurrent
+    // insert's offset, not just an insert shifting one forward. Without this, the
+    // insert's raw offset overshoots into the now-shorter body and (after
+    // boundary clamping) silently lands at the wrong position instead of where it
+    // was actually meant to go. The delete is the incoming side here (rather than
+    // retained/local) so the local "prior" body still contains the text the
+    // incoming delete's evidence expects to find, satisfying
+    // SyncConvergenceRewriteSafetyPolicy's own evidence check independent of the
+    // offset-rebase logic under test.
+    func testConcurrentDeleteRebasesLaterInsertOffsetBackward() {
+        let noteID = uuid("00000000-0000-0000-0000-000000165211")
+        let base = "Hello cruel World"
+        let baseHash = SyncBatchContentHash.sha256Hex(for: base)
+        let retained = retainedInsert(
+            noteID: noteID,
+            batchID: uuid("00000000-0000-0000-0000-000000165212"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000165213"),
+            operationIndex: 0,
+            offset: 12,
+            text: "big ",
+            modifiedAt: date(3),
+            baseBody: base,
+            resultBody: "Hello cruel big World"
+        )
+        let incoming = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000165214"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000165215"),
+            createdAt: date(1),
+            changes: [
+                .noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
+                    noteID: noteID,
+                    utf16Offset: 5,
+                    utf16Length: 6,
+                    expectedText: " cruel",
+                    modifiedAt: date(2),
+                    baseContentHash: baseHash
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: incoming,
+            currentNotes: [projectedNote(noteID: noteID, body: "Hello cruel big World")],
+            retainedSnapshots: [SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: baseHash, body: base, generation: 1)],
+            retainedLocalOperations: [retained]
+        ))
+
+        guard case .planned(let validatedInput) = outcome,
+              let plan = Optional(validatedInput.plan),
+              case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected reconstructed concurrent plan, got \(outcome)")
+        }
+        // The delete (offset 5, length 6, canonically replayed first since its
+        // modifiedAt is earlier) removes " cruel" from the base. Without rebasing,
+        // the insert's raw offset (12, originally right before "World" in the
+        // 17-character base) gets applied unmodified to the now-11-character
+        // post-delete body, landing at "Hello Worldbig " instead of before "World".
+        XCTAssertEqual(bodyPlan.finalBody, "Hello big World")
+    }
+
+    // The canonical replay order is symmetric by construction (it never depends on
+    // which side calls an operation "local/retained" vs "incoming/remote"), but
+    // that alone doesn't guarantee identical output unless offsets are rebased
+    // consistently regardless of role. This runs the same pair of concurrent edits
+    // from both devices' points of view and asserts they converge to the exact
+    // same string — the property that was broken (peers converging to different
+    // permutations of the same edits, or silently losing a character).
+    func testConcurrentEditsConvergeToIdenticalBodyRegardlessOfWhichSideIsLocal() {
+        let noteID = uuid("00000000-0000-0000-0000-000000165221")
+        let base = "Hello World"
+        let baseHash = SyncBatchContentHash.sha256Hex(for: base)
+        let deviceAID = uuid("00000000-0000-0000-0000-000000165222")
+        let deviceBID = uuid("00000000-0000-0000-0000-000000165223")
+        let batchAID = uuid("00000000-0000-0000-0000-000000165224")
+        let batchBID = uuid("00000000-0000-0000-0000-000000165225")
+
+        func finalBody(localDeviceIsA: Bool) -> String {
+            let localOperation = retainedInsert(
+                noteID: noteID,
+                batchID: localDeviceIsA ? batchAID : batchBID,
+                originDeviceID: localDeviceIsA ? deviceAID : deviceBID,
+                operationIndex: 0,
+                offset: localDeviceIsA ? 0 : base.utf16.count,
+                text: localDeviceIsA ? "XXX" : "YYY",
+                modifiedAt: localDeviceIsA ? date(2) : date(3),
+                baseBody: base,
+                resultBody: localDeviceIsA ? "XXXHello World" : "Hello WorldYYY"
+            )
+            let remoteChange: SyncBatchNoteBodyTextInsertedChange = localDeviceIsA
+                ? SyncBatchNoteBodyTextInsertedChange(noteID: noteID, utf16Offset: base.utf16.count, text: "YYY", modifiedAt: date(3), baseContentHash: baseHash)
+                : SyncBatchNoteBodyTextInsertedChange(noteID: noteID, utf16Offset: 0, text: "XXX", modifiedAt: date(2), baseContentHash: baseHash)
+            let incoming = SyncBatch(
+                id: localDeviceIsA ? batchBID : batchAID,
+                originDeviceID: localDeviceIsA ? deviceBID : deviceAID,
+                createdAt: date(1),
+                changes: [.noteBodyTextInserted(remoteChange)]
+            )
+
+            let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+                incomingBatch: incoming,
+                currentNotes: [projectedNote(noteID: noteID, body: localDeviceIsA ? "XXXHello World" : "Hello WorldYYY")],
+                retainedSnapshots: [SyncConvergenceRetainedSnapshot(noteID: noteID, contentHash: baseHash, body: base, generation: 1)],
+                retainedLocalOperations: [localOperation]
+            ))
+
+            guard case .planned(let validatedInput) = outcome,
+                  let plan = Optional(validatedInput.plan),
+                  case .reconstructedConflict(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
+                XCTFail("Expected reconstructed concurrent plan, got \(outcome)")
+                return ""
+            }
+            return bodyPlan.finalBody
+        }
+
+        let resultWhenALocal = finalBody(localDeviceIsA: true)
+        let resultWhenBLocal = finalBody(localDeviceIsA: false)
+
+        XCTAssertEqual(resultWhenALocal, "XXXHello WorldYYY")
+        XCTAssertEqual(resultWhenBLocal, resultWhenALocal)
+    }
+
     func testNilBaseRetainedOperationWithResultHashReconstructsChain() {
         let noteID = uuid("00000000-0000-0000-0000-00000013222C")
         let snapshotBody = "A"

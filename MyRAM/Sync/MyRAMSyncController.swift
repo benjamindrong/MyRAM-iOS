@@ -84,6 +84,10 @@ protocol MyRAMSyncControlling: AnyObject {
     var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])? { get set }
     var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)? { get set }
     var onBatchReceived: ((SyncBatch) async -> Void)? { get set }
+    /// Durably persists an incoming batch's raw bytes independent of convergence
+    /// processing. Returning true tells the peer it no longer needs to retry
+    /// redelivery, even if applying the batch's contents is deferred or blocked.
+    var onDurablyCaptureIncomingBatch: ((SyncBatch) async -> Bool)? { get set }
 
     func recordLocalChange(
         entityType: SyncEntityType,
@@ -162,6 +166,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])?
     var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
     var onBatchReceived: ((SyncBatch) async -> Void)?
+    var onDurablyCaptureIncomingBatch: ((SyncBatch) async -> Bool)?
     var onFlushLocalConvergenceRequested: (() async -> Void)?
     var localConvergencePendingCountProvider: (() -> Int)?
 
@@ -423,36 +428,25 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func sendBatch(_ batch: SyncBatch) async throws {
+        // Durability comes first: a peer accepting a `send()` call only means the
+        // data was handed to the transport, not that it survived to the other side.
+        // Removal from this queue happens only once the peer acknowledges receipt
+        // (see handleBatchAcknowledgement), so termination right after a send can
+        // never silently drop the batch.
+        do {
+            try enqueueUnsentBatchDurably(batch)
+            await updatePendingCount()
+        } catch {
+            await updatePendingCount()
+            throw error
+        }
+
         if isOutboundSuspendedForRecovery {
-            do {
-                try enqueueUnsentBatchDurably(batch)
-                outboundFlushRequestedWhileRecoverySuspended = true
-                await updatePendingCount()
-            } catch {
-                await updatePendingCount()
-                throw error
-            }
+            outboundFlushRequestedWhileRecoverySuspended = true
             return
         }
 
-        let sent = await sendQueuedBatch(batch)
-        if sent {
-            do {
-                try unsentBatches.removeBatches(withIDs: [batch.id])
-                await updatePendingCount()
-            } catch {
-                await updatePendingCount()
-                throw error
-            }
-        } else {
-            do {
-                try enqueueUnsentBatchDurably(batch)
-                await updatePendingCount()
-            } catch {
-                await updatePendingCount()
-                throw error
-            }
-        }
+        _ = await sendQueuedBatch(batch)
     }
 
     private func sendQueuedBatch(_ batch: SyncBatch) async -> Bool {
@@ -483,17 +477,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         guard !(await transport.connectedPeers()).isEmpty, !unsentBatches.isEmpty else { return }
 
         for batch in unsentBatches.pendingBatches {
-            let sent = await sendQueuedBatch(batch)
-            if sent {
-                do {
-                    try unsentBatches.removeBatches(withIDs: [batch.id])
-                    await updatePendingCount()
-                } catch {
-                    lastErrorMessage = "Unable to update the unsent batch queue."
-                    await updatePendingCount()
-                    return
-                }
-            }
+            _ = await sendQueuedBatch(batch)
         }
     }
 
@@ -503,6 +487,27 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         } catch {
             lastErrorMessage = "Unable to update the unsent batch queue."
             throw error
+        }
+    }
+
+    private func handleBatchAcknowledgement(_ acknowledgement: SyncBatchAcknowledgement) async {
+        do {
+            try unsentBatches.removeBatches(withIDs: [acknowledgement.batchID])
+            await updatePendingCount()
+        } catch {
+            lastErrorMessage = "Unable to update the unsent batch queue."
+            await updatePendingCount()
+        }
+    }
+
+    private func sendBatchAcknowledgement(batchID: SyncBatchID, to peerID: MCPeerID) async {
+        do {
+            let payload = try JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
+            let data = try MultipeerSyncMessageCoding.encode(kind: .batchAcknowledgement, payload: payload)
+            try await transport.send(data, toPeers: [peerID], mode: .reliable)
+        } catch {
+            // Best effort: if the ack itself is lost, the sender simply retries
+            // redelivery on its next reconnect, which the receiver already dedupes.
         }
     }
 
@@ -668,8 +673,16 @@ extension MyRAMSyncController: MCSessionDelegate {
             case .batchSync:
                 guard let envelope = try? JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload),
                       envelope.canDecodeWithCurrentSchema else { return }
+                let captured = await onDurablyCaptureIncomingBatch?(envelope.batch) ?? false
                 await onBatchReceived?(envelope.batch)
                 lastSyncAt = envelope.batch.createdAt
+                if captured {
+                    await sendBatchAcknowledgement(batchID: envelope.batch.id, to: peerID)
+                }
+
+            case .batchAcknowledgement:
+                guard let acknowledgement = try? JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload) else { return }
+                await handleBatchAcknowledgement(acknowledgement)
             }
 
             rememberTrustedPeer(peerID)

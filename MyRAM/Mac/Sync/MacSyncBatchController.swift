@@ -131,15 +131,18 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func acceptLocalBatch(_ batch: SyncBatch) async throws {
-        let sent = await sendQueuedBatch(batch)
-        if sent { return }
-
+        // Durability comes first: a peer accepting a `send()` call only means the
+        // data was handed to the transport, not that it survived to the other side.
+        // Removal from this queue happens only once the peer acknowledges receipt
+        // (see handleBatchAcknowledgement), so termination right after a send can
+        // never silently drop the batch.
         do {
             try unsentBatches.enqueueDurably(batch)
         } catch {
             lastErrorMessage = "Unable to save nearby sync changes for retry."
             throw error
         }
+        _ = await sendQueuedBatch(batch)
     }
 
     private func sendQueuedBatch(_ batch: SyncBatch) async -> Bool {
@@ -164,11 +167,18 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         guard !session.connectedPeers.isEmpty, !unsentBatches.isEmpty else { return }
 
         for batch in unsentBatches.pendingBatches {
-            let sent = await sendQueuedBatch(batch)
-            if sent {
-                unsentBatches.removeAll(withIDs: [batch.id])
-            }
+            _ = await sendQueuedBatch(batch)
         }
+    }
+
+    private func handleBatchAcknowledgement(_ acknowledgement: SyncBatchAcknowledgement) {
+        unsentBatches.removeAll(withIDs: [acknowledgement.batchID])
+    }
+
+    private func sendBatchAcknowledgement(batchID: SyncBatchID, to peerID: MCPeerID) throws {
+        let payload = try JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
+        let data = try MultipeerSyncMessageCoding.encode(kind: .batchAcknowledgement, payload: payload)
+        try session.send(data, toPeers: [peerID], with: .reliable)
     }
 
     func receive(_ batch: MacSyncBatch) {
@@ -271,10 +281,17 @@ extension MacSyncBatchController: MCSessionDelegate {
             case .batchSync:
                 guard let envelope = try? JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload),
                       envelope.canDecodeWithCurrentSchema else { return }
+                let captured = convergenceCoordinator?.durablyCaptureIncomingBatch(envelope.batch) ?? false
                 receive(envelope.batch)
+                if captured {
+                    try? sendBatchAcknowledgement(batchID: envelope.batch.id, to: peerID)
+                }
             case .legacySyncEnvelope:
                 guard let envelope = try? JSONDecoder().decode(SyncEnvelope.self, from: message.payload) else { return }
                 receiveLegacyEnvelope(envelope, from: peerID)
+            case .batchAcknowledgement:
+                guard let acknowledgement = try? JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload) else { return }
+                handleBatchAcknowledgement(acknowledgement)
             }
 
             remember(peerID)
