@@ -1,6 +1,6 @@
 import Foundation
 
-enum SyncSequenceIdentityError: Error, Equatable, Sendable {
+public enum SyncSequenceIdentityError: Error, Equatable, Sendable {
     case malformedDeviceID(String)
     case negativeElementOffset(Int)
     case negativeRunLength(Int)
@@ -58,9 +58,14 @@ extension SyncSequenceStableCodable {
 /// different batch operation index; batch and replay evidence are intentionally
 /// not part of this capture-time identity.
 /// Reservation and enforcement belong to a later anchored-sequence subtask.
-struct SyncOperationID: Equatable, Hashable, Sendable {
-    let deviceID: UUID
-    let localCounter: UInt64
+public struct SyncOperationID: Equatable, Hashable, Sendable {
+    public let deviceID: UUID
+    public let localCounter: UInt64
+
+    public init(deviceID: UUID, localCounter: UInt64) {
+        self.deviceID = deviceID
+        self.localCounter = localCounter
+    }
 }
 
 extension SyncOperationID: Codable {
@@ -69,13 +74,13 @@ extension SyncOperationID: Codable {
         case localCounter
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(deviceID.uuidString.lowercased(), forKey: .deviceID)
         try container.encode(localCounter, forKey: .localCounter)
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let encodedDeviceID = try container.decode(String.self, forKey: .deviceID)
         let deviceID = try SyncSequenceIdentityValidation.canonicalUUID(from: encodedDeviceID)
@@ -95,11 +100,11 @@ extension SyncOperationID: SyncSequenceStableCodable {}
 /// must never flatten the offset into `localCounter` or assume a contiguous element
 /// clock. Later structural mutations must also preserve valid UTF-16 boundaries and
 /// must not split surrogate pairs.
-struct SyncTextElementID: Equatable, Hashable, Sendable {
-    let operationID: SyncOperationID
-    let elementOffset: Int
+public struct SyncTextElementID: Equatable, Hashable, Sendable {
+    public let operationID: SyncOperationID
+    public let elementOffset: Int
 
-    init(
+    public init(
         operationID: SyncOperationID,
         elementOffset: Int
     ) throws {
@@ -127,13 +132,13 @@ extension SyncTextElementID: Codable {
         case elementOffset
     }
 
-    func encode(to encoder: Encoder) throws {
+    public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(operationID, forKey: .operationID)
         try container.encode(elementOffset, forKey: .elementOffset)
     }
 
-    init(from decoder: Decoder) throws {
+    public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let operationID = try container.decode(SyncOperationID.self, forKey: .operationID)
         let elementOffset = try container.decode(Int.self, forKey: .elementOffset)
@@ -144,15 +149,15 @@ extension SyncTextElementID: Codable {
 extension SyncTextElementID: SyncSequenceStableCodable {}
 
 /// A non-persistent, lazily derived view of an operation-owned UTF-16 run.
-struct SyncTextElementIDRun: RandomAccessCollection, Sendable {
-    typealias Index = Int
-    typealias Element = SyncTextElementID
+public struct SyncTextElementIDRun: RandomAccessCollection, Sendable {
+    public typealias Index = Int
+    public typealias Element = SyncTextElementID
 
-    let operationID: SyncOperationID
-    let utf16Count: Int
+    public let operationID: SyncOperationID
+    public let utf16Count: Int
 
-    var startIndex: Int { 0 }
-    var endIndex: Int { utf16Count }
+    public var startIndex: Int { 0 }
+    public var endIndex: Int { utf16Count }
 
     fileprivate init(
         operationID: SyncOperationID,
@@ -162,7 +167,7 @@ struct SyncTextElementIDRun: RandomAccessCollection, Sendable {
         self.utf16Count = trustedUTF16Count
     }
 
-    init(
+    public init(
         operationID: SyncOperationID,
         externallySourcedUTF16Count: Int
     ) throws {
@@ -174,7 +179,7 @@ struct SyncTextElementIDRun: RandomAccessCollection, Sendable {
         self.utf16Count = externallySourcedUTF16Count
     }
 
-    subscript(index: Int) -> SyncTextElementID {
+    public subscript(index: Int) -> SyncTextElementID {
         precondition(
             index >= startIndex && index < endIndex,
             "SyncTextElementIDRun index out of bounds"
@@ -189,7 +194,7 @@ struct SyncTextElementIDRun: RandomAccessCollection, Sendable {
 
 extension SyncOperationID {
     /// Derives stable element identities without allocating a per-element array.
-    func elementIDs(for text: String) -> SyncTextElementIDRun {
+    public func elementIDs(for text: String) -> SyncTextElementIDRun {
         SyncTextElementIDRun(
             operationID: self,
             trustedUTF16Count: text.utf16.count

@@ -1,11 +1,6 @@
 import Foundation
 import XCTest
-
-#if os(macOS)
-@testable import MyRAMMac
-#else
-@testable import MyRAM
-#endif
+@testable import AnchoredSequenceCore
 
 final class SyncSequenceIdentityTests: XCTestCase {
     // Guards deterministic hash/diagnostic encoding only.

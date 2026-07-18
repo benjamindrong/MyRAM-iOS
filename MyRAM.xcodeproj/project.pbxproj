@@ -31,10 +31,6 @@
 		BCA164010000000000000002 /* AttributedTextStorageKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000001 /* AttributedTextStorageKeys.swift */; };
 		BCA164010000000000000003 /* MacEditorTextColorPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */; };
 		BCA164010000000000000004 /* MacEditorTextColorPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */; };
-		BCA167010000000000000001 /* SyncSequenceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA167020000000000000001 /* SyncSequenceIdentity.swift */; };
-		BCA167010000000000000002 /* SyncSequenceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA167020000000000000001 /* SyncSequenceIdentity.swift */; };
-		BCA167010000000000000003 /* SyncSequenceIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA167020000000000000002 /* SyncSequenceIdentityTests.swift */; };
-		BCA167010000000000000004 /* SyncSequenceIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA167020000000000000002 /* SyncSequenceIdentityTests.swift */; };
 		BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000002 /* MyRAMMacApp.swift */; };
 		BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000003 /* MyRAMMacRootView.swift */; };
 		BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
@@ -215,6 +211,8 @@
 		C07100322FF1600000000001 /* MyRAMSyncControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100332FF1600000000001 /* MyRAMSyncControllerTests.swift */; };
 		C071000B2FF0000000000001 /* NearbySyncCore in Frameworks */ = {isa = PBXBuildFile; productRef = C07100302FF0000000000001 /* NearbySyncCore */; };
 		C071000E2FF0000000000001 /* NearbySyncCore in Frameworks */ = {isa = PBXBuildFile; productRef = C07100302FF0000000000001 /* NearbySyncCore */; };
+		AC50000000000000000000A3 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
+		AC50000000000000000000A4 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
 		C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */; };
 /* End PBXBuildFile section */
 
@@ -264,8 +262,6 @@
 		BCA105020000000000000001 /* MyRAMMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyRAMMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BCA104020000000000000001 /* RTFCoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTFCoding.swift; sourceTree = "<group>"; };
 		BCA164020000000000000001 /* AttributedTextStorageKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttributedTextStorageKeys.swift; sourceTree = "<group>"; };
-		BCA167020000000000000001 /* SyncSequenceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSequenceIdentity.swift; sourceTree = "<group>"; };
-		BCA167020000000000000002 /* SyncSequenceIdentityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncSequenceIdentityTests.swift; sourceTree = "<group>"; };
 		BCA105020000000000000002 /* MyRAMMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacApp.swift; sourceTree = "<group>"; };
 		BCA105020000000000000003 /* MyRAMMacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacRootView.swift; sourceTree = "<group>"; };
 		BCA106020000000000000001 /* MacNoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteEditorView.swift; sourceTree = "<group>"; };
@@ -415,6 +411,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C071000B2FF0000000000001 /* NearbySyncCore in Frameworks */,
+				AC50000000000000000000A3 /* AnchoredSequenceCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -437,6 +434,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C071000E2FF0000000000001 /* NearbySyncCore in Frameworks */,
+				AC50000000000000000000A4 /* AnchoredSequenceCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -594,14 +592,6 @@
 			path = Convergence;
 			sourceTree = "<group>";
 		};
-		BCA167030000000000000001 /* AnchoredSequence */ = {
-			isa = PBXGroup;
-			children = (
-				BCA167020000000000000001 /* SyncSequenceIdentity.swift */,
-			);
-			path = AnchoredSequence;
-			sourceTree = "<group>";
-		};
 		BCA123031000000000000001 /* iOS */ = {
 			isa = PBXGroup;
 			children = (
@@ -632,7 +622,6 @@
 			isa = PBXGroup;
 			children = (
 				BCA123020000000000000009 /* SyncBatchPayloadCompatibilityTests.swift */,
-				BCA167020000000000000002 /* SyncSequenceIdentityTests.swift */,
 				BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */,
 				BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */,
 				BCA155020000000000000002 /* SyncConvergenceRewriteSafetyPolicyTests.swift */,
@@ -765,7 +754,6 @@
 			isa = PBXGroup;
 			children = (
 				BCA123030000000000000001 /* Batch */,
-				BCA167030000000000000001 /* AnchoredSequence */,
 				BCA132030000000000000001 /* Convergence */,
 				BCA154030000000000000001 /* EditorApplication */,
 				C07100232FF1600000000001 /* Recovery */,
@@ -830,6 +818,7 @@
 			name = MyRAM;
 			packageProductDependencies = (
 				C07100302FF0000000000001 /* NearbySyncCore */,
+				AC50000000000000000000A2 /* AnchoredSequenceCore */,
 			);
 			productName = MyRAM;
 			productReference = BC9F1BAC2EA47D2E0045FD72 /* MyRAM.app */;
@@ -886,6 +875,7 @@
 			name = MyRAMMac;
 			packageProductDependencies = (
 				C07100302FF0000000000001 /* NearbySyncCore */,
+				AC50000000000000000000A2 /* AnchoredSequenceCore */,
 			);
 			productName = MyRAMMac;
 			productReference = BCA105020000000000000001 /* MyRAMMac.app */;
@@ -950,6 +940,7 @@
 			mainGroup = BC9F1BA32EA47D2E0045FD72;
 			packageReferences = (
 				C07100312FF0000000000001 /* XCLocalSwiftPackageReference "../NearbySyncCore" */,
+				AC50000000000000000000A1 /* XCLocalSwiftPackageReference "Packages/AnchoredSequenceCore" */,
 			);
 			productRefGroup = BC9F1BAD2EA47D2E0045FD72 /* Products */;
 			projectDirPath = "";
@@ -1013,7 +1004,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				BC9F1BB42EA47D2F0045FD72 /* Item.swift in Sources */,
-				BCA167010000000000000001 /* SyncSequenceIdentity.swift in Sources */,
 				BCA104010000000000000001 /* RTFCoding.swift in Sources */,
 				BCA164010000000000000001 /* AttributedTextStorageKeys.swift in Sources */,
 				BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */,
@@ -1104,7 +1094,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				BCA123010000000000000014 /* SyncBatchPayloadCompatibilityTests.swift in Sources */,
-				BCA167010000000000000003 /* SyncSequenceIdentityTests.swift in Sources */,
 				BCA132010000000000000005 /* SyncConvergenceFoundationTests.swift in Sources */,
 				BCA132010000000000000014 /* SyncConvergencePlanningTests.swift in Sources */,
 				BCA155010000000000000003 /* SyncConvergenceRewriteSafetyPolicyTests.swift in Sources */,
@@ -1144,7 +1133,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */,
-				BCA167010000000000000002 /* SyncSequenceIdentity.swift in Sources */,
 				BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */,
 				BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */,
 				BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */,
@@ -1216,7 +1204,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				BCA107010000000000000001 /* MacEditorSampleDocumentTests.swift in Sources */,
-				BCA167010000000000000004 /* SyncSequenceIdentityTests.swift in Sources */,
 				BCA107010000000000000003 /* MacEditorSelectionMapperTests.swift in Sources */,
 				BCA107010000000000000004 /* MacRemoteInsertionAttributePolicyTests.swift in Sources */,
 				BCA107010000000000000005 /* MacIncomingSyncApplicationPolicyTests.swift in Sources */,
@@ -1681,12 +1668,20 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../NearbySyncCore;
 		};
+		AC50000000000000000000A1 /* XCLocalSwiftPackageReference "Packages/AnchoredSequenceCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AnchoredSequenceCore;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		C07100302FF0000000000001 /* NearbySyncCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = NearbySyncCore;
+		};
+		AC50000000000000000000A2 /* AnchoredSequenceCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AnchoredSequenceCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

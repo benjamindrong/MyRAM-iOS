@@ -13,4 +13,5 @@ Implementation Docs/
 # Swift Package Manager
 .build/
 .swiftpm/
-Packages/
+# First-party local packages live under Packages/ and are tracked.
+# Build artifacts under them stay ignored via the .build/ and .swiftpm/ rules above.
