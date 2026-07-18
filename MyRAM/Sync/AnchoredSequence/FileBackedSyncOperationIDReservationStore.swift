@@ -8,6 +8,7 @@ typealias SyncOperationIDReservationTestHook =
     @Sendable (SyncOperationIDReservationTestStage) throws -> Void
 
 enum SyncOperationIDReservationTestStage: Equatable, Sendable {
+    case beforeTransactionLock
     case afterAuthoritativeLoad
     case beforeStateInstallation
     case afterStateInstallation
@@ -24,6 +25,12 @@ enum SyncOperationIDReservationStoreError: Error, Equatable, Sendable {
     case verificationFailed
 }
 
+/// A successfully verified reservation is durable across process termination,
+/// app relaunch, app crashes after return, and orderly device restart.
+///
+/// Sudden power loss during filesystem or directory-metadata writeback is outside
+/// this component's guarantee. The store intentionally does not claim directory
+/// fsync or custom full-filesystem barrier semantics.
 struct FileBackedSyncOperationIDReservationStore:
     SyncOperationIDReservationTransacting,
     Sendable
@@ -145,6 +152,7 @@ struct FileBackedSyncOperationIDReservationStore:
         }
         defer { _ = close(descriptor) }
 
+        try testHook(.beforeTransactionLock)
         guard flock(descriptor, LOCK_EX) == 0 else {
             throw SyncOperationIDReservationStoreError.transactionLockFailed
         }

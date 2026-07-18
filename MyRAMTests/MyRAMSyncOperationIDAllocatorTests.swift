@@ -196,7 +196,7 @@ final class MyRAMSyncOperationIDAllocatorTests: XCTestCase {
         XCTAssertTrue([actorA, actorB].contains(operationIDs[0].deviceID))
     }
 
-    func testLockCoversAuthoritativeLoadThroughVerification() async throws {
+    func testSecondStoreCannotEnterLockedTransactionUntilFirstReleases() async throws {
         let root = try makeTemporaryApplicationSupportDirectory()
         let pause = TransactionPause()
         let actorID = uuid("00000000-0000-0000-0000-000000000001")
@@ -211,24 +211,40 @@ final class MyRAMSyncOperationIDAllocatorTests: XCTestCase {
                 }
             )
         )
+        let bReachedLockBoundary = DispatchSemaphore(value: 0)
+        let bEnteredLockedTransaction = DispatchSemaphore(value: 0)
         let allocatorB = MyRAMSyncOperationIDAllocator(
-            transactionStore: makeStore(root: root, uuidProvider: { UUID() })
+            transactionStore: makeStore(
+                root: root,
+                uuidProvider: { UUID() },
+                testHook: { stage in
+                    switch stage {
+                    case .beforeTransactionLock:
+                        bReachedLockBoundary.signal()
+                    case .afterAuthoritativeLoad:
+                        bEnteredLockedTransaction.signal()
+                    default:
+                        break
+                    }
+                }
+            )
         )
 
         let firstTask = Task { try await allocatorA.reserveOperationID() }
         XCTAssertTrue(pause.waitUntilPaused())
 
-        let secondStarted = DispatchSemaphore(value: 0)
-        let secondCompleted = DispatchSemaphore(value: 0)
-        let secondTask = Task {
-            secondStarted.signal()
-            defer { secondCompleted.signal() }
-            return try await allocatorB.reserveOperationID()
-        }
-        XCTAssertEqual(secondStarted.wait(timeout: .now() + 1), .success)
-        XCTAssertEqual(secondCompleted.wait(timeout: .now() + 0.1), .timedOut)
+        let secondTask = Task { try await allocatorB.reserveOperationID() }
+        XCTAssertEqual(bReachedLockBoundary.wait(timeout: .now() + 1), .success)
+        XCTAssertEqual(
+            bEnteredLockedTransaction.wait(timeout: .now() + 0.1),
+            .timedOut
+        )
 
         pause.resumeTransaction()
+        XCTAssertEqual(
+            bEnteredLockedTransaction.wait(timeout: .now() + 1),
+            .success
+        )
         let results = try await [firstTask.value, secondTask.value]
 
         XCTAssertEqual(Set(results.map(\.deviceID)), [actorID])
