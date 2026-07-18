@@ -213,6 +213,14 @@
 		C071000E2FF0000000000001 /* NearbySyncCore in Frameworks */ = {isa = PBXBuildFile; productRef = C07100302FF0000000000001 /* NearbySyncCore */; };
 		AC50000000000000000000A3 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
 		AC50000000000000000000A4 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
+		C16801000000000000000001 /* MyRAMSyncOperationIDAllocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000001 /* MyRAMSyncOperationIDAllocator.swift */; };
+		C16801000000000000000002 /* MyRAMSyncOperationIDAllocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000001 /* MyRAMSyncOperationIDAllocator.swift */; };
+		C16801000000000000000003 /* FileBackedSyncOperationIDReservationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000002 /* FileBackedSyncOperationIDReservationStore.swift */; };
+		C16801000000000000000004 /* FileBackedSyncOperationIDReservationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000002 /* FileBackedSyncOperationIDReservationStore.swift */; };
+		C16801000000000000000005 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000003 /* MyRAMSyncOperationIDAllocatorTests.swift */; };
+		C16801000000000000000006 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000004 /* MyRAMSyncOperationIDAllocatorTests.swift */; };
+		C16801000000000000000007 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
+		C16801000000000000000008 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
 		C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */; };
 /* End PBXBuildFile section */
 
@@ -402,6 +410,10 @@
 		C07100272FF1600000000001 /* SyncRecoveryStateBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRecoveryStateBuilder.swift; sourceTree = "<group>"; };
 		C07100292FF1600000000001 /* PendingSyncRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingSyncRecoveryTests.swift; sourceTree = "<group>"; };
 		C07100332FF1600000000001 /* MyRAMSyncControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncControllerTests.swift; sourceTree = "<group>"; };
+		C16802000000000000000001 /* MyRAMSyncOperationIDAllocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncOperationIDAllocator.swift; sourceTree = "<group>"; };
+		C16802000000000000000002 /* FileBackedSyncOperationIDReservationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBackedSyncOperationIDReservationStore.swift; sourceTree = "<group>"; };
+		C16802000000000000000003 /* MyRAMSyncOperationIDAllocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncOperationIDAllocatorTests.swift; sourceTree = "<group>"; };
+		C16802000000000000000004 /* MyRAMSyncOperationIDAllocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift; sourceTree = "<group>"; };
 		C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteIntelligence.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -419,6 +431,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C16801000000000000000007 /* AnchoredSequenceCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -442,6 +455,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C16801000000000000000008 /* AnchoredSequenceCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -621,6 +635,7 @@
 		BC9F1BC12EA47D310045FD72 /* MyRAMTests */ = {
 			isa = PBXGroup;
 			children = (
+				C16802000000000000000003 /* MyRAMSyncOperationIDAllocatorTests.swift */,
 				BCA123020000000000000009 /* SyncBatchPayloadCompatibilityTests.swift */,
 				BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */,
 				BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */,
@@ -660,6 +675,7 @@
 		BCA107030000000000000001 /* MyRAMMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				C16802000000000000000004 /* MyRAMSyncOperationIDAllocatorTests.swift */,
 				BCA107020000000000000001 /* MacEditorSampleDocumentTests.swift */,
 				BCA107020000000000000003 /* MacEditorSelectionMapperTests.swift */,
 				BCA107020000000000000004 /* MacRemoteInsertionAttributePolicyTests.swift */,
@@ -753,6 +769,7 @@
 		C07100212FF0000000000001 /* Sync */ = {
 			isa = PBXGroup;
 			children = (
+				C16803000000000000000001 /* AnchoredSequence */,
 				BCA123030000000000000001 /* Batch */,
 				BCA132030000000000000001 /* Convergence */,
 				BCA154030000000000000001 /* EditorApplication */,
@@ -768,6 +785,15 @@
 				C071001F2FF0000000000001 /* PendingSyncStatus.swift */,
 			);
 			path = Sync;
+			sourceTree = "<group>";
+		};
+		C16803000000000000000001 /* AnchoredSequence */ = {
+			isa = PBXGroup;
+			children = (
+				C16802000000000000000002 /* FileBackedSyncOperationIDReservationStore.swift */,
+				C16802000000000000000001 /* MyRAMSyncOperationIDAllocator.swift */,
+			);
+			path = AnchoredSequence;
 			sourceTree = "<group>";
 		};
 		C07100232FF1600000000001 /* Recovery */ = {
@@ -838,6 +864,9 @@
 				BC9F1BC02EA47D310045FD72 /* PBXTargetDependency */,
 			);
 			name = MyRAMTests;
+			packageProductDependencies = (
+				AC50000000000000000000A2 /* AnchoredSequenceCore */,
+			);
 			productName = MyRAMTests;
 			productReference = BC9F1BBE2EA47D310045FD72 /* MyRAMTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -895,6 +924,9 @@
 				BCA107060000000000000002 /* PBXTargetDependency */,
 			);
 			name = MyRAMMacTests;
+			packageProductDependencies = (
+				AC50000000000000000000A2 /* AnchoredSequenceCore */,
+			);
 			productName = MyRAMMacTests;
 			productReference = BCA107020000000000000002 /* MyRAMMacTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
@@ -1003,6 +1035,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C16801000000000000000001 /* MyRAMSyncOperationIDAllocator.swift in Sources */,
+				C16801000000000000000003 /* FileBackedSyncOperationIDReservationStore.swift in Sources */,
 				BC9F1BB42EA47D2F0045FD72 /* Item.swift in Sources */,
 				BCA104010000000000000001 /* RTFCoding.swift in Sources */,
 				BCA164010000000000000001 /* AttributedTextStorageKeys.swift in Sources */,
@@ -1093,6 +1127,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C16801000000000000000005 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */,
 				BCA123010000000000000014 /* SyncBatchPayloadCompatibilityTests.swift in Sources */,
 				BCA132010000000000000005 /* SyncConvergenceFoundationTests.swift in Sources */,
 				BCA132010000000000000014 /* SyncConvergencePlanningTests.swift in Sources */,
@@ -1132,6 +1167,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C16801000000000000000002 /* MyRAMSyncOperationIDAllocator.swift in Sources */,
+				C16801000000000000000004 /* FileBackedSyncOperationIDReservationStore.swift in Sources */,
 				BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */,
 				BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */,
 				BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */,
@@ -1203,6 +1240,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C16801000000000000000006 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */,
 				BCA107010000000000000001 /* MacEditorSampleDocumentTests.swift in Sources */,
 				BCA107010000000000000003 /* MacEditorSelectionMapperTests.swift in Sources */,
 				BCA107010000000000000004 /* MacRemoteInsertionAttributePolicyTests.swift in Sources */,
