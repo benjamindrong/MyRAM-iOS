@@ -211,6 +211,8 @@
 		C07100322FF1600000000001 /* MyRAMSyncControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100332FF1600000000001 /* MyRAMSyncControllerTests.swift */; };
 		C071000B2FF0000000000001 /* NearbySyncCore in Frameworks */ = {isa = PBXBuildFile; productRef = C07100302FF0000000000001 /* NearbySyncCore */; };
 		C071000E2FF0000000000001 /* NearbySyncCore in Frameworks */ = {isa = PBXBuildFile; productRef = C07100302FF0000000000001 /* NearbySyncCore */; };
+		AC50000000000000000000A3 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
+		AC50000000000000000000A4 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
 		C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */; };
 /* End PBXBuildFile section */
 
@@ -409,6 +411,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C071000B2FF0000000000001 /* NearbySyncCore in Frameworks */,
+				AC50000000000000000000A3 /* AnchoredSequenceCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -431,6 +434,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				C071000E2FF0000000000001 /* NearbySyncCore in Frameworks */,
+				AC50000000000000000000A4 /* AnchoredSequenceCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -814,6 +818,7 @@
 			name = MyRAM;
 			packageProductDependencies = (
 				C07100302FF0000000000001 /* NearbySyncCore */,
+				AC50000000000000000000A2 /* AnchoredSequenceCore */,
 			);
 			productName = MyRAM;
 			productReference = BC9F1BAC2EA47D2E0045FD72 /* MyRAM.app */;
@@ -870,6 +875,7 @@
 			name = MyRAMMac;
 			packageProductDependencies = (
 				C07100302FF0000000000001 /* NearbySyncCore */,
+				AC50000000000000000000A2 /* AnchoredSequenceCore */,
 			);
 			productName = MyRAMMac;
 			productReference = BCA105020000000000000001 /* MyRAMMac.app */;
@@ -934,6 +940,7 @@
 			mainGroup = BC9F1BA32EA47D2E0045FD72;
 			packageReferences = (
 				C07100312FF0000000000001 /* XCLocalSwiftPackageReference "../NearbySyncCore" */,
+				AC50000000000000000000A1 /* XCLocalSwiftPackageReference "Packages/AnchoredSequenceCore" */,
 			);
 			productRefGroup = BC9F1BAD2EA47D2E0045FD72 /* Products */;
 			projectDirPath = "";
@@ -1661,12 +1668,20 @@
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../NearbySyncCore;
 		};
+		AC50000000000000000000A1 /* XCLocalSwiftPackageReference "Packages/AnchoredSequenceCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/AnchoredSequenceCore;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
 		C07100302FF0000000000001 /* NearbySyncCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = NearbySyncCore;
+		};
+		AC50000000000000000000A2 /* AnchoredSequenceCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AnchoredSequenceCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
