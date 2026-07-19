@@ -221,6 +221,12 @@
 		C16801000000000000000006 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000004 /* MyRAMSyncOperationIDAllocatorTests.swift */; };
 		C16801000000000000000007 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
 		C16801000000000000000008 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
+		C16901000000000000000001 /* NoteSequenceStateRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000001 /* NoteSequenceStateRecord.swift */; };
+		C16901000000000000000002 /* NoteSequenceStateRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000001 /* NoteSequenceStateRecord.swift */; };
+		C16901000000000000000003 /* SwiftDataNoteSequenceStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000002 /* SwiftDataNoteSequenceStateStore.swift */; };
+		C16901000000000000000004 /* SwiftDataNoteSequenceStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000002 /* SwiftDataNoteSequenceStateStore.swift */; };
+		C16901000000000000000005 /* SwiftDataNoteSequenceStateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000003 /* SwiftDataNoteSequenceStateStoreTests.swift */; };
+		C16901000000000000000006 /* SwiftDataNoteSequenceStateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000004 /* SwiftDataNoteSequenceStateStoreTests.swift */; };
 		C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */; };
 /* End PBXBuildFile section */
 
@@ -414,6 +420,10 @@
 		C16802000000000000000002 /* FileBackedSyncOperationIDReservationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBackedSyncOperationIDReservationStore.swift; sourceTree = "<group>"; };
 		C16802000000000000000003 /* MyRAMSyncOperationIDAllocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncOperationIDAllocatorTests.swift; sourceTree = "<group>"; };
 		C16802000000000000000004 /* MyRAMSyncOperationIDAllocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift; sourceTree = "<group>"; };
+		C16902000000000000000001 /* NoteSequenceStateRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateRecord.swift; sourceTree = "<group>"; };
+		C16902000000000000000002 /* SwiftDataNoteSequenceStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataNoteSequenceStateStore.swift; sourceTree = "<group>"; };
+		C16902000000000000000003 /* SwiftDataNoteSequenceStateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataNoteSequenceStateStoreTests.swift; sourceTree = "<group>"; };
+		C16902000000000000000004 /* SwiftDataNoteSequenceStateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift; sourceTree = "<group>"; };
 		C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteIntelligence.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -635,6 +645,7 @@
 		BC9F1BC12EA47D310045FD72 /* MyRAMTests */ = {
 			isa = PBXGroup;
 			children = (
+				C16902000000000000000003 /* SwiftDataNoteSequenceStateStoreTests.swift */,
 				C16802000000000000000003 /* MyRAMSyncOperationIDAllocatorTests.swift */,
 				BCA123020000000000000009 /* SyncBatchPayloadCompatibilityTests.swift */,
 				BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */,
@@ -675,6 +686,7 @@
 		BCA107030000000000000001 /* MyRAMMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				C16902000000000000000004 /* SwiftDataNoteSequenceStateStoreTests.swift */,
 				C16802000000000000000004 /* MyRAMSyncOperationIDAllocatorTests.swift */,
 				BCA107020000000000000001 /* MacEditorSampleDocumentTests.swift */,
 				BCA107020000000000000003 /* MacEditorSelectionMapperTests.swift */,
@@ -790,6 +802,8 @@
 		C16803000000000000000001 /* AnchoredSequence */ = {
 			isa = PBXGroup;
 			children = (
+				C16902000000000000000001 /* NoteSequenceStateRecord.swift */,
+				C16902000000000000000002 /* SwiftDataNoteSequenceStateStore.swift */,
 				C16802000000000000000002 /* FileBackedSyncOperationIDReservationStore.swift */,
 				C16802000000000000000001 /* MyRAMSyncOperationIDAllocator.swift */,
 			);
@@ -1035,6 +1049,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C16901000000000000000001 /* NoteSequenceStateRecord.swift in Sources */,
+				C16901000000000000000003 /* SwiftDataNoteSequenceStateStore.swift in Sources */,
 				C16801000000000000000001 /* MyRAMSyncOperationIDAllocator.swift in Sources */,
 				C16801000000000000000003 /* FileBackedSyncOperationIDReservationStore.swift in Sources */,
 				BC9F1BB42EA47D2F0045FD72 /* Item.swift in Sources */,
@@ -1127,6 +1143,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C16901000000000000000005 /* SwiftDataNoteSequenceStateStoreTests.swift in Sources */,
 				C16801000000000000000005 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */,
 				BCA123010000000000000014 /* SyncBatchPayloadCompatibilityTests.swift in Sources */,
 				BCA132010000000000000005 /* SyncConvergenceFoundationTests.swift in Sources */,
@@ -1167,6 +1184,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C16901000000000000000002 /* NoteSequenceStateRecord.swift in Sources */,
+				C16901000000000000000004 /* SwiftDataNoteSequenceStateStore.swift in Sources */,
 				C16801000000000000000002 /* MyRAMSyncOperationIDAllocator.swift in Sources */,
 				C16801000000000000000004 /* FileBackedSyncOperationIDReservationStore.swift in Sources */,
 				BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */,
@@ -1240,6 +1259,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C16901000000000000000006 /* SwiftDataNoteSequenceStateStoreTests.swift in Sources */,
 				C16801000000000000000006 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */,
 				BCA107010000000000000001 /* MacEditorSampleDocumentTests.swift in Sources */,
 				BCA107010000000000000003 /* MacEditorSelectionMapperTests.swift in Sources */,

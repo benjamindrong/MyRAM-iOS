@@ -28,6 +28,7 @@ enum MyRAMModelRegistry {
         ConvergenceBlockingBatchReference.self,
         ReconciliationEpisode.self,
         ReconciliationCandidateRecord.self,
-        ReconciliationCompletionEvidenceRecord.self
+        ReconciliationCompletionEvidenceRecord.self,
+        NoteSequenceStateRecord.self
     ]
 }
