@@ -48,15 +48,18 @@ extension SyncSequenceStableCodable {
     }
 }
 
-/// Identifies one operation at capture time.
+/// Identifies one operation-owned sequence run.
 ///
-/// `deviceID` remains stable for one installation identity. Its counters must be
-/// reserved monotonically and never reused. Failed reservations may leave gaps.
-/// Resetting the counter requires a new device ID, and reinstallation generates a
-/// new random device ID instead of restoring an old identity with a reset counter.
-/// The identity remains unchanged across retries, rebundling, retransmission, or a
-/// different batch operation index; batch and replay evidence are intentionally
-/// not part of this capture-time identity.
+/// Normal captured operations use a `deviceID` that remains stable for one
+/// installation identity. Their counters must be reserved monotonically and never
+/// reused. Failed reservations may leave gaps. Resetting the counter requires a new
+/// device ID, and reinstallation generates a new random device ID instead of
+/// restoring an old identity with a reset counter. The identity remains unchanged
+/// across retries, rebundling, retransmission, or a different batch operation index;
+/// batch and replay evidence are intentionally not part of capture-time identity.
+/// Synthetic legacy operations instead derive this same representation from an
+/// immutable, versioned bootstrap identity and do not participate in actor counter
+/// allocation.
 /// Reservation and enforcement belong to a later anchored-sequence subtask.
 public struct SyncOperationID: Equatable, Hashable, Sendable {
     public let deviceID: UUID
