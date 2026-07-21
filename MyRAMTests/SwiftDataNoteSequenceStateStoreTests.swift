@@ -11,6 +11,479 @@ import AnchoredSequenceCore
 
 @MainActor
 final class SwiftDataNoteSequenceStateStoreTests: XCTestCase {
+    func testBootstrapAdapterMatchesExplicitCoreV1() throws {
+        let noteID = UUID(uuidString: "10000000-0000-0000-0000-000000000001")!
+        let body = "A\u{1F600}Z"
+
+        XCTAssertEqual(
+            try NoteSequenceStateBootstrapAdapter.makeInitialState(
+                noteID: noteID,
+                body: body
+            ),
+            try SyncTextLegacyBootstrap.makeState(
+                noteID: noteID,
+                body: body,
+                formatVersion: .v1
+            )
+        )
+    }
+
+    func testBootstrapAdapterPreservesExactUTF16Body() throws {
+        let body = "\u{1F600}e\u{301}\n"
+
+        let state = try NoteSequenceStateBootstrapAdapter.makeInitialState(
+            noteID: UUID(),
+            body: body
+        )
+
+        XCTAssertTrue(state.visibleText.utf16.elementsEqual(body.utf16))
+    }
+
+    func testBootstrapAdapterMapsEmptyBodyToCanonicalEmptyState() throws {
+        XCTAssertEqual(
+            try NoteSequenceStateBootstrapAdapter.makeInitialState(
+                noteID: UUID(),
+                body: ""
+            ),
+            .empty
+        )
+    }
+
+    func testExactTextComparisonRejectsCanonicallyEquivalentDifferentUTF16() {
+        let precomposed = "\u{E9}"
+        let decomposed = "e\u{301}"
+
+        XCTAssertEqual(precomposed, decomposed)
+        XCTAssertFalse(NoteSequenceStateExactText.matches(precomposed, decomposed))
+    }
+
+    func testPreparedBootstrapExactMismatchUsesNewStateBodyMismatch() throws {
+        let state = try rootState(text: "\u{E9}")
+
+        XCTAssertThrowsError(
+            try NoteSequenceStateBootstrapPersistence.requireExactBody(
+                state: state,
+                body: "e\u{301}"
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoteSequenceStateStoreError,
+                .newStateBodyMismatch
+            )
+        }
+    }
+
+    func testPreparedBootstrapContainsCanonicalPayloadAndRevisionZeroMetadata() throws {
+        let noteID = UUID(uuidString: "20000000-0000-0000-0000-000000000002")!
+        let body = "Prepared \u{1F680}"
+
+        let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: noteID,
+            body: body
+        )
+        let expectedPayload = try NoteSequenceStatePersistenceCodec.encode(
+            state: prepared.state,
+            noteID: noteID
+        )
+        let record = prepared.makeRevisionZeroRecord()
+
+        XCTAssertEqual(prepared.payload, expectedPayload)
+        XCTAssertEqual(prepared.visibleUTF16Count, prepared.state.visibleUTF16Count)
+        XCTAssertEqual(
+            prepared.tombstonedUTF16Count,
+            prepared.state.tombstonedUTF16Count
+        )
+        XCTAssertEqual(record.noteID, noteID)
+        XCTAssertEqual(record.formatVersion, 1)
+        XCTAssertEqual(record.revision, 0)
+        XCTAssertEqual(record.visibleUTF16Count, prepared.visibleUTF16Count)
+        XCTAssertEqual(
+            record.tombstonedUTF16Count,
+            prepared.tombstonedUTF16Count
+        )
+        XCTAssertEqual(record.payloadByteCount, prepared.payload.count)
+        XCTAssertEqual(record.statePayloadData, prepared.payload)
+    }
+
+    func testLoadOrBootstrapCreatesRevisionZeroStateForAuthoritativeNonemptyBody() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Authoritative \u{1F600}", in: container)
+        let store = await SwiftDataNoteSequenceStateStore(container: container)
+
+        let loaded = try await store.loadOrBootstrap(noteID: noteID)
+        let expectedState = try NoteSequenceStateBootstrapAdapter.makeInitialState(
+            noteID: noteID,
+            body: "Authoritative \u{1F600}"
+        )
+
+        XCTAssertEqual(loaded.revision, 0)
+        XCTAssertEqual(loaded.note.body, "Authoritative \u{1F600}")
+        XCTAssertEqual(loaded.state, expectedState)
+        XCTAssertEqual(loaded.state.runs.count, 1)
+        XCTAssertEqual(loaded.state.fragments.count, 1)
+        XCTAssertTrue(
+            loaded.state.visibleText.utf16.elementsEqual(
+                "Authoritative \u{1F600}".utf16
+            )
+        )
+        XCTAssertEqual(loaded.state.tombstonedUTF16Count, 0)
+        XCTAssertEqual(try fetchRecords(in: container).count, 1)
+    }
+
+    func testLoadOrBootstrapPersistsRevisionZeroCanonicalEmptyState() async throws {
+        let container = try makeContainer()
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        try insertNote(noteID: noteID, body: "", in: container)
+        let store = await SwiftDataNoteSequenceStateStore(container: container)
+
+        let loaded = try await store.loadOrBootstrap(noteID: noteID)
+        let record = try XCTUnwrap(fetchRecords(in: container).only)
+
+        XCTAssertEqual(loaded.revision, 0)
+        XCTAssertEqual(loaded.state, .empty)
+        XCTAssertEqual(
+            record.statePayloadData,
+            Data(
+                "{\"formatVersion\":1,\"fragments\":[],\"noteID\":\"00000000-0000-0000-0000-000000000001\",\"runs\":[]}"
+                    .utf8
+            )
+        )
+    }
+
+    func testLoadOrBootstrapUsesBodyPersistedAtInvocation() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Original", in: container)
+        try updateNote(noteID: noteID, in: container) { note in
+            note.content = "Current \u{1F680}"
+        }
+        let store = await SwiftDataNoteSequenceStateStore(container: container)
+
+        let loaded = try await store.loadOrBootstrap(noteID: noteID)
+
+        XCTAssertEqual(loaded.note.body, "Current \u{1F680}")
+        XCTAssertTrue(
+            loaded.state.visibleText.utf16.elementsEqual("Current \u{1F680}".utf16)
+        )
+    }
+
+    func testLoadOrBootstrapChangesOnlyTheMissingSequenceStateRow() async throws {
+        let container = try makeContainer()
+        let context = ModelContext(container)
+        context.autosaveEnabled = false
+        let folder = Folder(name: "Folder")
+        let note = Note(title: "Title", content: "Body", folder: folder)
+        note.id = UUID()
+        note.richTextContentData = Data([0x01, 0x02, 0x03])
+        note.isPinned = true
+        note.createdAt = Date(timeIntervalSinceReferenceDate: 111)
+        note.modifiedAt = Date(timeIntervalSinceReferenceDate: 222)
+        note.deletedAt = Date(timeIntervalSinceReferenceDate: 333)
+        let photo = NotePhotoAttachment(imageData: Data([0x04]), note: note)
+        let pinnedText = PinnedThought(text: "Pinned", order: 7, note: note)
+        note.photoAttachments = [photo]
+        note.pinnedThoughts = [pinnedText]
+        context.insert(folder)
+        context.insert(note)
+        context.insert(photo)
+        context.insert(pinnedText)
+        try context.save()
+        let store = await SwiftDataNoteSequenceStateStore(container: container)
+
+        _ = try await store.loadOrBootstrap(noteID: note.id)
+        let persisted = try XCTUnwrap(fetchNote(noteID: note.id, in: container))
+
+        XCTAssertEqual(persisted.title, "Title")
+        XCTAssertEqual(persisted.content, "Body")
+        XCTAssertEqual(persisted.richTextContentData, Data([0x01, 0x02, 0x03]))
+        XCTAssertEqual(persisted.isPinned, true)
+        XCTAssertEqual(persisted.createdAt, Date(timeIntervalSinceReferenceDate: 111))
+        XCTAssertEqual(persisted.modifiedAt, Date(timeIntervalSinceReferenceDate: 222))
+        XCTAssertEqual(persisted.deletedAt, Date(timeIntervalSinceReferenceDate: 333))
+        XCTAssertEqual(persisted.folder?.id, folder.id)
+        XCTAssertEqual(persisted.photoAttachments.map(\.id), [photo.id])
+        XCTAssertEqual(persisted.pinnedThoughts.map(\.id), [pinnedText.id])
+        XCTAssertEqual(try fetchRecords(in: container).count, 1)
+    }
+
+    func testLoadOrBootstrapReturnsExistingStateWithoutSaveRevisionAdvanceOrPayloadRewrite() async throws {
+        let container = try makeContainer()
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000000001")!
+        try insertNote(noteID: noteID, body: "", in: container)
+        let initialStore = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await initialStore.compareAndSet(
+            noteID: noteID,
+            expected: .missing(expectedBody: ""),
+            newBody: "",
+            newState: .empty
+        )
+        let lexicalPayload = Data(
+            "{ \"runs\" : [ ], \"noteID\" : \"00000000-0000-0000-0000-000000000001\", \"fragments\" : [ ], \"formatVersion\" : 1 }"
+                .utf8
+        )
+        try updateRecord(in: container) { record in
+            record.revision = 8
+            record.statePayloadData = lexicalPayload
+            record.payloadByteCount = lexicalPayload.count
+        }
+        let saveCalls = InvocationRecorder()
+        let hookCalls = InvocationRecorder()
+        let store = await SwiftDataNoteSequenceStateStore(
+            container: container,
+            bootstrapSaveOperation: { _ in saveCalls.record() },
+            testHook: { _ in hookCalls.record() }
+        )
+
+        let loaded = try await store.loadOrBootstrap(noteID: noteID)
+
+        XCTAssertEqual(loaded.revision, 8)
+        XCTAssertEqual(loaded.state, .empty)
+        XCTAssertEqual(saveCalls.count, 0)
+        XCTAssertEqual(hookCalls.count, 0)
+        let record = try XCTUnwrap(fetchRecords(in: container).only)
+        XCTAssertEqual(record.revision, 8)
+        XCTAssertEqual(record.statePayloadData, lexicalPayload)
+    }
+
+    func testLoadOrBootstrapRejectsExistingStateWhoseVisibleTextIsNotExactUTF16() async throws {
+        let container = try makeContainer()
+        let decomposed = "e\u{301}"
+        let precomposed = "\u{E9}"
+        let noteID = try insertNote(body: decomposed, in: container)
+        let seedStore = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await seedStore.compareAndSet(
+            noteID: noteID,
+            expected: .missing(expectedBody: decomposed),
+            newBody: decomposed,
+            newState: rootState(text: precomposed)
+        )
+        let originalPayload = try XCTUnwrap(
+            fetchRecords(in: container).only?.statePayloadData
+        )
+
+        guard case .present = try await seedStore.load(noteID: noteID) else {
+            return XCTFail("Existing load should retain canonical String equality")
+        }
+        await assertStoreError(.corruptState) {
+            _ = try await seedStore.loadOrBootstrap(noteID: noteID)
+        }
+        XCTAssertEqual(
+            try fetchRecords(in: container).only?.statePayloadData,
+            originalPayload
+        )
+    }
+
+    func testLoadOrBootstrapDoesNotReplaceCorruptExistingState() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Body", in: container)
+        let seedStore = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await seedStore.compareAndSet(
+            noteID: noteID,
+            expected: .missing(expectedBody: "Body"),
+            newBody: "Body",
+            newState: rootState(text: "Body")
+        )
+        let corruptPayload = Data("not-json".utf8)
+        try updateRecord(in: container) { record in
+            record.statePayloadData = corruptPayload
+            record.payloadByteCount = corruptPayload.count
+        }
+
+        await assertStoreError(.corruptState) {
+            _ = try await seedStore.loadOrBootstrap(noteID: noteID)
+        }
+        XCTAssertEqual(try fetchRecords(in: container).count, 1)
+        XCTAssertEqual(
+            try fetchRecords(in: container).only?.statePayloadData,
+            corruptPayload
+        )
+    }
+
+    func testLoadOrBootstrapDoesNotReplaceUnsupportedExistingState() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Body", in: container)
+        let seedStore = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await seedStore.compareAndSet(
+            noteID: noteID,
+            expected: .missing(expectedBody: "Body"),
+            newBody: "Body",
+            newState: rootState(text: "Body")
+        )
+        try updateRecord(in: container) { $0.formatVersion = 2 }
+
+        await assertStoreError(.unsupportedVersion(2)) {
+            _ = try await seedStore.loadOrBootstrap(noteID: noteID)
+        }
+        XCTAssertEqual(try fetchRecords(in: container).only?.formatVersion, 2)
+        XCTAssertEqual(try fetchRecords(in: container).count, 1)
+    }
+
+    func testLoadOrBootstrapMissingNoteFailsWithoutCreatingState() async throws {
+        let container = try makeContainer()
+        let noteID = UUID()
+        let store = await SwiftDataNoteSequenceStateStore(container: container)
+
+        await assertStoreError(.missingNote(noteID)) {
+            _ = try await store.loadOrBootstrap(noteID: noteID)
+        }
+        XCTAssertTrue(try fetchRecords(in: container).isEmpty)
+    }
+
+    func testLoadOrBootstrapInjectedBeforeSaveFailureRollsBackPendingRow() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Body", in: container)
+        let store = await SwiftDataNoteSequenceStateStore(
+            container: container,
+            testHook: { stage in
+                if stage == .beforeSave {
+                    throw InjectedFailure.expected
+                }
+            }
+        )
+
+        await assertStoreError(.persistenceFailure) {
+            _ = try await store.loadOrBootstrap(noteID: noteID)
+        }
+        XCTAssertEqual(try fetchNote(noteID: noteID, in: container)?.content, "Body")
+        XCTAssertTrue(try fetchRecords(in: container).isEmpty)
+    }
+
+    func testLoadOrBootstrapThrownSaveOperationLeavesNoteAndStateUnchanged() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Body", in: container)
+        let hookStages = StageRecorder()
+        let store = await SwiftDataNoteSequenceStateStore(
+            container: container,
+            bootstrapSaveOperation: { _ in
+                throw InjectedFailure.expected
+            },
+            testHook: { hookStages.record($0) }
+        )
+
+        await assertStoreError(.persistenceFailure) {
+            _ = try await store.loadOrBootstrap(noteID: noteID)
+        }
+        XCTAssertEqual(hookStages.stages, [.beforeSave])
+        XCTAssertEqual(try fetchNote(noteID: noteID, in: container)?.content, "Body")
+        XCTAssertTrue(try fetchRecords(in: container).isEmpty)
+    }
+
+    func testLoadOrBootstrapPostSaveCommittedMismatchReturnsVerificationFailure() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Body", in: container)
+        let store = await SwiftDataNoteSequenceStateStore(
+            container: container,
+            testHook: { stage in
+                guard stage == .afterSave else { return }
+                let mutationContext = ModelContext(container)
+                let records = try mutationContext.fetch(
+                    FetchDescriptor<NoteSequenceStateRecord>()
+                )
+                guard let record = records.first else {
+                    throw InjectedFailure.expected
+                }
+                mutationContext.delete(record)
+                try mutationContext.save()
+            }
+        )
+
+        await assertStoreError(.verificationFailure) {
+            _ = try await store.loadOrBootstrap(noteID: noteID)
+        }
+        XCTAssertTrue(try fetchRecords(in: container).isEmpty)
+        XCTAssertEqual(try fetchNote(noteID: noteID, in: container)?.content, "Body")
+    }
+
+    func testLoadOrBootstrapStateSurvivesStoreRestart() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Restart \u{1F680}", in: container)
+        let firstStore = await SwiftDataNoteSequenceStateStore(container: container)
+        let first = try await firstStore.loadOrBootstrap(noteID: noteID)
+
+        let restartedStore = await SwiftDataNoteSequenceStateStore(container: container)
+        let restarted = try await restartedStore.loadOrBootstrap(noteID: noteID)
+
+        XCTAssertEqual(restarted, first)
+        XCTAssertEqual(try fetchRecords(in: container).count, 1)
+    }
+
+    func testConcurrentLoadOrBootstrapAcrossStoreInstancesCreatesOneRevisionZeroRow() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Concurrent", in: container)
+        let storeA = await SwiftDataNoteSequenceStateStore(container: container)
+        let storeB = await SwiftDataNoteSequenceStateStore(container: container)
+
+        let firstTask = Task.detached {
+            try await storeA.loadOrBootstrap(noteID: noteID)
+        }
+        let secondTask = Task.detached {
+            try await storeB.loadOrBootstrap(noteID: noteID)
+        }
+        let first = try await firstTask.value
+        let second = try await secondTask.value
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(first.revision, 0)
+        let records = try fetchRecords(in: container)
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.only?.revision, 0)
+        XCTAssertEqual(
+            records.only?.statePayloadData,
+            try NoteSequenceStatePersistenceCodec.encode(
+                state: first.state,
+                noteID: noteID
+            )
+        )
+    }
+
+    func testLoadOrBootstrapReturnsExistingNonBootstrapStateWithoutReplacement() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Body", in: container)
+        let state = try rootState(text: "Body")
+        let seedStore = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await seedStore.compareAndSet(
+            noteID: noteID,
+            expected: .missing(expectedBody: "Body"),
+            newBody: "Body",
+            newState: state
+        )
+        let originalPayload = try XCTUnwrap(
+            fetchRecords(in: container).only?.statePayloadData
+        )
+
+        let loaded = try await seedStore.loadOrBootstrap(noteID: noteID)
+
+        XCTAssertEqual(loaded.state, state)
+        XCTAssertEqual(loaded.revision, 0)
+        XCTAssertEqual(
+            try fetchRecords(in: container).only?.statePayloadData,
+            originalPayload
+        )
+    }
+
+    func testExistingLoadValidationRetainsCanonicalStringEqualityBehavior() async throws {
+        let container = try makeContainer()
+        let decomposed = "e\u{301}"
+        let noteID = try insertNote(body: decomposed, in: container)
+        let store = await SwiftDataNoteSequenceStateStore(container: container)
+        let precomposedState = try rootState(text: "\u{E9}")
+        _ = try await store.compareAndSet(
+            noteID: noteID,
+            expected: .missing(expectedBody: decomposed),
+            newBody: decomposed,
+            newState: precomposedState
+        )
+
+        let loaded = try await store.load(noteID: noteID)
+        XCTAssertEqual(
+            loaded,
+            .present(LoadedNoteSequenceState(
+                note: NoteSequenceStateNoteSnapshot(noteID: noteID, body: decomposed),
+                revision: 0,
+                state: precomposedState
+            ))
+        )
+    }
+
     func testMissingLoadDoesNotCreateAStateRow() async throws {
         let container = try makeContainer()
         let noteID = try insertNote(body: "Body", in: container)
@@ -611,6 +1084,22 @@ final class SwiftDataNoteSequenceStateStoreTests: XCTestCase {
         return try context.fetch(descriptor).first
     }
 
+    private func updateNote(
+        noteID: UUID,
+        in container: ModelContainer,
+        mutation: (Note) throws -> Void
+    ) throws {
+        let context = ModelContext(container)
+        let requestedNoteID = noteID
+        var descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { $0.id == requestedNoteID }
+        )
+        descriptor.fetchLimit = 1
+        let note = try XCTUnwrap(context.fetch(descriptor).first)
+        try mutation(note)
+        try context.save()
+    }
+
     private func fetchRecords(
         in container: ModelContainer
     ) throws -> [NoteSequenceStateRecord] {
@@ -799,6 +1288,32 @@ private final class StorePause: @unchecked Sendable {
     func block() {
         entered.signal()
         release.wait()
+    }
+}
+
+private final class InvocationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedCount = 0
+
+    var count: Int {
+        lock.withLock { storedCount }
+    }
+
+    func record() {
+        lock.withLock { storedCount += 1 }
+    }
+}
+
+private final class StageRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedStages: [NoteSequenceStateStoreTestStage] = []
+
+    var stages: [NoteSequenceStateStoreTestStage] {
+        lock.withLock { storedStages }
+    }
+
+    func record(_ stage: NoteSequenceStateStoreTestStage) {
+        lock.withLock { storedStages.append(stage) }
     }
 }
 
