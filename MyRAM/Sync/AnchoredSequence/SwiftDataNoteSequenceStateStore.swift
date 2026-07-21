@@ -19,6 +19,64 @@ struct LoadedNoteSequenceState: Equatable, Sendable {
     let state: SyncTextSequenceState
 }
 
+/// Carries one fully derived bootstrap row without performing persistence work.
+struct PreparedInitialNoteSequenceState: Equatable, Sendable {
+    let noteID: UUID
+    let body: String
+    let state: SyncTextSequenceState
+    let payload: Data
+    let visibleUTF16Count: Int
+    let tombstonedUTF16Count: Int
+
+    /// Builds the initial row from the already encoded payload so callers can save once.
+    func makeRevisionZeroRecord() -> NoteSequenceStateRecord {
+        NoteSequenceStateRecord(
+            noteID: noteID,
+            formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+            revision: 0,
+            visibleUTF16Count: visibleUTF16Count,
+            tombstonedUTF16Count: tombstonedUTF16Count,
+            payloadByteCount: payload.count,
+            statePayloadData: payload
+        )
+    }
+}
+
+/// Centralizes the exact-body invariant and canonical initial-state encoding.
+enum NoteSequenceStateBootstrapPersistence {
+    static func requireExactBody(
+        state: SyncTextSequenceState,
+        body: String
+    ) throws {
+        guard NoteSequenceStateExactText.matches(state.visibleText, body) else {
+            throw NoteSequenceStateStoreError.newStateBodyMismatch
+        }
+    }
+
+    static func prepareInitialState(
+        noteID: UUID,
+        body: String
+    ) throws -> PreparedInitialNoteSequenceState {
+        let state = try NoteSequenceStateBootstrapAdapter.makeInitialState(
+            noteID: noteID,
+            body: body
+        )
+        try requireExactBody(state: state, body: body)
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: state,
+            noteID: noteID
+        )
+        return PreparedInitialNoteSequenceState(
+            noteID: noteID,
+            body: body,
+            state: state,
+            payload: payload,
+            visibleUTF16Count: state.visibleUTF16Count,
+            tombstonedUTF16Count: state.tombstonedUTF16Count
+        )
+    }
+}
+
 enum NoteSequenceStateLoadResult: Equatable, Sendable {
     case missing(note: NoteSequenceStateNoteSnapshot)
     case present(LoadedNoteSequenceState)
@@ -31,6 +89,8 @@ enum NoteSequenceStateExpectation: Equatable, Sendable {
 
 protocol NoteSequenceStateStoring: Sendable {
     func load(noteID: UUID) async throws -> NoteSequenceStateLoadResult
+
+    func loadOrBootstrap(noteID: UUID) async throws -> LoadedNoteSequenceState
 
     func compareAndSet(
         noteID: UUID,
@@ -65,16 +125,21 @@ typealias NoteSequenceStateStoreTestHook =
 
 @NoteSequenceStatePersistenceActor
 final class SwiftDataNoteSequenceStateStore: NoteSequenceStateStoring {
-    private static let formatVersion = 1
+    private static let formatVersion = NoteSequenceStatePersistenceCodec.formatVersion
 
     private let container: ModelContainer
+    private let bootstrapSaveOperation: @Sendable (ModelContext) throws -> Void
     private let testHook: NoteSequenceStateStoreTestHook
 
     init(
         container: ModelContainer,
+        bootstrapSaveOperation: @escaping @Sendable (ModelContext) throws -> Void = {
+            try $0.save()
+        },
         testHook: @escaping NoteSequenceStateStoreTestHook = { _ in }
     ) {
         self.container = container
+        self.bootstrapSaveOperation = bootstrapSaveOperation
         self.testHook = testHook
     }
 
@@ -105,6 +170,68 @@ final class SwiftDataNoteSequenceStateStore: NoteSequenceStateStoring {
         } catch let error as NoteSequenceStateStoreError {
             throw error
         } catch {
+            throw NoteSequenceStateStoreError.persistenceFailure
+        }
+    }
+
+    func loadOrBootstrap(noteID: UUID) async throws -> LoadedNoteSequenceState {
+        let context = makeContext()
+        let note: Note
+        let existingRecord: NoteSequenceStateRecord?
+        do {
+            guard let fetchedNote = try fetchNote(noteID: noteID, in: context) else {
+                throw NoteSequenceStateStoreError.missingNote(noteID)
+            }
+            note = fetchedNote
+            existingRecord = try fetchRecord(noteID: noteID, in: context)
+        } catch let error as NoteSequenceStateStoreError {
+            throw error
+        } catch {
+            throw NoteSequenceStateStoreError.persistenceFailure
+        }
+
+        if let existingRecord {
+            let state = try decodeAndValidate(
+                record: existingRecord,
+                noteID: noteID,
+                noteBody: note.content
+            )
+            guard NoteSequenceStateExactText.matches(state.visibleText, note.content) else {
+                throw NoteSequenceStateStoreError.corruptState
+            }
+            return LoadedNoteSequenceState(
+                note: NoteSequenceStateNoteSnapshot(noteID: noteID, body: note.content),
+                revision: existingRecord.revision,
+                state: state
+            )
+        }
+
+        // Preparation remains outside persistence-error mapping so core failures propagate.
+        let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: noteID,
+            body: note.content
+        )
+
+        do {
+            context.insert(prepared.makeRevisionZeroRecord())
+            try testHook(.beforeSave)
+            do {
+                try bootstrapSaveOperation(context)
+            } catch {
+                context.rollback()
+                throw NoteSequenceStateStoreError.persistenceFailure
+            }
+            try testHook(.afterSave)
+            return try verifyCommittedBootstrap(prepared)
+        } catch let error as NoteSequenceStateStoreError {
+            if context.hasChanges {
+                context.rollback()
+            }
+            throw error
+        } catch {
+            if context.hasChanges {
+                context.rollback()
+            }
             throw NoteSequenceStateStoreError.persistenceFailure
         }
     }
@@ -140,7 +267,10 @@ final class SwiftDataNoteSequenceStateStore: NoteSequenceStateStoring {
             )
             try testHook(.afterExpectationValidation)
 
-            let payload = try encode(state: newState, noteID: noteID)
+            let payload = try NoteSequenceStatePersistenceCodec.encode(
+                state: newState,
+                noteID: noteID
+            )
             note.content = newBody
             if let record {
                 update(
@@ -289,39 +419,6 @@ final class SwiftDataNoteSequenceStateStore: NoteSequenceStateStoring {
         record.statePayloadData = payload
     }
 
-    private func encode(
-        state: SyncTextSequenceState,
-        noteID: UUID
-    ) throws -> Data {
-        let persisted = PersistedNoteSequenceStateV1(
-            formatVersion: Self.formatVersion,
-            noteID: noteID.uuidString.lowercased(),
-            runs: state.runs.map { run in
-                PersistedRunV1(
-                    operationID: run.operationID,
-                    leftOrigin: run.origin.leftElementID,
-                    rightOrigin: run.origin.rightElementID,
-                    text: run.text
-                )
-            },
-            fragments: state.fragments.map { fragment in
-                PersistedFragmentV1(
-                    operationID: fragment.operationID,
-                    startOffset: fragment.startOffset,
-                    utf16Length: fragment.utf16Length,
-                    visibility: fragment.visibility.rawValue
-                )
-            }
-        )
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        do {
-            return try encoder.encode(persisted)
-        } catch {
-            throw NoteSequenceStateStoreError.persistenceFailure
-        }
-    }
-
     private func decodeAndValidate(
         record: NoteSequenceStateRecord,
         noteID: UUID,
@@ -433,6 +530,86 @@ final class SwiftDataNoteSequenceStateStore: NoteSequenceStateStoring {
             )
         } catch {
             throw NoteSequenceStateStoreError.verificationFailure
+        }
+    }
+
+    private func verifyCommittedBootstrap(
+        _ prepared: PreparedInitialNoteSequenceState
+    ) throws -> LoadedNoteSequenceState {
+        do {
+            let verificationContext = makeContext()
+            guard let note = try fetchNote(
+                noteID: prepared.noteID,
+                in: verificationContext
+            ), let record = try fetchRecord(
+                noteID: prepared.noteID,
+                in: verificationContext
+            ), NoteSequenceStateExactText.matches(note.content, prepared.body),
+            record.revision == 0,
+            record.statePayloadData == prepared.payload else {
+                throw NoteSequenceStateStoreError.verificationFailure
+            }
+
+            let decodedState = try decodeAndValidate(
+                record: record,
+                noteID: prepared.noteID,
+                noteBody: note.content
+            )
+            guard decodedState == prepared.state,
+                  NoteSequenceStateExactText.matches(
+                    decodedState.visibleText,
+                    prepared.body
+                  ) else {
+                throw NoteSequenceStateStoreError.verificationFailure
+            }
+            return LoadedNoteSequenceState(
+                note: NoteSequenceStateNoteSnapshot(
+                    noteID: prepared.noteID,
+                    body: prepared.body
+                ),
+                revision: 0,
+                state: decodedState
+            )
+        } catch {
+            throw NoteSequenceStateStoreError.verificationFailure
+        }
+    }
+}
+
+/// Owns the canonical persisted V1 encoder shared by all state-writing paths.
+enum NoteSequenceStatePersistenceCodec {
+    static let formatVersion = 1
+
+    static func encode(
+        state: SyncTextSequenceState,
+        noteID: UUID
+    ) throws -> Data {
+        let persisted = PersistedNoteSequenceStateV1(
+            formatVersion: formatVersion,
+            noteID: noteID.uuidString.lowercased(),
+            runs: state.runs.map { run in
+                PersistedRunV1(
+                    operationID: run.operationID,
+                    leftOrigin: run.origin.leftElementID,
+                    rightOrigin: run.origin.rightElementID,
+                    text: run.text
+                )
+            },
+            fragments: state.fragments.map { fragment in
+                PersistedFragmentV1(
+                    operationID: fragment.operationID,
+                    startOffset: fragment.startOffset,
+                    utf16Length: fragment.utf16Length,
+                    visibility: fragment.visibility.rawValue
+                )
+            }
+        )
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        do {
+            return try encoder.encode(persisted)
+        } catch {
+            throw NoteSequenceStateStoreError.persistenceFailure
         }
     }
 }
