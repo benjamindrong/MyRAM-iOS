@@ -14,6 +14,7 @@ final class NotesListState: ObservableObject {
 
     struct BootstrapActions {
         var rollbackIfNeededOnLaunch: @MainActor () async throws -> Void
+        var migrateNoteSequenceStates: @MainActor () async throws -> Void
         var refreshPendingSyncStatus: @MainActor () async -> Void
         var resumeOutboundAfterRecovery: @MainActor () -> Void
         var startNetworkingIfNeeded: @MainActor () -> Void
@@ -43,6 +44,11 @@ final class NotesListState: ObservableObject {
             ?? BootstrapActions(
                 rollbackIfNeededOnLaunch: { [vm, syncController] in
                     try await vm.rollbackIfNeededOnLaunch(syncController: syncController)
+                },
+                migrateNoteSequenceStates: {
+                    try await NoteSequenceStateBootstrapMigrator(
+                        container: PersistenceManager.shared.container
+                    ).runToCompletion()
                 },
                 refreshPendingSyncStatus: { [syncController] in
                     await syncController.refreshPendingSyncStatus()
@@ -75,13 +81,16 @@ final class NotesListState: ObservableObject {
     func bootstrapAfterRecovery() async {
         do {
             try await bootstrapActions.rollbackIfNeededOnLaunch()
+            try await bootstrapActions.migrateNoteSequenceStates()
             await bootstrapActions.refreshPendingSyncStatus()
             bootstrapActions.resumeOutboundAfterRecovery()
             bootstrapActions.startNetworkingIfNeeded()
             bootstrapActions.resumePendingConvergencePresentationIfNeeded()
             bootstrapState = .ready
         } catch {
-            bootstrapState = .failed("Startup recovery failed. Restart MyRAM before syncing or editing.")
+            bootstrapState = .failed(
+                "Startup recovery or note-state preparation failed. Restart MyRAM before syncing or editing."
+            )
         }
     }
 }
@@ -1014,7 +1023,7 @@ struct NotesListView: View {
             .disabled(!canPerformCombinedUndo && !canPerformCombinedRedo)
         case .newNote:
             compactActionButton(systemImage: "square.and.pencil", identifier: "notes-topbar-new-note") {
-                selectedNote = vm.createNewNote()
+                selectedNote = vm.createNewNoteIfPossible()
             }
         case .newFolder:
             compactActionButton(systemImage: "folder.badge.plus", identifier: "notes-topbar-new-folder") {
@@ -1041,7 +1050,7 @@ struct NotesListView: View {
             .disabled(!canPerformCombinedUndo && !canPerformCombinedRedo)
         case .newNote:
             Button {
-                selectedNote = vm.createNewNote()
+                selectedNote = vm.createNewNoteIfPossible()
             } label: {
                 Label("New Note", systemImage: "square.and.pencil")
             }

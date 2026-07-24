@@ -4,6 +4,40 @@ import XCTest
 
 @MainActor
 final class MacSyncBatchControllerTests: XCTestCase {
+    func testMacControllerDoesNotStartNetworkingBeforeExplicitStart() throws {
+        var advertisingCalls = 0
+        var browsingCalls = 0
+
+        _ = MacSyncBatchController(
+            context: try makeInMemoryContainer().mainContext,
+            unsentBatchQueueFileURL: nil,
+            startsNetworking: false,
+            startAdvertisingOperation: { advertisingCalls += 1 },
+            startBrowsingOperation: { browsingCalls += 1 }
+        )
+
+        XCTAssertEqual(advertisingCalls, 0)
+        XCTAssertEqual(browsingCalls, 0)
+    }
+
+    func testMacControllerAdvertisingAndBrowsingEachStartExactlyOnce() throws {
+        var advertisingCalls = 0
+        var browsingCalls = 0
+        let controller = MacSyncBatchController(
+            context: try makeInMemoryContainer().mainContext,
+            unsentBatchQueueFileURL: nil,
+            startsNetworking: false,
+            startAdvertisingOperation: { advertisingCalls += 1 },
+            startBrowsingOperation: { browsingCalls += 1 }
+        )
+
+        controller.startNetworkingIfNeeded()
+        controller.startNetworkingIfNeeded()
+
+        XCTAssertEqual(advertisingCalls, 1)
+        XCTAssertEqual(browsingCalls, 1)
+    }
+
     func testDisconnectedTransportAcceptsByDurablyEnqueuingUnsentBatch() async throws {
         let unsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
         let controller = try makeController(unsentBatchQueueFileURL: unsentURL)

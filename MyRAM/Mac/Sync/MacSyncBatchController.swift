@@ -33,13 +33,18 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private var readyBatchTask: Task<Void, Never>?
     private let unsentBatches: FileBackedSyncBatchQueue
     private let legacyReceiver: MacLegacySyncReceiver
+    private let startAdvertisingOperation: () -> Void
+    private let startBrowsingOperation: () -> Void
+    private var hasStartedNetworking = false
 
     init(
         context: ModelContext,
         unsentBatchQueueFileURL: URL? = MacSyncBatchController.unsentBatchQueueFileURL(),
         unsentBatchQueue: FileBackedSyncBatchQueue? = nil,
         startsNetworking: Bool = true,
-        legacyReceiver: MacLegacySyncReceiver? = nil
+        legacyReceiver: MacLegacySyncReceiver? = nil,
+        startAdvertisingOperation: (() -> Void)? = nil,
+        startBrowsingOperation: (() -> Void)? = nil
     ) {
         let identity = MacSyncDeviceIdentityProvider().currentIdentity()
         peerID = MCPeerID(displayName: "\(identity.displayName)|\(identity.id.uuidString)")
@@ -50,6 +55,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         self.context = context
         unsentBatches = unsentBatchQueue ?? FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
         self.legacyReceiver = legacyReceiver ?? MacLegacySyncReceiver(context: context)
+        self.startAdvertisingOperation = startAdvertisingOperation
+            ?? { [advertiser] in advertiser.startAdvertisingPeer() }
+        self.startBrowsingOperation = startBrowsingOperation
+            ?? { [browser] in browser.startBrowsingForPeers() }
 
         super.init()
 
@@ -57,8 +66,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         advertiser.delegate = self
         browser.delegate = self
         if startsNetworking {
-            advertiser.startAdvertisingPeer()
-            browser.startBrowsingForPeers()
+            startNetworkingIfNeeded()
         }
 
         readyBatchTask = Task { [weak self, accumulator] in
@@ -82,6 +90,14 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     var hasConnectedPeers: Bool {
         !session.connectedPeers.isEmpty
+    }
+
+    /// Starts the retained nearby-sync transports exactly once after startup migration succeeds.
+    func startNetworkingIfNeeded() {
+        guard !hasStartedNetworking else { return }
+        hasStartedNetworking = true
+        startAdvertisingOperation()
+        startBrowsingOperation()
     }
 
     func invite(_ peer: MacSyncDiscoveredPeer) {

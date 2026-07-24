@@ -563,16 +563,13 @@ final class MacLegacySyncReceiverTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
     private func makeContext() throws -> ModelContext {
-        let schema = Schema([Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self])
+        let schema = Schema(MyRAMModelRegistry.models)
         let configuration = ModelConfiguration(
             "MacLegacySyncReceiverTests-\(UUID().uuidString)",
             schema: schema,
             isStoredInMemoryOnly: true
         )
-        let container = try ModelContainer(
-            for: Folder.self, Note.self, NotePhotoAttachment.self, PinnedThought.self,
-            configurations: configuration
-        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
         retainedContainers.append(container)
         return container.mainContext
     }

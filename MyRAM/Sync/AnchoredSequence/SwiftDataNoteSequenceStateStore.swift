@@ -40,6 +40,19 @@ struct PreparedInitialNoteSequenceState: Equatable, Sendable {
             statePayloadData: payload
         )
     }
+
+    /// Reuses the canonical payload when an existing row must represent a new full body.
+    func apply(
+        to record: NoteSequenceStateRecord,
+        revision: UInt64
+    ) {
+        record.formatVersion = NoteSequenceStatePersistenceCodec.formatVersion
+        record.revision = revision
+        record.visibleUTF16Count = visibleUTF16Count
+        record.tombstonedUTF16Count = tombstonedUTF16Count
+        record.payloadByteCount = payload.count
+        record.statePayloadData = payload
+    }
 }
 
 /// Centralizes the exact-body invariant and canonical initial-state encoding.
@@ -102,6 +115,10 @@ protocol NoteSequenceStateStoring: Sendable {
 
 enum NoteSequenceStateStoreError: Error, Equatable, Sendable {
     case missingNote(UUID)
+    case noteAlreadyExists(UUID)
+    case stateAlreadyExists(UUID)
+    case noteContextMismatch(UUID)
+    case preparedStateNoteIDMismatch
     case expectedMissingButRowExists
     case expectedRowButRowIsMissing
     case staleRevision(expected: UInt64, actual: UInt64)
@@ -223,6 +240,70 @@ final class SwiftDataNoteSequenceStateStore: NoteSequenceStateStoring {
             }
             try testHook(.afterSave)
             return try verifyCommittedBootstrap(prepared)
+        } catch let error as NoteSequenceStateStoreError {
+            if context.hasChanges {
+                context.rollback()
+            }
+            throw error
+        } catch {
+            if context.hasChanges {
+                context.rollback()
+            }
+            throw NoteSequenceStateStoreError.persistenceFailure
+        }
+    }
+
+    func ensureBootstrapStateForCurrentBody(
+        noteID: UUID
+    ) async throws -> LoadedNoteSequenceState {
+        let context = makeContext()
+        do {
+            guard let note = try fetchNote(noteID: noteID, in: context) else {
+                throw NoteSequenceStateStoreError.missingNote(noteID)
+            }
+
+            let result = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+                for: note,
+                in: context
+            )
+            guard let record = try fetchRecord(noteID: noteID, in: context) else {
+                throw NoteSequenceStateStoreError.verificationFailure
+            }
+
+            let authoritativeBody = note.content
+            let expectedRevision = record.revision
+            let expectedPayload = record.statePayloadData
+            let state = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+                record: record,
+                noteID: noteID
+            )
+
+            if case .unchanged = result {
+                return LoadedNoteSequenceState(
+                    note: NoteSequenceStateNoteSnapshot(
+                        noteID: noteID,
+                        body: authoritativeBody
+                    ),
+                    revision: expectedRevision,
+                    state: state
+                )
+            }
+
+            try testHook(.beforeSave)
+            do {
+                try bootstrapSaveOperation(context)
+            } catch {
+                context.rollback()
+                throw NoteSequenceStateStoreError.persistenceFailure
+            }
+            try testHook(.afterSave)
+
+            return try verifyCommittedCurrentBodyState(
+                noteID: noteID,
+                body: authoritativeBody,
+                revision: expectedRevision,
+                payload: expectedPayload
+            )
         } catch let error as NoteSequenceStateStoreError {
             if context.hasChanges {
                 context.rollback()
@@ -424,79 +505,46 @@ final class SwiftDataNoteSequenceStateStore: NoteSequenceStateStoring {
         noteID: UUID,
         noteBody: String
     ) throws -> SyncTextSequenceState {
-        guard record.formatVersion == Self.formatVersion else {
-            throw NoteSequenceStateStoreError.unsupportedVersion(record.formatVersion)
-        }
-
-        let version: PersistedVersionHeader
-        do {
-            version = try JSONDecoder().decode(
-                PersistedVersionHeader.self,
-                from: record.statePayloadData
-            )
-        } catch {
-            throw NoteSequenceStateStoreError.corruptState
-        }
-        guard version.formatVersion == Self.formatVersion else {
-            throw NoteSequenceStateStoreError.unsupportedVersion(version.formatVersion)
-        }
-
-        let persisted: PersistedNoteSequenceStateV1
-        do {
-            persisted = try JSONDecoder().decode(
-                PersistedNoteSequenceStateV1.self,
-                from: record.statePayloadData
-            )
-        } catch {
-            throw NoteSequenceStateStoreError.corruptState
-        }
-
-        guard let payloadNoteID = UUID(uuidString: persisted.noteID),
-              persisted.noteID == payloadNoteID.uuidString.lowercased(),
-              payloadNoteID == noteID,
-              record.noteID == noteID else {
-            throw NoteSequenceStateStoreError.corruptState
-        }
-
-        let state: SyncTextSequenceState
-        do {
-            let runs = try persisted.runs.map { persistedRun in
-                try SyncTextSequenceRun(
-                    operationID: persistedRun.operationID,
-                    origin: SyncTextInsertionOrigin(
-                        leftElementID: persistedRun.leftOrigin,
-                        rightElementID: persistedRun.rightOrigin
-                    ),
-                    text: persistedRun.text
-                )
-            }
-            let fragments = try persisted.fragments.map { persistedFragment in
-                guard let visibility = SyncTextSequenceElementVisibility(
-                    rawValue: persistedFragment.visibility
-                ) else {
-                    throw NoteSequenceStateStoreError.corruptState
-                }
-                return try SyncTextSequenceFragment(
-                    operationID: persistedFragment.operationID,
-                    startOffset: persistedFragment.startOffset,
-                    utf16Length: persistedFragment.utf16Length,
-                    visibility: visibility
-                )
-            }
-            state = try SyncTextSequenceState(runs: runs, fragments: fragments)
-        } catch let error as NoteSequenceStateStoreError {
-            throw error
-        } catch {
-            throw NoteSequenceStateStoreError.corruptState
-        }
-
-        guard record.visibleUTF16Count == state.visibleUTF16Count,
-              record.tombstonedUTF16Count == state.tombstonedUTF16Count,
-              record.payloadByteCount == record.statePayloadData.count,
-              state.visibleText == noteBody else {
+        let state = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record,
+            noteID: noteID
+        )
+        guard state.visibleText == noteBody else {
             throw NoteSequenceStateStoreError.corruptState
         }
         return state
+    }
+
+    private func verifyCommittedCurrentBodyState(
+        noteID: UUID,
+        body: String,
+        revision: UInt64,
+        payload: Data
+    ) throws -> LoadedNoteSequenceState {
+        do {
+            let verificationContext = makeContext()
+            guard let note = try fetchNote(noteID: noteID, in: verificationContext),
+                  let record = try fetchRecord(noteID: noteID, in: verificationContext),
+                  NoteSequenceStateExactText.matches(note.content, body),
+                  record.revision == revision,
+                  record.statePayloadData == payload else {
+                throw NoteSequenceStateStoreError.verificationFailure
+            }
+            let state = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+                record: record,
+                noteID: noteID
+            )
+            guard NoteSequenceStateExactText.matches(state.visibleText, note.content) else {
+                throw NoteSequenceStateStoreError.verificationFailure
+            }
+            return LoadedNoteSequenceState(
+                note: NoteSequenceStateNoteSnapshot(noteID: noteID, body: note.content),
+                revision: revision,
+                state: state
+            )
+        } catch {
+            throw NoteSequenceStateStoreError.verificationFailure
+        }
     }
 
     private func verifyCommittedState(
@@ -611,6 +659,84 @@ enum NoteSequenceStatePersistenceCodec {
         } catch {
             throw NoteSequenceStateStoreError.persistenceFailure
         }
+    }
+
+    static func decodeStructurallyValidatedState(
+        record: NoteSequenceStateRecord,
+        noteID: UUID
+    ) throws -> SyncTextSequenceState {
+        guard record.formatVersion == formatVersion else {
+            throw NoteSequenceStateStoreError.unsupportedVersion(record.formatVersion)
+        }
+
+        let version: PersistedVersionHeader
+        do {
+            version = try JSONDecoder().decode(
+                PersistedVersionHeader.self,
+                from: record.statePayloadData
+            )
+        } catch {
+            throw NoteSequenceStateStoreError.corruptState
+        }
+        guard version.formatVersion == formatVersion else {
+            throw NoteSequenceStateStoreError.unsupportedVersion(version.formatVersion)
+        }
+
+        let persisted: PersistedNoteSequenceStateV1
+        do {
+            persisted = try JSONDecoder().decode(
+                PersistedNoteSequenceStateV1.self,
+                from: record.statePayloadData
+            )
+        } catch {
+            throw NoteSequenceStateStoreError.corruptState
+        }
+
+        guard let payloadNoteID = UUID(uuidString: persisted.noteID),
+              persisted.noteID == payloadNoteID.uuidString.lowercased(),
+              payloadNoteID == noteID,
+              record.noteID == noteID else {
+            throw NoteSequenceStateStoreError.corruptState
+        }
+
+        let state: SyncTextSequenceState
+        do {
+            let runs = try persisted.runs.map { persistedRun in
+                try SyncTextSequenceRun(
+                    operationID: persistedRun.operationID,
+                    origin: SyncTextInsertionOrigin(
+                        leftElementID: persistedRun.leftOrigin,
+                        rightElementID: persistedRun.rightOrigin
+                    ),
+                    text: persistedRun.text
+                )
+            }
+            let fragments = try persisted.fragments.map { persistedFragment in
+                guard let visibility = SyncTextSequenceElementVisibility(
+                    rawValue: persistedFragment.visibility
+                ) else {
+                    throw NoteSequenceStateStoreError.corruptState
+                }
+                return try SyncTextSequenceFragment(
+                    operationID: persistedFragment.operationID,
+                    startOffset: persistedFragment.startOffset,
+                    utf16Length: persistedFragment.utf16Length,
+                    visibility: visibility
+                )
+            }
+            state = try SyncTextSequenceState(runs: runs, fragments: fragments)
+        } catch let error as NoteSequenceStateStoreError {
+            throw error
+        } catch {
+            throw NoteSequenceStateStoreError.corruptState
+        }
+
+        guard record.visibleUTF16Count == state.visibleUTF16Count,
+              record.tombstonedUTF16Count == state.tombstonedUTF16Count,
+              record.payloadByteCount == record.statePayloadData.count else {
+            throw NoteSequenceStateStoreError.corruptState
+        }
+        return state
     }
 }
 

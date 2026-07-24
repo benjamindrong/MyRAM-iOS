@@ -651,6 +651,9 @@ final class NotesListStateBootstrapTests: XCTestCase {
                     rollbackIfNeededOnLaunch: {
                         events.append("rollback")
                     },
+                    migrateNoteSequenceStates: {
+                        events.append("migrate-note-sequence-states")
+                    },
                     refreshPendingSyncStatus: {
                         events.append("refresh-status")
                     },
@@ -675,6 +678,7 @@ final class NotesListStateBootstrapTests: XCTestCase {
             events,
             [
                 "rollback",
+                "migrate-note-sequence-states",
                 "refresh-status",
                 "resume-outbound",
                 "start-networking",
@@ -695,6 +699,9 @@ final class NotesListStateBootstrapTests: XCTestCase {
                     rollbackIfNeededOnLaunch: {
                         events.append("rollback")
                         throw PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed
+                    },
+                    migrateNoteSequenceStates: {
+                        events.append("migrate-note-sequence-states")
                     },
                     refreshPendingSyncStatus: {
                         events.append("refresh-status")
@@ -717,7 +724,9 @@ final class NotesListStateBootstrapTests: XCTestCase {
         XCTAssertEqual(events, ["rollback"])
         XCTAssertEqual(
             state.bootstrapState,
-            .failed("Startup recovery failed. Restart MyRAM before syncing or editing.")
+            .failed(
+                "Startup recovery or note-state preparation failed. Restart MyRAM before syncing or editing."
+            )
         )
     }
 

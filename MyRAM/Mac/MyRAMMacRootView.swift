@@ -3,13 +3,16 @@ import AppKit
 import SwiftUI
 
 struct MyRAMMacRootView: View {
-    @StateObject private var syncController = MacSyncBatchController(context: PersistenceManager.shared.context)
+    @StateObject private var startupCoordinator = MacStartupCoordinator()
+    @StateObject private var syncController = MacSyncBatchController(
+        context: PersistenceManager.shared.context,
+        startsNetworking: false
+    )
     @StateObject private var editorSyncBridge = MacEditorSyncBridge()
     @State private var syncConvergenceCoordinator: MacSyncConvergenceCoordinator?
     @State private var notes: [Note] = []
     @State private var selectedNoteID: UUID?
     @State private var attributedText = NSAttributedString(string: "")
-    @State private var hasLoadedNotes = false
     @State private var loadError: String?
     @State private var saveError: String?
     @State private var saveTask: Task<Void, Never>?
@@ -22,6 +25,31 @@ struct MyRAMMacRootView: View {
     @State private var isExpandingWindowForSidebar = false
 
     var body: some View {
+        Group {
+            switch startupCoordinator.state {
+            case .idle, .running:
+                ProgressView()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .failed(let message):
+                Text(message)
+                    .multilineTextAlignment(.center)
+                    .foregroundStyle(.red)
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            case .ready:
+                readyContent
+            }
+        }
+        .frame(minWidth: 260, minHeight: 280)
+        .onAppear {
+            startupCoordinator.startIfNeeded(actions: startupActions)
+        }
+        .onDisappear {
+            Task { await flushPendingSave() }
+        }
+    }
+
+    private var readyContent: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             MacNoteListView(
                 notes: notes,
@@ -41,7 +69,6 @@ struct MyRAMMacRootView: View {
             )
         }
         .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 260, minHeight: 280)
         .onGeometryChange(for: CGFloat.self) { proxy in
             proxy.size.width
         } action: { width in
@@ -50,11 +77,28 @@ struct MyRAMMacRootView: View {
         .onChange(of: columnVisibility) { _, newValue in
             handleColumnVisibilityChange(newValue)
         }
-        .onAppear(perform: loadNotesIfNeeded)
-        .onAppear(perform: configureSyncConvergenceIfNeeded)
-        .onDisappear {
-            Task { await flushPendingSave() }
-        }
+    }
+
+    private var startupActions: MacStartupCoordinator.Actions {
+        MacStartupCoordinator.Actions(
+            migrateNoteSequenceStates: {
+                try await NoteSequenceStateBootstrapMigrator(
+                    container: PersistenceManager.shared.container
+                ).runToCompletion()
+            },
+            loadNotesCreatingFirstIfNeeded: {
+                try loadNotesSelectingFirstForStartup()
+            },
+            configureConvergenceIfNeeded: {
+                configureSyncConvergenceIfNeeded()
+            },
+            startNetworkingIfNeeded: {
+                syncController.startNetworkingIfNeeded()
+            },
+            resumePendingConvergence: {
+                resumeSyncConvergence()
+            }
+        )
     }
 
     private var selectedNote: Note? {
@@ -94,27 +138,16 @@ struct MyRAMMacRootView: View {
         )
     }
 
-    private func loadNotesIfNeeded() {
-        guard !hasLoadedNotes else { return }
-        hasLoadedNotes = true
-        loadNotesSelectingFirst()
-    }
-
-    private func loadNotesSelectingFirst() {
-        do {
-            let loadedNotes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
-            notes = loadedNotes
-            selectedNoteID = loadedNotes.first?.id
-            attributedText = loadedNotes.first.map {
-                MacNotePersistenceAdapter().attributedContent(for: $0)
-            } ?? NSAttributedString(string: "")
-            hasUnsavedChanges = false
-            editorRevision = UUID()
-            loadError = nil
-            resumeSyncConvergence()
-        } catch {
-            loadError = "Unable to load notes: \(error.localizedDescription)"
-        }
+    private func loadNotesSelectingFirstForStartup() throws {
+        let loadedNotes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
+        notes = loadedNotes
+        selectedNoteID = loadedNotes.first?.id
+        attributedText = loadedNotes.first.map {
+            MacNotePersistenceAdapter().attributedContent(for: $0)
+        } ?? NSAttributedString(string: "")
+        hasUnsavedChanges = false
+        editorRevision = UUID()
+        loadError = nil
     }
 
     private func loadNotesKeepingSelection() {
@@ -205,7 +238,6 @@ struct MyRAMMacRootView: View {
             presentationSurface: presentationSurface,
             incomingBoundarySurface: boundarySurface
         )
-        resumeSyncConvergence()
     }
 
     private func resumeSyncConvergence() {

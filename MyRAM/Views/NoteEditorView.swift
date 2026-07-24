@@ -927,7 +927,9 @@ struct NoteEditorView: View {
         toolbarBridge?.newNote = {
             commitActivePinnedThoughtEdit()
             commitPendingNoteEdit()
-            onNewNote(vm.createNewNote())
+            if let newNote = vm.createNewNoteIfPossible() {
+                onNewNote(newNote)
+            }
         }
         toolbarBridge?.newFolder = {
             newFolderName = ""
@@ -1177,7 +1179,9 @@ struct NoteEditorView: View {
             topBarActionButton(systemImage: "square.and.pencil", identifier: "topbar-new-note") {
                 commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
-                onNewNote(vm.createNewNote())
+                if let newNote = vm.createNewNoteIfPossible() {
+                    onNewNote(newNote)
+                }
             }
         case .newFolder:
             topBarActionButton(systemImage: "folder.badge.plus", identifier: "topbar-new-folder") {
@@ -2167,7 +2171,9 @@ struct NoteEditorView: View {
             Button {
                 commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
-                onNewNote(vm.createNewNote())
+                if let newNote = vm.createNewNoteIfPossible() {
+                    onNewNote(newNote)
+                }
             } label: {
                 Label("New Note", systemImage: "square.and.pencil")
             }

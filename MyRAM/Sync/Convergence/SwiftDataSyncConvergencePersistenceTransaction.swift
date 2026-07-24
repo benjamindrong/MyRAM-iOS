@@ -23,11 +23,21 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
     }
 
     func insertNote(_ record: SyncConvergenceNewNoteRecord) throws {
-        let note = Note(title: record.title, content: record.body, folder: try folder(id: record.folderID))
+        let destinationFolder = try folder(id: record.folderID)
+        let note = Note(title: record.title, content: record.body)
         note.id = record.noteID
         note.createdAt = record.createdAt
         note.modifiedAt = record.modifiedAt
-        context.insert(note)
+        let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: record.noteID,
+            body: record.body
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.insertNewNote(
+            note,
+            preparedState: prepared,
+            in: context
+        )
+        note.folder = destinationFolder
     }
 
     func updateNote(_ record: SyncConvergenceUpdatedNoteRecord) throws {
@@ -35,13 +45,18 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
         guard let note = try fetchOne(Note.self, #Predicate { $0.id == noteID }) else {
             throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: record.noteID)
         }
+        let clearsRichText = note.content != record.body
+        _ = try NoteSequenceStateFullBodyIntegration.replaceBody(
+            of: note,
+            with: record.body,
+            in: context
+        )
         note.title = record.title
-        if note.content != record.body {
+        if clearsRichText {
             // The merge only produces plain text; stale rich text from before the
             // merge would otherwise keep rendering in the editor over the top of it.
             note.richTextContentData = nil
         }
-        note.content = record.body
         note.modifiedAt = record.modifiedAt
         if let deletedAt = record.deletedAt {
             note.deletedAt = deletedAt

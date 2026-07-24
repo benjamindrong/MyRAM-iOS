@@ -17,13 +17,14 @@ struct MacLegacyReceiveResult: Equatable {
 enum MacLegacySyncReceiverError: Error, Equatable {
     case preExistingModelSaveFailed
     case modelSaveFailed
+    case conflictEffectsPersistenceFailed
     case appliedLedgerPersistenceFailed
 }
 
 @MainActor
 final class MacLegacySyncReceiver {
     private let context: ModelContext
-    private let applier: MyRAMSyncChangeApplier
+    private let conflictStore: SyncConflictStore
     private let appliedStore: MacLegacyAppliedChangeStoring
     private let performSave: () throws -> Void
 
@@ -34,7 +35,7 @@ final class MacLegacySyncReceiver {
         performSave: (() throws -> Void)? = nil
     ) {
         self.context = context
-        self.applier = MyRAMSyncChangeApplier(context: context, conflictStore: conflictStore)
+        self.conflictStore = conflictStore
         self.appliedStore = appliedStore
         self.performSave = performSave ?? { try context.save() }
     }
@@ -72,6 +73,11 @@ final class MacLegacySyncReceiver {
             }
         }
 
+        let bufferedConflictStore = BufferedSyncConflictStore(base: conflictStore)
+        let applier = MyRAMSyncChangeApplier(
+            context: context,
+            conflictStore: bufferedConflictStore
+        )
         let applyResult = applier.apply(
             newValidChanges,
             activeNoteID: nil,
@@ -79,12 +85,23 @@ final class MacLegacySyncReceiver {
             currentFolderID: nil
         )
         let terminalChangeIDs = Set(applyResult.outcomes.filter(\.shouldAcknowledge).map(\.changeID))
+        rejectedChangeIDs.append(contentsOf: applyResult.outcomes.compactMap {
+            $0.shouldAcknowledge ? nil : $0.changeID
+        })
 
         do {
             try performSave()
         } catch {
             context.rollback()
             throw MacLegacySyncReceiverError.modelSaveFailed
+        }
+
+        do {
+            try conflictStore.commitLegacyIncomingEffectsChecked(
+                bufferedConflictStore.effects
+            )
+        } catch {
+            throw MacLegacySyncReceiverError.conflictEffectsPersistenceFailed
         }
 
         do {

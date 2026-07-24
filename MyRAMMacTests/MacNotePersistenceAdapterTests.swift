@@ -5,6 +5,40 @@ import XCTest
 
 @MainActor
 final class MacNotePersistenceAdapterTests: XCTestCase {
+    func testMacCreateNoteCommitsNoteAndRevisionZeroStateTogether() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        var observedAtomicModels = false
+        let adapter = MacNotePersistenceAdapter(context: context, saveOperation: { context in
+            observedAtomicModels = try context.fetch(FetchDescriptor<Note>()).count == 1
+                && context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).count == 1
+            try context.save()
+        })
+
+        let note = try adapter.createNote()
+
+        XCTAssertTrue(observedAtomicModels)
+        let record = try XCTUnwrap(
+            ModelContext(container).fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+        )
+        XCTAssertEqual(record.noteID, note.id)
+        XCTAssertEqual(record.revision, 0)
+    }
+
+    func testMacCreateNoteSaveFailureRollsBackNoteAndState() throws {
+        let container = try makeInMemoryContainer()
+        let adapter = MacNotePersistenceAdapter(
+            context: container.mainContext,
+            saveOperation: { _ in throw MacNotePersistenceAdapterTestError.injectedSaveFailure }
+        )
+
+        XCTAssertThrowsError(try adapter.createNote())
+
+        let context = ModelContext(container)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<Note>()).isEmpty)
+        XCTAssertTrue(try context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).isEmpty)
+    }
+
     func testLoadDefaultNoteCreatesNoteWhenStoreIsEmpty() throws {
         let container = try makeInMemoryContainer()
         let adapter = MacNotePersistenceAdapter(context: container.mainContext)
@@ -524,25 +558,14 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
     }
 
     private func makeInMemoryContainer() throws -> ModelContainer {
-        let schema = Schema([
-            Folder.self,
-            Note.self,
-            NotePhotoAttachment.self,
-            PinnedThought.self
-        ])
+        let schema = Schema(MyRAMModelRegistry.models)
         let configuration = ModelConfiguration(
             "MacNotePersistenceAdapterTests",
             schema: schema,
             isStoredInMemoryOnly: true
         )
 
-        return try ModelContainer(
-            for: Folder.self,
-            Note.self,
-            NotePhotoAttachment.self,
-            PinnedThought.self,
-            configurations: configuration
-        )
+        return try ModelContainer(for: schema, configurations: configuration)
     }
 
     private func decodeRawStoredRTF(from note: Note) throws -> NSAttributedString {

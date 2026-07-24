@@ -33,6 +33,7 @@
 		BCA164010000000000000004 /* MacEditorTextColorPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */; };
 		BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000002 /* MyRAMMacApp.swift */; };
 		BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000003 /* MyRAMMacRootView.swift */; };
+		BCA170010000000000000001 /* MacStartupCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA170020000000000000001 /* MacStartupCoordinator.swift */; };
 		BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCA105010000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BC9F1BB52EA47D300045FD72 /* Assets.xcassets */; };
 		BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000001 /* MacNoteEditorView.swift */; };
@@ -229,6 +230,17 @@
 		C16901000000000000000006 /* SwiftDataNoteSequenceStateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000004 /* SwiftDataNoteSequenceStateStoreTests.swift */; };
 		C17001000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift */; };
 		C17001000000000000000002 /* NoteSequenceStateBootstrapAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift */; };
+		C17001000000000000000003 /* NoteSequenceStateFullBodyIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000002 /* NoteSequenceStateFullBodyIntegration.swift */; };
+		C17001000000000000000004 /* NoteSequenceStateFullBodyIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000002 /* NoteSequenceStateFullBodyIntegration.swift */; };
+		C17001000000000000000005 /* NoteSequenceStateBootstrapMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000003 /* NoteSequenceStateBootstrapMigrator.swift */; };
+		C17001000000000000000006 /* NoteSequenceStateBootstrapMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000003 /* NoteSequenceStateBootstrapMigrator.swift */; };
+		C17001000000000000000007 /* NoteSequenceStateFullBodyIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000004 /* NoteSequenceStateFullBodyIntegrationTests.swift */; };
+		C17001000000000000000008 /* NoteSequenceStateFullBodyIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000005 /* NoteSequenceStateFullBodyIntegrationTests.swift */; };
+		C17001000000000000000009 /* NoteSequenceStateBootstrapMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000006 /* NoteSequenceStateBootstrapMigratorTests.swift */; };
+		C1700100000000000000000A /* NoteSequenceStateBootstrapMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000007 /* NoteSequenceStateBootstrapMigratorTests.swift */; };
+		C1700100000000000000000B /* MYR170FullBodyPathIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000008 /* MYR170FullBodyPathIntegrationTests.swift */; };
+		C1700100000000000000000C /* MYR170MacFullBodyPathIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */; };
+		C1700100000000000000000D /* MacStartupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1700200000000000000000A /* MacStartupCoordinatorTests.swift */; };
 		C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */; };
 /* End PBXBuildFile section */
 
@@ -280,6 +292,7 @@
 		BCA164020000000000000001 /* AttributedTextStorageKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttributedTextStorageKeys.swift; sourceTree = "<group>"; };
 		BCA105020000000000000002 /* MyRAMMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacApp.swift; sourceTree = "<group>"; };
 		BCA105020000000000000003 /* MyRAMMacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacRootView.swift; sourceTree = "<group>"; };
+		BCA170020000000000000001 /* MacStartupCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStartupCoordinator.swift; sourceTree = "<group>"; };
 		BCA106020000000000000001 /* MacNoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteEditorView.swift; sourceTree = "<group>"; };
 		BCA106020000000000000002 /* MacTextViewRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTextViewRepresentable.swift; sourceTree = "<group>"; };
 		BCA106020000000000000003 /* MacEditorSampleDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSampleDocument.swift; sourceTree = "<group>"; };
@@ -427,6 +440,15 @@
 		C16902000000000000000003 /* SwiftDataNoteSequenceStateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataNoteSequenceStateStoreTests.swift; sourceTree = "<group>"; };
 		C16902000000000000000004 /* SwiftDataNoteSequenceStateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift; sourceTree = "<group>"; };
 		C17002000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateBootstrapAdapter.swift; sourceTree = "<group>"; };
+		C17002000000000000000002 /* NoteSequenceStateFullBodyIntegration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateFullBodyIntegration.swift; sourceTree = "<group>"; };
+		C17002000000000000000003 /* NoteSequenceStateBootstrapMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateBootstrapMigrator.swift; sourceTree = "<group>"; };
+		C17002000000000000000004 /* NoteSequenceStateFullBodyIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateFullBodyIntegrationTests.swift; sourceTree = "<group>"; };
+		C17002000000000000000005 /* NoteSequenceStateFullBodyIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift; sourceTree = "<group>"; };
+		C17002000000000000000006 /* NoteSequenceStateBootstrapMigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateBootstrapMigratorTests.swift; sourceTree = "<group>"; };
+		C17002000000000000000007 /* NoteSequenceStateBootstrapMigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/NoteSequenceStateBootstrapMigratorTests.swift; sourceTree = "<group>"; };
+		C17002000000000000000008 /* MYR170FullBodyPathIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR170FullBodyPathIntegrationTests.swift; sourceTree = "<group>"; };
+		C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR170MacFullBodyPathIntegrationTests.swift; sourceTree = "<group>"; };
+		C1700200000000000000000A /* MacStartupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStartupCoordinatorTests.swift; sourceTree = "<group>"; };
 		C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteIntelligence.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -547,6 +569,7 @@
 				BCA122030000000000000001 /* Sync */,
 				BCA105020000000000000002 /* MyRAMMacApp.swift */,
 				BCA105020000000000000003 /* MyRAMMacRootView.swift */,
+				BCA170020000000000000001 /* MacStartupCoordinator.swift */,
 				BCA106020000000000000001 /* MacNoteEditorView.swift */,
 				BCA106020000000000000002 /* MacTextViewRepresentable.swift */,
 				BCA106020000000000000003 /* MacEditorSampleDocument.swift */,
@@ -649,6 +672,9 @@
 			isa = PBXGroup;
 			children = (
 				C16902000000000000000003 /* SwiftDataNoteSequenceStateStoreTests.swift */,
+				C17002000000000000000004 /* NoteSequenceStateFullBodyIntegrationTests.swift */,
+				C17002000000000000000006 /* NoteSequenceStateBootstrapMigratorTests.swift */,
+				C17002000000000000000008 /* MYR170FullBodyPathIntegrationTests.swift */,
 				C16802000000000000000003 /* MyRAMSyncOperationIDAllocatorTests.swift */,
 				BCA123020000000000000009 /* SyncBatchPayloadCompatibilityTests.swift */,
 				BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */,
@@ -690,6 +716,10 @@
 			isa = PBXGroup;
 			children = (
 				C16902000000000000000004 /* SwiftDataNoteSequenceStateStoreTests.swift */,
+				C17002000000000000000005 /* NoteSequenceStateFullBodyIntegrationTests.swift */,
+				C17002000000000000000007 /* NoteSequenceStateBootstrapMigratorTests.swift */,
+				C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */,
+				C1700200000000000000000A /* MacStartupCoordinatorTests.swift */,
 				C16802000000000000000004 /* MyRAMSyncOperationIDAllocatorTests.swift */,
 				BCA107020000000000000001 /* MacEditorSampleDocumentTests.swift */,
 				BCA107020000000000000003 /* MacEditorSelectionMapperTests.swift */,
@@ -807,6 +837,8 @@
 			children = (
 				C16902000000000000000001 /* NoteSequenceStateRecord.swift */,
 				C17002000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift */,
+				C17002000000000000000002 /* NoteSequenceStateFullBodyIntegration.swift */,
+				C17002000000000000000003 /* NoteSequenceStateBootstrapMigrator.swift */,
 				C16902000000000000000002 /* SwiftDataNoteSequenceStateStore.swift */,
 				C16802000000000000000002 /* FileBackedSyncOperationIDReservationStore.swift */,
 				C16802000000000000000001 /* MyRAMSyncOperationIDAllocator.swift */,
@@ -1055,6 +1087,8 @@
 			files = (
 				C16901000000000000000001 /* NoteSequenceStateRecord.swift in Sources */,
 				C17001000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift in Sources */,
+				C17001000000000000000003 /* NoteSequenceStateFullBodyIntegration.swift in Sources */,
+				C17001000000000000000005 /* NoteSequenceStateBootstrapMigrator.swift in Sources */,
 				C16901000000000000000003 /* SwiftDataNoteSequenceStateStore.swift in Sources */,
 				C16801000000000000000001 /* MyRAMSyncOperationIDAllocator.swift in Sources */,
 				C16801000000000000000003 /* FileBackedSyncOperationIDReservationStore.swift in Sources */,
@@ -1149,6 +1183,9 @@
 			buildActionMask = 2147483647;
 			files = (
 				C16901000000000000000005 /* SwiftDataNoteSequenceStateStoreTests.swift in Sources */,
+				C17001000000000000000007 /* NoteSequenceStateFullBodyIntegrationTests.swift in Sources */,
+				C17001000000000000000009 /* NoteSequenceStateBootstrapMigratorTests.swift in Sources */,
+				C1700100000000000000000B /* MYR170FullBodyPathIntegrationTests.swift in Sources */,
 				C16801000000000000000005 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */,
 				BCA123010000000000000014 /* SyncBatchPayloadCompatibilityTests.swift in Sources */,
 				BCA132010000000000000005 /* SyncConvergenceFoundationTests.swift in Sources */,
@@ -1191,11 +1228,14 @@
 			files = (
 				C16901000000000000000002 /* NoteSequenceStateRecord.swift in Sources */,
 				C17001000000000000000002 /* NoteSequenceStateBootstrapAdapter.swift in Sources */,
+				C17001000000000000000004 /* NoteSequenceStateFullBodyIntegration.swift in Sources */,
+				C17001000000000000000006 /* NoteSequenceStateBootstrapMigrator.swift in Sources */,
 				C16901000000000000000004 /* SwiftDataNoteSequenceStateStore.swift in Sources */,
 				C16801000000000000000002 /* MyRAMSyncOperationIDAllocator.swift in Sources */,
 				C16801000000000000000004 /* FileBackedSyncOperationIDReservationStore.swift in Sources */,
 				BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */,
 				BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */,
+				BCA170010000000000000001 /* MacStartupCoordinator.swift in Sources */,
 				BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */,
 				BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */,
 				BCA106010000000000000003 /* MacEditorSampleDocument.swift in Sources */,
@@ -1266,6 +1306,10 @@
 			buildActionMask = 2147483647;
 			files = (
 				C16901000000000000000006 /* SwiftDataNoteSequenceStateStoreTests.swift in Sources */,
+				C17001000000000000000008 /* NoteSequenceStateFullBodyIntegrationTests.swift in Sources */,
+				C1700100000000000000000A /* NoteSequenceStateBootstrapMigratorTests.swift in Sources */,
+				C1700100000000000000000C /* MYR170MacFullBodyPathIntegrationTests.swift in Sources */,
+				C1700100000000000000000D /* MacStartupCoordinatorTests.swift in Sources */,
 				C16801000000000000000006 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */,
 				BCA107010000000000000001 /* MacEditorSampleDocumentTests.swift in Sources */,
 				BCA107010000000000000003 /* MacEditorSelectionMapperTests.swift in Sources */,
