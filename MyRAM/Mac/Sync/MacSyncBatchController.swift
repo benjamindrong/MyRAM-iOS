@@ -147,6 +147,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func acceptLocalBatch(_ batch: SyncBatch) async throws {
+        try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
         // Durability comes first: a peer accepting a `send()` call only means the
         // data was handed to the transport, not that it survived to the other side.
         // Removal from this queue happens only once the peer acknowledges receipt
@@ -198,6 +199,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func receive(_ batch: MacSyncBatch) {
+        guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(batch)) != nil else {
+            return
+        }
         Task { await convergenceCoordinator?.submitRemoteBatch(batch) }
     }
 
@@ -297,6 +301,9 @@ extension MacSyncBatchController: MCSessionDelegate {
             case .batchSync:
                 guard let envelope = try? JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload),
                       envelope.canDecodeWithCurrentSchema else { return }
+                guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(envelope.batch)) != nil else {
+                    return
+                }
                 let captured = convergenceCoordinator?.durablyCaptureIncomingBatch(envelope.batch) ?? false
                 receive(envelope.batch)
                 if captured {

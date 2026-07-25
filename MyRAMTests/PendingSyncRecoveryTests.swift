@@ -5,6 +5,33 @@ import SwiftData
 
 @MainActor
 final class PendingSyncRecoveryTests: XCTestCase {
+    func testStateBuilderRejectsAnchoredBatchBeforeCurrentStateLookup() throws {
+        let container = try makeContainer()
+        let batch = try makeAnchoredInsertBatchForTest()
+
+        XCTAssertThrowsError(try SyncRecoveryStateBuilder.build(
+            context: container.mainContext,
+            conflictStore: SyncConflictStore(fileURL: temporaryConflictURL()),
+            legacySnapshot: SyncQueueSnapshot(
+                pendingChanges: [],
+                appliedChangeIDs: [],
+                pendingAcknowledgementIDs: []
+            ),
+            unsentBatches: [batch],
+            localConvergenceBatches: [],
+            currentDeviceID: "current-device",
+            recoveryTimestamp: Date(timeIntervalSince1970: 1_710)
+        )) {
+            XCTAssertEqual(
+                $0 as? SyncBatchAnchoredPayloadPolicyError,
+                .anchoredPayloadDisabled(
+                    boundary: .recovery,
+                    noteID: batch.changes[0].noteID
+                )
+            )
+        }
+    }
+
     func testStateBuilderReplacesQueuesWithCurrentSwiftDataState() throws {
         let container = try makeContainer()
         let context = container.mainContext

@@ -475,6 +475,60 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
     }
 
+    func testAnchoredLocalBatchRejectsBeforeQueueOrTransportMutation() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(),
+            transport: transport
+        )
+        let batch = try makeAnchoredInsertBatchForTest()
+
+        do {
+            try await controller.acceptLocalBatch(batch)
+            XCTFail("Expected anchored local admission to fail")
+        } catch {
+            XCTAssertEqual(
+                error as? SyncBatchAnchoredPayloadPolicyError,
+                .anchoredPayloadDisabled(
+                    boundary: .outboundController,
+                    noteID: batch.changes[0].noteID
+                )
+            )
+        }
+
+        XCTAssertTrue(controller.unsentBatchQueueSnapshot().pendingBatches.isEmpty)
+        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 0)
+        XCTAssertTrue(transport.sentBatchEnvelopes.isEmpty)
+        XCTAssertNil(controller.lastSyncAt)
+    }
+
+    func testDirectlyEncodedInboundAnchoredBatchRejectsBeforeCallbacksAndAck() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(transport: transport)
+        let batch = try makeAnchoredInsertBatchForTest()
+        var durableCaptureCount = 0
+        var receiveCount = 0
+        controller.onDurablyCaptureIncomingBatch = { _ in
+            durableCaptureCount += 1
+            return true
+        }
+        controller.onBatchReceived = { _ in receiveCount += 1 }
+
+        let data = try MultipeerSyncMessageCoding.encode(
+            kind: .batchSync,
+            payload: JSONEncoder().encode(SyncBatchEnvelope(batch: batch))
+        )
+        let dummySession = MCSession(peer: MCPeerID(displayName: "local|local-device"))
+        controller.session(dummySession, didReceive: data, fromPeer: Self.remotePeerID)
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(durableCaptureCount, 0)
+        XCTAssertEqual(receiveCount, 0)
+        XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
+        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 0)
+        XCTAssertNil(controller.lastSyncAt)
+    }
+
     func testLocalConvergenceReplacementRefreshesAggregateStatusImmediately() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(

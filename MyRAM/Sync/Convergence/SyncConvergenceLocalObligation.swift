@@ -77,12 +77,17 @@ enum SyncConvergenceLocalEvidenceCapture {
                 deletedText: deletedText(for: change)
             )
             return SyncConvergenceCapturedLocalChange(change: change, evidence: evidence)
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
+            throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(
+                noteID: change.noteID
+            )
         case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return SyncConvergenceCapturedLocalChange(change: change, evidence: nil)
         }
     }
 
     static func validate(obligation: SyncConvergenceLocalObligation) throws -> [SyncConvergenceCapturedLocalChange] {
+        try SyncBatchAnchoredPayloadPolicy.validateOffsetReplay(obligation.batch)
         guard case .captured(let capturedChanges) = obligation.evidence else { return [] }
         guard obligation.batch.changes.count == capturedChanges.count else {
             throw SyncConvergenceLocalEvidenceCaptureError.indexedChangeMismatch(batchID: obligation.batch.id)
@@ -147,37 +152,21 @@ enum SyncConvergenceLocalEvidenceCapture {
             let mutable = NSMutableString(string: body)
             mutable.deleteCharacters(in: range)
             return String(mutable)
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
+            throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(
+                noteID: change.noteID
+            )
         case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return body
         }
     }
 
     static func noteID(for change: SyncBatchChange) -> UUID {
-        switch change {
-        case .noteCreated(let payload):
-            payload.noteID
-        case .noteTitleChanged(let payload):
-            payload.noteID
-        case .noteBodyTextInserted(let payload):
-            payload.noteID
-        case .noteBodyTextDeleted(let payload):
-            payload.noteID
-        case .noteBodyReconciled(let payload):
-            payload.noteID
-        case .noteLifecycleChanged(let payload):
-            payload.noteID
-        }
+        change.noteID
     }
 
     static func baseContentHash(for change: SyncBatchChange) -> String? {
-        switch change {
-        case .noteBodyTextInserted(let payload):
-            payload.baseContentHash
-        case .noteBodyTextDeleted(let payload):
-            payload.baseContentHash
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
-            nil
-        }
+        change.baseContentHash
     }
 
     static func insertedText(for change: SyncBatchChange) -> String? {
@@ -194,7 +183,8 @@ enum SyncConvergenceLocalEvidenceCapture {
         switch change {
         case .noteBodyTextInserted, .noteBodyTextDeleted:
             true
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             false
         }
     }

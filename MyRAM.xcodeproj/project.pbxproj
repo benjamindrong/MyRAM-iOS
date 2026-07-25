@@ -241,6 +241,11 @@
 		C1700100000000000000000B /* MYR170FullBodyPathIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000008 /* MYR170FullBodyPathIntegrationTests.swift */; };
 		C1700100000000000000000C /* MYR170MacFullBodyPathIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */; };
 		C1700100000000000000000D /* MacStartupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1700200000000000000000A /* MacStartupCoordinatorTests.swift */; };
+		C17101000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */; };
+		C17101000000000000000002 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */; };
+		C17101000000000000000003 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */; };
+		C17101000000000000000004 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */; };
+		C17101000000000000000005 /* SyncBatchAnchoredPayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000003 /* SyncBatchAnchoredPayloadTests.swift */; };
 		C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */; };
 /* End PBXBuildFile section */
 
@@ -449,6 +454,9 @@
 		C17002000000000000000008 /* MYR170FullBodyPathIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR170FullBodyPathIntegrationTests.swift; sourceTree = "<group>"; };
 		C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR170MacFullBodyPathIntegrationTests.swift; sourceTree = "<group>"; };
 		C1700200000000000000000A /* MacStartupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStartupCoordinatorTests.swift; sourceTree = "<group>"; };
+		C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadAdapter.swift; sourceTree = "<group>"; };
+		C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadPolicy.swift; sourceTree = "<group>"; };
+		C17102000000000000000003 /* SyncBatchAnchoredPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadTests.swift; sourceTree = "<group>"; };
 		C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteIntelligence.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
@@ -605,6 +613,8 @@
 			isa = PBXGroup;
 			children = (
 				BCA123020000000000000001 /* SyncBatchPayload.swift */,
+				C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */,
+				C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */,
 				BCA123020000000000000002 /* SyncBatchEnvelope.swift */,
 				BCA123020000000000000003 /* MultipeerSyncMessageEnvelope.swift */,
 				BCA123020000000000000004 /* SyncBatchSeenBatchStore.swift */,
@@ -677,6 +687,7 @@
 				C17002000000000000000008 /* MYR170FullBodyPathIntegrationTests.swift */,
 				C16802000000000000000003 /* MyRAMSyncOperationIDAllocatorTests.swift */,
 				BCA123020000000000000009 /* SyncBatchPayloadCompatibilityTests.swift */,
+				C17102000000000000000003 /* SyncBatchAnchoredPayloadTests.swift */,
 				BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */,
 				BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */,
 				BCA155020000000000000002 /* SyncConvergenceRewriteSafetyPolicyTests.swift */,
@@ -1096,6 +1107,8 @@
 				BCA104010000000000000001 /* RTFCoding.swift in Sources */,
 				BCA164010000000000000001 /* AttributedTextStorageKeys.swift in Sources */,
 				BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */,
+				C17101000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
+				C17101000000000000000003 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */,
 				BCA123010000000000000002 /* SyncBatchEnvelope.swift in Sources */,
 				BCA123010000000000000003 /* MultipeerSyncMessageEnvelope.swift in Sources */,
 				BCA123010000000000000004 /* SyncBatchSeenBatchStore.swift in Sources */,
@@ -1188,6 +1201,7 @@
 				C1700100000000000000000B /* MYR170FullBodyPathIntegrationTests.swift in Sources */,
 				C16801000000000000000005 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */,
 				BCA123010000000000000014 /* SyncBatchPayloadCompatibilityTests.swift in Sources */,
+				C17101000000000000000005 /* SyncBatchAnchoredPayloadTests.swift in Sources */,
 				BCA132010000000000000005 /* SyncConvergenceFoundationTests.swift in Sources */,
 				BCA132010000000000000014 /* SyncConvergencePlanningTests.swift in Sources */,
 				BCA155010000000000000003 /* SyncConvergenceRewriteSafetyPolicyTests.swift in Sources */,
@@ -1254,6 +1268,8 @@
 				BCA109010000000000000004 /* PersistenceManager.swift in Sources */,
 				BCA10A010000000000000001 /* MacSidebarCollapsePolicy.swift in Sources */,
 				BCA123010000000000000006 /* SyncBatchPayload.swift in Sources */,
+				C17101000000000000000002 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
+				C17101000000000000000004 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */,
 				BCA123010000000000000007 /* SyncBatchEnvelope.swift in Sources */,
 				BCA123010000000000000008 /* MultipeerSyncMessageEnvelope.swift in Sources */,
 				BCA123010000000000000009 /* SyncBatchSeenBatchStore.swift in Sources */,

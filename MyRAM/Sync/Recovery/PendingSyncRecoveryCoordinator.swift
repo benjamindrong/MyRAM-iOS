@@ -242,7 +242,7 @@ private extension PersistedQueueHealth {
         switch self {
         case .healthy, .fileMissing:
             true
-        case .corrupt, .unsupportedVersion, .readFailed:
+        case .corrupt, .unsupportedVersion, .unsupportedAnchoredPayload, .readFailed:
             false
         }
     }

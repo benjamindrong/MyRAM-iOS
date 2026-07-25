@@ -8,6 +8,32 @@ import XCTest
 #endif
 
 final class SyncConvergencePlanningTests: XCTestCase {
+    func testAnchoredBatchFailsPlanningBeforeCanonicalWork() throws {
+        let batch = try makeAnchoredInsertBatchForTest()
+
+        XCTAssertEqual(
+            SyncConvergencePlanner().plan(
+                input: SyncConvergencePlanningInput(incomingBatch: batch)
+            ),
+            .failedBeforeCommit(
+                .invalidMergePlan(noteID: batch.changes[0].noteID)
+            )
+        )
+    }
+
+    func testCanonicalDigestExplicitlyRejectsAnchoredBatch() throws {
+        let batch = try makeAnchoredInsertBatchForTest()
+
+        XCTAssertThrowsError(
+            try SyncConvergenceCanonicalBatchDigest.canonicalBytes(for: batch)
+        ) {
+            XCTAssertEqual(
+                $0 as? SyncConvergenceCanonicalBatchDigest.Error,
+                .invalidPayload("anchoredBodyOperation")
+            )
+        }
+    }
+
     func testLifecycleDivergencePreservesLiveNoteWithoutBlockingPlan() {
         let noteID = uuid("00000000-0000-0000-0000-000000165101")
         let batch = SyncBatch(

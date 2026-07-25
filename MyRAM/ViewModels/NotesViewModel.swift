@@ -1484,6 +1484,10 @@ final class NotesViewModel: ObservableObject {
                 return payload.noteID
             case .noteBodyTextDeleted(let payload):
                 return payload.noteID
+            case .noteBodyTextInsertedAnchored(let payload):
+                return payload.noteID
+            case .noteBodyTextDeletedAnchored(let payload):
+                return payload.noteID
             case .noteBodyReconciled(let payload):
                 return payload.noteID
             case .noteTitleChanged, .noteLifecycleChanged:
@@ -2098,6 +2102,9 @@ final class NotesViewModel: ObservableObject {
     }
 
     func applyIncomingSyncBatch(_ batch: SyncBatch) async {
+        guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(batch)) != nil else {
+            return
+        }
         guard !batch.changes.isEmpty else { return }
         let outcome = await syncConvergenceRuntime.submitRemoteBatch(batch)
         await handleConvergenceRuntimeOutcome(outcome)
@@ -2109,6 +2116,9 @@ final class NotesViewModel: ObservableObject {
     /// returns true, the sender no longer needs to keep the batch around for
     /// redelivery, even if convergence processing of its contents is deferred or blocked.
     func durablyCaptureIncomingBatch(_ batch: SyncBatch) -> Bool {
+        guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(batch)) != nil else {
+            return false
+        }
         guard !batch.changes.isEmpty else { return true }
         if pendingIncomingBatches.contains(batch.id) { return true }
         do {
@@ -2128,6 +2138,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     func replaceLocalConvergenceBatches(_ batches: [SyncBatch]) async throws {
+        try batches.forEach(SyncBatchAnchoredPayloadPolicy.validateRecovery)
         try pendingLocalConvergenceBatches.replacePendingBatches(batches)
         await refreshPendingSyncStatusForLocalConvergenceMutation?()
     }

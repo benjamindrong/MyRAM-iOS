@@ -347,6 +347,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func acceptLocalBatch(_ batch: SyncBatch) async throws {
+        try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
         try await sendBatch(batch)
     }
 
@@ -382,6 +383,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             issues.append(PendingSyncHealthIssue(domain: .unsentBatches, description: "Unsent batch queue is unreadable."))
         case .unsupportedVersion:
             issues.append(PendingSyncHealthIssue(domain: .unsentBatches, description: "Unsent batch queue needs a newer app version."))
+        case .unsupportedAnchoredPayload:
+            issues.append(PendingSyncHealthIssue(
+                domain: .unsentBatches,
+                description: "Unsent batch queue contains unsupported anchored payloads."
+            ))
         case .readFailed:
             issues.append(PendingSyncHealthIssue(domain: .unsentBatches, description: "Unsent batch queue could not be read or saved."))
         }
@@ -428,6 +434,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func sendBatch(_ batch: SyncBatch) async throws {
+        try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
         // Durability comes first: a peer accepting a `send()` call only means the
         // data was handed to the transport, not that it survived to the other side.
         // Removal from this queue happens only once the peer acknowledges receipt
@@ -626,6 +633,7 @@ extension MyRAMSyncController: PendingSyncQueueAdministrating {
     }
 
     func replaceUnsentBatches(_ batches: [SyncBatch]) async throws {
+        try batches.forEach(SyncBatchAnchoredPayloadPolicy.validateOutbound)
         try unsentBatches.replacePendingBatches(batches)
         await updatePendingCount()
     }
@@ -673,6 +681,9 @@ extension MyRAMSyncController: MCSessionDelegate {
             case .batchSync:
                 guard let envelope = try? JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload),
                       envelope.canDecodeWithCurrentSchema else { return }
+                guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(envelope.batch)) != nil else {
+                    return
+                }
                 let captured = await onDurablyCaptureIncomingBatch?(envelope.batch) ?? false
                 await onBatchReceived?(envelope.batch)
                 lastSyncAt = envelope.batch.createdAt

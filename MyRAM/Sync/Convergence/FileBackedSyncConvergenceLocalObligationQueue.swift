@@ -48,6 +48,7 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
     }
 
     func enqueue(_ obligation: SyncConvergenceLocalObligation) throws {
+        try SyncBatchAnchoredPayloadPolicy.validateDurableAdmission(obligation.batch)
         guard canPersistCurrentQueue else { throw QueueError.unhealthyPersistence }
         guard limit > 0 else { throw QueueError.capacityExceeded }
         guard !contains(obligation.id) else { return }
@@ -79,10 +80,14 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
     }
 
     func replacePendingBatches(_ replacement: [SyncBatch]) throws {
+        try replacement.forEach(SyncBatchAnchoredPayloadPolicy.validateDurableAdmission)
         try replacePendingObligations(replacement.map(SyncConvergenceLocalObligation.init(legacyBatch:)))
     }
 
     func replacePendingObligations(_ replacement: [SyncConvergenceLocalObligation]) throws {
+        try replacement.forEach {
+            try SyncBatchAnchoredPayloadPolicy.validateDurableAdmission($0.batch)
+        }
         guard canReplaceQueue else { throw QueueError.unhealthyPersistence }
 
         let original = obligations
@@ -104,7 +109,7 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         switch health {
         case .healthy, .fileMissing:
             return true
-        case .corrupt, .unsupportedVersion, .readFailed:
+        case .corrupt, .unsupportedVersion, .unsupportedAnchoredPayload, .readFailed:
             return false
         }
     }
@@ -128,12 +133,18 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
             switch version {
             case PersistedSyncConvergenceLocalObligationQueue.currentVersion:
                 let persistedQueue = try JSONDecoder().decode(PersistedSyncConvergenceLocalObligationQueue.self, from: data)
+                try persistedQueue.obligations.forEach {
+                    try SyncBatchAnchoredPayloadPolicy.validateDurableAdmission($0.batch)
+                }
                 return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
                     obligations: persistedQueue.obligations,
                     health: .healthy
                 )
             case PersistedLegacySyncBatchQueue.currentVersion:
                 let legacyQueue = try JSONDecoder().decode(PersistedLegacySyncBatchQueue.self, from: data)
+                try legacyQueue.batches.forEach(
+                    SyncBatchAnchoredPayloadPolicy.validateDurableAdmission
+                )
                 let migrated = legacyQueue.batches.map(SyncConvergenceLocalObligation.init(legacyBatch:))
                 obligations = migrated
                 try persistQueueThrowing(allowUnhealthyReplacement: true)
@@ -144,6 +155,11 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
                     health: .unsupportedVersion(version)
                 )
             }
+        } catch is SyncBatchAnchoredPayloadPolicyError {
+            return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                obligations: [],
+                health: .unsupportedAnchoredPayload
+            )
         } catch _ as DecodingError {
             return FileBackedSyncConvergenceLocalObligationQueueSnapshot(obligations: [], health: .corrupt)
         } catch {
@@ -184,22 +200,7 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
     }
 
     private static func affectedNoteIDs(in batch: SyncBatch) -> Set<UUID> {
-        Set(batch.changes.compactMap { change -> UUID? in
-            switch change {
-            case .noteCreated(let payload):
-                return payload.noteID
-            case .noteTitleChanged(let payload):
-                return payload.noteID
-            case .noteBodyTextInserted(let payload):
-                return payload.noteID
-            case .noteBodyTextDeleted(let payload):
-                return payload.noteID
-            case .noteBodyReconciled(let payload):
-                return payload.noteID
-            case .noteLifecycleChanged(let payload):
-                return payload.noteID
-            }
-        })
+        Set(batch.changes.map(\.noteID))
     }
 }
 

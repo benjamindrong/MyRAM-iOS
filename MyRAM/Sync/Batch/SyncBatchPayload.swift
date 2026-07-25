@@ -33,6 +33,8 @@ enum SyncBatchChange: Codable, Equatable, Sendable {
     case noteTitleChanged(SyncBatchNoteTitleChangedChange)
     case noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange)
     case noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange)
+    case noteBodyTextInsertedAnchored(SyncBatchNoteBodyTextInsertedAnchoredChange)
+    case noteBodyTextDeletedAnchored(SyncBatchNoteBodyTextDeletedAnchoredChange)
     case noteBodyReconciled(SyncBatchNoteBodyReconciledChange)
     case noteLifecycleChanged(SyncBatchNoteLifecycleChangedChange)
 }
@@ -571,6 +573,7 @@ struct SyncBatchPreflight {
     }
 
     func validate(batch: SyncBatch, bodyProvider: BodyProvider) throws {
+        try SyncBatchAnchoredPayloadPolicy.validateApply(batch)
         var workingBodies: [SyncBatchNoteID: String] = [:]
         var missingNotes: Set<SyncBatchNoteID> = []
 
@@ -632,6 +635,18 @@ struct SyncBatchPreflight {
 
                 body = (body as NSString).replacingCharacters(in: range, with: "")
                 workingBodies[change.noteID] = body
+
+            case .noteBodyTextInsertedAnchored(let change):
+                throw SyncBatchAnchoredPayloadPolicyError.anchoredPayloadDisabled(
+                    boundary: .apply,
+                    noteID: change.noteID
+                )
+
+            case .noteBodyTextDeletedAnchored(let change):
+                throw SyncBatchAnchoredPayloadPolicyError.anchoredPayloadDisabled(
+                    boundary: .apply,
+                    noteID: change.noteID
+                )
 
             case .noteBodyReconciled(let change):
                 throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
@@ -758,6 +773,27 @@ extension SyncBatch {
 }
 
 extension SyncBatchChange {
+    var noteID: UUID {
+        switch self {
+        case .noteCreated(let change):
+            change.noteID
+        case .noteTitleChanged(let change):
+            change.noteID
+        case .noteBodyTextInserted(let change):
+            change.noteID
+        case .noteBodyTextDeleted(let change):
+            change.noteID
+        case .noteBodyTextInsertedAnchored(let change):
+            change.noteID
+        case .noteBodyTextDeletedAnchored(let change):
+            change.noteID
+        case .noteBodyReconciled(let change):
+            change.noteID
+        case .noteLifecycleChanged(let change):
+            change.noteID
+        }
+    }
+
     var modifiedAtForReplayOrdering: Date {
         switch self {
         case .noteCreated(let change):
@@ -768,10 +804,40 @@ extension SyncBatchChange {
             change.modifiedAt
         case .noteBodyTextDeleted(let change):
             change.modifiedAt
+        case .noteBodyTextInsertedAnchored(let change):
+            change.modifiedAt
+        case .noteBodyTextDeletedAnchored(let change):
+            change.modifiedAt
         case .noteBodyReconciled(let change):
             change.modifiedAt
         case .noteLifecycleChanged(let change):
             change.modifiedAt
+        }
+    }
+
+    var bodyOperationRepresentation: SyncBatchBodyOperationRepresentation {
+        switch self {
+        case .noteBodyTextInserted, .noteBodyTextDeleted:
+            .legacy
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
+            .anchored
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+            .none
+        }
+    }
+
+    var baseContentHash: String? {
+        switch self {
+        case .noteBodyTextInserted(let change):
+            change.baseContentHash
+        case .noteBodyTextDeleted(let change):
+            change.baseContentHash
+        case .noteBodyTextInsertedAnchored(let change):
+            change.baseContentHash
+        case .noteBodyTextDeletedAnchored(let change):
+            change.baseContentHash
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+            nil
         }
     }
 }

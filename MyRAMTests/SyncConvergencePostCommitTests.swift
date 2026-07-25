@@ -14,9 +14,9 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         let second = batch(id: uuid("00000000-0000-0000-0000-000000000002"))
         let third = batch(id: uuid("00000000-0000-0000-0000-000000000003"))
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
-        queue.enqueue(first)
-        queue.enqueue(second)
-        queue.enqueue(third)
+        try queue.enqueueDurably(first)
+        try queue.enqueueDurably(second)
+        try queue.enqueueDurably(third)
 
         try queue.removeBatches(withIDs: [second.id])
 
@@ -28,8 +28,8 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         let first = batch(id: uuid("00000000-0000-0000-0000-000000000011"))
         let second = batch(id: uuid("00000000-0000-0000-0000-000000000012"))
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
-        queue.enqueue(first)
-        queue.enqueue(second)
+        try queue.enqueueDurably(first)
+        try queue.enqueueDurably(second)
 
         queue.injectPersistenceFailureForNextWrite()
 
@@ -45,14 +45,45 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         let first = batch(id: uuid("00000000-0000-0000-0000-000000000021"))
         let second = batch(id: uuid("00000000-0000-0000-0000-000000000022"))
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
-        queue.enqueue(first)
-        queue.enqueue(second)
+        try queue.enqueueDurably(first)
+        try queue.enqueueDurably(second)
 
         queue.injectPersistenceFailureForNextWrite()
         queue.removeAll(withIDs: [first.id])
 
         XCTAssertEqual(queue.pendingBatches, [second])
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [first, second])
+    }
+
+    @MainActor
+    func testRuntimeRejectsAnchoredRemoteAndLocalSubmissionBeforePersistence() async throws {
+        let container = try makeMYR158Container()
+        let incomingQueue = FileBackedSyncBatchQueue(fileURL: nil)
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil)
+        let runtime = SyncConvergenceRuntime(
+            context: container.mainContext,
+            convergenceQueue: incomingQueue,
+            localObligationQueue: localQueue,
+            localBatchTransportAdapter: nil,
+            presentationAdapter: MYR158CountingPresentationAdapter()
+        )
+        let batch = try makeAnchoredInsertBatchForTest()
+
+        let remote = await runtime.submitRemoteBatch(batch)
+        let local = await runtime.submitLocalBatch(batch)
+
+        if case .blocked(let failure) = remote {
+            XCTAssertEqual(failure.kind, .invalidMergePlan)
+        } else {
+            XCTFail("Expected anchored remote submission to be blocked")
+        }
+        if case .blocked(let failure) = local {
+            XCTAssertEqual(failure.kind, .invalidMergePlan)
+        } else {
+            XCTFail("Expected anchored local submission to be blocked")
+        }
+        XCTAssertTrue(incomingQueue.pendingBatches.isEmpty)
+        XCTAssertTrue(localQueue.pendingBatches.isEmpty)
     }
 
     func testCompletedPostCommitStateDoesNotCallAdaptersOrWrite() async {

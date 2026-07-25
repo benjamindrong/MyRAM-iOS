@@ -260,6 +260,29 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         XCTAssertTrue(secondResult.appliedTitleChanges.isEmpty)
     }
 
+    func testAnchoredBatchRejectsBeforeMutationSaveOrSeenMarking() throws {
+        let container = try makeInMemoryContainer()
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-0000001252AA")!
+        let note = try insertNote(id: noteID, content: "", in: container)
+        let batch = try makeAnchoredInsertBatchForTest(noteID: noteID)
+        let defaults = makeDefaults()
+        let seenStore = SyncBatchSeenBatchStore(defaults: defaults)
+
+        XCTAssertThrowsError(try IPhoneSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: seenStore
+        ).apply(batch)) {
+            XCTAssertEqual(
+                $0 as? SyncBatchAnchoredPayloadPolicyError,
+                .anchoredPayloadDisabled(boundary: .apply, noteID: noteID)
+            )
+        }
+
+        XCTAssertEqual(note.content, "")
+        XCTAssertFalse(seenStore.hasSeen(batch.id))
+        XCTAssertFalse(container.mainContext.hasChanges)
+    }
+
     func testMissingNoteTitleChangeProducesNoAppliedTitleEvidence() throws {
         let container = try makeInMemoryContainer()
         let missingNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000125210")!

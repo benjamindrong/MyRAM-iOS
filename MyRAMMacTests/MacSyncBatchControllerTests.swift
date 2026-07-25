@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import SwiftData
 import XCTest
 @testable import MyRAMMac
@@ -47,6 +48,41 @@ final class MacSyncBatchControllerTests: XCTestCase {
 
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: unsentURL).pendingBatches, [batch])
         XCTAssertNil(controller.lastErrorMessage)
+    }
+
+    func testAnchoredLocalBatchRejectsBeforeQueueMutation() async throws {
+        let unsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
+        let controller = try makeController(unsentBatchQueueFileURL: unsentURL)
+        let batch = try makeAnchoredBatch()
+
+        do {
+            try await controller.acceptLocalBatch(batch)
+            XCTFail("Expected anchored local admission to fail")
+        } catch {
+            XCTAssertEqual(
+                error as? SyncBatchAnchoredPayloadPolicyError,
+                .anchoredPayloadDisabled(
+                    boundary: .outboundController,
+                    noteID: batch.changes[0].noteID
+                )
+            )
+        }
+
+        XCTAssertTrue(
+            FileBackedSyncBatchQueue(fileURL: unsentURL).pendingBatches.isEmpty
+        )
+        XCTAssertNil(controller.lastSyncAt)
+    }
+
+    func testDirectReceiveRejectsAnchoredBatchBeforeCoordinatorSubmission() async throws {
+        let controller = try makeController(unsentBatchQueueFileURL: nil)
+        let batch = try makeAnchoredBatch()
+
+        controller.receive(batch)
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(controller.pendingIncomingBatchCount, 0)
+        XCTAssertNil(controller.lastSyncAt)
     }
 
     func testFailedDurableUnsentEnqueueThrowsAndLeavesQueueUnchanged() async throws {
@@ -170,14 +206,20 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
 
         XCTAssertGreaterThanOrEqual(project.countOccurrences(of: "SyncBatchNoteChangeCapture.swift in Sources"), 2)
+        XCTAssertGreaterThanOrEqual(project.countOccurrences(of: "SyncBatchAnchoredPayloadAdapter.swift in Sources"), 2)
+        XCTAssertGreaterThanOrEqual(project.countOccurrences(of: "SyncBatchAnchoredPayloadPolicy.swift in Sources"), 2)
+        XCTAssertEqual(project.countOccurrences(of: "SyncBatchAnchoredPayloadTests.swift in Sources"), 2)
         XCTAssertTrue(project.contains("MacSyncConvergencePresentationAdapter.swift in Sources"))
         XCTAssertTrue(project.contains("MacSyncConvergencePresentationAdapterTests.swift in Sources"))
         XCTAssertTrue(project.contains("MacSyncConvergenceCoordinatorTests.swift in Sources"))
         XCTAssertTrue(project.contains("MacSyncIncomingLocalBoundaryTests.swift in Sources"))
         XCTAssertTrue(project.contains("MacNotePersistenceAdapterTests.swift in Sources"))
 
-        let macAppSources = try XCTUnwrap(project.section(startingWith: "BCA105040000000000000001 /* Sources */"))
-        let macTestSources = try XCTUnwrap(project.section(startingWith: "BCA107040000000000000001 /* Sources */"))
+        let iosTestSources = try XCTUnwrap(project.section(startingWith: "\t\tBC9F1BBA2EA47D310045FD72 /* Sources */ = {"))
+        let macAppSources = try XCTUnwrap(project.section(startingWith: "\t\tBCA105040000000000000001 /* Sources */ = {"))
+        let macTestSources = try XCTUnwrap(project.section(startingWith: "\t\tBCA107040000000000000001 /* Sources */ = {"))
+        XCTAssertTrue(iosTestSources.contains("SyncBatchAnchoredPayloadTests.swift in Sources"))
+        XCTAssertFalse(macTestSources.contains("SyncBatchAnchoredPayloadTests.swift in Sources"))
         XCTAssertFalse(macAppSources.contains("MacSyncBatchApplier.swift in Sources"))
         XCTAssertFalse(macTestSources.contains("MacSyncBatchApplierTests.swift in Sources"))
     }
@@ -208,6 +250,27 @@ final class MacSyncBatchControllerTests: XCTestCase {
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
             createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
             changes: []
+        )
+    }
+
+    private func makeAnchoredBatch() throws -> SyncBatch {
+        let deviceID = UUID(uuidString: "17100000-0000-0000-0000-0000000000BB")!
+        let state = try SyncTextSequenceState(runs: [], fragments: [])
+        let change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: UUID(uuidString: "17100000-0000-0000-0000-0000000000BC")!,
+            utf16Offset: 0,
+            text: "A",
+            modifiedAt: Date(timeIntervalSince1970: 1_710),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            operationID: SyncOperationID(deviceID: deviceID, localCounter: 1),
+            state: state
+        )
+        return SyncBatch(
+            id: UUID(uuidString: "17100000-0000-0000-0000-0000000000BD")!,
+            originDeviceID: deviceID,
+            createdAt: Date(timeIntervalSince1970: 1_710),
+            batchSequence: 1,
+            changes: [change]
         )
     }
 

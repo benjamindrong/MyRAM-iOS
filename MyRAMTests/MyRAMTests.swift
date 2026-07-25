@@ -9235,22 +9235,7 @@ private final class SinglePendingLocalBoundaryAdapter: SyncConvergenceIncomingLo
     }
 
     private static func affectedNoteIDs(in batch: SyncBatch) -> Set<UUID> {
-        Set(batch.changes.map { change in
-            switch change {
-            case .noteCreated(let payload):
-                return payload.noteID
-            case .noteTitleChanged(let payload):
-                return payload.noteID
-            case .noteBodyTextInserted(let payload):
-                return payload.noteID
-            case .noteBodyTextDeleted(let payload):
-                return payload.noteID
-            case .noteBodyReconciled(let payload):
-                return payload.noteID
-            case .noteLifecycleChanged(let payload):
-                return payload.noteID
-            }
-        })
+        Set(batch.changes.map(\.noteID))
     }
 }
 

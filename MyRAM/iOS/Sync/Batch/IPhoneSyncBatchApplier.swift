@@ -107,6 +107,16 @@ final class IPhoneSyncBatchApplier {
             return AppliedSyncBatchChangeResult(editorMutation: try applyBodyTextInserted(change))
         case .noteBodyTextDeleted(let change):
             return AppliedSyncBatchChangeResult(editorMutation: try applyBodyTextDeleted(change))
+        case .noteBodyTextInsertedAnchored(let change):
+            throw SyncBatchAnchoredPayloadPolicyError.anchoredPayloadDisabled(
+                boundary: .apply,
+                noteID: change.noteID
+            )
+        case .noteBodyTextDeletedAnchored(let change):
+            throw SyncBatchAnchoredPayloadPolicyError.anchoredPayloadDisabled(
+                boundary: .apply,
+                noteID: change.noteID
+            )
         case .noteBodyReconciled(let change):
             throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
         case .noteLifecycleChanged(let change):
