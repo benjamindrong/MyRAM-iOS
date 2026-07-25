@@ -292,6 +292,84 @@ public struct SyncTextSequenceState: Equatable, Sendable {
         return result
     }
 
+    /// Resolves a visible cursor to one deterministic gap in the structural stream.
+    public func operationAnchor(
+        atVisibleUTF16Offset offset: Int
+    ) throws -> SyncOperationAnchor {
+        guard offset >= 0, offset <= visibleUTF16Count else {
+            throw SyncTextSequenceStateError.visibleOffsetOutOfBounds(offset)
+        }
+        guard SyncTextSequenceStringBoundary.isBoundary(
+            offset,
+            in: materializedVisibleText
+        ) else {
+            throw SyncTextSequenceStateError.visibleOffsetSplitsSurrogatePair(offset)
+        }
+        guard !fragments.isEmpty else { return .empty }
+
+        var visibleCursor = 0
+        var leftElementID: SyncTextElementID?
+        for fragment in fragments {
+            if fragment.visibility == .visible {
+                let nextVisibleCursor = visibleCursor + fragment.utf16Length
+                if offset < nextVisibleCursor {
+                    let offsetInFragment = offset - visibleCursor
+                    let rightElementID = try SyncTextElementID(
+                        operationID: fragment.operationID,
+                        elementOffset: fragment.startOffset + offsetInFragment
+                    )
+                    if offsetInFragment > 0 {
+                        leftElementID = try SyncTextElementID(
+                            operationID: fragment.operationID,
+                            elementOffset: fragment.startOffset + offsetInFragment - 1
+                        )
+                    }
+                    return try Self.operationAnchor(
+                        leftElementID: leftElementID,
+                        rightElementID: rightElementID
+                    )
+                }
+                visibleCursor = nextVisibleCursor
+            }
+
+            leftElementID = try SyncTextElementID(
+                operationID: fragment.operationID,
+                elementOffset: fragment.startOffset + fragment.utf16Length - 1
+            )
+        }
+
+        guard let leftElementID else {
+            preconditionFailure("A structurally nonempty state must have a final element")
+        }
+        return .after(leftElementID)
+    }
+
+    /// Derives a portable insertion payload without reserving or persisting identity.
+    public func insertOperationPayload(
+        operationID: SyncOperationID,
+        atVisibleUTF16Offset offset: Int,
+        formatVersion: SyncTextOperationPayloadFormatVersion = .v1
+    ) throws -> SyncTextInsertOperationPayload {
+        SyncTextInsertOperationPayload(
+            operationID: operationID,
+            anchor: try operationAnchor(atVisibleUTF16Offset: offset),
+            formatVersion: formatVersion
+        )
+    }
+
+    /// Derives compact deleted identity without mutating the authoritative state.
+    public func deleteOperationPayload(
+        operationID: SyncOperationID,
+        inVisibleUTF16Range range: Range<Int>,
+        formatVersion: SyncTextOperationPayloadFormatVersion = .v1
+    ) throws -> SyncTextDeleteOperationPayload {
+        try SyncTextDeleteOperationPayload(
+            operationID: operationID,
+            deletedElementIDSpans: elementIDSpans(inVisibleUTF16Range: range),
+            formatVersion: formatVersion
+        )
+    }
+
     public var tombstonedElementIDSpans: [SyncTextElementIDSpan] {
         var result: [SyncTextElementIDSpan] = []
         var previousSelectedFragmentIndex: Int?
@@ -328,6 +406,22 @@ public struct SyncTextSequenceState: Equatable, Sendable {
             )
         } else {
             result.append(span)
+        }
+    }
+
+    private static func operationAnchor(
+        leftElementID: SyncTextElementID?,
+        rightElementID: SyncTextElementID?
+    ) throws -> SyncOperationAnchor {
+        switch (leftElementID, rightElementID) {
+        case (nil, nil):
+            return .empty
+        case (nil, let rightElementID?):
+            return .before(rightElementID)
+        case (let leftElementID?, let rightElementID?):
+            return try .between(left: leftElementID, right: rightElementID)
+        case (let leftElementID?, nil):
+            return .after(leftElementID)
         }
     }
 }
