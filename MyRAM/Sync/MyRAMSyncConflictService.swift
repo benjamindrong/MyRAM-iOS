@@ -15,10 +15,16 @@ struct SyncConflictRestoreResult {
 final class MyRAMSyncConflictService {
     private let context: ModelContext
     private let store: SyncConflictStore
+    private let saveOperation: (ModelContext) throws -> Void
 
-    init(context: ModelContext, store: SyncConflictStore) {
+    init(
+        context: ModelContext,
+        store: SyncConflictStore,
+        saveOperation: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) {
         self.context = context
         self.store = store
+        self.saveOperation = saveOperation
     }
 
     func activeConflicts() -> [SyncConflictVersion] {
@@ -67,56 +73,69 @@ final class MyRAMSyncConflictService {
         let resolution = SyncTextConflictResolver.resolve(conflict.syncTextConflict, choice: choice)
         var result = SyncConflictRestoreResult(conflicts: store.activeConflicts(), resolution: resolution)
 
-        switch conflict.field {
-        case .noteTitle:
-            guard let note = fetchNote(withID: conflict.entityID) else { return nil }
-            note.title = resolution.resolvedText
-            note.modifiedAt = now
-            result.note = note
-            result.folder = note.folder
-            result.shouldRefreshActiveNote = activeNoteID == note.id
+        do {
+            switch conflict.field {
+            case .noteTitle:
+                guard let note = fetchNote(withID: conflict.entityID) else { return nil }
+                note.title = resolution.resolvedText
+                note.modifiedAt = now
+                result.note = note
+                result.folder = note.folder
+                result.shouldRefreshActiveNote = activeNoteID == note.id
 
-        case .noteContent:
-            guard let note = fetchNote(withID: conflict.entityID) else { return nil }
-            let previousContent = note.content
-            note.content = resolution.resolvedText
-            if resolution.usesRemoteData {
-                note.richTextContentData = RichTextContentCodec.sanitizedConflictRichTextData(
-                    resolution.resolvedData,
-                    plainText: resolution.resolvedText
-                )
-            } else if previousContent != resolution.resolvedText {
-                // Plain-text merge resolutions can omit rich text data; keep
-                // compatible existing formatting instead of clearing it.
-                note.richTextContentData = resolution.resolvedData
-                    ?? RichTextContentCodec.sanitizedConflictRichTextData(
-                        note.richTextContentData,
+            case .noteContent:
+                guard let note = fetchNote(withID: conflict.entityID) else { return nil }
+                let previousContent = note.content
+                let resolvedRichTextData: Data?
+                if resolution.usesRemoteData {
+                    resolvedRichTextData = RichTextContentCodec.sanitizedConflictRichTextData(
+                        resolution.resolvedData,
                         plainText: resolution.resolvedText
                     )
+                } else if previousContent != resolution.resolvedText {
+                    // Plain-text merge resolutions can omit rich text data; preserve
+                    // compatible formatting without publishing before persistence.
+                    resolvedRichTextData = resolution.resolvedData
+                        ?? RichTextContentCodec.sanitizedConflictRichTextData(
+                            note.richTextContentData,
+                            plainText: resolution.resolvedText
+                        )
+                } else {
+                    resolvedRichTextData = note.richTextContentData
+                }
+                _ = try NoteSequenceStateFullBodyIntegration.replaceBody(
+                    of: note,
+                    with: resolution.resolvedText,
+                    in: context
+                )
+                note.richTextContentData = resolvedRichTextData
+                note.modifiedAt = now
+                result.note = note
+                result.folder = note.folder
+                result.shouldRefreshActiveNote = activeNoteID == note.id
+
+            case .folderTitle:
+                guard let folder = fetchFolder(withID: conflict.entityID) else { return nil }
+                folder.name = resolution.resolvedText
+                folder.modifiedAt = now
+                result.folder = folder
+
+            case .pinnedText:
+                guard let thought = fetchPinnedThought(withID: conflict.entityID) else { return nil }
+                thought.text = resolution.resolvedText
+                thought.modifiedAt = now
+                thought.note?.modifiedAt = now
+                result.pinnedThought = thought
+                result.note = thought.note
+                result.folder = thought.note?.folder
+                result.shouldRefreshActiveNote = activeNoteID == thought.note?.id
             }
-            note.modifiedAt = now
-            result.note = note
-            result.folder = note.folder
-            result.shouldRefreshActiveNote = activeNoteID == note.id
 
-        case .folderTitle:
-            guard let folder = fetchFolder(withID: conflict.entityID) else { return nil }
-            folder.name = resolution.resolvedText
-            folder.modifiedAt = now
-            result.folder = folder
-
-        case .pinnedText:
-            guard let thought = fetchPinnedThought(withID: conflict.entityID) else { return nil }
-            thought.text = resolution.resolvedText
-            thought.modifiedAt = now
-            thought.note?.modifiedAt = now
-            result.pinnedThought = thought
-            result.note = thought.note
-            result.folder = thought.note?.folder
-            result.shouldRefreshActiveNote = activeNoteID == thought.note?.id
+            try saveOperation(context)
+        } catch {
+            context.rollback()
+            return nil
         }
-
-        try? context.save()
         result.conflicts = store.removeResolvedConflict(conflict)
         return result
     }

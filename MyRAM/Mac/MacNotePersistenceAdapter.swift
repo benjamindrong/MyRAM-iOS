@@ -58,9 +58,22 @@ final class MacNotePersistenceAdapter {
 
     func createNote() throws -> Note {
         let note = Note()
-        context.insert(note)
-        try context.save()
-        return note
+        do {
+            let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+                noteID: note.id,
+                body: note.content
+            )
+            _ = try NoteSequenceStateFullBodyIntegration.insertNewNote(
+                note,
+                preparedState: prepared,
+                in: context
+            )
+            try saveOperation(context)
+            return note
+        } catch {
+            context.rollback()
+            throw error
+        }
     }
 
     func attributedContent(for note: Note) -> NSAttributedString {

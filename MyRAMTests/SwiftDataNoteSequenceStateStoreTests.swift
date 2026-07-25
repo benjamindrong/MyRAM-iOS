@@ -406,6 +406,200 @@ final class SwiftDataNoteSequenceStateStoreTests: XCTestCase {
         XCTAssertEqual(try fetchRecords(in: container).count, 1)
     }
 
+    func testEnsureBootstrapStateForCurrentBodyReturnsExactExistingStateWithoutSave() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Exact", in: container)
+        let seedStore = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await seedStore.loadOrBootstrap(noteID: noteID)
+        let originalRecord = try XCTUnwrap(fetchRecords(in: container).only)
+        let originalPayload = originalRecord.statePayloadData
+        let saveCalls = InvocationRecorder()
+        let store = await SwiftDataNoteSequenceStateStore(
+            container: container,
+            bootstrapSaveOperation: { _ in saveCalls.record() }
+        )
+
+        let loaded = try await store.ensureBootstrapStateForCurrentBody(noteID: noteID)
+
+        XCTAssertEqual(loaded.revision, 0)
+        XCTAssertTrue(NoteSequenceStateExactText.matches(loaded.state.visibleText, "Exact"))
+        XCTAssertEqual(saveCalls.count, 0)
+        XCTAssertEqual(try fetchRecords(in: container).only?.statePayloadData, originalPayload)
+    }
+
+    func testEnsureBootstrapStateForCurrentBodyCreatesMissingState() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Missing \u{1F680}", in: container)
+        let store = await SwiftDataNoteSequenceStateStore(container: container)
+
+        let loaded = try await store.ensureBootstrapStateForCurrentBody(noteID: noteID)
+
+        XCTAssertEqual(loaded.revision, 0)
+        XCTAssertTrue(
+            NoteSequenceStateExactText.matches(
+                loaded.state.visibleText,
+                "Missing \u{1F680}"
+            )
+        )
+        XCTAssertEqual(try fetchRecords(in: container).count, 1)
+    }
+
+    func testEnsureBootstrapStateForCurrentBodyRepairsValidStaleState() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Current", in: container)
+        let seedStore = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await seedStore.compareAndSet(
+            noteID: noteID,
+            expected: .missing(expectedBody: "Current"),
+            newBody: "Stale",
+            newState: rootState(text: "Stale")
+        )
+        try updateNote(noteID: noteID, in: container) { $0.content = "Current" }
+        let store = await SwiftDataNoteSequenceStateStore(container: container)
+
+        let loaded = try await store.ensureBootstrapStateForCurrentBody(noteID: noteID)
+
+        XCTAssertEqual(loaded.revision, 1)
+        XCTAssertTrue(NoteSequenceStateExactText.matches(loaded.state.visibleText, "Current"))
+        XCTAssertEqual(try fetchNote(noteID: noteID, in: container)?.content, "Current")
+    }
+
+    func testEnsureBootstrapStateForCurrentBodyPreservesNonBootstrapStateWhenExact() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Body", in: container)
+        let nonBootstrapState = try rootState(text: "Body")
+        let seedStore = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await seedStore.compareAndSet(
+            noteID: noteID,
+            expected: .missing(expectedBody: "Body"),
+            newBody: "Body",
+            newState: nonBootstrapState
+        )
+        let originalPayload = try XCTUnwrap(fetchRecords(in: container).only?.statePayloadData)
+
+        let loaded = try await seedStore.ensureBootstrapStateForCurrentBody(noteID: noteID)
+
+        XCTAssertEqual(loaded.state, nonBootstrapState)
+        XCTAssertEqual(loaded.revision, 0)
+        XCTAssertEqual(try fetchRecords(in: container).only?.statePayloadData, originalPayload)
+    }
+
+    func testEnsureBootstrapStateForCurrentBodyRejectsCorruptState() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Body", in: container)
+        let seedStore = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await seedStore.loadOrBootstrap(noteID: noteID)
+        let corruptPayload = Data("not-json".utf8)
+        try updateRecord(in: container) { record in
+            record.statePayloadData = corruptPayload
+            record.payloadByteCount = corruptPayload.count
+        }
+
+        await assertStoreError(.corruptState) {
+            _ = try await seedStore.ensureBootstrapStateForCurrentBody(noteID: noteID)
+        }
+
+        XCTAssertEqual(try fetchRecords(in: container).only?.statePayloadData, corruptPayload)
+    }
+
+    func testEnsureBootstrapStateForCurrentBodyRejectsUnsupportedState() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Body", in: container)
+        let store = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await store.loadOrBootstrap(noteID: noteID)
+        try updateRecord(in: container) { $0.formatVersion = 2 }
+
+        await assertStoreError(.unsupportedVersion(2)) {
+            _ = try await store.ensureBootstrapStateForCurrentBody(noteID: noteID)
+        }
+
+        XCTAssertEqual(try fetchRecords(in: container).only?.formatVersion, 2)
+    }
+
+    func testEnsureBootstrapStateForCurrentBodyRejectsRevisionExhaustion() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Current", in: container)
+        let store = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await store.compareAndSet(
+            noteID: noteID,
+            expected: .missing(expectedBody: "Current"),
+            newBody: "Stale",
+            newState: rootState(text: "Stale")
+        )
+        try updateNote(noteID: noteID, in: container) { $0.content = "Current" }
+        try updateRecord(in: container) { $0.revision = .max }
+        let originalPayload = try XCTUnwrap(fetchRecords(in: container).only?.statePayloadData)
+
+        await assertStoreError(.revisionExhaustion) {
+            _ = try await store.ensureBootstrapStateForCurrentBody(noteID: noteID)
+        }
+
+        let record = try XCTUnwrap(fetchRecords(in: container).only)
+        XCTAssertEqual(record.revision, .max)
+        XCTAssertEqual(record.statePayloadData, originalPayload)
+    }
+
+    func testEnsureBootstrapStateForCurrentBodySaveFailureRollsBack() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Body", in: container)
+        let store = await SwiftDataNoteSequenceStateStore(
+            container: container,
+            bootstrapSaveOperation: { _ in throw InjectedFailure.expected }
+        )
+
+        await assertStoreError(.persistenceFailure) {
+            _ = try await store.ensureBootstrapStateForCurrentBody(noteID: noteID)
+        }
+
+        XCTAssertTrue(try fetchRecords(in: container).isEmpty)
+        XCTAssertEqual(try fetchNote(noteID: noteID, in: container)?.content, "Body")
+    }
+
+    func testEnsureBootstrapStateForCurrentBodyVerificationFailureIsSurfaced() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Body", in: container)
+        let store = await SwiftDataNoteSequenceStateStore(
+            container: container,
+            testHook: { stage in
+                guard stage == .afterSave else { return }
+                let mutationContext = ModelContext(container)
+                for record in try mutationContext.fetch(
+                    FetchDescriptor<NoteSequenceStateRecord>()
+                ) {
+                    mutationContext.delete(record)
+                }
+                try mutationContext.save()
+            }
+        )
+
+        await assertStoreError(.verificationFailure) {
+            _ = try await store.ensureBootstrapStateForCurrentBody(noteID: noteID)
+        }
+
+        XCTAssertTrue(try fetchRecords(in: container).isEmpty)
+    }
+
+    func testLoadOrBootstrapRejectsMismatchWhileEnsureCurrentBodyRepairsIt() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Current", in: container)
+        let store = await SwiftDataNoteSequenceStateStore(container: container)
+        _ = try await store.compareAndSet(
+            noteID: noteID,
+            expected: .missing(expectedBody: "Current"),
+            newBody: "Stale",
+            newState: rootState(text: "Stale")
+        )
+        try updateNote(noteID: noteID, in: container) { $0.content = "Current" }
+
+        await assertStoreError(.corruptState) {
+            _ = try await store.loadOrBootstrap(noteID: noteID)
+        }
+
+        let repaired = try await store.ensureBootstrapStateForCurrentBody(noteID: noteID)
+        XCTAssertEqual(repaired.revision, 1)
+        XCTAssertTrue(NoteSequenceStateExactText.matches(repaired.state.visibleText, "Current"))
+    }
+
     func testConcurrentLoadOrBootstrapAcrossStoreInstancesCreatesOneRevisionZeroRow() async throws {
         let container = try makeContainer()
         let noteID = try insertNote(body: "Concurrent", in: container)

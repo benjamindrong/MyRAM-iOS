@@ -62,6 +62,10 @@ private struct LegacyIncomingIsolatedApplyResult {
     let shouldRefreshActiveNote: Bool
 }
 
+private enum LegacyIncomingIsolatedApplyFailure: Error {
+    case nonAcknowledgeableOutcome
+}
+
 @MainActor
 final class NotesViewModel: ObservableObject {
     @Published var notes: [Note] = []
@@ -124,10 +128,11 @@ final class NotesViewModel: ObservableObject {
         saveLegacyIncomingApplyContext: ((ModelContext) throws -> Void)? = nil,
         commitLegacyIncomingEffects: ((LegacyIncomingBufferedEffects) throws -> Void)? = nil
     ) {
+        let resolvedSaveContext = saveContext ?? { try context.save() }
         self.context = context
         self.syncController = syncController
         self.syncConflictStore = syncConflictStore
-        self.saveContext = saveContext ?? { try context.save() }
+        self.saveContext = resolvedSaveContext
         self.saveLegacyIncomingApplyContext = saveLegacyIncomingApplyContext ?? { try $0.save() }
         self.commitLegacyIncomingEffects = commitLegacyIncomingEffects ?? { effects in
             try Self.commitLegacyIncomingEffects(effects, to: syncConflictStore)
@@ -145,7 +150,11 @@ final class NotesViewModel: ObservableObject {
             originDeviceID: UUID(uuidString: MyRAMDeviceIdentity.currentDeviceID()) ?? UUID(),
             quietWindow: syncBatchQuietWindow
         )
-        syncConflictService = MyRAMSyncConflictService(context: context, store: syncConflictStore)
+        syncConflictService = MyRAMSyncConflictService(
+            context: context,
+            store: syncConflictStore,
+            saveOperation: { _ in try resolvedSaveContext() }
+        )
         self.syncController?.onChangesReceived = { [weak self] changes in
             await self?.applyIncomingSyncChanges(changes) ?? changes.map {
                 LegacyIncomingChangeResult(changeID: $0.id, disposition: .retryRequired)
@@ -203,17 +212,25 @@ final class NotesViewModel: ObservableObject {
     func undoLastAction() {
         guard let action = undoStack.popLast() else { return }
 
+        let succeeded: Bool
         switch action {
         case .noteCreation(let snapshot):
             undoNoteCreation(using: snapshot)
+            succeeded = true
         case .folderCreation(let snapshot):
             undoFolderCreation(using: snapshot)
+            succeeded = true
         case .noteMove(let snapshot):
             undoNoteMove(using: snapshot)
+            succeeded = true
         case .noteDeletion(let snapshot):
-            undoNoteDeletion(using: snapshot)
+            succeeded = undoNoteDeletion(using: snapshot)
         case .folderDeletion(let snapshot):
-            undoFolderDeletion(using: snapshot)
+            succeeded = undoFolderDeletion(using: snapshot)
+        }
+        guard succeeded else {
+            undoStack.append(action)
+            return
         }
         redoStack.append(action)
         resumePendingConvergencePresentationIfNeeded()
@@ -222,17 +239,26 @@ final class NotesViewModel: ObservableObject {
     func redoLastAction() {
         guard let action = redoStack.popLast() else { return }
 
+        let succeeded: Bool
         switch action {
         case .noteCreation(let snapshot):
-            redoNoteCreation(using: snapshot)
+            succeeded = redoNoteCreation(using: snapshot)
         case .folderCreation(let snapshot):
             redoFolderCreation(using: snapshot)
+            succeeded = true
         case .noteMove(let snapshot):
             redoNoteMove(using: snapshot)
+            succeeded = true
         case .noteDeletion(let snapshot):
             redoNoteDeletion(using: snapshot)
+            succeeded = true
         case .folderDeletion(let snapshot):
             redoFolderDeletion(using: snapshot)
+            succeeded = true
+        }
+        guard succeeded else {
+            redoStack.append(action)
+            return
         }
         undoStack.append(action)
         resumePendingConvergencePresentationIfNeeded()
@@ -328,11 +354,30 @@ final class NotesViewModel: ObservableObject {
     }
 
     @discardableResult
-    func createNewNote() -> Note {
-        let note = Note(folder: currentFolder)
-        context.insert(note)
-        currentFolder?.modifiedAt = .now
-        try? context.save()
+    func createNewNote() -> Note? {
+        let note = Note()
+        let previousFolderModifiedAt = currentFolder?.modifiedAt
+        do {
+            let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+                noteID: note.id,
+                body: note.content
+            )
+            _ = try NoteSequenceStateFullBodyIntegration.insertNewNote(
+                note,
+                preparedState: prepared,
+                in: context
+            )
+            note.folder = currentFolder
+            currentFolder?.modifiedAt = .now
+            try saveContext()
+        } catch {
+            context.rollback()
+            if let previousFolderModifiedAt {
+                currentFolder?.modifiedAt = previousFolderModifiedAt
+            }
+            syncBatchErrorMessage = "Unable to create the note."
+            return nil
+        }
         recordSyncBatchChange(SyncConvergenceCapturedLocalChange(
             change: IPhoneSyncBatchCaptureHook.noteCreated(note),
             evidence: nil
@@ -976,10 +1021,20 @@ final class NotesViewModel: ObservableObject {
     }
 
     func restoreNote(_ note: Note) {
-        note.deletedAt = nil
-        note.modifiedAt = .now
-        note.folder?.modifiedAt = .now
-        try? context.save()
+        do {
+            _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+                for: note,
+                in: context
+            )
+            note.deletedAt = nil
+            note.modifiedAt = .now
+            note.folder?.modifiedAt = .now
+            try saveContext()
+        } catch {
+            context.rollback()
+            syncBatchErrorMessage = "Unable to restore the note."
+            return
+        }
         recordSyncBatchChange(SyncConvergenceCapturedLocalChange(
             change: IPhoneSyncBatchCaptureHook.lifecycleChanged(note),
             evidence: nil
@@ -1057,18 +1112,29 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func redoNoteCreation(using snapshot: NoteCreationUndoSnapshot) {
+    private func redoNoteCreation(using snapshot: NoteCreationUndoSnapshot) -> Bool {
         guard let note = fetchNote(withID: snapshot.noteID) else {
             refreshCurrentFolderContent()
-            return
+            return true
         }
 
-        note.deletedAt = nil
-        note.folder = snapshot.folderID.flatMap(fetchFolder(withID:))
-        note.modifiedAt = .now
-        note.folder?.modifiedAt = .now
-        try? context.save()
+        do {
+            _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+                for: note,
+                in: context
+            )
+            note.deletedAt = nil
+            note.folder = snapshot.folderID.flatMap(fetchFolder(withID:))
+            note.modifiedAt = .now
+            note.folder?.modifiedAt = .now
+            try saveContext()
+        } catch {
+            context.rollback()
+            syncBatchErrorMessage = "Unable to redo note creation."
+            return false
+        }
         refreshCurrentFolderContent()
+        return true
     }
 
     private func undoFolderCreation(using snapshot: FolderCreationUndoSnapshot) {
@@ -1145,18 +1211,29 @@ final class NotesViewModel: ObservableObject {
         refreshCurrentFolderContent()
     }
 
-    private func undoNoteDeletion(using snapshot: NoteDeletionUndoSnapshot) {
+    private func undoNoteDeletion(using snapshot: NoteDeletionUndoSnapshot) -> Bool {
         guard let note = fetchNote(withID: snapshot.noteID) else {
             refreshCurrentFolderContent()
-            return
+            return true
         }
 
-        note.deletedAt = snapshot.previousDeletedAt
-        note.folder = snapshot.previousFolderID.flatMap(fetchFolder(withID:))
-        note.modifiedAt = .now
-        note.folder?.modifiedAt = .now
-        try? context.save()
+        do {
+            _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+                for: note,
+                in: context
+            )
+            note.deletedAt = snapshot.previousDeletedAt
+            note.folder = snapshot.previousFolderID.flatMap(fetchFolder(withID:))
+            note.modifiedAt = .now
+            note.folder?.modifiedAt = .now
+            try saveContext()
+        } catch {
+            context.rollback()
+            syncBatchErrorMessage = "Unable to undo note deletion."
+            return false
+        }
         refreshCurrentFolderContent()
+        return true
     }
 
     private func redoNoteDeletion(using snapshot: NoteDeletionUndoSnapshot) {
@@ -1176,7 +1253,22 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func undoFolderDeletion(using snapshot: FolderDeletionUndoSnapshot) {
+    private func undoFolderDeletion(using snapshot: FolderDeletionUndoSnapshot) -> Bool {
+        let notesToRestore = snapshot.noteMoves.compactMap {
+            fetchNote(withID: $0.noteID)
+        }
+        do {
+            for note in notesToRestore {
+                _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+                    for: note,
+                    in: context
+                )
+            }
+        } catch {
+            context.rollback()
+            syncBatchErrorMessage = "Unable to undo folder deletion."
+            return false
+        }
         var recreatedFolders: [UUID: Folder] = [:]
 
         for folderRecord in snapshot.folders.sorted(by: { $0.depth < $1.depth }) {
@@ -1200,8 +1292,15 @@ final class NotesViewModel: ObservableObject {
             note.modifiedAt = .now
         }
 
-        try? context.save()
+        do {
+            try saveContext()
+        } catch {
+            context.rollback()
+            syncBatchErrorMessage = "Unable to undo folder deletion."
+            return false
+        }
         refreshCurrentFolderContent()
+        return true
     }
 
     private func redoFolderDeletion(using snapshot: FolderDeletionUndoSnapshot) {
@@ -1695,6 +1794,10 @@ final class NotesViewModel: ObservableObject {
             currentNoteID: currentNoteID,
             currentFolderID: currentFolderID
         )
+        guard result.outcomes.first?.shouldAcknowledge == true else {
+            isolatedContext.rollback()
+            throw LegacyIncomingIsolatedApplyFailure.nonAcknowledgeableOutcome
+        }
         var noteSnapshot = try legacyIncomingNoteSnapshot(for: change, in: isolatedContext)
         if let cleanBaseSnapshot = try cleanBaseLegacyIncomingNoteSnapshot(for: change),
            result.preservedConflicts.isEmpty {
@@ -1788,6 +1891,9 @@ final class NotesViewModel: ObservableObject {
         _ change: SyncChange,
         noteSnapshot: LegacyIncomingNoteSnapshot?
     ) throws {
+        if let noteSnapshot {
+            try applyLegacyIncomingNoteSnapshot(noteSnapshot, in: context)
+        }
         switch change.entityType {
         case .collection:
             if let payload = try? MyRAMSyncPayloadCoding.decodeFolder(from: change.payload) {
@@ -1797,9 +1903,7 @@ final class NotesViewModel: ObservableObject {
                 }
             }
         case .item:
-            if let noteSnapshot {
-                try applyLegacyIncomingNoteSnapshot(noteSnapshot, in: context)
-            }
+            break
         case .marker:
             if let payload = try? MyRAMSyncPayloadCoding.decodePinnedThought(from: change.payload) {
                 _ = try fetchPinnedThought(withID: payload.id, in: context)
@@ -1880,9 +1984,23 @@ final class NotesViewModel: ObservableObject {
         for change: SyncChange,
         in context: ModelContext
     ) throws -> LegacyIncomingNoteSnapshot? {
-        guard change.entityType == .item,
-              let payload = try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload),
-              let note = try fetchNote(withID: payload.id, in: context) else {
+        let noteID: UUID?
+        switch change.entityType {
+        case .item:
+            noteID = (try? MyRAMSyncPayloadCoding.decodeNote(from: change.payload))?.id
+        case .conflict:
+            guard let payload = try? MyRAMSyncPayloadCoding.decodeSyncConflict(
+                from: change.payload
+            ), payload.action == .resolved,
+            payload.conflict?.field == .noteContent else {
+                return nil
+            }
+            noteID = payload.conflict?.entityID
+        case .collection, .marker, .attachment:
+            noteID = nil
+        }
+        guard let noteID,
+              let note = try fetchNote(withID: noteID, in: context) else {
             return nil
         }
         return LegacyIncomingNoteSnapshot(
@@ -1903,23 +2021,41 @@ final class NotesViewModel: ObservableObject {
         in context: ModelContext,
         savesContext: Bool = true
     ) throws {
-        let note = try fetchNote(withID: snapshot.id, in: context) ?? Note()
-        if note.modelContext == nil {
+        let folder = try snapshot.folderID.flatMap {
+            try fetchFolder(withID: $0, in: context)
+        }
+        let existingNote = try fetchNote(withID: snapshot.id, in: context)
+        let note: Note
+        if let existingNote {
+            note = existingNote
+            _ = try NoteSequenceStateFullBodyIntegration.replaceBody(
+                of: note,
+                with: snapshot.content,
+                in: context
+            )
+        } else {
+            note = Note(
+                title: snapshot.title,
+                content: snapshot.content
+            )
             note.id = snapshot.id
-            context.insert(note)
+            let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+                noteID: snapshot.id,
+                body: snapshot.content
+            )
+            _ = try NoteSequenceStateFullBodyIntegration.insertNewNote(
+                note,
+                preparedState: prepared,
+                in: context
+            )
         }
         note.title = snapshot.title
-        note.content = snapshot.content
         note.richTextContentData = snapshot.richTextContentData
         note.isPinned = snapshot.isPinned
         note.createdAt = snapshot.createdAt
         note.modifiedAt = snapshot.modifiedAt
         note.deletedAt = snapshot.deletedAt
-        if let folderID = snapshot.folderID {
-            note.folder = try fetchFolder(withID: folderID, in: context)
-        } else {
-            note.folder = nil
-        }
+        note.folder = folder
         if savesContext, context.hasChanges {
             try context.save()
         }
@@ -2366,12 +2502,17 @@ final class NotesViewModel: ObservableObject {
             throw NoteImportError.unsupportedFormat
         }
 
-        let importedNotes = manifest.notes.compactMap(importNote)
-        guard !importedNotes.isEmpty else {
-            throw NoteImportError.noImportableNotes
+        let importedNotes: [Note]
+        do {
+            importedNotes = try manifest.notes.compactMap { try importNote(from: $0) }
+            guard !importedNotes.isEmpty else {
+                throw NoteImportError.noImportableNotes
+            }
+            try saveContext()
+        } catch {
+            context.rollback()
+            throw error
         }
-
-        try context.save()
         refreshCurrentFolderContent()
         selectNote(importedNotes[0])
         return importedNotes
@@ -2532,16 +2673,25 @@ final class NotesViewModel: ObservableObject {
             }
     }
 
-    private func importNote(from noteRecord: ExportManifestNote) -> Note? {
+    private func importNote(from noteRecord: ExportManifestNote) throws -> Note? {
         if noteRecord.deletedAt != nil {
             return nil
         }
 
         let folder = folder(forPath: noteRecord.folderPath)
-        let note = Note(title: noteRecord.title, content: noteRecord.content, folder: folder)
+        let note = Note(title: noteRecord.title, content: noteRecord.content)
         note.createdAt = Self.date(from: noteRecord.createdAt) ?? .now
         note.modifiedAt = Self.date(from: noteRecord.modifiedAt) ?? .now
-        context.insert(note)
+        let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: note.id,
+            body: note.content
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.insertNewNote(
+            note,
+            preparedState: prepared,
+            in: context
+        )
+        note.folder = folder
 
         let pinnedThoughts = noteRecord.pinnedThoughts.sorted {
             if $0.order != $1.order {
