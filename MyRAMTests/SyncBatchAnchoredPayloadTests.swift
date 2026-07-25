@@ -109,11 +109,18 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
             counter: 10
         )
 
-        XCTAssertEqual(deleteValue(change).payload.deletedElementIDSpans, [
+        let evidence = deleteValue(change)
+        XCTAssertEqual(evidence.noteID, noteID)
+        XCTAssertEqual(evidence.utf16Offset, 0)
+        XCTAssertEqual(evidence.utf16Length, 2)
+        XCTAssertEqual(evidence.expectedText, "AB")
+        XCTAssertEqual(evidence.modifiedAt, modifiedAt)
+        XCTAssertEqual(evidence.baseContentHash, hash("AB"))
+        XCTAssertEqual(evidence.payload.operationID, operation(10))
+        XCTAssertEqual(evidence.payload.deletedElementIDSpans, [
             try span(first),
             try span(second)
         ])
-        XCTAssertEqual(deleteValue(change).payload.operationID, operation(10))
     }
 
     func testDeleteWithinOneRunProducesOneSpan() throws {
@@ -225,7 +232,7 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
         }
     }
 
-    func testAdapterDoesNotMutateStateOnSuccessOrFailure() throws {
+    func testInsertAndDeleteAdaptersDoNotMutateStateOnSuccessOrFailure() throws {
         let value = try state(text: "AB")
         let original = value
 
@@ -233,6 +240,27 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
         XCTAssertEqual(value, original)
 
         XCTAssertThrowsError(try inserted(offset: 3, text: "x", state: value))
+        XCTAssertEqual(value, original)
+
+        _ = try deleted(
+            offset: 0,
+            length: 2,
+            expectedText: "AB",
+            state: value
+        )
+        XCTAssertEqual(value, original)
+
+        XCTAssertThrowsError(try deleted(
+            offset: 0,
+            length: 2,
+            expectedText: "ZZ",
+            state: value
+        )) {
+            XCTAssertEqual(
+                $0 as? SyncBatchAnchoredPayloadAdapterError,
+                .expectedTextMismatch(noteID: noteID)
+            )
+        }
         XCTAssertEqual(value, original)
     }
 

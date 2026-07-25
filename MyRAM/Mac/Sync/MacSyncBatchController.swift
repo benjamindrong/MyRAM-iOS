@@ -26,6 +26,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private let serviceType = "myram-sync"
     private let peerID: MCPeerID
     private let session: MCSession
+    /// Keeps batch transport observable in tests without making capability policy configurable.
+    private let connectedPeersProvider: () -> [MCPeerID]
+    private let sendBatchDataOperation:
+        (Data, [MCPeerID], MCSessionSendDataMode) throws -> Void
     private let advertiser: MCNearbyServiceAdvertiser
     private let browser: MCNearbyServiceBrowser
     private let accumulator: MacSyncBatchAccumulator
@@ -44,13 +48,36 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         startsNetworking: Bool = true,
         legacyReceiver: MacLegacySyncReceiver? = nil,
         startAdvertisingOperation: (() -> Void)? = nil,
-        startBrowsingOperation: (() -> Void)? = nil
+        startBrowsingOperation: (() -> Void)? = nil,
+        connectedPeersProvider: (() -> [MCPeerID])? = nil,
+        sendBatchDataOperation:
+            ((Data, [MCPeerID], MCSessionSendDataMode) throws -> Void)? = nil
     ) {
         let identity = MacSyncDeviceIdentityProvider().currentIdentity()
-        peerID = MCPeerID(displayName: "\(identity.displayName)|\(identity.id.uuidString)")
-        session = MCSession(peer: peerID, securityIdentity: nil, encryptionPreference: .required)
-        advertiser = MCNearbyServiceAdvertiser(peer: peerID, discoveryInfo: nil, serviceType: serviceType)
-        browser = MCNearbyServiceBrowser(peer: peerID, serviceType: serviceType)
+        let retainedPeerID = MCPeerID(
+            displayName: "\(identity.displayName)|\(identity.id.uuidString)"
+        )
+        let retainedSession = MCSession(
+            peer: retainedPeerID,
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+        peerID = retainedPeerID
+        session = retainedSession
+        self.connectedPeersProvider =
+            connectedPeersProvider ?? {
+                retainedSession.connectedPeers
+            }
+        self.sendBatchDataOperation =
+            sendBatchDataOperation ?? { data, peers, mode in
+                try retainedSession.send(data, toPeers: peers, with: mode)
+            }
+        advertiser = MCNearbyServiceAdvertiser(
+            peer: retainedPeerID,
+            discoveryInfo: nil,
+            serviceType: serviceType
+        )
+        browser = MCNearbyServiceBrowser(peer: retainedPeerID, serviceType: serviceType)
         accumulator = MacSyncBatchAccumulator(originDeviceID: identity.id)
         self.context = context
         unsentBatches = unsentBatchQueue ?? FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
@@ -89,7 +116,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     var hasConnectedPeers: Bool {
-        !session.connectedPeers.isEmpty
+        !connectedPeersProvider().isEmpty
     }
 
     /// Starts the retained nearby-sync transports exactly once after startup migration succeeds.
@@ -163,14 +190,14 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     private func sendQueuedBatch(_ batch: SyncBatch) async -> Bool {
-        let peers = session.connectedPeers
+        let peers = connectedPeersProvider()
         guard !peers.isEmpty else {
             return false
         }
 
         do {
             let data = try MultipeerSyncMessageCoding.encodeBatchEnvelope(SyncBatchEnvelope(batch: batch))
-            try session.send(data, toPeers: peers, with: .reliable)
+            try sendBatchDataOperation(data, peers, .reliable)
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
             return true
@@ -181,7 +208,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     private func flushUnsentBatches() async {
-        guard !session.connectedPeers.isEmpty, !unsentBatches.isEmpty else { return }
+        guard !connectedPeersProvider().isEmpty, !unsentBatches.isEmpty else { return }
 
         for batch in unsentBatches.pendingBatches {
             _ = await sendQueuedBatch(batch)
@@ -195,7 +222,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private func sendBatchAcknowledgement(batchID: SyncBatchID, to peerID: MCPeerID) throws {
         let payload = try JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
         let data = try MultipeerSyncMessageCoding.encode(kind: .batchAcknowledgement, payload: payload)
-        try session.send(data, toPeers: [peerID], with: .reliable)
+        try sendBatchDataOperation(data, [peerID], .reliable)
     }
 
     func receive(_ batch: MacSyncBatch) {
