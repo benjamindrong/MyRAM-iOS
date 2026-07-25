@@ -786,7 +786,7 @@ final class MyRAMTests: XCTestCase {
     func testIncomingPhotoAttachmentSyncAddsAndRemovesAttachment() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
         let attachmentID = UUID()
         let createdAt = Date(timeIntervalSince1970: 500)
         let addPayload = try JSONEncoder().encode(
@@ -6662,12 +6662,12 @@ final class MyRAMTests: XCTestCase {
         vm.createFolder(named: "Work")
         let workFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Work" }))
         vm.openFolder(workFolder)
-        let nestedNote = vm.createNewNote()
+        let nestedNote = vm.createNewNote()!
 
         XCTAssertEqual(nestedNote.folder?.id, workFolder.id)
 
         vm.navigateToParentFolder()
-        let rootNote = vm.createNewNote()
+        let rootNote = vm.createNewNote()!
         XCTAssertNil(rootNote.folder)
     }
 
@@ -6675,13 +6675,13 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
 
-        let rootNote = vm.createNewNote()
+        let rootNote = vm.createNewNote()!
 
         vm.createFolder(named: "Work")
         let workFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Work" }))
         vm.openFolder(workFolder)
-        let pinnedWorkNote = vm.createNewNote()
-        let unpinnedWorkNote = vm.createNewNote()
+        let pinnedWorkNote = vm.createNewNote()!
+        let unpinnedWorkNote = vm.createNewNote()!
         vm.setNotePinned(pinnedWorkNote, isPinned: true)
 
         vm.navigateToParentFolder()
@@ -6697,20 +6697,20 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
 
-        let rootNote = vm.createNewNote()
+        let rootNote = vm.createNewNote()!
 
         vm.createFolder(named: "Work")
         let workFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Work" }))
         vm.openFolder(workFolder)
-        let pinnedWorkNote = vm.createNewNote()
-        let unpinnedWorkNote = vm.createNewNote()
+        let pinnedWorkNote = vm.createNewNote()!
+        let unpinnedWorkNote = vm.createNewNote()!
         vm.setNotePinned(pinnedWorkNote, isPinned: true)
 
         vm.navigateToParentFolder()
         vm.createFolder(named: "Personal")
         let personalFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Personal" }))
         vm.openFolder(personalFolder)
-        let personalNote = vm.createNewNote()
+        let personalNote = vm.createNewNote()!
 
         let visibleNoteIDs = Set(vm.notes.map(\.id))
         XCTAssertTrue(visibleNoteIDs.contains(pinnedWorkNote.id))
@@ -6723,8 +6723,8 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
 
-        let regularRootNote = vm.createNewNote()
-        let pinnedRootNote = vm.createNewNote()
+        let regularRootNote = vm.createNewNote()!
+        let pinnedRootNote = vm.createNewNote()!
         vm.setNotePinned(pinnedRootNote, isPinned: true)
         vm.createFolder(named: "Work")
         let workFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Work" }))
@@ -6748,12 +6748,12 @@ final class MyRAMTests: XCTestCase {
         let folderB = try XCTUnwrap(vm.folders.first(where: { $0.name == "B" }))
 
         vm.openFolder(folderA)
-        _ = vm.createNewNote()
-        let deletedNote = vm.createNewNote()
+        _ = vm.createNewNote()!
+        let deletedNote = vm.createNewNote()!
         vm.deleteNote(deletedNote)
 
         vm.openFolder(folderB)
-        _ = vm.createNewNote()
+        _ = vm.createNewNote()!
 
         XCTAssertEqual(vm.activeNoteCount(in: folderA), 1)
         XCTAssertEqual(vm.activeNoteCount(in: folderB), 1)
@@ -6770,9 +6770,9 @@ final class MyRAMTests: XCTestCase {
         let childFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Child" }))
 
         vm.openFolder(childFolder)
-        _ = vm.createNewNote()
-        _ = vm.createNewNote()
-        let deletedNestedNote = vm.createNewNote()
+        _ = vm.createNewNote()!
+        _ = vm.createNewNote()!
+        let deletedNestedNote = vm.createNewNote()!
         vm.deleteNote(deletedNestedNote)
 
         XCTAssertEqual(vm.activeNoteCount(in: childFolder), 2)
@@ -6867,11 +6867,11 @@ final class MyRAMTests: XCTestCase {
         vm.createFolder(named: "Projects")
         let parent = try XCTUnwrap(vm.folders.first(where: { $0.name == "Projects" }))
         vm.openFolder(parent)
-        let parentNote = vm.createNewNote()
+        let parentNote = vm.createNewNote()!
         vm.createFolder(named: "Client")
         let child = try XCTUnwrap(vm.folders.first(where: { $0.name == "Client" }))
         vm.openFolder(child)
-        let childNote = vm.createNewNote()
+        let childNote = vm.createNewNote()!
 
         vm.deleteFolder(parent, preserveNotes: true)
 
@@ -6892,7 +6892,7 @@ final class MyRAMTests: XCTestCase {
         vm.createFolder(named: "Temp")
         let folder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Temp" }))
         vm.openFolder(folder)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
 
         vm.deleteFolder(folder, preserveNotes: false)
 
@@ -6918,7 +6918,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
 
-        let rootNote = vm.createNewNote()
+        let rootNote = vm.createNewNote()!
         XCTAssertNil(rootNote.folder)
 
         vm.createFolder(named: "Work")
@@ -6940,7 +6940,7 @@ final class MyRAMTests: XCTestCase {
         let folderB = try XCTUnwrap(vm.folders.first(where: { $0.name == "B" }))
 
         vm.openFolder(folderA)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
         XCTAssertEqual(note.folder?.id, folderA.id)
 
         vm.moveNote(note, to: folderB)
@@ -6956,7 +6956,7 @@ final class MyRAMTests: XCTestCase {
         vm.createFolder(named: "B")
         let folderB = try XCTUnwrap(vm.folders.first(where: { $0.name == "B" }))
         vm.openFolder(folderA)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
 
         vm.moveNote(note, to: folderB)
         XCTAssertEqual(note.folder?.id, folderB.id)
@@ -6973,7 +6973,7 @@ final class MyRAMTests: XCTestCase {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
 
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
         XCTAssertNil(note.deletedAt)
 
         vm.undoLastAction()
@@ -7006,7 +7006,7 @@ final class MyRAMTests: XCTestCase {
     func testAddPhotoAttachmentStoresImageOnNote() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
         let imageData = try makeJPEGData()
 
         vm.addPhotoAttachment(to: note, imageData: imageData)
@@ -7020,7 +7020,7 @@ final class MyRAMTests: XCTestCase {
     func testRemovePhotoAttachmentDeletesAttachment() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
         let imageData = try makeJPEGData()
 
         vm.addPhotoAttachment(to: note, imageData: imageData)
@@ -7036,7 +7036,7 @@ final class MyRAMTests: XCTestCase {
     func testPinnedThoughtsCanBeAddedEditedDraggedAndUnpinnedWithoutChangingBody() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
         note.content = "Body text"
         note.richTextContentData = Data("rich body".utf8)
 
@@ -7067,7 +7067,7 @@ final class MyRAMTests: XCTestCase {
     func testPinnedTextCommitTrimsOnlyWhenUpdatingModel() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
         let pinnedText = try XCTUnwrap(vm.addPinnedThought(to: note, text: "Initial"))
 
         vm.updatePinnedThought(pinnedText, text: "One space ")
@@ -7567,8 +7567,8 @@ final class MyRAMTests: XCTestCase {
     func testPinnedThoughtExpansionStateDefaultsCollapsedAndPersistsPerSessionNote() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let firstNote = vm.createNewNote()
-        let secondNote = vm.createNewNote()
+        let firstNote = vm.createNewNote()!
+        let secondNote = vm.createNewNote()!
 
         XCTAssertFalse(vm.isPinnedThoughtsSectionExpanded(for: firstNote))
         XCTAssertFalse(vm.isPinnedThoughtsSectionExpanded(for: secondNote))
@@ -7586,7 +7586,7 @@ final class MyRAMTests: XCTestCase {
     func testPinnedParagraphCanBeDeletedWithoutRestoringToBody() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
         note.content = "Body text"
         note.richTextContentData = Data("rich body".utf8)
 
@@ -7663,7 +7663,7 @@ final class MyRAMTests: XCTestCase {
                 configurationName: storeName
             )
             let vm = NotesViewModel(context: container.mainContext)
-            let note = vm.createNewNote()
+            let note = vm.createNewNote()!
             noteID = note.id
 
             _ = vm.addPinnedThought(to: note, text: "Remember this")
@@ -7690,7 +7690,7 @@ final class MyRAMTests: XCTestCase {
                 configurationName: storeName
             )
             let vm = NotesViewModel(context: container.mainContext)
-            let note = vm.createNewNote()
+            let note = vm.createNewNote()!
             let imageData = try makeJPEGData()
 
             vm.addPhotoAttachment(to: note, imageData: imageData)
@@ -7711,7 +7711,7 @@ final class MyRAMTests: XCTestCase {
     func testUpdateNoteKeepsExistingNotesWithoutAttachmentsCompatible() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
 
         vm.updateNote(note, title: "Title", content: "Content")
 
@@ -7723,7 +7723,7 @@ final class MyRAMTests: XCTestCase {
     func testUpdateNotePersistsRichTextDataAlongsidePlainText() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
 
         let attributedText = NSAttributedString(
             string: "Styled note",
@@ -7956,7 +7956,7 @@ final class MyRAMTests: XCTestCase {
     func testExportNotesForSharingSingleNoteCreatesStructuredJSONFileAndImageFiles() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
         vm.updateNote(note, title: "Daily Log", content: "UTF-8 test ✅")
         note.createdAt = Date(timeIntervalSince1970: 1000)
         note.modifiedAt = Date(timeIntervalSince1970: 2000)
@@ -7994,12 +7994,12 @@ final class MyRAMTests: XCTestCase {
     func testExportNotesForSharingMultipleNotesIncludesFolderPathsAndPhotos() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note1 = vm.createNewNote()
+        let note1 = vm.createNewNote()!
         vm.updateNote(note1, title: "First Note", content: "Body A")
 
         vm.createFolder(named: "Work")
         let workFolder = try XCTUnwrap(vm.folders.first(where: { $0.name == "Work" }))
-        let note2 = vm.createNewNote()
+        let note2 = vm.createNewNote()!
         vm.updateNote(note2, title: "Second Note", content: "Body B")
         vm.moveNote(note2, to: workFolder)
         let imageData = try makeJPEGData()
@@ -8030,7 +8030,7 @@ final class MyRAMTests: XCTestCase {
         let sourceVM = NotesViewModel(context: sourceContainer.mainContext)
         sourceVM.createFolder(named: "Work")
         let workFolder = try XCTUnwrap(sourceVM.folders.first(where: { $0.name == "Work" }))
-        let sourceNote = sourceVM.createNewNote()
+        let sourceNote = sourceVM.createNewNote()!
         sourceVM.updateNote(sourceNote, title: "Imported Plan", content: "Follow up tomorrow")
         sourceVM.moveNote(sourceNote, to: workFolder)
         let pinnedThought = try XCTUnwrap(sourceVM.addPinnedThought(to: sourceNote, text: "Call Sam"))
@@ -8060,9 +8060,9 @@ final class MyRAMTests: XCTestCase {
     func testSetNotePinnedMovesNoteAheadOfUnpinnedNotes() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let older = vm.createNewNote()
+        let older = vm.createNewNote()!
         vm.updateNote(older, title: "Older", content: "")
-        let newer = vm.createNewNote()
+        let newer = vm.createNewNote()!
         vm.updateNote(newer, title: "Newer", content: "")
 
         vm.setNotePinned(older, isPinned: true)
@@ -8074,7 +8074,7 @@ final class MyRAMTests: XCTestCase {
     func testUndoLastActionRestoresSoftDeletedNote() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
 
         vm.deleteNote(note)
         XCTAssertNotNil(note.deletedAt)
@@ -8090,7 +8090,7 @@ final class MyRAMTests: XCTestCase {
     func testRedoLastActionReappliesSoftDeletedNote() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let vm = NotesViewModel(context: container.mainContext)
-        let note = vm.createNewNote()
+        let note = vm.createNewNote()!
 
         vm.deleteNote(note)
         vm.undoLastAction()
@@ -8113,7 +8113,7 @@ final class MyRAMTests: XCTestCase {
         vm.createFolder(named: "Child")
         let child = try XCTUnwrap(vm.folders.first(where: { $0.name == "Child" }))
         vm.openFolder(child)
-        let nestedNote = vm.createNewNote()
+        let nestedNote = vm.createNewNote()!
 
         vm.deleteFolder(parent, preserveNotes: false)
         XCTAssertNotNil(nestedNote.deletedAt)
@@ -8139,7 +8139,7 @@ final class MyRAMTests: XCTestCase {
         vm.createFolder(named: "Child")
         let child = try XCTUnwrap(vm.folders.first(where: { $0.name == "Child" }))
         vm.openFolder(child)
-        let nestedNote = vm.createNewNote()
+        let nestedNote = vm.createNewNote()!
 
         vm.deleteFolder(parent, preserveNotes: false)
         vm.undoLastAction()

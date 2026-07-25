@@ -1023,7 +1023,7 @@ struct NotesListView: View {
             .disabled(!canPerformCombinedUndo && !canPerformCombinedRedo)
         case .newNote:
             compactActionButton(systemImage: "square.and.pencil", identifier: "notes-topbar-new-note") {
-                selectedNote = vm.createNewNoteIfPossible()
+                selectedNote = vm.createNewNote()
             }
         case .newFolder:
             compactActionButton(systemImage: "folder.badge.plus", identifier: "notes-topbar-new-folder") {
@@ -1050,7 +1050,7 @@ struct NotesListView: View {
             .disabled(!canPerformCombinedUndo && !canPerformCombinedRedo)
         case .newNote:
             Button {
-                selectedNote = vm.createNewNoteIfPossible()
+                selectedNote = vm.createNewNote()
             } label: {
                 Label("New Note", systemImage: "square.and.pencil")
             }

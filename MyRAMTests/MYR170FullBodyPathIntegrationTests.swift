@@ -78,7 +78,7 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
             try context.save()
         })
 
-        let note = try XCTUnwrap(viewModel.createNewNoteIfPossible())
+        let note = try XCTUnwrap(viewModel.createNewNote())
 
         XCTAssertTrue(observedAtomicModels)
         XCTAssertTrue(viewModel.hasUndoableAction)
@@ -92,7 +92,7 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
             saveContext: { throw MYR170PathTestError.injected }
         )
 
-        XCTAssertNil(viewModel.createNewNoteIfPossible())
+        XCTAssertNil(viewModel.createNewNote())
         XCTAssertFalse(viewModel.hasUndoableAction)
         XCTAssertTrue(try fetchNotes(in: container).isEmpty)
         XCTAssertTrue(try fetchStateRecords(in: container).isEmpty)

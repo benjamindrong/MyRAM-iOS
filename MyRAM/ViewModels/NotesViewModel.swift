@@ -354,16 +354,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     @discardableResult
-    func createNewNote() -> Note {
-        guard let note = createNewNoteIfPossible() else {
-            preconditionFailure("The default note-creation path unexpectedly failed.")
-        }
-        return note
-    }
-
-    /// Lets interactive callers remain on the current note when atomic creation cannot save.
-    @discardableResult
-    func createNewNoteIfPossible() -> Note? {
+    func createNewNote() -> Note? {
         let note = Note()
         let previousFolderModifiedAt = currentFolder?.modifiedAt
         do {

@@ -927,7 +927,7 @@ struct NoteEditorView: View {
         toolbarBridge?.newNote = {
             commitActivePinnedThoughtEdit()
             commitPendingNoteEdit()
-            if let newNote = vm.createNewNoteIfPossible() {
+            if let newNote = vm.createNewNote() {
                 onNewNote(newNote)
             }
         }
@@ -1179,7 +1179,7 @@ struct NoteEditorView: View {
             topBarActionButton(systemImage: "square.and.pencil", identifier: "topbar-new-note") {
                 commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
-                if let newNote = vm.createNewNoteIfPossible() {
+                if let newNote = vm.createNewNote() {
                     onNewNote(newNote)
                 }
             }
@@ -2171,7 +2171,7 @@ struct NoteEditorView: View {
             Button {
                 commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
-                if let newNote = vm.createNewNoteIfPossible() {
+                if let newNote = vm.createNewNote() {
                     onNewNote(newNote)
                 }
             } label: {
