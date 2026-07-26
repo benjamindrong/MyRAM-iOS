@@ -319,14 +319,42 @@ is not a delivery dependency or verification gap.
 
 ## Command-level verification
 
-All Xcode test commands ran sequentially.
+All Xcode test commands ran sequentially. The commands below are the literal
+commands executed; no test selector or audit condition is delegated to another
+document.
 
 ### Baseline refresh and branch publication
 
-The approved Gate 1 shell ran `git fetch origin`, `git switch main`,
-`git pull --ff-only origin main`, equality checks for `HEAD` and `origin/main`,
-`git switch -c MYR-172-verify-dark-anchored-sequence-foundations`, and
-`git push -u origin MYR-172-verify-dark-anchored-sequence-foundations`.
+```bash
+set -euo pipefail
+
+REPO_ROOT="/Users/Shared/Development/XcodeProjects/MyRAM"
+BRANCH="MYR-172-verify-dark-anchored-sequence-foundations"
+cd "$REPO_ROOT"
+
+git status --short
+test -z "$(git status --porcelain)"
+
+git fetch origin
+git switch main
+git pull --ff-only origin main
+
+git status --short
+test -z "$(git status --porcelain)"
+
+git rev-parse HEAD
+git rev-parse origin/main
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+
+BASELINE_SHA="$(git rev-parse HEAD)"
+printf 'MYR-172 baseline: %s\n' "$BASELINE_SHA"
+
+git switch -c "$BRANCH"
+git push -u origin "$BRANCH"
+
+git branch --show-current
+git status --short
+```
 
 - Exit status: 0
 - Refreshed baseline: `cc952ff391f404eb2f1c195fb9ebdc8f57398009`
@@ -334,7 +362,18 @@ The approved Gate 1 shell ran `git fetch origin`, `git switch main`,
 
 ### In-repository package
 
-Run from `Packages/AnchoredSequenceCore`:
+```bash
+set -euo pipefail
+REPO_ROOT="/Users/Shared/Development/XcodeProjects/MyRAM"
+cd "$REPO_ROOT/Packages/AnchoredSequenceCore"
+
+swift test --filter SyncSequenceIdentityTests
+swift test --filter SyncActorSequenceReservationTests
+swift test --filter SyncTextSequenceStateTests
+swift test --filter SyncTextLegacyBootstrapTests
+swift test --filter SyncTextOperationPayloadTests
+swift test
+```
 
 | Command | Exit | Tests | Failures |
 | --- | ---: | ---: | ---: |
@@ -349,9 +388,42 @@ No package warning or error was recorded.
 
 ### Standalone extraction
 
-The package was copied with `rsync -a`, excluding `.build` and `.swiftpm`, into
-a fresh `MYR-172-AnchoredSequenceCore.XXXXXX` directory. The copied root
-contained only `Package.swift`, `Sources`, and `Tests`.
+```bash
+set -euo pipefail
+REPO_ROOT="/Users/Shared/Development/XcodeProjects/MyRAM"
+SOURCE_PACKAGE="$REPO_ROOT/Packages/AnchoredSequenceCore"
+EXTRACTION_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/MYR-172-AnchoredSequenceCore.XXXXXX")"
+EXTRACTED_PACKAGE="$EXTRACTION_ROOT/AnchoredSequenceCore"
+trap 'rm -rf "$EXTRACTION_ROOT"' EXIT
+
+mkdir -p "$EXTRACTED_PACKAGE"
+rsync -a \
+  --exclude '.build' \
+  --exclude '.swiftpm' \
+  "$SOURCE_PACKAGE/" \
+  "$EXTRACTED_PACKAGE/"
+
+find "$EXTRACTED_PACKAGE" \
+  -maxdepth 1 \
+  -mindepth 1 \
+  -exec basename {} \; |
+  sort
+
+cd "$EXTRACTED_PACKAGE"
+swift package dump-package > "$EXTRACTION_ROOT/dump-package.json"
+swift package show-dependencies --format json > "$EXTRACTION_ROOT/dependencies.json"
+python3 -c '
+import json
+import sys
+
+payload = json.load(open(sys.argv[1]))
+print("Standalone dependencies:", len(payload.get("dependencies", [])))
+' "$EXTRACTION_ROOT/dependencies.json"
+swift build
+swift test
+```
+
+The copied root contained only `Package.swift`, `Sources`, and `Tests`.
 
 | Command | Exit | Result |
 | --- | ---: | --- |
@@ -365,17 +437,146 @@ recorded.
 
 ### iOS host
 
-Destination:
-`platform=iOS Simulator,id=1C546BCF-C14F-42C8-A4F1-B53026F3183C`
+The simulator was selected and booted with:
 
-| Command | Exit | Tests | Failures |
-| --- | ---: | ---: | ---: |
-| `xcodebuild ... test -only-testing:MyRAMTests/SyncBatchAnchoredPayloadTests` | 0 | 15 | 0 |
-| Focused seven-suite Stage 1 `xcodebuild ... test` command from the proposal | 0 | 144 | 0 |
-| Compatibility invocation 1 | 0 | 33 | 0 |
-| Compatibility invocation 2 | 0 | 33 | 0 |
-| Complete `xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination "$IOS_DESTINATION" test` | 0 | 915 application + 6 UI | 0 |
-| `xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' build` | 0 | N/A | N/A |
+```bash
+set -euo pipefail
+REPO_ROOT="/Users/Shared/Development/XcodeProjects/MyRAM"
+cd "$REPO_ROOT"
+
+SIMULATOR_UDID="$(
+  xcrun simctl list devices available -j |
+  python3 -c '
+import json
+import re
+import sys
+
+payload = json.load(sys.stdin)
+candidates = []
+for runtime_id, devices in payload.get("devices", {}).items():
+    match = re.search(r"\.iOS-(\d+)-(\d+)(?:-(\d+))?$", runtime_id)
+    if match is None:
+        continue
+    version = tuple(int(part or 0) for part in match.groups())
+    for device in devices:
+        if not device.get("isAvailable", True):
+            continue
+        name = device.get("name", "")
+        if not name.startswith("iPhone"):
+            continue
+        candidates.append((
+            device.get("state") == "Booted",
+            version,
+            name,
+            device["udid"],
+        ))
+
+if not candidates:
+    raise SystemExit("No available iPhone simulator found")
+
+candidates.sort(key=lambda item: (
+    not item[0],
+    tuple(-part for part in item[1]),
+    item[2],
+    item[3],
+))
+print(candidates[0][3])
+'
+)"
+
+test -n "$SIMULATOR_UDID"
+IOS_DESTINATION="platform=iOS Simulator,id=$SIMULATOR_UDID"
+xcrun simctl boot "$SIMULATOR_UDID" 2>/dev/null || true
+xcrun simctl bootstatus "$SIMULATOR_UDID" -b
+printf 'Using iOS destination: %s\n' "$IOS_DESTINATION"
+```
+
+The resolved destination was
+`platform=iOS Simulator,id=1C546BCF-C14F-42C8-A4F1-B53026F3183C`.
+
+The new seam test was first verified with:
+
+```bash
+xcodebuild \
+  -project MyRAM.xcodeproj \
+  -scheme MyRAM \
+  -destination 'platform=iOS Simulator,id=1C546BCF-C14F-42C8-A4F1-B53026F3183C' \
+  test \
+  -only-testing:MyRAMTests/SyncBatchAnchoredPayloadTests
+```
+
+- Exit status: 0
+- Tests: 15
+- Failures: 0
+- Warnings: three non-material AppIntents metadata-skip messages
+
+The complete focused iOS Stage 1 matrix was:
+
+```bash
+xcodebuild \
+  -project MyRAM.xcodeproj \
+  -scheme MyRAM \
+  -destination 'platform=iOS Simulator,id=1C546BCF-C14F-42C8-A4F1-B53026F3183C' \
+  test \
+  -only-testing:MyRAMTests/SyncBatchAnchoredPayloadTests \
+  -only-testing:MyRAMTests/MyRAMSyncOperationIDAllocatorTests \
+  -only-testing:MyRAMTests/SwiftDataNoteSequenceStateStoreTests \
+  -only-testing:MyRAMTests/NoteSequenceStateBootstrapMigratorTests \
+  -only-testing:MyRAMTests/NoteSequenceStateFullBodyIntegrationTests \
+  -only-testing:MyRAMTests/MYR170FullBodyPathIntegrationTests \
+  -only-testing:MyRAMTests/PendingSyncRecoveryTests
+```
+
+- Exit status: 0
+- Tests: 144
+- Failures: 0
+- Warnings: 0
+
+The compatibility suite was executed twice with this literal loop:
+
+```bash
+for ATTEMPT in 1 2; do
+  printf 'Compatibility invocation %s\n' "$ATTEMPT"
+  xcodebuild \
+    -project MyRAM.xcodeproj \
+    -scheme MyRAM \
+    -destination 'platform=iOS Simulator,id=1C546BCF-C14F-42C8-A4F1-B53026F3183C' \
+    test \
+    -only-testing:MyRAMTests/SyncBatchPayloadCompatibilityTests
+done
+```
+
+- Invocation 1: exit 0; 33 tests; 0 failures; 0 warnings
+- Invocation 2: exit 0; 33 tests; 0 failures; 0 warnings
+
+The complete iOS scheme, including UI tests, was:
+
+```bash
+xcodebuild \
+  -project MyRAM.xcodeproj \
+  -scheme MyRAM \
+  -destination 'platform=iOS Simulator,id=1C546BCF-C14F-42C8-A4F1-B53026F3183C' \
+  test
+```
+
+- Exit status: 0
+- Tests: 915 application tests plus 6 UI tests
+- Failures: 0
+- Warnings: 0
+
+The iOS build was:
+
+```bash
+xcodebuild \
+  -project MyRAM.xcodeproj \
+  -scheme MyRAM \
+  -destination 'generic/platform=iOS Simulator' \
+  build
+```
+
+- Exit status: 0
+- Result: `** BUILD SUCCEEDED **`
+- Warnings: one non-material AppIntents metadata-skip message
 
 The focused anchored-payload build logged three instances of the non-material
 AppIntents metadata message: metadata extraction was skipped because the target
@@ -385,11 +586,58 @@ warnings or errors.
 
 ### Native Mac host
 
-| Command | Exit | Tests | Failures |
-| --- | ---: | ---: | ---: |
-| Focused nine-suite `MyRAMMac` Stage 1 `xcodebuild ... test` command from the proposal | 0 | 143 | 0 |
-| Complete `xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' test` | 0 | 530 | 0 |
-| `xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' build` | 0 | N/A | N/A |
+The focused native Mac Stage 1 matrix was:
+
+```bash
+xcodebuild \
+  -project MyRAM.xcodeproj \
+  -scheme MyRAMMac \
+  -destination 'platform=macOS' \
+  test \
+  -only-testing:MyRAMMacTests/MyRAMSyncOperationIDAllocatorTests \
+  -only-testing:MyRAMMacTests/SwiftDataNoteSequenceStateStoreTests \
+  -only-testing:MyRAMMacTests/NoteSequenceStateBootstrapMigratorTests \
+  -only-testing:MyRAMMacTests/NoteSequenceStateFullBodyIntegrationTests \
+  -only-testing:MyRAMMacTests/MYR170MacFullBodyPathIntegrationTests \
+  -only-testing:MyRAMMacTests/MacStartupCoordinatorTests \
+  -only-testing:MyRAMMacTests/MacLegacySyncReceiverTests \
+  -only-testing:MyRAMMacTests/MacSyncBatchControllerTests \
+  -only-testing:MyRAMMacTests/MacSyncConvergenceCoordinatorTests
+```
+
+- Exit status: 0
+- Tests: 143
+- Failures: 0
+- Warnings: two non-material AppIntents metadata-skip messages
+
+The complete native Mac scheme was:
+
+```bash
+xcodebuild \
+  -project MyRAM.xcodeproj \
+  -scheme MyRAMMac \
+  -destination 'platform=macOS' \
+  test
+```
+
+- Exit status: 0
+- Tests: 530
+- Failures: 0
+- Warnings: 0
+
+The native Mac build was:
+
+```bash
+xcodebuild \
+  -project MyRAM.xcodeproj \
+  -scheme MyRAMMac \
+  -destination 'platform=macOS' \
+  build
+```
+
+- Exit status: 0
+- Result: `** BUILD SUCCEEDED **`
+- Warnings: one non-material AppIntents metadata-skip message
 
 The focused Mac build logged two instances of the same non-material AppIntents
 metadata-skip message. The final Mac build logged it once. The complete native
@@ -398,39 +646,197 @@ Mac scheme log contained no warnings or errors.
 ### Static-audit invocation note
 
 The first combined version/static-audit shell was attempted without elevated
-CoreSimulator access. `xcrun simctl list devices available` exited 1 because the
-sandbox could not connect to CoreSimulatorService, and the shell stopped before
-running any repository audit. The identical read-only audit was rerun with the
-required access and exited 0. No pass result is claimed from the sandbox-failed
-invocation.
+CoreSimulator access. The exact commands reached were:
 
-### Static audit results
+```bash
+set -euo pipefail
+cd /Users/Shared/Development/XcodeProjects/MyRAM
+xcodebuild -version
+swift --version
+xcrun simctl list devices available |
+  rg -n 'iPhone 16 Pro.*1C546BCF-C14F-42C8-A4F1-B53026F3183C'
+```
 
-- `rg` package-import inventory: exit 0; imports limited to Foundation and
-  CryptoKit.
-- Prohibited-import conditional audit: exit 0; no MyRAM, MyRAMMac,
-  NearbySyncCore, SwiftData, SwiftUI, UIKit, AppKit, or
-  MultipeerConnectivity import.
-- Per-source `project.pbxproj` membership loop: exit 0; no package source file
-  directly referenced.
-- Package product reference inventory: exit 0; Xcode integration uses the
-  `AnchoredSequenceCore` package product.
-- Public declaration inventory: exit 0; 104 public declaration lines reviewed.
-- Disabled-capability audit: exit 0;
-  `SyncBatchAnchoredPayloadCapability.isEnabled` remains exactly `false`.
-- Production adapter-caller audit: exit 0; no production
-  `makeInsertedChange` or `makeDeletedChange` caller.
-- Reservation and anchored-case inventories: exit 0; reservation is exposed by
-  the allocator boundary only, and anchored cases are declarations or
-  fail-closed handling.
-- Transport constant and V2 audit: exit 0; both schema constants are `1`, the
-  outer kind is `myram.batchSync.v1`, and no V2 behavior was found.
-- Baseline diff audit: exit 0; no production, package, project, native Mac test,
-  or UI test diff.
-- `git diff --check`: exit 0.
-- Architectural-conformance source and test inventory: exit 0; all six required
-  dimensions mapped to current implementation, established rationale, exact
-  proving tests, and a no-contradiction conclusion.
+`xcodebuild -version` and `swift --version` exited 0. The simulator pipeline
+exited 1 because the sandbox could not connect to CoreSimulatorService, so
+`set -e` stopped the shell before any repository audit. No pass result is
+claimed from that invocation.
+
+### Successful static audit commands
+
+Version and simulator identity:
+
+```bash
+xcodebuild -version
+swift --version
+xcrun simctl list devices available |
+  rg -n 'iPhone 16 Pro.*1C546BCF-C14F-42C8-A4F1-B53026F3183C'
+```
+
+- Exit status: 0
+- Result: Xcode 26.5 build 17F42; Apple Swift 6.3.2; selected iPhone 16
+  Pro found
+
+Package imports and prohibited-import failure condition:
+
+```bash
+set -euo pipefail
+REPO_ROOT="/Users/Shared/Development/XcodeProjects/MyRAM"
+CORE_SOURCES="$REPO_ROOT/Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore"
+
+rg -n '^\s*import\s+' "$CORE_SOURCES"
+
+if rg -n '^\s*import\s+(MyRAM|MyRAMMac|NearbySyncCore|SwiftData|SwiftUI|UIKit|AppKit|MultipeerConnectivity)\b' "$CORE_SOURCES"; then
+  echo 'Prohibited AnchoredSequenceCore import found' >&2
+  exit 1
+fi
+```
+
+- Exit status: 0
+- Result: imports limited to Foundation and CryptoKit; prohibited match absent
+
+Direct Xcode source membership and package product linkage:
+
+```bash
+set -euo pipefail
+REPO_ROOT="/Users/Shared/Development/XcodeProjects/MyRAM"
+PBXPROJ="$REPO_ROOT/MyRAM.xcodeproj/project.pbxproj"
+CORE_SOURCES="$REPO_ROOT/Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore"
+
+while IFS= read -r SOURCE_FILE; do
+  BASENAME="$(basename "$SOURCE_FILE")"
+  if rg -n -F "$BASENAME" "$PBXPROJ"; then
+    echo "Core source is directly referenced by Xcode project: $BASENAME" >&2
+    exit 1
+  fi
+done < <(find "$CORE_SOURCES" -maxdepth 1 -type f -name '*.swift' | sort)
+
+rg -n 'AnchoredSequenceCore' "$PBXPROJ" | head -30
+```
+
+- Exit status: 0
+- Result: no direct source-file membership; expected local package and product
+  references present
+
+Public API inventory:
+
+```bash
+set -euo pipefail
+REPO_ROOT="/Users/Shared/Development/XcodeProjects/MyRAM"
+CORE_SOURCES="$REPO_ROOT/Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore"
+
+rg -n '^\s*public\s+' "$CORE_SOURCES" |
+  tee /private/tmp/MYR-172-public-api.txt
+wc -l < /private/tmp/MYR-172-public-api.txt
+```
+
+- Exit status: 0
+- Result: 104 public declaration lines reviewed and classified
+
+Dark capability, production capture, reservation, and anchored-case inventories:
+
+```bash
+set -euo pipefail
+REPO_ROOT="/Users/Shared/Development/XcodeProjects/MyRAM"
+cd "$REPO_ROOT"
+
+rg -n 'static let isEnabled = false' \
+  MyRAM/Sync/Batch/SyncBatchAnchoredPayloadPolicy.swift
+
+if rg -n 'static let isEnabled = true|SyncBatchAnchoredPayloadCapability\.isEnabled\s*=\s*true' MyRAM; then
+  echo 'Anchored payload capability was enabled' >&2
+  exit 1
+fi
+
+if rg -n 'SyncBatchAnchoredPayloadAdapter\.make(Inserted|Deleted)Change' MyRAM --glob '*.swift'; then
+  echo 'Production anchored capture caller found' >&2
+  exit 1
+fi
+
+rg -n 'reserveOperationID\(' MyRAM --glob '*.swift' || true
+rg -n 'noteBodyTextInsertedAnchored|noteBodyTextDeletedAnchored' MyRAM --glob '*.swift'
+```
+
+- Exit status: 0
+- Result: capability remained false; no production anchored adapter caller;
+  reservation remained at the allocator boundary; anchored cases were
+  declarations or fail-closed handling
+
+Transport constants, encoder inventory, V2 failure condition, and baseline diff:
+
+```bash
+set -euo pipefail
+REPO_ROOT="/Users/Shared/Development/XcodeProjects/MyRAM"
+cd "$REPO_ROOT"
+
+rg -n -C 2 'currentSchemaVersion|myram\.batchSync\.v1|JSONEncoder\(\)|outputFormatting' \
+  MyRAM --glob '*.swift' |
+  rg 'SyncBatchEnvelope|MultipeerSyncMessageEnvelope|myram\.batchSync\.v1|currentSchemaVersion|outputFormatting|JSONEncoder' |
+  head -120
+
+if rg -n 'batchSync\.v2|currentSchemaVersion\s*=\s*2' MyRAM --glob '*.swift'; then
+  echo 'V2 transport behavior found' >&2
+  exit 1
+fi
+
+git diff --name-only cc952ff391f404eb2f1c195fb9ebdc8f57398009 --
+
+test -z "$(git diff --name-only \
+  cc952ff391f404eb2f1c195fb9ebdc8f57398009 -- \
+  MyRAM \
+  Packages/AnchoredSequenceCore \
+  Packages/NearbySyncCore \
+  MyRAM.xcodeproj/project.pbxproj \
+  MyRAMMacTests \
+  MyRAMUITests)"
+```
+
+- Exit status: 0
+- Result: both schema constants were `1`; outer kind was
+  `myram.batchSync.v1`; no V2 value or transport option change; no prohibited
+  baseline diff
+
+Architectural-conformance source and test inventory:
+
+```bash
+rg -n '^\s*func test' \
+  Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncSequenceIdentityTests.swift \
+  Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncActorSequenceReservationTests.swift \
+  Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceStateTests.swift \
+  Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextOperationPayloadTests.swift \
+  Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextLegacyBootstrapTests.swift \
+  MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift \
+  MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift \
+  MyRAMTests/NoteSequenceStateBootstrapMigratorTests.swift \
+  MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift \
+  MyRAMTests/MYR170FullBodyPathIntegrationTests.swift
+
+rg -n \
+  'public struct SyncOperationID|public struct SyncTextElementID|public struct SyncTextInsertionOrigin|public struct SyncTextSequenceRun|public struct SyncTextSequenceFragment|public struct SyncTextSequenceState|operationAnchor|tombstonedUTF16Count|visibleText|isOrderedBefore|makeState|requireExactBody|loadOrBootstrap' \
+  Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore \
+  MyRAM/Sync/AnchoredSequence \
+  --glob '*.swift'
+
+rg -n -C 3 \
+  'identity|anchor|sibling|tombstone|bootstrap|UTF-16|dark|capability|compatib' \
+  docs/MYR-171-completion-verification-evidence.md
+```
+
+- Exit status: 0
+- Result: all six required dimensions mapped to current implementation,
+  established rationale, exact proving tests, and a no-contradiction conclusion
+
+Project integrity and whitespace checks:
+
+```bash
+plutil -lint MyRAM.xcodeproj/project.pbxproj
+xcodebuild -project MyRAM.xcodeproj -list
+git diff --check
+```
+
+- Exit status: 0
+- Result: project file valid; MyRAM and MyRAMMac schemes present; no whitespace
+  errors
 
 ## Static, target-membership, and extraction audits
 
