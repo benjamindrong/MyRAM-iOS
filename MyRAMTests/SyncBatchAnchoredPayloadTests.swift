@@ -43,6 +43,79 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
         XCTAssertEqual(evidence.payload.operationID, operation(12))
     }
 
+    func testBootstrapBackedVisibleRunChainProducesExpectedAnchorsIncludingMidRun() throws {
+        let bootstrap = try NoteSequenceStateBootstrapAdapter.makeInitialState(
+            noteID: noteID,
+            body: "ABCD"
+        )
+        let originalBootstrap = bootstrap
+        XCTAssertEqual(bootstrap.runs.count, 1)
+        let bootstrapRun = try XCTUnwrap(bootstrap.runs.first)
+        let bootstrapOperationID = bootstrapRun.operationID
+        let insertedOperationID = operation(172)
+        let insertedRun = try run(
+            insertedOperationID,
+            left: element(bootstrapOperationID, 1),
+            right: element(bootstrapOperationID, 2),
+            text: "xy"
+        )
+
+        // The fragment chain crosses both run boundaries while retaining a mid-run gap.
+        let assembled = try SyncTextSequenceState(
+            runs: [bootstrapRun, insertedRun].sorted {
+                SyncOperationIDCanonicalOrder.isOrderedBefore(
+                    $0.operationID,
+                    $1.operationID
+                )
+            },
+            fragments: [
+                try fragment(bootstrapOperationID, start: 0, length: 2),
+                try fragment(insertedOperationID, start: 0, length: 2),
+                try fragment(bootstrapOperationID, start: 2, length: 2)
+            ]
+        )
+        let originalAssembled = assembled
+        let captureCounter: UInt64 = 200
+        let changes = try [0, 2, 3, 4, 6].map {
+            try inserted(
+                offset: $0,
+                text: "z",
+                state: assembled,
+                counter: captureCounter
+            )
+        }
+
+        XCTAssertEqual(assembled.visibleText, "ABxyCD")
+        XCTAssertEqual(assembled.visibleUTF16Count, 6)
+        XCTAssertEqual(assembled.tombstonedUTF16Count, 0)
+        XCTAssertEqual(
+            changes.map { insertValue($0).payload.anchor },
+            [
+                .before(try element(bootstrapOperationID, 0)),
+                try .between(
+                    left: element(bootstrapOperationID, 1),
+                    right: element(insertedOperationID, 0)
+                ),
+                try .between(
+                    left: element(insertedOperationID, 0),
+                    right: element(insertedOperationID, 1)
+                ),
+                try .between(
+                    left: element(insertedOperationID, 1),
+                    right: element(bootstrapOperationID, 2)
+                ),
+                .after(try element(bootstrapOperationID, 3))
+            ]
+        )
+        XCTAssertTrue(
+            changes.allSatisfy {
+                insertValue($0).payload.operationID == operation(captureCounter)
+            }
+        )
+        XCTAssertEqual(assembled, originalAssembled)
+        XCTAssertEqual(bootstrap, originalBootstrap)
+    }
+
     func testInsertBesideTombstoneUsesVisibleNeighbors() throws {
         let parent = operation(1)
         let tombstone = operation(2)
