@@ -45,6 +45,9 @@ final class MacSyncConvergenceCoordinator {
     /// true, the sender no longer needs to keep the batch around for redelivery,
     /// even if convergence processing of its contents is deferred or blocked.
     func durablyCaptureIncomingBatch(_ batch: SyncBatch) -> Bool {
+        guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(batch)) != nil else {
+            return false
+        }
         guard !batch.changes.isEmpty else { return true }
         if pendingIncomingQueue.contains(batch.id) { return true }
         do {
@@ -56,10 +59,16 @@ final class MacSyncConvergenceCoordinator {
     }
 
     func submitRemoteBatch(_ batch: SyncBatch) async {
+        guard (try? SyncBatchAnchoredPayloadPolicy.validateConvergence(batch)) != nil else {
+            return
+        }
         await handle(outcome: runtime.submitRemoteBatch(batch), sourceBatch: batch)
     }
 
     func submitLocalObligation(_ obligation: SyncConvergenceLocalObligation) async {
+        guard (try? SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)) != nil else {
+            return
+        }
         await handle(outcome: runtime.submitLocalObligation(obligation), sourceBatch: obligation.batch)
     }
 

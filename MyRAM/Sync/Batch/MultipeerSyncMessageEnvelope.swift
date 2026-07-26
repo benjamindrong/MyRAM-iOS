@@ -30,7 +30,11 @@ struct MultipeerSyncMessageEnvelope: Codable, Equatable, Sendable {
 
 enum MultipeerSyncMessageCoding {
     static func encodeBatchEnvelope(_ envelope: SyncBatchEnvelope) throws -> Data {
-        try encode(kind: .batchSync, payload: JSONEncoder().encode(envelope))
+        try SyncBatchAnchoredPayloadPolicy.validateTransportEncode(envelope.batch)
+        return try encode(
+            kind: .batchSync,
+            payload: JSONEncoder().encode(envelope)
+        )
     }
 
     static func encode(kind: MultipeerSyncMessageKind, payload: Data) throws -> Data {

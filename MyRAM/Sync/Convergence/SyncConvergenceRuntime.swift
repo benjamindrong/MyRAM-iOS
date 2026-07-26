@@ -103,6 +103,11 @@ final class SyncConvergenceRuntime {
     }
 
     func submitRemoteBatch(_ batch: SyncBatch) async -> SyncConvergenceRuntimeOutcome {
+        do {
+            try SyncBatchAnchoredPayloadPolicy.validateConvergence(batch)
+        } catch {
+            return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .invalidMergePlan))
+        }
         guard !batch.changes.isEmpty else { return .drained(appliedBatchIDs: []) }
         if !convergenceQueue.contains(batch.id) {
             do {
@@ -115,11 +120,17 @@ final class SyncConvergenceRuntime {
     }
 
     func submitLocalBatch(_ batch: SyncBatch) async -> SyncConvergenceRuntimeOutcome {
-        await submitLocalObligation(SyncConvergenceLocalObligation(legacyBatch: batch))
+        do {
+            try SyncBatchAnchoredPayloadPolicy.validateConvergence(batch)
+        } catch {
+            return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .invalidMergePlan))
+        }
+        return await submitLocalObligation(SyncConvergenceLocalObligation(legacyBatch: batch))
     }
 
     func submitLocalObligation(_ obligation: SyncConvergenceLocalObligation) async -> SyncConvergenceRuntimeOutcome {
         do {
+            try SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)
             if case .captured = obligation.evidence {
                 _ = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
             }
@@ -223,6 +234,14 @@ final class SyncConvergenceRuntime {
                 blockedOrigins: blockedOrigins
             ) {
                 let batch = convergenceQueue.pendingBatches[candidateIndex]
+                do {
+                    try SyncBatchAnchoredPayloadPolicy.validateConvergence(batch)
+                } catch {
+                    return .blocked(SyncBatchDrainFailure(
+                        batchID: batch.id,
+                        kind: .invalidMergePlan
+                    ))
+                }
                 switch await satisfyIncomingLocalBoundary(
                     batchID: batch.id,
                     noteIDs: Self.bodyMutationNoteIDs(in: batch)
@@ -404,6 +423,14 @@ final class SyncConvergenceRuntime {
             let obligation = localObligationQueue.pendingObligations[candidateIndex]
             attemptedBatchIDs.insert(obligation.id)
             do {
+                try SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)
+            } catch {
+                return .blocked(SyncBatchDrainFailure(
+                    batchID: obligation.id,
+                    kind: .invalidMergePlan
+                ))
+            }
+            do {
                 _ = try admitQueuedLocalObligation(obligation)
             } catch SyncConvergenceTransactionFailure.staleAuthoritativeState {
                 guard case .legacyMissing = obligation.evidence else {
@@ -501,6 +528,7 @@ final class SyncConvergenceRuntime {
         _ obligation: SyncConvergenceLocalObligation
     ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
         do {
+            try SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)
             try localObligationQueue.enqueue(obligation)
             _ = try admitQueuedLocalObligation(obligation)
             return .evidenceRegistered(obligationID: obligation.id)
@@ -565,6 +593,7 @@ final class SyncConvergenceRuntime {
 
     private func registerLocalEvidence(for obligation: SyncConvergenceLocalObligation) throws {
         let batch = obligation.batch
+        try SyncBatchAnchoredPayloadPolicy.validateOffsetReplay(batch)
         let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
 #if DEBUG
         localEvidenceMetrics?.recordSubmittedBodyOperations(
@@ -602,7 +631,9 @@ final class SyncConvergenceRuntime {
         for (operationIndex, capturedChange) in capturedChanges.enumerated() {
             guard SyncConvergenceLocalEvidenceCapture.isBodyTextOperation(capturedChange.change) else { continue }
             guard let evidence = capturedChange.evidence else {
-                throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: Self.noteID(for: capturedChange.change))
+                throw SyncConvergenceTransactionFailure.invalidMergePlan(
+                    noteID: capturedChange.change.noteID
+                )
             }
             let expectedRecord = try retainedOperationRecord(
                 batch: obligation.batch,
@@ -633,7 +664,9 @@ final class SyncConvergenceRuntime {
         for (operationIndex, capturedChange) in capturedChanges.enumerated() {
             guard SyncConvergenceLocalEvidenceCapture.isBodyTextOperation(capturedChange.change) else { continue }
             guard let evidence = capturedChange.evidence else {
-                throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: Self.noteID(for: capturedChange.change))
+                throw SyncConvergenceTransactionFailure.invalidMergePlan(
+                    noteID: capturedChange.change.noteID
+                )
             }
             let record = try retainedOperationRecord(
                 batch: batch,
@@ -661,17 +694,20 @@ final class SyncConvergenceRuntime {
         for batch: SyncBatch,
         transaction: SwiftDataSyncConvergencePersistenceTransaction
     ) throws {
-        let indexedBodyChanges = batch.changes.enumerated().compactMap { index, change -> (Int, SyncBatchChange)? in
+        var indexedBodyChanges: [(Int, SyncBatchChange)] = []
+        for (index, change) in batch.changes.enumerated() {
             switch change {
             case .noteBodyTextInserted, .noteBodyTextDeleted:
-                return (index, change)
+                indexedBodyChanges.append((index, change))
+            case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
+                throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
             case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
-                return nil
+                continue
             }
         }
         guard !indexedBodyChanges.isEmpty else { return }
 
-        for (noteID, changes) in Dictionary(grouping: indexedBodyChanges, by: { Self.noteID(for: $0.1) }).sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+        for (noteID, changes) in Dictionary(grouping: indexedBodyChanges, by: { $0.1.noteID }).sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             guard var currentBody = try transaction.loadNote(id: noteID)?.body else {
                 continue
             }
@@ -790,8 +826,9 @@ final class SyncConvergenceRuntime {
                 canonicalReplayKey: replayKey,
                 modifiedAt: deleted.modifiedAt
             )
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
-            throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: Self.noteID(for: change))
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+            throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
         }
     }
 
@@ -816,8 +853,9 @@ final class SyncConvergenceRuntime {
             let mutable = NSMutableString(string: currentBody)
             mutable.insert(expectedText, at: deleted.utf16Offset)
             return String(mutable)
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
-            throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: Self.noteID(for: change))
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+            throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
         }
     }
 
@@ -831,6 +869,8 @@ final class SyncConvergenceRuntime {
         case .noteBodyTextDeleted(let deleted):
             declared = deleted.baseContentHash
             noteID = deleted.noteID
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
+            throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
         case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return
         }
@@ -1070,11 +1110,11 @@ final class SyncConvergenceRuntime {
     }
 
     private static func affectedNoteIDs(in batch: SyncBatch) -> Set<UUID> {
-        Set(batch.changes.map(Self.noteID(for:)))
+        Set(batch.changes.map(\.noteID))
     }
 
     private static func affectedNoteIDs(in batches: [SyncBatch]) -> Set<UUID> {
-        Set(batches.flatMap { $0.changes.map(Self.noteID(for:)) })
+        Set(batches.flatMap { $0.changes.map(\.noteID) })
     }
 
     private static func bodyMutationNoteIDs(in batch: SyncBatch) -> Set<UUID> {
@@ -1086,6 +1126,10 @@ final class SyncConvergenceRuntime {
                 return payload.noteID
             case .noteBodyTextDeleted(let payload):
                 return payload.noteID
+            case .noteBodyTextInsertedAnchored(let payload):
+                return payload.noteID
+            case .noteBodyTextDeletedAnchored(let payload):
+                return payload.noteID
             case .noteBodyReconciled(let payload):
                 return payload.noteID
             case .noteLifecycleChanged(let payload):
@@ -1094,23 +1138,6 @@ final class SyncConvergenceRuntime {
                 return nil
             }
         })
-    }
-
-    private static func noteID(for change: SyncBatchChange) -> UUID {
-        switch change {
-        case .noteCreated(let change):
-            return change.noteID
-        case .noteTitleChanged(let change):
-            return change.noteID
-        case .noteBodyTextInserted(let change):
-            return change.noteID
-        case .noteBodyTextDeleted(let change):
-            return change.noteID
-        case .noteBodyReconciled(let change):
-            return change.noteID
-        case .noteLifecycleChanged(let change):
-            return change.noteID
-        }
     }
 
     private static func operationKind(for change: SyncBatchChange) -> String {
@@ -1123,6 +1150,10 @@ final class SyncConvergenceRuntime {
             return "insert"
         case .noteBodyTextDeleted:
             return "delete"
+        case .noteBodyTextInsertedAnchored:
+            return "anchoredInsert"
+        case .noteBodyTextDeletedAnchored:
+            return "anchoredDelete"
         case .noteBodyReconciled:
             return "reconcile"
         case .noteLifecycleChanged:

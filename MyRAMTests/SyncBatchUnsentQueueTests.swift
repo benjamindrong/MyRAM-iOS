@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import XCTest
 
 #if os(macOS)
@@ -105,12 +106,12 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(queue.pendingBatches, [second])
     }
 
-    func testFileBackedQueueReloadsPersistedBatchesWithStableIDs() {
+    func testFileBackedQueueReloadsPersistedBatchesWithStableIDs() throws {
         let fileURL = temporaryQueueFileURL()
         let batch = makeBatch(idSuffix: 1)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        queue.enqueue(batch)
+        try queue.enqueueDurably(batch)
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
         XCTAssertEqual(reloadedQueue.pendingBatches, [batch])
@@ -156,31 +157,31 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.queuePosition), [0, 1, 2, 3])
     }
 
-    func testFileBackedQueueDeduplicatesByStableBatchID() {
+    func testFileBackedQueueDeduplicatesByStableBatchID() throws {
         let fileURL = temporaryQueueFileURL()
         let batch = makeBatch(idSuffix: 1)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        queue.enqueue(batch)
-        queue.enqueue(batch)
+        try queue.enqueueDurably(batch)
+        try queue.enqueueDurably(batch)
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
         XCTAssertEqual(reloadedQueue.pendingBatches, [batch])
     }
 
-    func testFileBackedQueueKeepsMostRecentBatchesWithinLimitAfterReload() {
+    func testFileBackedQueueRejectsOverflowWithoutEvictionAfterReload() throws {
         let fileURL = temporaryQueueFileURL()
         let first = makeBatch(idSuffix: 1)
         let second = makeBatch(idSuffix: 2)
         let third = makeBatch(idSuffix: 3)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 2)
 
-        queue.enqueue(first)
-        queue.enqueue(second)
-        queue.enqueue(third)
+        try queue.enqueueDurably(first)
+        try queue.enqueueDurably(second)
+        XCTAssertThrowsError(try queue.enqueueDurably(third))
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 2)
 
-        XCTAssertEqual(reloadedQueue.pendingBatches, [second, third])
+        XCTAssertEqual(reloadedQueue.pendingBatches, [first, second])
     }
 
     func testFileBackedIncomingQueueRejectsCapacityWithoutChangingExistingEntries() throws {
@@ -272,30 +273,30 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [batch])
     }
 
-    func testFileBackedQueueRemovesOnlySuccessfulIDsFromDisk() {
+    func testFileBackedQueueRemovesOnlySuccessfulIDsFromDisk() throws {
         let fileURL = temporaryQueueFileURL()
         let first = makeBatch(idSuffix: 1)
         let second = makeBatch(idSuffix: 2)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        queue.enqueue(first)
-        queue.enqueue(second)
+        try queue.enqueueDurably(first)
+        try queue.enqueueDurably(second)
         queue.removeAll(withIDs: [first.id])
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
         XCTAssertEqual(reloadedQueue.pendingBatches, [second])
     }
 
-    func testFileBackedQueueReloadsAfterPartialRemoval() {
+    func testFileBackedQueueReloadsAfterPartialRemoval() throws {
         let fileURL = temporaryQueueFileURL()
         let first = makeBatch(idSuffix: 1)
         let second = makeBatch(idSuffix: 2)
         let third = makeBatch(idSuffix: 3)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        queue.enqueue(first)
-        queue.enqueue(second)
-        queue.enqueue(third)
+        try queue.enqueueDurably(first)
+        try queue.enqueueDurably(second)
+        try queue.enqueueDurably(third)
         queue.removeAll(withIDs: [first.id, third.id])
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
@@ -307,47 +308,47 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         let batch = makeBatch(idSuffix: 1)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        queue.enqueue(batch)
+        try queue.enqueueDurably(batch)
         let originalData = try Data(contentsOf: fileURL)
         queue.removeAll(withIDs: [UUID(uuidString: "00000000-0000-0000-0000-000000999999")!])
 
         XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
     }
 
-    func testFileBackedQueueFirstReturnsOldestPersistedBatch() {
+    func testFileBackedQueueFirstReturnsOldestPersistedBatch() throws {
         let fileURL = temporaryQueueFileURL()
         let first = makeBatch(idSuffix: 1)
         let second = makeBatch(idSuffix: 2)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        queue.enqueue(first)
-        queue.enqueue(second)
+        try queue.enqueueDurably(first)
+        try queue.enqueueDurably(second)
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
         XCTAssertEqual(reloadedQueue.first, first)
         XCTAssertEqual(reloadedQueue.pendingBatches, [first, second])
     }
 
-    func testFileBackedQueueContainsDetectsPersistedBatchID() {
+    func testFileBackedQueueContainsDetectsPersistedBatchID() throws {
         let fileURL = temporaryQueueFileURL()
         let batch = makeBatch(idSuffix: 1)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        queue.enqueue(batch)
+        try queue.enqueueDurably(batch)
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
         XCTAssertTrue(reloadedQueue.contains(batch.id))
         XCTAssertFalse(reloadedQueue.contains(UUID(uuidString: "00000000-0000-0000-0000-000000999999")!))
     }
 
-    func testFileBackedQueueRemoveDropsOneBatchFromDisk() {
+    func testFileBackedQueueRemoveDropsOneBatchFromDisk() throws {
         let fileURL = temporaryQueueFileURL()
         let first = makeBatch(idSuffix: 1)
         let second = makeBatch(idSuffix: 2)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        queue.enqueue(first)
-        queue.enqueue(second)
+        try queue.enqueueDurably(first)
+        try queue.enqueueDurably(second)
         queue.remove(first.id)
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
@@ -364,7 +365,7 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
 
         XCTAssertTrue(queue.isEmpty)
         XCTAssertEqual(queue.snapshot().health, .corrupt)
-        queue.enqueue(batch)
+        XCTAssertThrowsError(try queue.enqueueDurably(batch))
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
         XCTAssertEqual(try Data(contentsOf: fileURL), corruptData)
@@ -384,7 +385,7 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
 
         XCTAssertTrue(queue.isEmpty)
         XCTAssertEqual(queue.snapshot().health, .unsupportedVersion(999))
-        queue.enqueue(supportedBatch)
+        XCTAssertThrowsError(try queue.enqueueDurably(supportedBatch))
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
         XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
@@ -399,14 +400,14 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(queue.pendingCount, 0)
     }
 
-    func testFileBackedQueueReportsHealthyReloadSnapshot() {
+    func testFileBackedQueueReportsHealthyReloadSnapshot() throws {
         let fileURL = temporaryQueueFileURL()
         let first = makeBatch(idSuffix: 1)
         let second = makeBatch(idSuffix: 2)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        queue.enqueue(first)
-        queue.enqueue(second)
+        try queue.enqueueDurably(first)
+        try queue.enqueueDurably(second)
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
         XCTAssertEqual(
@@ -423,8 +424,8 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         let replacement = makeBatch(idSuffix: 3)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        queue.enqueue(first)
-        queue.enqueue(second)
+        try queue.enqueueDurably(first)
+        try queue.enqueueDurably(second)
         try queue.replacePendingBatches([replacement])
 
         let reloadedQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
@@ -439,7 +440,7 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         let replacement = makeBatch(idSuffix: 2)
         let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
 
-        queue.enqueue(first)
+        try queue.enqueueDurably(first)
         queue.injectPersistenceFailureForNextWrite()
         XCTAssertThrowsError(try queue.replacePendingBatches([replacement])) { error in
             XCTAssertEqual(error as? FileBackedSyncBatchQueue.QueueError, .persistenceFailed)
@@ -460,14 +461,161 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         }
     }
 
-    func testFileBackedQueueCanRunMemoryOnlyWithNilFileURL() {
+    func testFileBackedQueueCanRunMemoryOnlyWithNilFileURL() throws {
         let batch = makeBatch(idSuffix: 1)
         let queue = FileBackedSyncBatchQueue(fileURL: nil, limit: 10)
 
-        queue.enqueue(batch)
+        try queue.enqueueDurably(batch)
         queue.removeAll(withIDs: [UUID(uuidString: "00000000-0000-0000-0000-000000999999")!])
 
         XCTAssertEqual(queue.pendingBatches, [batch])
+    }
+
+    func testBothDurableQueuesRejectAnchoredAdmissionWithoutMutation() throws {
+        let batchQueueURL = temporaryQueueFileURL()
+        let obligationQueueURL = temporaryQueueFileURL()
+        try createDirectory(for: batchQueueURL)
+        try createDirectory(for: obligationQueueURL)
+        let legacy = makeBatch(idSuffix: 1)
+        let anchored = try makeAnchoredInsertBatchForTest()
+        let batchQueue = FileBackedSyncBatchQueue(fileURL: batchQueueURL, limit: 10)
+        let obligationQueue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: obligationQueueURL,
+            limit: 10
+        )
+        try batchQueue.enqueueDurably(legacy)
+        try obligationQueue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: legacy)
+        )
+        let originalBatchQueueData = try Data(contentsOf: batchQueueURL)
+        let originalObligationQueueData = try Data(contentsOf: obligationQueueURL)
+
+        XCTAssertThrowsError(try batchQueue.enqueueDurably(anchored)) {
+            XCTAssertEqual(
+                $0 as? SyncBatchAnchoredPayloadPolicyError,
+                .anchoredPayloadDisabled(
+                    boundary: .durableQueue,
+                    noteID: anchored.changes[0].noteID
+                )
+            )
+        }
+        XCTAssertThrowsError(try obligationQueue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: anchored)
+        )) {
+            XCTAssertEqual(
+                $0 as? SyncBatchAnchoredPayloadPolicyError,
+                .anchoredPayloadDisabled(
+                    boundary: .durableQueue,
+                    noteID: anchored.changes[0].noteID
+                )
+            )
+        }
+        XCTAssertEqual(batchQueue.pendingBatches, [legacy])
+        XCTAssertEqual(obligationQueue.pendingBatches, [legacy])
+        XCTAssertEqual(try Data(contentsOf: batchQueueURL), originalBatchQueueData)
+        XCTAssertEqual(
+            try Data(contentsOf: obligationQueueURL),
+            originalObligationQueueData
+        )
+    }
+
+    func testBothDurableQueuesRejectMixedAdmissionWithoutMutation() throws {
+        let legacy = makeBatch(idSuffix: 1)
+        let anchored = try makeAnchoredInsertBatchForTest()
+        let mixed = SyncBatch(
+            id: anchored.id,
+            originDeviceID: anchored.originDeviceID,
+            createdAt: anchored.createdAt,
+            batchSequence: anchored.batchSequence,
+            changes: [
+                .noteBodyTextInserted(.init(
+                    noteID: anchored.changes[0].noteID,
+                    utf16Offset: 0,
+                    text: "A",
+                    modifiedAt: anchored.createdAt
+                )),
+                anchored.changes[0]
+            ]
+        )
+        let batchQueue = FileBackedSyncBatchQueue(fileURL: nil, limit: 10)
+        let obligationQueue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: nil,
+            limit: 10
+        )
+        try batchQueue.enqueueDurably(legacy)
+        try obligationQueue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: legacy)
+        )
+
+        XCTAssertThrowsError(try batchQueue.enqueueDurably(mixed)) {
+            XCTAssertEqual(
+                $0 as? SyncBatchAnchoredPayloadPolicyError,
+                .mixedBodyOperationRepresentations(boundary: .durableQueue)
+            )
+        }
+        XCTAssertThrowsError(try obligationQueue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: mixed)
+        )) {
+            XCTAssertEqual(
+                $0 as? SyncBatchAnchoredPayloadPolicyError,
+                .mixedBodyOperationRepresentations(boundary: .durableQueue)
+            )
+        }
+        XCTAssertEqual(batchQueue.pendingBatches, [legacy])
+        XCTAssertEqual(obligationQueue.pendingBatches, [legacy])
+    }
+
+    func testBothDurableQueuesValidateCompleteReplacementBeforeMutation() throws {
+        let legacy = makeBatch(idSuffix: 1)
+        let anchored = try makeAnchoredInsertBatchForTest()
+        let batchQueue = FileBackedSyncBatchQueue(fileURL: nil, limit: 10)
+        let obligationQueue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: nil,
+            limit: 10
+        )
+        try batchQueue.enqueueDurably(legacy)
+        try obligationQueue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: legacy)
+        )
+
+        XCTAssertThrowsError(
+            try batchQueue.replacePendingBatches([legacy, anchored])
+        )
+        XCTAssertThrowsError(
+            try obligationQueue.replacePendingBatches([legacy, anchored])
+        )
+        XCTAssertEqual(batchQueue.pendingBatches, [legacy])
+        XCTAssertEqual(obligationQueue.pendingBatches, [legacy])
+    }
+
+    func testBothDurableQueuesQuarantinePersistedAnchoredBytes() throws {
+        let fileURL = temporaryQueueFileURL()
+        try createDirectory(for: fileURL)
+        let anchored = try makeAnchoredInsertBatchForTest()
+        try JSONEncoder().encode(
+            TestPersistedSyncBatchQueue(version: 1, batches: [anchored])
+        ).write(to: fileURL)
+        let originalData = try Data(contentsOf: fileURL)
+
+        let batchQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+        XCTAssertEqual(batchQueue.snapshot().health, .unsupportedAnchoredPayload)
+        XCTAssertTrue(batchQueue.pendingBatches.isEmpty)
+        XCTAssertThrowsError(try batchQueue.enqueueDurably(makeBatch(idSuffix: 2)))
+        XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+
+        let obligationQueue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: fileURL,
+            limit: 10
+        )
+        XCTAssertEqual(
+            obligationQueue.snapshot().health,
+            .unsupportedAnchoredPayload
+        )
+        XCTAssertTrue(obligationQueue.pendingBatches.isEmpty)
+        XCTAssertThrowsError(try obligationQueue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 2))
+        ))
+        XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
     }
 
     func testMixedReplayKeysSortLegacyBeforeSequencedThenOperationIndex() {
@@ -572,4 +720,29 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
 private struct TestPersistedSyncBatchQueue: Codable {
     let version: Int
     let batches: [SyncBatch]
+}
+
+func makeAnchoredInsertBatchForTest(
+    id: UUID = UUID(),
+    noteID: UUID = UUID()
+) throws -> SyncBatch {
+    let deviceID = UUID(uuidString: "17100000-0000-0000-0000-0000000000AA")!
+    let operationID = SyncOperationID(deviceID: deviceID, localCounter: 1)
+    let state = try SyncTextSequenceState(runs: [], fragments: [])
+    let change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+        noteID: noteID,
+        utf16Offset: 0,
+        text: "A",
+        modifiedAt: Date(timeIntervalSince1970: 1_710),
+        baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+        operationID: operationID,
+        state: state
+    )
+    return SyncBatch(
+        id: id,
+        originDeviceID: deviceID,
+        createdAt: Date(timeIntervalSince1970: 1_710),
+        batchSequence: 1,
+        changes: [change]
+    )
 }

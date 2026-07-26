@@ -22,6 +22,14 @@ struct SyncConvergencePlanner {
     }
 
     func plan(input: SyncConvergencePlanningInput) -> SyncConvergencePlanningOutcome {
+        do {
+            try SyncBatchAnchoredPayloadPolicy.validateConvergence(input.incomingBatch)
+        } catch SyncBatchAnchoredPayloadPolicyError.anchoredPayloadDisabled(_, let noteID) {
+            return .failedBeforeCommit(.invalidMergePlan(noteID: noteID))
+        } catch {
+            return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
+        }
+
         let currentDigest: String
         do {
             currentDigest = try SyncConvergenceCanonicalBatchDigest.digest(
@@ -154,9 +162,7 @@ struct SyncConvergencePlanner {
                 }
 
             case .noteBodyTextInserted, .noteBodyTextDeleted:
-                guard let noteID = change.noteID else {
-                    return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
-                }
+                let noteID = change.noteID
                 guard !processedBodyNoteIDs.contains(noteID) else {
                     continue
                 }
@@ -195,6 +201,9 @@ struct SyncConvergencePlanner {
                 case .failed(let failure):
                     return .failedBeforeCommit(failure)
                 }
+
+            case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
+                return .failedBeforeCommit(.invalidMergePlan(noteID: change.noteID))
 
             case .noteBodyReconciled:
                 break
@@ -810,6 +819,10 @@ struct CanonicalPayloadDigestFormatV1 {
                 appendOptionalString(delete.expectedText)
                 appendOptionalString(delete.baseContentHash)
                 appendUInt64(SyncConvergenceDateBits.bitPattern(for: delete.modifiedAt))
+            case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
+                throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload(
+                    "anchoredBodyOperation"
+                )
             case .noteBodyReconciled(let reconciliation):
                 appendUInt32(Domain.reconciliation)
                 try appendUUID(reconciliation.noteID)
@@ -1083,7 +1096,7 @@ struct CanonicalPayloadDigestFormatV1 {
 
 struct SyncConvergenceEvidenceSelector {
     func request(for batch: SyncBatch) -> SyncConvergenceEvidenceRequest {
-        let noteIDs = Set(batch.changes.compactMap(\.noteID))
+        let noteIDs = Set(batch.changes.map(\.noteID))
         let requiredHashes = Set(batch.changes.compactMap(\.baseContentHash))
         return SyncConvergenceEvidenceRequest(
             batchID: batch.id,
@@ -1535,7 +1548,8 @@ private struct SyncOperationReplayEngine {
                     operationIdentity: identity
                 )
             ))
-        default:
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return .failed(.invalidMergePlan(noteID: noteID))
         }
     }
@@ -1550,13 +1564,13 @@ private struct SyncOperationReplayEngine {
         for originDeviceIDLowercase: String,
         against appliedForeignEvents: [SyncConvergenceAppliedRebaseEvent]
     ) -> SyncBatchChange {
-        let rebased = rebasedOffset(
-            utf16Offset(of: change),
-            excludingOriginDeviceIDLowercase: originDeviceIDLowercase,
-            against: appliedForeignEvents
-        )
         switch change {
         case .noteBodyTextInserted(let insert):
+            let rebased = rebasedOffset(
+                insert.utf16Offset,
+                excludingOriginDeviceIDLowercase: originDeviceIDLowercase,
+                against: appliedForeignEvents
+            )
             guard rebased != insert.utf16Offset else { return change }
             return .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
                 noteID: insert.noteID,
@@ -1566,6 +1580,11 @@ private struct SyncOperationReplayEngine {
                 baseContentHash: insert.baseContentHash
             ))
         case .noteBodyTextDeleted(let delete):
+            let rebased = rebasedOffset(
+                delete.utf16Offset,
+                excludingOriginDeviceIDLowercase: originDeviceIDLowercase,
+                against: appliedForeignEvents
+            )
             guard rebased != delete.utf16Offset else { return change }
             return .noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
                 noteID: delete.noteID,
@@ -1575,7 +1594,8 @@ private struct SyncOperationReplayEngine {
                 modifiedAt: delete.modifiedAt,
                 baseContentHash: delete.baseContentHash
             ))
-        default:
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return change
         }
     }
@@ -1586,7 +1606,8 @@ private struct SyncOperationReplayEngine {
             insert.utf16Offset
         case .noteBodyTextDeleted(let delete):
             delete.utf16Offset
-        default:
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             0
         }
     }
@@ -2110,7 +2131,7 @@ struct SyncConvergencePlanValidator {
             return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
         }
 
-        let sourceAffectedNoteIDs = Set(input.incomingBatch.changes.compactMap(\.noteID))
+        let sourceAffectedNoteIDs = Set(input.incomingBatch.changes.map(\.noteID))
         let plannedNoteIDs = Set(plan.affectedNotePlans.map(\.noteID))
         guard plannedNoteIDs == sourceAffectedNoteIDs else {
             return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
@@ -2587,39 +2608,11 @@ private extension SyncConvergenceRetainedOperation {
 
 private extension SyncBatch {
     var affectedNoteIDs: Set<UUID> {
-        Set(changes.compactMap(\.noteID))
+        Set(changes.map(\.noteID))
     }
 }
 
 private extension SyncBatchChange {
-    var noteID: UUID? {
-        switch self {
-        case .noteCreated(let change):
-            return change.noteID
-        case .noteTitleChanged(let change):
-            return change.noteID
-        case .noteBodyTextInserted(let change):
-            return change.noteID
-        case .noteBodyTextDeleted(let change):
-            return change.noteID
-        case .noteBodyReconciled(let change):
-            return change.noteID
-        case .noteLifecycleChanged(let change):
-            return change.noteID
-        }
-    }
-
-    var baseContentHash: String? {
-        switch self {
-        case .noteBodyTextInserted(let change):
-            return change.baseContentHash
-        case .noteBodyTextDeleted(let change):
-            return change.baseContentHash
-        default:
-            return nil
-        }
-    }
-
     var operationKind: String {
         switch self {
         case .noteCreated:
@@ -2630,6 +2623,10 @@ private extension SyncBatchChange {
             return "insert"
         case .noteBodyTextDeleted:
             return "delete"
+        case .noteBodyTextInsertedAnchored:
+            return "anchoredInsert"
+        case .noteBodyTextDeletedAnchored:
+            return "anchoredDelete"
         case .noteBodyReconciled:
             return "reconciliation"
         case .noteLifecycleChanged:
@@ -2641,7 +2638,8 @@ private extension SyncBatchChange {
         switch self {
         case .noteBodyTextInserted, .noteBodyTextDeleted:
             return true
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return false
         }
     }
@@ -2652,7 +2650,8 @@ private extension SyncBatchChange {
             return change.utf16Offset
         case .noteBodyTextDeleted(let change):
             return change.utf16Offset
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return 0
         }
     }
@@ -2661,7 +2660,9 @@ private extension SyncBatchChange {
         switch self {
         case .noteBodyTextDeleted(let change):
             return change.utf16Length
-        case .noteCreated, .noteTitleChanged, .noteBodyTextInserted, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
+             .noteCreated, .noteTitleChanged, .noteBodyTextInserted,
+             .noteBodyReconciled, .noteLifecycleChanged:
             return nil
         }
     }
@@ -2670,7 +2671,9 @@ private extension SyncBatchChange {
         switch self {
         case .noteBodyTextInserted(let change):
             return change.text
-        case .noteCreated, .noteTitleChanged, .noteBodyTextDeleted, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
+             .noteCreated, .noteTitleChanged, .noteBodyTextDeleted,
+             .noteBodyReconciled, .noteLifecycleChanged:
             return nil
         }
     }
@@ -2679,7 +2682,9 @@ private extension SyncBatchChange {
         switch self {
         case .noteBodyTextDeleted(let change):
             return change.expectedText
-        case .noteCreated, .noteTitleChanged, .noteBodyTextInserted, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
+             .noteCreated, .noteTitleChanged, .noteBodyTextInserted,
+             .noteBodyReconciled, .noteLifecycleChanged:
             return nil
         }
     }

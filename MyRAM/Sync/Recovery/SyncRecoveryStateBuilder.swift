@@ -31,6 +31,10 @@ enum SyncRecoveryStateBuilder {
         currentDeviceID: String,
         recoveryTimestamp: Date
     ) throws -> SyncRecoveryReplacementState {
+        try unsentBatches.forEach(SyncBatchAnchoredPayloadPolicy.validateRecovery)
+        try localConvergenceBatches.forEach(
+            SyncBatchAnchoredPayloadPolicy.validateRecovery
+        )
         let legacyTargets = try targets(from: legacySnapshot.pendingChanges)
         let allAffectedNoteIDs = try affectedNoteIDs(
             context: context,
@@ -420,25 +424,6 @@ enum SyncRecoveryStateBuilder {
                 && change.operation == .delete
                 && UUID(uuidString: change.entityID) == entityID
                 && isValidDeletionTombstone(change)
-        }
-    }
-}
-
-private extension SyncBatchChange {
-    var noteID: UUID {
-        switch self {
-        case .noteCreated(let change):
-            change.noteID
-        case .noteTitleChanged(let change):
-            change.noteID
-        case .noteBodyTextInserted(let change):
-            change.noteID
-        case .noteBodyTextDeleted(let change):
-            change.noteID
-        case .noteBodyReconciled(let change):
-            change.noteID
-        case .noteLifecycleChanged(let change):
-            change.noteID
         }
     }
 }

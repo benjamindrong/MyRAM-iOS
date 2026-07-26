@@ -44,18 +44,12 @@ final class FileBackedSyncBatchQueue {
         queue.contains(batchID)
     }
 
-    func enqueue(_ batch: SyncBatch) {
-        let didChange = queue.enqueue(batch)
-        if didChange {
-            persistQueue()
-        }
-    }
-
     func enqueueIncoming(_ batch: SyncBatch) throws {
         try enqueueDurably(batch)
     }
 
     func enqueueDurably(_ batch: SyncBatch) throws {
+        try SyncBatchAnchoredPayloadPolicy.validateDurableAdmission(batch)
         guard canPersistCurrentQueue else { throw QueueError.unhealthyPersistence }
         let originalBatches = queue.pendingBatches
         do {
@@ -104,6 +98,7 @@ final class FileBackedSyncBatchQueue {
     }
 
     func replacePendingBatches(_ replacement: [SyncBatch]) throws {
+        try replacement.forEach(SyncBatchAnchoredPayloadPolicy.validateDurableAdmission)
         guard canReplaceQueue else { throw QueueError.unhealthyPersistence }
 
         let originalBatches = queue.pendingBatches
@@ -121,7 +116,7 @@ final class FileBackedSyncBatchQueue {
         switch health {
         case .healthy, .fileMissing:
             return true
-        case .corrupt, .unsupportedVersion, .readFailed:
+        case .corrupt, .unsupportedVersion, .unsupportedAnchoredPayload, .readFailed:
             return false
         }
     }
@@ -148,9 +143,17 @@ final class FileBackedSyncBatchQueue {
                     health: .unsupportedVersion(persistedQueue.version)
                 )
             }
+            try persistedQueue.batches.forEach(
+                SyncBatchAnchoredPayloadPolicy.validateDurableAdmission
+            )
             return FileBackedSyncBatchQueueSnapshot(
                 pendingBatches: persistedQueue.batches,
                 health: .healthy
+            )
+        } catch is SyncBatchAnchoredPayloadPolicyError {
+            return FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [],
+                health: .unsupportedAnchoredPayload
             )
         } catch _ as DecodingError {
             return FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .corrupt)
@@ -201,6 +204,7 @@ enum PersistedQueueHealth: Equatable {
     case fileMissing
     case corrupt
     case unsupportedVersion(Int)
+    case unsupportedAnchoredPayload
     case readFailed(String)
 }
 

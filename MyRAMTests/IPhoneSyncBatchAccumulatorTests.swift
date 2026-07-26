@@ -525,6 +525,12 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
                 let end = body.utf16.index(start, offsetBy: deletion.utf16Length)
                 let range = String.Index(start, within: body)!..<String.Index(end, within: body)!
                 XCTAssertEqual(String(body[range]), deletion.expectedText, file: file, line: line)
+            case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
+                XCTFail(
+                    "Capture must remain legacy-only while anchored payloads are disabled",
+                    file: file,
+                    line: line
+                )
             case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
                 XCTFail("Unexpected non-positional body change", file: file, line: line)
             }

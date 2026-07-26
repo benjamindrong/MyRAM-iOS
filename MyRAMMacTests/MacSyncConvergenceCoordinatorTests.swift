@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import SwiftData
 import XCTest
 @testable import MyRAMMac
@@ -65,6 +66,48 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         // Calling it again (as the retry path does) must stay idempotent.
         XCTAssertTrue(coordinator.durablyCaptureIncomingBatch(batch))
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id), [batch.id])
+    }
+
+    func testAnchoredDirectAdmissionRejectsBeforeDurabilityOrRuntimeSubmission() async throws {
+        let pendingURL = temporaryQueueFileURL(
+            named: "mac-pending-incoming-batch-queue.json"
+        )
+        let localURL = temporaryQueueFileURL(
+            named: "mac-local-obligation-queue.json"
+        )
+        let container = try makeInMemoryContainer()
+        let controller = try makeController()
+        var boundaryCalls = 0
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in
+                    boundaryCalls += 1
+                    return .ready
+                }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: localURL
+        )
+        let batch = try anchoredBatch()
+
+        XCTAssertFalse(coordinator.durablyCaptureIncomingBatch(batch))
+        await coordinator.submitRemoteBatch(batch)
+        await coordinator.submitLocalObligation(
+            SyncConvergenceLocalObligation(legacyBatch: batch)
+        )
+
+        XCTAssertEqual(boundaryCalls, 0)
+        XCTAssertTrue(
+            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.isEmpty
+        )
+        XCTAssertTrue(
+            FileBackedSyncConvergenceLocalObligationQueue(
+                fileURL: localURL
+            ).pendingBatches.isEmpty
+        )
     }
 
     func testDeferredIncomingDoesNotBlockDisjointEligibleBatch() async throws {
@@ -225,6 +268,27 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
                     modifiedAt: Date(timeIntervalSince1970: TimeInterval(idSuffix))
                 ))
             ]
+        )
+    }
+
+    private func anchoredBatch() throws -> SyncBatch {
+        let deviceID = Self.uuid(902)
+        let state = try SyncTextSequenceState(runs: [], fragments: [])
+        let change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: Self.uuid(903),
+            utf16Offset: 0,
+            text: "A",
+            modifiedAt: Date(timeIntervalSince1970: 1_710),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            operationID: SyncOperationID(deviceID: deviceID, localCounter: 1),
+            state: state
+        )
+        return SyncBatch(
+            id: Self.uuid(904),
+            originDeviceID: deviceID,
+            createdAt: Date(timeIntervalSince1970: 1_710),
+            batchSequence: 1,
+            changes: [change]
         )
     }
 
