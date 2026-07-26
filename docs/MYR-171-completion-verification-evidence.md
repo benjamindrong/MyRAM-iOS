@@ -118,7 +118,12 @@ Manual target-membership review and the successful builds/tests confirmed:
 - No `AnchoredSequenceCore` source is compiled directly into an application or test target.
 - `MyRAMUITests` gained no source or dependency, and this Markdown file has no target membership.
 
-This evidence update changes one staged file, so the entire cached audit must pass again from the beginning before commit.
+Final closure results:
+
+- The second complete cached audit passed.
+- `HEAD:MyRAMTests/SyncBatchPayloadCompatibilityTests.swift` resolves to blob `b45af6d5f364e9fbb4a624fa32f90ec738cad841`.
+- The final `3869daefe0001f0320a715c1b48295fefa1429d3...HEAD` diff contains exactly the two approved files.
+- The final whitespace and prohibited-scope checks passed.
 
 ## Non-goals and remaining ownership
 
