@@ -115,13 +115,11 @@ enum MarkdownFilenamePolicy {
         stem = String(stem.unicodeScalars.map { scalar in
             invalidCharacters.contains(scalar) ? Character("-") : Character(String(scalar))
         })
+        stem = String(stem.prefix(maximumStemLength))
         stem = stem.trimmingCharacters(in: CharacterSet(charactersIn: " .-"))
-
         if stem.isEmpty {
             stem = "Untitled"
         }
-
-        stem = String(stem.prefix(maximumStemLength))
         return "\(stem).md"
     }
 }

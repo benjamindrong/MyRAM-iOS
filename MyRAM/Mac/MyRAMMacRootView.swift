@@ -24,8 +24,7 @@ struct MyRAMMacRootView: View {
     @State private var isApplyingAutomaticVisibilityChange = false
     @State private var isExpandingWindowForSidebar = false
     @State private var isMarkdownFileOperationInProgress = false
-    @State private var pendingMarkdownOpenURLs: [URL] = []
-    @State private var markdownFileErrorMessage: String?
+    @State private var markdownOpenURLQueue = MacMarkdownOpenURLQueue()
 
     var body: some View {
         Group {
@@ -51,7 +50,7 @@ struct MyRAMMacRootView: View {
             Task { await flushPendingSave() }
         }
         .onOpenURL { url in
-            pendingMarkdownOpenURLs.append(url)
+            markdownOpenURLQueue.enqueue(url)
             drainPendingMarkdownOpenURLsIfReady()
         }
         .onChange(of: startupCoordinator.state) { _, _ in
@@ -61,17 +60,18 @@ struct MyRAMMacRootView: View {
         .alert(
             "Markdown File Error",
             isPresented: Binding(
-                get: { markdownFileErrorMessage != nil },
+                get: { markdownOpenURLQueue.errorMessage != nil },
                 set: { isPresented in
                     if !isPresented {
-                        markdownFileErrorMessage = nil
+                        markdownOpenURLQueue.acknowledgeError()
+                        drainPendingMarkdownOpenURLsIfReady()
                     }
                 }
             )
         ) {
             Button("OK", role: .cancel) {}
         } message: {
-            Text(markdownFileErrorMessage ?? "")
+            Text(markdownOpenURLQueue.errorMessage ?? "")
         }
     }
 
@@ -135,10 +135,13 @@ struct MyRAMMacRootView: View {
     private var markdownCommandActions: MacMarkdownCommandActions {
         let isReady = startupCoordinator.state == .ready
         return MacMarkdownCommandActions(
-            canImport: isReady && !isMarkdownFileOperationInProgress,
+            canImport: isReady
+                && !isMarkdownFileOperationInProgress
+                && markdownOpenURLQueue.errorMessage == nil,
             canExport: isReady
                 && selectedNoteID != nil
-                && !isMarkdownFileOperationInProgress,
+                && !isMarkdownFileOperationInProgress
+                && markdownOpenURLQueue.errorMessage == nil,
             importMarkdown: beginMarkdownImportWithPanel,
             exportMarkdown: beginMarkdownExportWithPanel
         )
@@ -357,14 +360,15 @@ struct MyRAMMacRootView: View {
 
     private func beginMarkdownImportWithPanel() {
         guard startupCoordinator.state == .ready,
-              !isMarkdownFileOperationInProgress else {
+              !isMarkdownFileOperationInProgress,
+              markdownOpenURLQueue.errorMessage == nil else {
             return
         }
 
         isMarkdownFileOperationInProgress = true
         Task { @MainActor in
             do {
-                _ = try await MacMarkdownFileOperationCoordinator().performImport(
+                let result = try await MacMarkdownFileOperationCoordinator().performImport(
                     flush: { await flushPendingSave() },
                     selectSource: {
                         let panel = NSOpenPanel()
@@ -378,7 +382,7 @@ struct MyRAMMacRootView: View {
                     publish: publishImportedMarkdown,
                     present: presentImportedMarkdown
                 )
-                finishMarkdownFileOperation()
+                finishMarkdownImportOperation(result)
             } catch {
                 finishMarkdownFileOperation(errorMessage: markdownErrorMessage(for: error))
             }
@@ -388,7 +392,8 @@ struct MyRAMMacRootView: View {
     private func beginMarkdownExportWithPanel() {
         guard startupCoordinator.state == .ready,
               selectedNoteID != nil,
-              !isMarkdownFileOperationInProgress else {
+              !isMarkdownFileOperationInProgress,
+              markdownOpenURLQueue.errorMessage == nil else {
             return
         }
 
@@ -429,24 +434,24 @@ struct MyRAMMacRootView: View {
     }
 
     private func drainPendingMarkdownOpenURLsIfReady() {
-        guard startupCoordinator.state == .ready,
-              !isMarkdownFileOperationInProgress,
-              !pendingMarkdownOpenURLs.isEmpty else {
+        guard let url = markdownOpenURLQueue.takeNextIfReady(
+            startupIsReady: startupCoordinator.state == .ready,
+            operationIsInProgress: isMarkdownFileOperationInProgress
+        ) else {
             return
         }
 
-        let url = pendingMarkdownOpenURLs.removeFirst()
         isMarkdownFileOperationInProgress = true
         Task { @MainActor in
             do {
-                _ = try await MacMarkdownFileOperationCoordinator().performImport(
+                let result = try await MacMarkdownFileOperationCoordinator().performImport(
                     flush: { await flushPendingSave() },
                     selectSource: { url },
                     consume: consumeMarkdownFile,
                     publish: publishImportedMarkdown,
                     present: presentImportedMarkdown
                 )
-                finishMarkdownFileOperation()
+                finishMarkdownImportOperation(result)
             } catch {
                 finishMarkdownFileOperation(errorMessage: markdownErrorMessage(for: error))
             }
@@ -501,9 +506,20 @@ struct MyRAMMacRootView: View {
     }
 
     private func finishMarkdownFileOperation(errorMessage: String? = nil) {
-        markdownFileErrorMessage = errorMessage
+        markdownOpenURLQueue.recordCompletion(errorMessage: errorMessage)
         isMarkdownFileOperationInProgress = false
         drainPendingMarkdownOpenURLsIfReady()
+    }
+
+    private func finishMarkdownImportOperation(_ result: MacMarkdownImportResult) {
+        switch result {
+        case .cancelled, .importedAndPresented:
+            finishMarkdownFileOperation()
+        case .importedButPresentationFailed:
+            finishMarkdownFileOperation(
+                errorMessage: "The Markdown note was imported, but MyRAM could not open it automatically."
+            )
+        }
     }
 
     private func markdownErrorMessage(for error: Error) -> String {

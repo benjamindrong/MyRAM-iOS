@@ -1349,14 +1349,11 @@ struct NoteEditorView: View {
         return true
     }
 
-    private func flushPendingNoteEditForFileOperation() -> NoteEditorFileOperationFlushResult {
+    private func flushPendingNoteEditForFileOperation() -> EditorLocalFlushOutcome {
         guard commitPendingNoteEdit() else {
-            return .failed(
-                noteID: note.id,
-                message: "Unable to save the current note."
-            )
+            return .failed(message: "Unable to save the current note.")
         }
-        return .succeeded(noteID: note.id)
+        return .succeeded
     }
 
     private func handleEditorChange() {
@@ -2205,16 +2202,7 @@ struct NoteEditorView: View {
     private func prepareMarkdownExport() {
         do {
             let prepared = try MarkdownExportPreparationCoordinator().prepare(
-                flush: {
-                    guard let fileOperationBridge else {
-                        return flushPendingNoteEditForFileOperation()
-                    }
-                    let result = fileOperationBridge.flushActiveEditor()
-                    if case .noActiveEditor = result {
-                        return flushPendingNoteEditForFileOperation()
-                    }
-                    return result
-                },
+                flush: flushPendingNoteEditForFileOperation,
                 snapshot: {
                     (title: title, source: content)
                 }

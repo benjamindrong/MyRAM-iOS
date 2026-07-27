@@ -100,6 +100,34 @@ final class MarkdownFileIOTests: XCTestCase {
         XCTAssertTrue(stem.hasSuffix("🚀"))
     }
 
+    func testExportFilenameRetrimsSeparatorsIntroducedAtCapBoundary() {
+        for separator in ["/", ":", ".", " ", "-"] {
+            let title = String(
+                repeating: "a",
+                count: MarkdownFilenamePolicy.maximumStemLength - 1
+            ) + separator + "tail"
+            let filename = MarkdownFilenamePolicy.exportFilename(for: title)
+            let stem = String(filename.dropLast(3))
+
+            XCTAssertFalse(stem.hasSuffix(" "), separator)
+            XCTAssertFalse(stem.hasSuffix("."), separator)
+            XCTAssertFalse(stem.hasSuffix("-"), separator)
+            XCTAssertEqual(stem.count, MarkdownFilenamePolicy.maximumStemLength - 1, separator)
+        }
+    }
+
+    func testExportFilenameFallsBackWhenPostCapTrimEmptiesStem() {
+        let title = String(
+            repeating: "/",
+            count: MarkdownFilenamePolicy.maximumStemLength
+        ) + "VisibleOnlyAfterCap"
+
+        XCTAssertEqual(
+            MarkdownFilenamePolicy.exportFilename(for: title),
+            "Untitled.md"
+        )
+    }
+
     func testWriterPassesExactBytesToAtomicWriteSeam() throws {
         var observedData: Data?
         let writer = MarkdownFileWriter(writeOperation: { data, _ in observedData = data })

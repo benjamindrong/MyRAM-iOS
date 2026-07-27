@@ -3,9 +3,21 @@ import Foundation
 import SwiftUI
 import UniformTypeIdentifiers
 
-enum NoteEditorFileOperationFlushResult: Equatable {
+enum ExpectedEditor: Equatable {
+    case none
+    case note(UUID)
+}
+
+enum EditorLocalFlushOutcome: Equatable {
+    case succeeded
+    case failed(message: String)
+}
+
+enum EditorFlushResult: Equatable {
     case noActiveEditor
     case succeeded(noteID: UUID)
+    case expectedEditorUnavailable(noteID: UUID)
+    case editorMismatch(expected: ExpectedEditor, actualNoteID: UUID)
     case failed(noteID: UUID, message: String)
 }
 
@@ -13,14 +25,14 @@ enum NoteEditorFileOperationFlushResult: Equatable {
 final class NoteEditorFileOperationBridge: ObservableObject {
     private struct Registration {
         let noteID: UUID
-        let flush: @MainActor () -> NoteEditorFileOperationFlushResult
+        let flush: @MainActor () -> EditorLocalFlushOutcome
     }
 
     private var registration: Registration?
 
     func register(
         noteID: UUID,
-        flush: @escaping @MainActor () -> NoteEditorFileOperationFlushResult
+        flush: @escaping @MainActor () -> EditorLocalFlushOutcome
     ) {
         registration = Registration(noteID: noteID, flush: flush)
     }
@@ -30,22 +42,50 @@ final class NoteEditorFileOperationBridge: ObservableObject {
         registration = nil
     }
 
-    func flushActiveEditor() -> NoteEditorFileOperationFlushResult {
-        registration?.flush() ?? .noActiveEditor
+    /// Authorizes the registered editor identity before invoking editor-owned persistence.
+    func flushEditor(expected: ExpectedEditor) -> EditorFlushResult {
+        switch (expected, registration) {
+        case (.none, nil):
+            return .noActiveEditor
+
+        case (.none, let registration?):
+            return .editorMismatch(
+                expected: .none,
+                actualNoteID: registration.noteID
+            )
+
+        case (.note(let expectedID), nil):
+            return .expectedEditorUnavailable(noteID: expectedID)
+
+        case (.note(let expectedID), let registration?):
+            guard expectedID == registration.noteID else {
+                return .editorMismatch(
+                    expected: .note(expectedID),
+                    actualNoteID: registration.noteID
+                )
+            }
+
+            switch registration.flush() {
+            case .succeeded:
+                return .succeeded(noteID: registration.noteID)
+            case .failed(let message):
+                return .failed(noteID: registration.noteID, message: message)
+            }
+        }
     }
 }
 
 enum MarkdownImportOperationError: Error, Equatable, LocalizedError {
     case operationInProgress
-    case sourceFlushFailed(String)
+    case editorPreconditionFailed(EditorFlushResult)
     case unsupportedFileType
 
     var errorDescription: String? {
         switch self {
         case .operationInProgress:
             return "Another Markdown file operation is already in progress."
-        case .sourceFlushFailed:
-            return "The current note could not be saved before importing Markdown."
+        case .editorPreconditionFailed:
+            return "The current note could not be saved before continuing."
         case .unsupportedFileType:
             return "The selected file is not a Markdown document."
         }
@@ -69,6 +109,7 @@ final class MarkdownImportOperationCoordinator: ObservableObject {
 
     func perform<Result>(
         url: URL,
+        expectedEditor: ExpectedEditor,
         flushBridge: NoteEditorFileOperationBridge,
         consume: (ImportedMarkdownDocument) throws -> Result
     ) throws -> Result {
@@ -79,11 +120,16 @@ final class MarkdownImportOperationCoordinator: ObservableObject {
         isProcessing = true
         defer { isProcessing = false }
 
-        switch flushBridge.flushActiveEditor() {
+        let flushResult = flushBridge.flushEditor(expected: expectedEditor)
+        switch flushResult {
         case .noActiveEditor, .succeeded:
             break
-        case .failed(_, let message):
-            throw MarkdownImportOperationError.sourceFlushFailed(message)
+        case .expectedEditorUnavailable,
+             .editorMismatch,
+             .failed:
+            throw MarkdownImportOperationError.editorPreconditionFailed(
+                flushResult
+            )
         }
 
         let didStartAccessing = url.startAccessingSecurityScopedResource()
@@ -98,6 +144,58 @@ final class MarkdownImportOperationCoordinator: ObservableObject {
         }
 
         return try consume(reader.read(from: url))
+    }
+}
+
+enum ExternalImportRoutingResult<MarkdownResult, MyRAMResult> {
+    case markdown(MarkdownResult)
+    case myram(MyRAMResult)
+}
+
+enum ExternalImportRoutingError: Error, Equatable, LocalizedError {
+    case unsupportedFileType
+
+    var errorDescription: String? {
+        "The selected file is not a supported MyRAM import format."
+    }
+}
+
+@MainActor
+struct ExternalImportURLRouter {
+    private let classifier: MarkdownFileClassifier
+
+    init(classifier: MarkdownFileClassifier = MarkdownFileClassifier()) {
+        self.classifier = classifier
+    }
+
+    /// Performs metadata-only routing before delegating Markdown body access to its coordinator.
+    func route<MarkdownResult, MyRAMResult>(
+        url: URL,
+        expectedEditor: ExpectedEditor,
+        markdownCoordinator: MarkdownImportOperationCoordinator,
+        flushBridge: NoteEditorFileOperationBridge,
+        importMarkdown: (ImportedMarkdownDocument) throws -> MarkdownResult,
+        importMyRAM: (URL) throws -> MyRAMResult
+    ) throws -> ExternalImportRoutingResult<MarkdownResult, MyRAMResult> {
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        let kind = classifier.kind(for: url)
+        if didStartAccessing {
+            url.stopAccessingSecurityScopedResource()
+        }
+
+        switch kind {
+        case .markdown:
+            return try .markdown(markdownCoordinator.perform(
+                url: url,
+                expectedEditor: expectedEditor,
+                flushBridge: flushBridge,
+                consume: importMarkdown
+            ))
+        case .myram:
+            return try .myram(importMyRAM(url))
+        case .unsupported:
+            throw ExternalImportRoutingError.unsupportedFileType
+        }
     }
 }
 
@@ -137,11 +235,11 @@ enum MarkdownExportPreparationError: Error, Equatable {
 struct MarkdownExportPreparationCoordinator {
     /// Captures editor-owned source only after the current editor reports a durable flush.
     func prepare(
-        flush: () -> NoteEditorFileOperationFlushResult,
+        flush: () -> EditorLocalFlushOutcome,
         snapshot: () -> (title: String, source: String)
     ) throws -> PreparedMarkdownExport {
         switch flush() {
-        case .noActiveEditor, .succeeded:
+        case .succeeded:
             break
         case .failed:
             throw MarkdownExportPreparationError.sourceFlushFailed

@@ -36,7 +36,7 @@ final class MacMarkdownFileIOIntegrationTests: XCTestCase {
         var events: [String] = []
         let importedNote = Note(title: "Imported", content: "Exact body")
 
-        let imported = try await MacMarkdownFileOperationCoordinator().performImport(
+        let result = try await MacMarkdownFileOperationCoordinator().performImport(
             flush: {
                 events.append("flush")
                 return true
@@ -59,14 +59,17 @@ final class MacMarkdownFileIOIntegrationTests: XCTestCase {
             }
         )
 
-        XCTAssertTrue(imported)
+        guard case .importedAndPresented(let presentedNote) = result else {
+            return XCTFail("Expected committed note to be presented")
+        }
+        XCTAssertEqual(presentedNote.id, importedNote.id)
         XCTAssertEqual(events, ["flush", "panel", "commit", "publish", "select"])
     }
 
     func testImportCancellationStopsBeforeConsumptionWithoutError() async throws {
         var didConsume = false
 
-        let imported = try await MacMarkdownFileOperationCoordinator().performImport(
+        let result = try await MacMarkdownFileOperationCoordinator().performImport(
             flush: { true },
             selectSource: { nil },
             consume: { _ in
@@ -77,8 +80,97 @@ final class MacMarkdownFileIOIntegrationTests: XCTestCase {
             present: { _ in }
         )
 
-        XCTAssertFalse(imported)
+        guard case .cancelled = result else {
+            return XCTFail("Expected cancellation")
+        }
         XCTAssertFalse(didConsume)
+    }
+
+    func testCommittedImportPresentationFailureReturnsNonRetryableCommittedOutcome() async throws {
+        var events: [String] = []
+        var importCount = 0
+        let importedNote = Note(title: "Imported", content: "Exact body")
+
+        let result = try await MacMarkdownFileOperationCoordinator().performImport(
+            flush: {
+                events.append("flush")
+                return true
+            },
+            selectSource: {
+                events.append("source")
+                return URL(fileURLWithPath: "/tmp/imported.md")
+            },
+            consume: { _ in
+                importCount += 1
+                events.append("commit")
+                return importedNote
+            },
+            publish: { _ in events.append("publish") },
+            present: { _ in
+                events.append("present")
+                throw MacMarkdownTestError.presentationFailed
+            }
+        )
+
+        guard case .importedButPresentationFailed(let committedNote, let message) = result else {
+            return XCTFail("Expected committed-but-not-presented outcome")
+        }
+        XCTAssertEqual(committedNote.id, importedNote.id)
+        XCTAssertFalse(message.isEmpty)
+        XCTAssertEqual(importCount, 1)
+        XCTAssertEqual(events, ["flush", "source", "commit", "publish", "present"])
+    }
+
+    func testQueuedErrorPausesLaterURLUntilAcknowledgment() throws {
+        let firstURL = URL(fileURLWithPath: "/tmp/A.md")
+        let secondURL = URL(fileURLWithPath: "/tmp/B.md")
+        var queue = MacMarkdownOpenURLQueue()
+        queue.enqueue(firstURL)
+        queue.enqueue(secondURL)
+
+        XCTAssertEqual(
+            queue.takeNextIfReady(startupIsReady: true, operationIsInProgress: false),
+            firstURL
+        )
+        queue.recordCompletion(errorMessage: "A failed")
+
+        XCTAssertNil(
+            queue.takeNextIfReady(startupIsReady: true, operationIsInProgress: false)
+        )
+        XCTAssertEqual(queue.pendingURLs, [secondURL])
+        XCTAssertEqual(queue.errorMessage, "A failed")
+
+        queue.acknowledgeError()
+
+        XCTAssertEqual(
+            queue.takeNextIfReady(startupIsReady: true, operationIsInProgress: false),
+            secondURL
+        )
+        XCTAssertNil(queue.errorMessage)
+        XCTAssertTrue(queue.pendingURLs.isEmpty)
+    }
+
+    func testLaterSuccessCannotClearUnacknowledgedQueuedError() {
+        var queue = MacMarkdownOpenURLQueue()
+        queue.recordCompletion(errorMessage: "First failure")
+        queue.recordCompletion(errorMessage: nil)
+
+        XCTAssertEqual(queue.errorMessage, "First failure")
+    }
+
+    func testQueuedURLWaitsForStartupReadiness() {
+        let url = URL(fileURLWithPath: "/tmp/Startup.md")
+        var queue = MacMarkdownOpenURLQueue()
+        queue.enqueue(url)
+
+        XCTAssertNil(
+            queue.takeNextIfReady(startupIsReady: false, operationIsInProgress: false)
+        )
+        XCTAssertEqual(queue.pendingURLs, [url])
+        XCTAssertEqual(
+            queue.takeNextIfReady(startupIsReady: true, operationIsInProgress: false),
+            url
+        )
     }
 
     func testExportFlushFailureBlocksSourceReadPanelAndWrite() async {
@@ -151,4 +243,8 @@ final class MacMarkdownFileIOIntegrationTests: XCTestCase {
         XCTAssertFalse(exported)
         XCTAssertFalse(didWrite)
     }
+}
+
+private enum MacMarkdownTestError: Error {
+    case presentationFailed
 }

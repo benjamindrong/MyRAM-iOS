@@ -116,6 +116,7 @@ struct NotesListView: View {
     @StateObject private var editorToolbarBridge = NoteEditorToolbarBridge()
     @StateObject private var editorFileOperationBridge = NoteEditorFileOperationBridge()
     @StateObject private var markdownImportCoordinator = MarkdownImportOperationCoordinator()
+    private let externalImportRouter = ExternalImportURLRouter()
     @State private var editMode: EditMode = .inactive
     @State private var selectedNote: Note? = nil
     @State private var showingRecentlyDeleted = false
@@ -1661,25 +1662,47 @@ struct NotesListView: View {
         }
     }
 
-    private func importMyRAMFile(from url: URL) {
-        do {
-            selectedNote = try vm.importNotes(from: url).first
-        } catch {
-            importErrorMessage = (error as? LocalizedError)?.errorDescription
-                ?? "An unknown import error occurred."
-        }
-    }
-
     private func importMarkdownFile(from url: URL) {
         do {
             let importedNote = try markdownImportCoordinator.perform(
                 url: url,
+                expectedEditor: expectedEditor,
                 flushBridge: editorFileOperationBridge,
                 consume: vm.importMarkdownDocument
             )
             selectedNote = importedNote
         } catch {
             markdownImportErrorMessage = markdownImportMessage(for: error)
+        }
+    }
+
+    private var expectedEditor: ExpectedEditor {
+        selectedNote.map { .note($0.id) } ?? .none
+    }
+
+    private func routeExternalImport(from url: URL) {
+        do {
+            let result = try externalImportRouter.route(
+                url: url,
+                expectedEditor: expectedEditor,
+                markdownCoordinator: markdownImportCoordinator,
+                flushBridge: editorFileOperationBridge,
+                importMarkdown: vm.importMarkdownDocument,
+                importMyRAM: { try vm.importNotes(from: $0).first }
+            )
+            switch result {
+            case .markdown(let note):
+                selectedNote = note
+            case .myram(let note):
+                selectedNote = note
+            }
+        } catch let error as MarkdownImportOperationError {
+            markdownImportErrorMessage = markdownImportMessage(for: error)
+        } catch let error as MarkdownFileIOError {
+            markdownImportErrorMessage = markdownImportMessage(for: error)
+        } catch {
+            importErrorMessage = (error as? LocalizedError)?.errorDescription
+                ?? "An unknown import error occurred."
         }
     }
 
@@ -1691,20 +1714,7 @@ struct NotesListView: View {
 
         while !pendingOpenURLs.isEmpty {
             let url = pendingOpenURLs.removeFirst()
-            let didStartAccessing = url.startAccessingSecurityScopedResource()
-            let kind = MarkdownFileClassifier().kind(for: url)
-            if didStartAccessing {
-                url.stopAccessingSecurityScopedResource()
-            }
-
-            switch kind {
-            case .markdown:
-                importMarkdownFile(from: url)
-            case .myram:
-                importMyRAMFile(from: url)
-            case .unsupported:
-                importErrorMessage = MarkdownFileIOError.unsupportedFileType.errorDescription
-            }
+            routeExternalImport(from: url)
         }
     }
 

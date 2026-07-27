@@ -108,6 +108,98 @@ final class MarkdownImportIntegrationTests: XCTestCase {
         )
     }
 
+    func testExternalRouteEditorMismatchLeavesNoRowsUndoSelectionOrBodyRead() throws {
+        let expectedID = UUID()
+        let actualID = UUID()
+        let bridge = NoteEditorFileOperationBridge()
+        var didInvokeWrongEditor = false
+        bridge.register(noteID: actualID) {
+            didInvokeWrongEditor = true
+            return .succeeded
+        }
+
+        try assertExternalRouteBlocked(
+            expectedEditor: .note(expectedID),
+            bridge: bridge,
+            expectedResult: .editorMismatch(
+                expected: .note(expectedID),
+                actualNoteID: actualID
+            )
+        )
+        XCTAssertFalse(didInvokeWrongEditor)
+    }
+
+    func testExternalRouteUnavailableEditorLeavesNoRowsUndoSelectionOrBodyRead() throws {
+        let expectedID = UUID()
+
+        try assertExternalRouteBlocked(
+            expectedEditor: .note(expectedID),
+            bridge: NoteEditorFileOperationBridge(),
+            expectedResult: .expectedEditorUnavailable(noteID: expectedID)
+        )
+    }
+
+    private func assertExternalRouteBlocked(
+        expectedEditor: ExpectedEditor,
+        bridge: NoteEditorFileOperationBridge,
+        expectedResult: EditorFlushResult,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let viewModel = makeViewModel(context: context)
+        var bodyReadCount = 0
+        let coordinator = MarkdownImportOperationCoordinator(
+            classifier: MarkdownFileClassifier(contentTypeProvider: { _ in
+                MarkdownFileClassifier.markdownContentType
+            }),
+            reader: MarkdownFileReader(dataLoader: { _ in
+                bodyReadCount += 1
+                return Data("Body".utf8)
+            })
+        )
+        let router = ExternalImportURLRouter(classifier: MarkdownFileClassifier(
+            contentTypeProvider: { _ in MarkdownFileClassifier.markdownContentType }
+        ))
+        let route: () throws -> ExternalImportRoutingResult<Note, Note?> = {
+            try router.route(
+                url: URL(fileURLWithPath: "/tmp/Blocked.md"),
+                expectedEditor: expectedEditor,
+                markdownCoordinator: coordinator,
+                flushBridge: bridge,
+                importMarkdown: viewModel.importMarkdownDocument,
+                importMyRAM: { _ -> Note? in
+                    XCTFail("Unexpected .myram import", file: file, line: line)
+                    return nil
+                }
+            )
+        }
+
+        XCTAssertThrowsError(try route(), file: file, line: line) {
+            XCTAssertEqual(
+                $0 as? MarkdownImportOperationError,
+                .editorPreconditionFailed(expectedResult),
+                file: file,
+                line: line
+            )
+        }
+
+        XCTAssertEqual(bodyReadCount, 0, file: file, line: line)
+        XCTAssertFalse(viewModel.hasUndoableAction, file: file, line: line)
+        XCTAssertNil(viewModel.currentNote, file: file, line: line)
+        XCTAssertTrue(
+            try context.fetch(FetchDescriptor<Note>()).isEmpty,
+            file: file,
+            line: line
+        )
+        XCTAssertTrue(
+            try context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).isEmpty,
+            file: file,
+            line: line
+        )
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let schema = Schema(MyRAMModelRegistry.models)
         let configuration = ModelConfiguration(
