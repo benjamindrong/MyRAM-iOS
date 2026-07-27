@@ -423,7 +423,7 @@ git diff --check origin/main...HEAD         PASSED
 
 ## Cross-Scene External Import Remediation — 2026-07-27
 
-Re-verified at tested implementation SHA `a2961ddfb19846b0a1d41870a4efbcf2aee379c3`
+Re-verified at tested implementation SHA `a2961ddaae8343c35aac2389c0235b316276b681`
 following PR #112 review findings.
 
 ### Defects resolved
