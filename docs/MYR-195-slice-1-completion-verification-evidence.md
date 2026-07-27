@@ -423,7 +423,7 @@ git diff --check origin/main...HEAD         PASSED
 
 ## Cross-Scene External Import Remediation — 2026-07-27
 
-Re-verified at tested implementation SHA `30668c1b752df46e01a88bceea7cff177df9ca7e`
+Re-verified at tested implementation SHA `a2961ddfb19846b0a1d41870a4efbcf2aee379c3`
 following PR #112 review findings.
 
 ### Defects resolved
@@ -434,10 +434,10 @@ following PR #112 review findings.
    scene's isolated state allowed it to claim and import the file, bypassing the error gate.
 2. File-menu Panel Error Display: `finishMarkdownFileOperation(errorMessage:)` previously dropped
    `errorMessage`, causing File-menu import/export failures and presentation failures to be silently discarded.
-   Added scene-local `markdownFilePanelErrorMessage` and panel alert in `MyRAMMacRootView`.
+   Added scene-local `MacSceneLocalFileOperationState` and panel alert in `MyRAMMacRootView`.
 3. External Import Busy Tracking: `drainPendingMarkdownOpenURLsIfReady()` claimed requests without setting
    `isMarkdownFileOperationInProgress = true`, allowing File-menu operations to overlap an active external import.
-   Added busy flag tracking around external imports.
+   Added busy flag tracking around external imports via `MacSceneLocalFileOperationState`.
 4. Error Acknowledgment Scene Ownership: `MacMarkdownExternalImportCoordinator.acknowledgeError(sceneID:)`
    now enforces `guard pendingError?.presentingSceneID == sceneID else { return }` so non-presenting scenes
    cannot clear the error gate.
@@ -450,6 +450,8 @@ following PR #112 review findings.
 - `MacMarkdownExternalImportCoordinator`: Single application-scoped `@MainActor`
   `ObservableObject` created by `MyRAMMacApp` as `@StateObject` and injected into
   `WindowGroup` via `.environmentObject`.
+- `MacMarkdownCommandActionsBuilder`: Testable production seam for computing File-menu command availability.
+- `MacSceneLocalFileOperationState`: Testable production seam for managing scene-local busy tracking and panel error storage.
 - Stable scene identity: Each `MyRAMMacRootView` owns a stable in-memory `markdownSceneID`
   (`UUID`) for request-to-scene association.
 - Single global active request: At most one external import is active across all scenes.
@@ -462,16 +464,18 @@ following PR #112 review findings.
 ### Focused suites
 
 ```
-Mac: 62 tests, 0 failures (MacMarkdownFileIOIntegrationTests: 16, MacNotePersistenceAdapterTests: 33, MYR170MacFullBodyPathIntegrationTests: 10, MacStartupCoordinatorTests: 3)
+Mac: 64 tests, 0 failures (MacMarkdownFileIOIntegrationTests: 18, MacNotePersistenceAdapterTests: 33, MYR170MacFullBodyPathIntegrationTests: 10, MacStartupCoordinatorTests: 3)
 ```
 
-Added two-scene test groups & scene ownership test:
+Added two-scene test groups & seam coverage tests:
 - 8.1 Two-scene global gate (`testTwoSceneGlobalGateBlocksSuccessorUntilAcknowledgment`)
 - 8.2 Cross-scene active-operation ownership (`testSceneBCannotClaimWhileSceneAIsActive`)
 - 8.3 Arrival ordering and target-scene locking (`testArrivalOrderingAndTargetSceneLocking`)
 - 8.4 Error preservation under all non-acknowledgment operations (`testErrorPreservationUnderAllNonAcknowledgmentOperations`)
 - Scene ownership check (`testAcknowledgeErrorRequiresPresentingSceneOwnership`)
 - File-menu scene independence (`testExternalErrorInOneSceneDoesNotDisableFileMenuInAnotherScene`)
+- Scene-local operation state & panel error recording seam (`testSceneLocalFileOperationStateLifecycleAndPanelErrorRecording`)
+- File-menu command actions builder seam (`testMacMarkdownCommandActionsBuilderEvaluatesSceneLocalStateOnly`)
 
 Single-scene coordinator unit tests replaced former `MacMarkdownOpenURLQueue` tests:
 - Startup readiness gating (`testCoordinatorQueuedURLWaitsForStartupReadiness`)
@@ -481,7 +485,7 @@ Single-scene coordinator unit tests replaced former `MacMarkdownOpenURLQueue` te
 ### Complete suites
 
 ```
-Mac: 563 tests, 0 failures — TEST SUCCEEDED
+Mac: 565 tests, 0 failures — TEST SUCCEEDED
 iOS: 954 tests, 0 failures — Valid from prior run (diff from 1ba561f contains no iOS files)
 ```
 
