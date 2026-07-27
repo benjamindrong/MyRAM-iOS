@@ -7,9 +7,9 @@ iOS/iPadOS application and the native `MyRAMMac` target. It does not add a
 Markdown note type, parser, rendered Preview, schema field, sync payload,
 anchored capture, structural replay, file bookmark, or write-back behavior.
 
-Automated verdict: implementation, focused tests, complete application suites,
-builds, project/property-list validation, and architectural guardrails passed at
-the tested implementation SHA below.
+Automated verdict: remediation-focused tests, complete application suites, both
+application builds, project/property-list validation, and architectural guards
+passed at the tested implementation SHA below.
 
 Manual picker, Finder/Open With, forced-save-failure, and destination-write
 failure scenarios were not driven interactively in this automated session.
@@ -20,8 +20,10 @@ verification gate.
 ## Verified identities
 
 - Base SHA: `417cda0437e3e14703f6ee15250a3b4884ed2589`
+- Reviewed remediation base SHA:
+  `d3ab61ce2e4073470381b28e2988cf4a0218db21`
 - Tested implementation SHA:
-  `8a9fac565c6d2aaa2ea07d618b87b6919c8cb7db`
+  `1ba561f539e8f4610f98df2eee7cbceead762a6d`
 - Branch: `MYR-195-Slice-1-Raw-Markdown-file-I-O`
 - Intended PR title: `MYR-195 Slice 1: Raw Markdown file I/O`
 - Xcode: 26.5 (build 17F42)
@@ -58,9 +60,12 @@ MyRAMTests/MarkdownFileIOTests.swift
 MyRAMTests/MarkdownFileOperationBoundaryTests.swift
 MyRAMTests/MarkdownImportIntegrationTests.swift
 MyRAMTests/MyRAMTests.swift
+docs/MYR-195-slice-1-completion-verification-evidence.md
 ```
 
-Range summary: 19 files changed, 1,608 insertions, and 17 deletions.
+The range contains 20 files. The remediation commit changes only the ten
+expected production and test surfaces relative to the reviewed remediation
+base.
 
 ## Shared file contracts
 
@@ -89,27 +94,34 @@ Range summary: 19 files changed, 1,608 insertions, and 17 deletions.
 
 ## iOS ownership and ordering
 
-`NotesListView` owns one `NoteEditorFileOperationBridge` and one
-`MarkdownImportOperationCoordinator`. The mounted `NoteEditorView` registers
-and unregisters an identity-bound flush closure. A stale editor unregister
-cannot clear a newer registration.
+`NotesListView` owns one `NoteEditorFileOperationBridge`, one
+`MarkdownImportOperationCoordinator`, and the production
+`ExternalImportURLRouter`. The mounted `NoteEditorView` registers and
+unregisters an editor-local flush closure that cannot provide its own identity.
+The caller supplies `ExpectedEditor` from the authoritative `selectedNote`
+lifecycle state, and the bridge authorizes that identity before invoking the
+closure. A stale editor unregister cannot clear a newer registration.
 
 The flush closure cancels the debounce without discarding pending state,
 resolves deferred rich-text encoding through the existing editor commit path,
 and receives the result-bearing `NotesViewModel.commitNoteEdit` outcome.
 Persistence/capture failure leaves the mutation pending and returns failure.
 
-Explicit picker import and externally delivered Markdown both enter
-`MarkdownImportOperationCoordinator.perform`. External routing may inspect only
-type metadata or extension before this boundary. The coordinator then:
+Explicit picker import enters `MarkdownImportOperationCoordinator.perform`.
+Externally delivered files enter `ExternalImportURLRouter`, which performs
+metadata/extension-only classification and dispatches Markdown to that same
+coordinator while leaving `.myram` on its existing importer. The coordinator
+then:
 
 1. Rejects concurrent ownership.
-2. Flushes the active editor.
-3. Stops before any body read or model consumption when flushing fails.
-4. Enters balanced security-scoped consumption access.
-5. Revalidates Markdown classification.
-6. Reads and strictly decodes the body.
-7. Calls the dedicated view-model import transaction.
+2. Authorizes the expected editor identity.
+3. Flushes only the matching editor.
+4. Stops before any body read or model consumption when the editor is
+   unavailable, mismatched, or fails its local flush.
+5. Enters balanced security-scoped consumption access.
+6. Revalidates Markdown classification.
+7. Reads and strictly decodes the body.
+8. Calls the dedicated view-model import transaction.
 
 The view-model transaction constructs the note with its final title and exact
 body, prepares revision-zero state from that body, inserts note and state
@@ -118,15 +130,18 @@ ordinary current-folder policy, and saves once. Failure rolls back note, state,
 folder timestamp, undo state, and selection. Sync publication, folder
 publication, undo registration, refresh, and selection occur only after save.
 
-iOS export uses the same editor-owned flush boundary. The export preparation
+iOS export calls the editor-local flush method directly; it does not consult the
+list-owned bridge or another editor registration. The export preparation
 coordinator cannot snapshot source after a failed flush and captures the latest
 raw editor source only after success. The system file exporter receives the
 shared exact UTF-8 data and shared sanitized filename.
 
-Focused boundary tests prove no-active-editor behavior, identity-safe
-registration, failed-flush fail-closed behavior, flush/read/consume ordering,
-type-only routing without body reads, export snapshot suppression on failure,
-and capture of the latest raw source after success.
+Focused boundary tests prove the five-case identity matrix, bridge-owned
+identity, stale-unregister safety, zero downstream effects for flush failure,
+mismatch, and unavailable-editor states, production Markdown routing order,
+`.myram` and unsupported routing isolation, export snapshot suppression on
+failure, capture of latest raw source after success, and independence from
+another editor's bridge registration.
 
 ## Native Mac ownership and ordering
 
@@ -143,20 +158,26 @@ where required, and single file-operation ownership.
 `MacMarkdownFileOperationCoordinator` owns the ordering:
 
 - Import flushes before panel presentation, file consumption, persistence,
-  publication, or selection. Cancellation stops before consumption. A committed
-  note publishes before the list/editor selection is updated.
+  publication, or selection. Cancellation stops before consumption. A
+  committed note publishes before list/editor presentation. Presentation
+  failure returns an explicit committed-but-not-presented outcome and is
+  surfaced as non-retryable.
 - Export flushes before reloading canonical persisted source, presenting the
   save panel, or writing. Cancellation does not write. Only `Note.content`
   enters the shared writer.
 
-Finder/Open With URLs are captured outside the ready subtree, queued in memory,
-and drained serially after startup reaches `.ready`. They use the same
-coordinator and flush boundary as the File menu action.
+Finder/Open With URLs are captured outside the ready subtree in the production
+`MacMarkdownOpenURLQueue`, then drained serially after startup reaches `.ready`.
+The queue refuses to dequeue while an operation or unacknowledged error is
+present. Alert acknowledgment clears the error and resumes draining. Queued
+imports use the same coordinator and flush boundary as the File menu action.
 
 Focused tests prove panel and downstream suppression on failed flush,
-commit-before-publication/selection ordering, cancellation, latest-source
-capture after flush, exact raw export, generalized atomic Markdown creation,
-revision-zero state, nil rich-text data, and rollback.
+commit-before-publication/presentation ordering, committed presentation
+failure semantics without automatic re-import, cancellation, queue startup
+gating, error pause/preservation/resumption, latest-source capture after flush,
+exact raw export, generalized atomic Markdown creation, revision-zero state,
+nil rich-text data, and rollback.
 
 ## Document registration
 
@@ -191,11 +212,11 @@ xcodebuild \
   -only-testing:MyRAMTests/SyncBatchPayloadCompatibilityTests
 ```
 
-Result: `TEST SUCCEEDED`; 81 tests executed, 0 failures.
+Result: `TEST SUCCEEDED`; 95 tests executed, 0 failures.
 
-- `MarkdownFileIOTests`: 13
-- `MarkdownImportIntegrationTests`: 4
-- `MarkdownFileOperationBoundaryTests`: 8
+- `MarkdownFileIOTests`: 15
+- `MarkdownImportIntegrationTests`: 6
+- `MarkdownFileOperationBoundaryTests`: 18
 - `MYR170FullBodyPathIntegrationTests`: 23
 - `SyncBatchPayloadCompatibilityTests`: 33
 
@@ -214,10 +235,10 @@ xcodebuild \
   -only-testing:MyRAMMacTests/MacStartupCoordinatorTests
 ```
 
-Result: `TEST SUCCEEDED`; 65 tests executed, 0 failures.
+Result: `TEST SUCCEEDED`; 71 tests executed, 0 failures.
 
-- `MarkdownFileIOTests`: 13
-- `MacMarkdownFileIOIntegrationTests`: 6
+- `MarkdownFileIOTests`: 15
+- `MacMarkdownFileIOIntegrationTests`: 10
 - `MacNotePersistenceAdapterTests`: 33
 - `MYR170MacFullBodyPathIntegrationTests`: 10
 - `MacStartupCoordinatorTests`: 3
@@ -237,14 +258,9 @@ xcodebuild \
 
 Result: `TEST SUCCEEDED`.
 
-- `MyRAMTests.xctest`: 940 tests, 0 failures.
+- `MyRAMTests.xctest`: 954 tests, 0 failures.
 - `MyRAMUITests`: five UI tests passed.
 - `MyRAMUITestsLaunchTests`: one launch test passed.
-
-The first complete-suite attempt exposed one stale regression expectation for
-the editor overflow action order. The expectation was updated to include the
-new `Export Markdown` action, committed, and every required verification gate
-was restarted against the tested implementation SHA recorded above.
 
 ### Native Mac application
 
@@ -256,7 +272,7 @@ xcodebuild \
   test
 ```
 
-Result: `TEST SUCCEEDED`; 551 tests executed, 0 failures.
+Result: `TEST SUCCEEDED`; 557 tests executed, 0 failures.
 
 ## Build verification
 
@@ -299,9 +315,9 @@ git diff --stat origin/main...HEAD
 git diff --name-only origin/main...HEAD
 ```
 
-The Xcode project lists both `MyRAM` and `MyRAMMac` targets and schemes. The
-tested implementation tree was clean and two local commits ahead of the
-initially pushed branch.
+The Xcode project lists both `MyRAM` and `MyRAMMac` targets and schemes.
+At the tested implementation SHA, the working tree was modified only by this
+pending evidence update.
 
 ## Architectural guardrails
 
@@ -340,7 +356,10 @@ boundaries:
 - latest raw source export after flush;
 - exclusion of rich-text representation from export bytes;
 - cancellation and atomic writer failure;
-- startup gating and queued Mac operation ordering;
+- production external Markdown/`.myram`/unsupported routing;
+- expected-editor mismatch and unavailable-editor fail-closed behavior;
+- startup gating and queued Mac pause/resume around acknowledged errors;
+- committed Mac import followed by presentation failure;
 - existing `.myram`, rich-text, blank-note, sync, convergence, and capability
   compatibility through complete suites.
 
