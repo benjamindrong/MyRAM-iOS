@@ -423,16 +423,24 @@ git diff --check origin/main...HEAD         PASSED
 
 ## Cross-Scene External Import Remediation — 2026-07-27
 
-Re-verified at tested implementation SHA `89f643564c7849ed71ca701c3fcbcbeccb9ae7d4`
-following PR #112 review finding.
+Re-verified at tested implementation SHA `333f5d72f9ff07be9f706596b6dcf15444fae24a`
+following PR #112 review findings.
 
-### Defect resolved
+### Defects resolved
 
-External Open With queue ownership, active-operation state, and unacknowledged
-error state were previously scene-local inside `MyRAMMacRootView`. When a second
-window or tab received an external URL while an earlier scene held an unacknowledged
-error, the new scene's isolated state allowed it to claim and import the file,
-bypassing the error gate.
+1. Cross-Scene Import Bypass: External Open With queue ownership, active-operation state,
+   and unacknowledged error state were previously scene-local inside `MyRAMMacRootView`. When a second
+   window or tab received an external URL while an earlier scene held an unacknowledged error, the new
+   scene's isolated state allowed it to claim and import the file, bypassing the error gate.
+2. File-menu Panel Error Display: `finishMarkdownFileOperation(errorMessage:)` previously dropped
+   `errorMessage`, causing File-menu import/export failures and presentation failures to be silently discarded.
+   Added scene-local `markdownFilePanelErrorMessage` and panel alert in `MyRAMMacRootView`.
+3. External Import Busy Tracking: `drainPendingMarkdownOpenURLsIfReady()` claimed requests without setting
+   `isMarkdownFileOperationInProgress = true`, allowing File-menu operations to overlap an active external import.
+   Added busy flag tracking around external imports.
+4. Error Acknowledgment Scene Ownership: `MacMarkdownExternalImportCoordinator.acknowledgeError(sceneID:)`
+   now enforces `guard pendingError?.presentingSceneID == sceneID else { return }` so non-presenting scenes
+   cannot clear the error gate.
 
 ### Architecture implemented
 
@@ -451,14 +459,15 @@ bypassing the error gate.
 ### Focused suites
 
 ```
-Mac: 60 tests, 0 failures (MacMarkdownFileIOIntegrationTests: 14, MacNotePersistenceAdapterTests: 33, MYR170MacFullBodyPathIntegrationTests: 10, MacStartupCoordinatorTests: 3)
+Mac: 61 tests, 0 failures (MacMarkdownFileIOIntegrationTests: 15, MacNotePersistenceAdapterTests: 33, MYR170MacFullBodyPathIntegrationTests: 10, MacStartupCoordinatorTests: 3)
 ```
 
-Added two-scene test groups:
+Added two-scene test groups & scene ownership test:
 - 8.1 Two-scene global gate (`testTwoSceneGlobalGateBlocksSuccessorUntilAcknowledgment`)
 - 8.2 Cross-scene active-operation ownership (`testSceneBCannotClaimWhileSceneAIsActive`)
 - 8.3 Arrival ordering and target-scene locking (`testArrivalOrderingAndTargetSceneLocking`)
 - 8.4 Error preservation under all non-acknowledgment operations (`testErrorPreservationUnderAllNonAcknowledgmentOperations`)
+- Scene ownership check (`testAcknowledgeErrorRequiresPresentingSceneOwnership`)
 
 Single-scene coordinator unit tests replaced former `MacMarkdownOpenURLQueue` tests:
 - Startup readiness gating (`testCoordinatorQueuedURLWaitsForStartupReadiness`)
@@ -468,7 +477,7 @@ Single-scene coordinator unit tests replaced former `MacMarkdownOpenURLQueue` te
 ### Complete suites
 
 ```
-Mac: 561 tests, 0 failures — TEST SUCCEEDED
+Mac: 562 tests, 0 failures — TEST SUCCEEDED
 iOS: 954 tests, 0 failures — Valid from prior run (diff from 1ba561f contains no iOS files)
 ```
 
@@ -494,4 +503,3 @@ git diff --check origin/main...HEAD         PASSED
 - No schema, model, sync payload, or anchored capability changes.
 - File-menu import/export remain scene-local and independent per window/tab.
 - No global static callbacks or NotificationCenter used for scene routing.
-
