@@ -366,3 +366,55 @@ boundaries:
 Interactive product verification remains explicitly unclaimed and should be
 completed before merge using Section 14 of the approved implementation
 proposal.
+
+---
+
+## Re-verification — 2026-07-27
+
+Re-verified at HEAD `e5949d45e7f5d39475e54f5e02a9f8fab1dbb5f9` (evidence-only
+commit). No production code changed between the tested implementation SHA
+`1ba561f` and this HEAD. All six remediation findings confirmed covered.
+
+### Focused suites
+
+```
+iOS:  39 tests, 0 failures  (MarkdownFileIOTests: 15, MarkdownFileOperationBoundaryTests: 18, MarkdownImportIntegrationTests: 6)
+Mac:  71 tests, 0 failures  (MarkdownFileIOTests: 15, MacMarkdownFileIOIntegrationTests: 10, MacNotePersistenceAdapterTests: 33, MYR170MacFullBodyPathIntegrationTests: 10, MacStartupCoordinatorTests: 3)
+```
+
+### Complete suites
+
+```
+iOS:  954 tests, 0 failures  — TEST SUCCEEDED
+Mac:  557 tests, 0 failures  — TEST SUCCEEDED
+```
+
+### Builds
+
+```
+iOS Simulator (generic):  BUILD SUCCEEDED
+macOS native:             BUILD SUCCEEDED
+```
+
+### Static checks
+
+```
+plutil -lint MyRAM/Info.plist               PASSED
+plutil -lint MyRAM/Mac/Info.plist           PASSED
+plutil -lint MyRAM.xcodeproj/project.pbxproj  PASSED
+xcodebuild -project MyRAM.xcodeproj -list  PASSED
+git diff --check origin/main...HEAD         PASSED
+```
+
+### Architectural guardrails
+
+- `SyncBatchAnchoredPayloadCapability.isEnabled` remains `false`; no
+  `isEnabled = true` found in production or package code.
+- `makeInsertedChange`/`makeDeletedChange` exist only in the existing
+  `SyncBatchAnchoredPayloadAdapter.swift`; no new call sites introduced.
+- No `batchSync.v2` or `currentSchemaVersion = 2` activation found.
+- `MyRAM/Markdown/MarkdownFileIO.swift` imports neither UIKit nor AppKit.
+- `.myram` routing remains a separate extension/content-type path; Markdown
+  bytes cannot reach its JSON decoder.
+- No schema, sync payload, parser, Preview, bookmark, monitoring, or
+  write-back change introduced.
