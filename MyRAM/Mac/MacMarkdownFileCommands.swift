@@ -8,6 +8,23 @@ struct MacMarkdownCommandActions {
     let exportMarkdown: () -> Void
 }
 
+struct MacMarkdownCommandActionsBuilder {
+    static func build(
+        isReady: Bool,
+        hasSelectedNote: Bool,
+        isOperationInProgress: Bool,
+        importMarkdown: @escaping () -> Void,
+        exportMarkdown: @escaping () -> Void
+    ) -> MacMarkdownCommandActions {
+        MacMarkdownCommandActions(
+            canImport: isReady && !isOperationInProgress,
+            canExport: isReady && hasSelectedNote && !isOperationInProgress,
+            importMarkdown: importMarkdown,
+            exportMarkdown: exportMarkdown
+        )
+    }
+}
+
 private struct MacMarkdownCommandActionsKey: FocusedValueKey {
     typealias Value = MacMarkdownCommandActions
 }

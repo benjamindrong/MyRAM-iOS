@@ -26,6 +26,27 @@ enum MacMarkdownImportResult {
     case importedButPresentationFailed(Note, message: String)
 }
 
+/// Manages scene-local file-operation lifecycle and panel error presentation.
+struct MacSceneLocalFileOperationState: Equatable {
+    private(set) var isOperationInProgress = false
+    private(set) var panelErrorMessage: String?
+
+    mutating func beginOperation() -> Bool {
+        guard !isOperationInProgress else { return false }
+        isOperationInProgress = true
+        return true
+    }
+
+    mutating func finishOperation(errorMessage: String? = nil) {
+        panelErrorMessage = errorMessage
+        isOperationInProgress = false
+    }
+
+    mutating func clearPanelError() {
+        panelErrorMessage = nil
+    }
+}
+
 /// Application-scoped coordinator that enforces a single active external-import
 /// request across all scenes and holds every scene's drain gate open until any
 /// unacknowledged error is explicitly dismissed.

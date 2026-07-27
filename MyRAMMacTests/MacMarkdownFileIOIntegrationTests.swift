@@ -344,6 +344,77 @@ final class MacMarkdownFileIOIntegrationTests: XCTestCase {
         XCTAssertEqual(coordinator.pendingError?.message, originalError?.message)
     }
 
+    // MARK: - Scene-local File-Operation Seam Tests
+
+    func testSceneLocalFileOperationStateLifecycleAndPanelErrorRecording() {
+        var state = MacSceneLocalFileOperationState()
+
+        XCTAssertFalse(state.isOperationInProgress)
+        XCTAssertNil(state.panelErrorMessage)
+
+        // beginOperation sets busy flag
+        XCTAssertTrue(state.beginOperation())
+        XCTAssertTrue(state.isOperationInProgress)
+
+        // Overlapping beginOperation while busy is rejected
+        XCTAssertFalse(state.beginOperation())
+
+        // finishOperation clears busy flag and stores panel error message
+        state.finishOperation(errorMessage: "Panel Import Failed")
+        XCTAssertFalse(state.isOperationInProgress)
+        XCTAssertEqual(state.panelErrorMessage, "Panel Import Failed")
+
+        // clearPanelError clears the panel error message
+        state.clearPanelError()
+        XCTAssertNil(state.panelErrorMessage)
+    }
+
+    func testMacMarkdownCommandActionsBuilderEvaluatesSceneLocalStateOnly() {
+        // Ready, no selection, idle
+        let actionsNoSelection = MacMarkdownCommandActionsBuilder.build(
+            isReady: true,
+            hasSelectedNote: false,
+            isOperationInProgress: false,
+            importMarkdown: {},
+            exportMarkdown: {}
+        )
+        XCTAssertTrue(actionsNoSelection.canImport)
+        XCTAssertFalse(actionsNoSelection.canExport)
+
+        // Ready, with selection, idle
+        let actionsIdle = MacMarkdownCommandActionsBuilder.build(
+            isReady: true,
+            hasSelectedNote: true,
+            isOperationInProgress: false,
+            importMarkdown: {},
+            exportMarkdown: {}
+        )
+        XCTAssertTrue(actionsIdle.canImport)
+        XCTAssertTrue(actionsIdle.canExport)
+
+        // Busy in current scene -> both disabled
+        let actionsBusy = MacMarkdownCommandActionsBuilder.build(
+            isReady: true,
+            hasSelectedNote: true,
+            isOperationInProgress: true,
+            importMarkdown: {},
+            exportMarkdown: {}
+        )
+        XCTAssertFalse(actionsBusy.canImport)
+        XCTAssertFalse(actionsBusy.canExport)
+
+        // Startup not ready -> both disabled
+        let actionsNotReady = MacMarkdownCommandActionsBuilder.build(
+            isReady: false,
+            hasSelectedNote: true,
+            isOperationInProgress: false,
+            importMarkdown: {},
+            exportMarkdown: {}
+        )
+        XCTAssertFalse(actionsNotReady.canImport)
+        XCTAssertFalse(actionsNotReady.canExport)
+    }
+
     func testExternalErrorInOneSceneDoesNotDisableFileMenuInAnotherScene() {
         let coordinator = MacMarkdownExternalImportCoordinator()
         let sceneA = UUID()
@@ -361,13 +432,16 @@ final class MacMarkdownFileIOIntegrationTests: XCTestCase {
         // External claim gate holds for Scene B
         XCTAssertNil(coordinator.claimNext(sceneID: sceneB, startupIsReady: true))
 
-        // Scene B's local state is unaffected by Scene A's external error:
-        // File-menu actions in Scene B depend only on startupIsReady and Scene B's local isMarkdownFileOperationInProgress flag,
-        // which remains false.
-        let sceneBIsBusy = false
-        let startupIsReady = true
-        let canImportInSceneB = startupIsReady && !sceneBIsBusy
-        XCTAssertTrue(canImportInSceneB, "Scene B File-menu import must remain enabled despite Scene A external error")
+        // Production seam check: Scene B's command actions depend ONLY on Scene B's readiness, selection, and local busy state
+        let sceneBActions = MacMarkdownCommandActionsBuilder.build(
+            isReady: true,
+            hasSelectedNote: true,
+            isOperationInProgress: false,
+            importMarkdown: {},
+            exportMarkdown: {}
+        )
+        XCTAssertTrue(sceneBActions.canImport, "Scene B File-menu import must remain enabled despite Scene A external error")
+        XCTAssertTrue(sceneBActions.canExport, "Scene B File-menu export must remain enabled despite Scene A external error")
     }
 
     func testExportFlushFailureBlocksSourceReadPanelAndWrite() async {
