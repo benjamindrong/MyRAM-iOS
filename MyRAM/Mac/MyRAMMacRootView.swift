@@ -156,15 +156,12 @@ struct MyRAMMacRootView: View {
 
     private var markdownCommandActions: MacMarkdownCommandActions {
         let isReady = startupCoordinator.state == .ready
-        let hasExternalError = externalImportCoordinator.pendingError != nil
         return MacMarkdownCommandActions(
             canImport: isReady
-                && !isMarkdownFileOperationInProgress
-                && !hasExternalError,
+                && !isMarkdownFileOperationInProgress,
             canExport: isReady
                 && selectedNoteID != nil
-                && !isMarkdownFileOperationInProgress
-                && !hasExternalError,
+                && !isMarkdownFileOperationInProgress,
             importMarkdown: beginMarkdownImportWithPanel,
             exportMarkdown: beginMarkdownExportWithPanel
         )
@@ -383,8 +380,7 @@ struct MyRAMMacRootView: View {
 
     private func beginMarkdownImportWithPanel() {
         guard startupCoordinator.state == .ready,
-              !isMarkdownFileOperationInProgress,
-              externalImportCoordinator.pendingError == nil else {
+              !isMarkdownFileOperationInProgress else {
             return
         }
 
@@ -415,8 +411,7 @@ struct MyRAMMacRootView: View {
     private func beginMarkdownExportWithPanel() {
         guard startupCoordinator.state == .ready,
               selectedNoteID != nil,
-              !isMarkdownFileOperationInProgress,
-              externalImportCoordinator.pendingError == nil else {
+              !isMarkdownFileOperationInProgress else {
             return
         }
 

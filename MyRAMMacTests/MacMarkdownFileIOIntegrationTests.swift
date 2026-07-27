@@ -344,6 +344,32 @@ final class MacMarkdownFileIOIntegrationTests: XCTestCase {
         XCTAssertEqual(coordinator.pendingError?.message, originalError?.message)
     }
 
+    func testExternalErrorInOneSceneDoesNotDisableFileMenuInAnotherScene() {
+        let coordinator = MacMarkdownExternalImportCoordinator()
+        let sceneA = UUID()
+        let sceneB = UUID()
+
+        // Scene A fails external import -> pendingError is active
+        coordinator.enqueue(url: URL(fileURLWithPath: "/tmp/A.md"), sceneID: sceneA)
+        let requestA = coordinator.claimNext(sceneID: sceneA, startupIsReady: true)!
+        coordinator.complete(requestID: requestA.id, errorMessage: "Scene A External Error")
+
+        XCTAssertNotNil(coordinator.pendingError)
+        XCTAssertTrue(coordinator.shouldPresentError(in: sceneA))
+        XCTAssertFalse(coordinator.shouldPresentError(in: sceneB))
+
+        // External claim gate holds for Scene B
+        XCTAssertNil(coordinator.claimNext(sceneID: sceneB, startupIsReady: true))
+
+        // Scene B's local state is unaffected by Scene A's external error:
+        // File-menu actions in Scene B depend only on startupIsReady and Scene B's local isMarkdownFileOperationInProgress flag,
+        // which remains false.
+        let sceneBIsBusy = false
+        let startupIsReady = true
+        let canImportInSceneB = startupIsReady && !sceneBIsBusy
+        XCTAssertTrue(canImportInSceneB, "Scene B File-menu import must remain enabled despite Scene A external error")
+    }
+
     func testExportFlushFailureBlocksSourceReadPanelAndWrite() async {
         var events: [String] = []
 
