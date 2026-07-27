@@ -7911,6 +7911,7 @@ final class MyRAMTests: XCTestCase {
                 .search,
                 .newNote,
                 .newFolder,
+                .exportMarkdown,
                 .exportNote,
                 .attachments,
                 .deleteNote

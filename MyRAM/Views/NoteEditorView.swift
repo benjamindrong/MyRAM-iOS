@@ -26,6 +26,7 @@ struct NoteEditorView: View {
     let onNewNote: (Note) -> Void
     var showsTopBar = true
     var toolbarBridge: NoteEditorToolbarBridge?
+    var fileOperationBridge: NoteEditorFileOperationBridge?
     var syncController: MyRAMSyncController? = nil
     var syncConflicts: [SyncConflictVersion] = []
     var currentNoteSearchText: Binding<String>? = nil
@@ -76,6 +77,10 @@ struct NoteEditorView: View {
     @State private var lookupRequest: LookupRequest?
     @State private var sharePayload: NoteSharePayload?
     @State private var exportErrorMessage: String?
+    @State private var markdownExportErrorMessage: String?
+    @State private var markdownExportDocument: MarkdownExportDocument?
+    @State private var markdownExportFilename = "Untitled.md"
+    @State private var showingMarkdownExporter = false
     @State private var showingNearbySync = false
     @State private var selectedSyncConflict: SyncConflictVersion?
     @State private var isLocalCurrentNoteSearchPresented = false
@@ -173,6 +178,18 @@ struct NoteEditorView: View {
                 guard case let .success(urls) = result else { return }
                 importImageFiles(from: urls)
             }
+            .fileExporter(
+                isPresented: $showingMarkdownExporter,
+                document: markdownExportDocument,
+                contentType: MarkdownFileClassifier.markdownContentType,
+                defaultFilename: markdownExportFilename
+            ) { result in
+                if case .failure(let error) = result,
+                   (error as? CocoaError)?.code != .userCancelled {
+                    markdownExportErrorMessage = "The Markdown file could not be written."
+                }
+                markdownExportDocument = nil
+            }
             .sheet(item: $lookupRequest) { request in
                 ReferenceLookupView(term: request.term)
             }
@@ -185,6 +202,14 @@ struct NoteEditorView: View {
             .sheet(item: $selectedSyncConflict) { conflict in
                 syncConflictSheet(for: conflict)
             }
+            .alert("Unable to Export Markdown", isPresented: Binding(
+                get: { markdownExportErrorMessage != nil },
+                set: { if !$0 { markdownExportErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(markdownExportErrorMessage ?? "An unknown Markdown export error occurred.")
+            }
     }
 
     private var editorLifecycleContent: some View {
@@ -192,6 +217,9 @@ struct NoteEditorView: View {
             .onAppear {
                 vm.registerActiveEditor(noteID: note.id)
                 initializeEditor()
+                fileOperationBridge?.register(noteID: note.id) {
+                    flushPendingNoteEditForFileOperation()
+                }
             }
             .onChange(of: title) { _, newTitle in
                 handleObservedTitleChange(newTitle)
@@ -223,6 +251,7 @@ struct NoteEditorView: View {
                 clearCurrentNoteSearch()
                 commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
+                fileOperationBridge?.unregister(noteID: note.id)
                 vm.unregisterActiveEditor(noteID: note.id)
             }
             .onChange(of: focusedPinnedThoughtID) { oldValue, newValue in
@@ -940,6 +969,9 @@ struct NoteEditorView: View {
             commitPendingNoteEdit()
             exportCurrentNote()
         }
+        toolbarBridge?.exportMarkdown = {
+            prepareMarkdownExport()
+        }
         toolbarBridge?.importFromPhotoLibrary = { showingPhotoPicker = true }
         toolbarBridge?.importImageFile = { showingFileImporter = true }
         toolbarBridge?.deleteNote = {
@@ -1194,6 +1226,10 @@ struct NoteEditorView: View {
                 commitPendingNoteEdit()
                 exportCurrentNote()
             }
+        case .exportMarkdown:
+            topBarActionButton(systemImage: "doc.badge.arrow.up", identifier: "topbar-export-markdown") {
+                prepareMarkdownExport()
+            }
         case .attachments:
             Menu {
                 attachmentImportMenuItems
@@ -1271,7 +1307,7 @@ struct NoteEditorView: View {
             try? await Task.sleep(nanoseconds: EditorTimingPolicy.commitDelayNanoseconds)
             guard !Task.isCancelled else { return }
             await MainActor.run {
-                commitPendingNoteEdit()
+                _ = commitPendingNoteEdit()
             }
         }
     }
@@ -1282,27 +1318,42 @@ struct NoteEditorView: View {
         hasPendingNoteCommit = false
     }
 
-    private func commitPendingNoteEdit() {
-        guard hasPendingNoteCommit else { return }
-        cancelPendingNoteCommit()
+    @discardableResult
+    private func commitPendingNoteEdit() -> Bool {
+        guard hasPendingNoteCommit else { return true }
+        pendingNoteCommitTask?.cancel()
+        pendingNoteCommitTask = nil
         let committedRichTextContentData = EditorRichTextCommitPolicy.committedRichTextContentData(
             currentData: richTextContentData,
             pendingEncoder: pendingRichTextContentEncoder
         )
         pendingRichTextContentEncoder = nil
         richTextContentData = committedRichTextContentData
-        vm.commitNoteEdit(
+        guard vm.commitNoteEdit(
             note,
             title: title,
             content: content,
             richTextContentData: committedRichTextContentData
-        )
+        ) else {
+            // Keep the pending mutation owned by this editor so a later flush can retry it.
+            hasPendingNoteCommit = true
+            return false
+        }
+        hasPendingNoteCommit = false
         vm.recordNoteEdited(note)
         if editorBufferOwner == .localEditing {
             editorBufferOwner = .idle
         }
         lastSnapshot = currentNoteSnapshot()
         vm.resumePendingConvergencePresentationIfNeeded()
+        return true
+    }
+
+    private func flushPendingNoteEditForFileOperation() -> EditorLocalFlushOutcome {
+        guard commitPendingNoteEdit() else {
+            return .failed(message: "Unable to save the current note.")
+        }
+        return .succeeded
     }
 
     private func handleEditorChange() {
@@ -2148,9 +2199,32 @@ struct NoteEditorView: View {
         }
     }
 
+    private func prepareMarkdownExport() {
+        do {
+            let prepared = try MarkdownExportPreparationCoordinator().prepare(
+                flush: flushPendingNoteEditForFileOperation,
+                snapshot: {
+                    (title: title, source: content)
+                }
+            )
+            markdownExportDocument = MarkdownExportDocument(data: prepared.data)
+            markdownExportFilename = prepared.filename
+            showingMarkdownExporter = true
+        } catch {
+            markdownExportErrorMessage = "The current note could not be saved before export."
+        }
+    }
+
     @ViewBuilder
     private func overflowMenuItem(for action: NoteEditorOverflowAction) -> some View {
         switch action {
+        case .exportMarkdown:
+            Button {
+                prepareMarkdownExport()
+            } label: {
+                Label("Export Markdown", systemImage: "doc.badge.arrow.up")
+            }
+            .foregroundStyle(.primary)
         case .exportNote:
             Button {
                 commitActivePinnedThoughtEdit()
@@ -2225,6 +2299,7 @@ enum NoteEditorOverflowAction: String, CaseIterable {
     case newNote
     case newFolder
     case search
+    case exportMarkdown
     case exportNote
     case attachments
     case deleteNote
@@ -2233,6 +2308,7 @@ enum NoteEditorOverflowAction: String, CaseIterable {
         .search,
         .newNote,
         .newFolder,
+        .exportMarkdown,
         .exportNote,
         .attachments,
         .deleteNote
@@ -2287,6 +2363,7 @@ final class NoteEditorToolbarBridge: ObservableObject {
     var newNote: (() -> Void)?
     var newFolder: (() -> Void)?
     var exportNote: (() -> Void)?
+    var exportMarkdown: (() -> Void)?
     var importFromPhotoLibrary: (() -> Void)?
     var importImageFile: (() -> Void)?
     var deleteNote: (() -> Void)?
@@ -2302,6 +2379,7 @@ final class NoteEditorToolbarBridge: ObservableObject {
         newNote = nil
         newFolder = nil
         exportNote = nil
+        exportMarkdown = nil
         importFromPhotoLibrary = nil
         importImageFile = nil
         deleteNote = nil
