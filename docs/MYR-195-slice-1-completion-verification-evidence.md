@@ -418,3 +418,80 @@ git diff --check origin/main...HEAD         PASSED
   bytes cannot reach its JSON decoder.
 - No schema, sync payload, parser, Preview, bookmark, monitoring, or
   write-back change introduced.
+
+---
+
+## Cross-Scene External Import Remediation — 2026-07-27
+
+Re-verified at tested implementation SHA `89f643564c7849ed71ca701c3fcbcbeccb9ae7d4`
+following PR #112 review finding.
+
+### Defect resolved
+
+External Open With queue ownership, active-operation state, and unacknowledged
+error state were previously scene-local inside `MyRAMMacRootView`. When a second
+window or tab received an external URL while an earlier scene held an unacknowledged
+error, the new scene's isolated state allowed it to claim and import the file,
+bypassing the error gate.
+
+### Architecture implemented
+
+- `MacMarkdownExternalImportCoordinator`: Single application-scoped `@MainActor`
+  `ObservableObject` created by `MyRAMMacApp` as `@StateObject` and injected into
+  `WindowGroup` via `.environmentObject`.
+- Stable scene identity: Each `MyRAMMacRootView` owns a stable in-memory `markdownSceneID`
+  (`UUID`) for request-to-scene association.
+- Single global active request: At most one external import is active across all scenes.
+- Application-wide error gate: Unacknowledged errors block `claimNext` across all scenes.
+- Target-scene locking: Requests are granted strictly in arrival order only to their target scene.
+- Error presentation transfer: Enqueueing a URL while an error is pending transfers
+  alert presentation ownership to the newly active scene without clearing or altering the error message.
+- Preservation of windowing: `WindowGroup` is preserved; File-menu import/export remain scene-local.
+
+### Focused suites
+
+```
+Mac: 60 tests, 0 failures (MacMarkdownFileIOIntegrationTests: 14, MacNotePersistenceAdapterTests: 33, MYR170MacFullBodyPathIntegrationTests: 10, MacStartupCoordinatorTests: 3)
+```
+
+Added two-scene test groups:
+- 8.1 Two-scene global gate (`testTwoSceneGlobalGateBlocksSuccessorUntilAcknowledgment`)
+- 8.2 Cross-scene active-operation ownership (`testSceneBCannotClaimWhileSceneAIsActive`)
+- 8.3 Arrival ordering and target-scene locking (`testArrivalOrderingAndTargetSceneLocking`)
+- 8.4 Error preservation under all non-acknowledgment operations (`testErrorPreservationUnderAllNonAcknowledgmentOperations`)
+
+Single-scene coordinator unit tests replaced former `MacMarkdownOpenURLQueue` tests:
+- Startup readiness gating (`testCoordinatorQueuedURLWaitsForStartupReadiness`)
+- Queue pause/resume around acknowledgment (`testCoordinatorQueuedErrorPausesLaterURLUntilAcknowledgment`)
+- Error preservation against stale/wrong completions (`testCoordinatorLaterSuccessCannotClearUnacknowledgedError`)
+
+### Complete suites
+
+```
+Mac: 561 tests, 0 failures — TEST SUCCEEDED
+iOS: 954 tests, 0 failures — Valid from prior run (diff from 1ba561f contains no iOS files)
+```
+
+### Builds
+
+```
+macOS native:             BUILD SUCCEEDED
+iOS Simulator (generic):  BUILD SUCCEEDED
+```
+
+### Static checks
+
+```
+plutil -lint MyRAM/Mac/Info.plist               PASSED
+plutil -lint MyRAM.xcodeproj/project.pbxproj  PASSED
+xcodebuild -project MyRAM.xcodeproj -list  PASSED
+git diff --check origin/main...HEAD         PASSED
+```
+
+### Architectural guardrails
+
+- `WindowGroup` preserved; no document-based window conversion.
+- No schema, model, sync payload, or anchored capability changes.
+- File-menu import/export remain scene-local and independent per window/tab.
+- No global static callbacks or NotificationCenter used for scene routing.
+
