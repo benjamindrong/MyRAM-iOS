@@ -110,7 +110,7 @@ final class MacMarkdownExternalImportCoordinator: ObservableObject {
     /// Acknowledges and clears the pending error, releasing the application-wide
     /// gate so scenes may claim the next queued request.
     func acknowledgeError(sceneID: UUID) {
-        guard pendingError != nil else { return }
+        guard pendingError?.presentingSceneID == sceneID else { return }
         pendingError = nil
         bumpRevision()
     }

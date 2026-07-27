@@ -182,6 +182,25 @@ final class MacMarkdownFileIOIntegrationTests: XCTestCase {
         XCTAssertEqual(coordinator.pendingError?.message, "First failure")
     }
 
+    func testAcknowledgeErrorRequiresPresentingSceneOwnership() {
+        let coordinator = MacMarkdownExternalImportCoordinator()
+        let sceneA = UUID()
+        let sceneB = UUID()
+        let urlA = URL(fileURLWithPath: "/tmp/A.md")
+        coordinator.enqueue(url: urlA, sceneID: sceneA)
+        let requestA = coordinator.claimNext(sceneID: sceneA, startupIsReady: true)!
+        coordinator.complete(requestID: requestA.id, errorMessage: "Scene A Error")
+
+        // Non-presenting scene B tries to acknowledge
+        coordinator.acknowledgeError(sceneID: sceneB)
+        XCTAssertEqual(coordinator.pendingError?.message, "Scene A Error")
+        XCTAssertEqual(coordinator.pendingError?.presentingSceneID, sceneA)
+
+        // Presenting scene A acknowledges
+        coordinator.acknowledgeError(sceneID: sceneA)
+        XCTAssertNil(coordinator.pendingError)
+    }
+
     // MARK: - 8.1 Two-scene global gate
 
     func testTwoSceneGlobalGateBlocksSuccessorUntilAcknowledgment() {

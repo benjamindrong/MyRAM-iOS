@@ -28,6 +28,7 @@ struct MyRAMMacRootView: View {
     /// external Open With URL with the scene that received it. Not persisted.
     @State private var markdownSceneID = UUID()
     @State private var isMarkdownFileOperationInProgress = false
+    @State private var markdownFilePanelErrorMessage: String?
 
     var body: some View {
         Group {
@@ -78,6 +79,21 @@ struct MyRAMMacRootView: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(externalImportCoordinator.pendingError?.message ?? "")
+        }
+        .alert(
+            "Markdown File Error",
+            isPresented: Binding(
+                get: { markdownFilePanelErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        markdownFilePanelErrorMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(markdownFilePanelErrorMessage ?? "")
         }
     }
 
@@ -441,6 +457,7 @@ struct MyRAMMacRootView: View {
     }
 
     private func drainPendingMarkdownOpenURLsIfReady() {
+        guard !isMarkdownFileOperationInProgress else { return }
         guard let request = externalImportCoordinator.claimNext(
             sceneID: markdownSceneID,
             startupIsReady: startupCoordinator.state == .ready
@@ -448,6 +465,7 @@ struct MyRAMMacRootView: View {
             return
         }
 
+        isMarkdownFileOperationInProgress = true
         let url = request.url
         let requestID = request.id
         Task { @MainActor in
@@ -465,6 +483,7 @@ struct MyRAMMacRootView: View {
                     requestID: requestID,
                     errorMessage: markdownErrorMessage(for: error)
                 )
+                isMarkdownFileOperationInProgress = false
                 drainPendingMarkdownOpenURLsIfReady()
             }
         }
@@ -517,8 +536,9 @@ struct MyRAMMacRootView: View {
         resumeSyncConvergence()
     }
 
-    /// Cleans up after a File-menu panel import. Does not touch the external coordinator.
+    /// Cleans up after a File-menu panel import or export. Does not touch the external coordinator.
     private func finishMarkdownFileOperation(errorMessage: String? = nil) {
+        markdownFilePanelErrorMessage = errorMessage
         isMarkdownFileOperationInProgress = false
     }
 
