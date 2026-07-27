@@ -423,7 +423,7 @@ git diff --check origin/main...HEAD         PASSED
 
 ## Cross-Scene External Import Remediation — 2026-07-27
 
-Re-verified at tested implementation SHA `333f5d72f9ff07be9f706596b6dcf15444fae24a`
+Re-verified at tested implementation SHA `30668c1b752df46e01a88bceea7cff177df9ca7e`
 following PR #112 review findings.
 
 ### Defects resolved
@@ -441,6 +441,9 @@ following PR #112 review findings.
 4. Error Acknowledgment Scene Ownership: `MacMarkdownExternalImportCoordinator.acknowledgeError(sceneID:)`
    now enforces `guard pendingError?.presentingSceneID == sceneID else { return }` so non-presenting scenes
    cannot clear the error gate.
+5. File-Menu Scene Independence: Removed global `pendingError` checks from `markdownCommandActions`,
+   `beginMarkdownImportWithPanel`, and `beginMarkdownExportWithPanel`. An unacknowledged external error in
+   one scene no longer disables File-menu import/export in other windows/tabs.
 
 ### Architecture implemented
 
@@ -459,7 +462,7 @@ following PR #112 review findings.
 ### Focused suites
 
 ```
-Mac: 61 tests, 0 failures (MacMarkdownFileIOIntegrationTests: 15, MacNotePersistenceAdapterTests: 33, MYR170MacFullBodyPathIntegrationTests: 10, MacStartupCoordinatorTests: 3)
+Mac: 62 tests, 0 failures (MacMarkdownFileIOIntegrationTests: 16, MacNotePersistenceAdapterTests: 33, MYR170MacFullBodyPathIntegrationTests: 10, MacStartupCoordinatorTests: 3)
 ```
 
 Added two-scene test groups & scene ownership test:
@@ -468,6 +471,7 @@ Added two-scene test groups & scene ownership test:
 - 8.3 Arrival ordering and target-scene locking (`testArrivalOrderingAndTargetSceneLocking`)
 - 8.4 Error preservation under all non-acknowledgment operations (`testErrorPreservationUnderAllNonAcknowledgmentOperations`)
 - Scene ownership check (`testAcknowledgeErrorRequiresPresentingSceneOwnership`)
+- File-menu scene independence (`testExternalErrorInOneSceneDoesNotDisableFileMenuInAnotherScene`)
 
 Single-scene coordinator unit tests replaced former `MacMarkdownOpenURLQueue` tests:
 - Startup readiness gating (`testCoordinatorQueuedURLWaitsForStartupReadiness`)
@@ -477,7 +481,7 @@ Single-scene coordinator unit tests replaced former `MacMarkdownOpenURLQueue` te
 ### Complete suites
 
 ```
-Mac: 562 tests, 0 failures — TEST SUCCEEDED
+Mac: 563 tests, 0 failures — TEST SUCCEEDED
 iOS: 954 tests, 0 failures — Valid from prior run (diff from 1ba561f contains no iOS files)
 ```
 
