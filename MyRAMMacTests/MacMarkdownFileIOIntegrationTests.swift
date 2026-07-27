@@ -121,56 +121,208 @@ final class MacMarkdownFileIOIntegrationTests: XCTestCase {
         XCTAssertEqual(events, ["flush", "source", "commit", "publish", "present"])
     }
 
-    func testQueuedErrorPausesLaterURLUntilAcknowledgment() throws {
+    // MARK: - Coordinator: single-scene basics (regression 8.5)
+
+    func testCoordinatorQueuedURLWaitsForStartupReadiness() {
+        let coordinator = MacMarkdownExternalImportCoordinator()
+        let sceneID = UUID()
+        let url = URL(fileURLWithPath: "/tmp/Startup.md")
+        coordinator.enqueue(url: url, sceneID: sceneID)
+
+        XCTAssertNil(
+            coordinator.claimNext(sceneID: sceneID, startupIsReady: false)
+        )
+        XCTAssertEqual(coordinator.pendingRequests.count, 1)
+
+        let claimed = coordinator.claimNext(sceneID: sceneID, startupIsReady: true)
+        XCTAssertNotNil(claimed)
+        XCTAssertEqual(claimed?.url, url)
+    }
+
+    func testCoordinatorQueuedErrorPausesLaterURLUntilAcknowledgment() {
+        let coordinator = MacMarkdownExternalImportCoordinator()
+        let sceneID = UUID()
         let firstURL = URL(fileURLWithPath: "/tmp/A.md")
         let secondURL = URL(fileURLWithPath: "/tmp/B.md")
-        var queue = MacMarkdownOpenURLQueue()
-        queue.enqueue(firstURL)
-        queue.enqueue(secondURL)
+        coordinator.enqueue(url: firstURL, sceneID: sceneID)
+        coordinator.enqueue(url: secondURL, sceneID: sceneID)
 
-        XCTAssertEqual(
-            queue.takeNextIfReady(startupIsReady: true, operationIsInProgress: false),
-            firstURL
-        )
-        queue.recordCompletion(errorMessage: "A failed")
+        let first = coordinator.claimNext(sceneID: sceneID, startupIsReady: true)
+        let firstID = try! XCTUnwrap(first).id
+        coordinator.complete(requestID: firstID, errorMessage: "A failed")
 
-        XCTAssertNil(
-            queue.takeNextIfReady(startupIsReady: true, operationIsInProgress: false)
-        )
-        XCTAssertEqual(queue.pendingURLs, [secondURL])
-        XCTAssertEqual(queue.errorMessage, "A failed")
+        XCTAssertNil(coordinator.claimNext(sceneID: sceneID, startupIsReady: true))
+        XCTAssertEqual(coordinator.pendingRequests.count, 1)
+        XCTAssertEqual(coordinator.pendingError?.message, "A failed")
 
-        queue.acknowledgeError()
+        coordinator.acknowledgeError(sceneID: sceneID)
 
-        XCTAssertEqual(
-            queue.takeNextIfReady(startupIsReady: true, operationIsInProgress: false),
-            secondURL
-        )
-        XCTAssertNil(queue.errorMessage)
-        XCTAssertTrue(queue.pendingURLs.isEmpty)
+        let second = coordinator.claimNext(sceneID: sceneID, startupIsReady: true)
+        XCTAssertNotNil(second)
+        XCTAssertEqual(second?.url, secondURL)
+        XCTAssertNil(coordinator.pendingError)
+        XCTAssertTrue(coordinator.pendingRequests.isEmpty)
     }
 
-    func testLaterSuccessCannotClearUnacknowledgedQueuedError() {
-        var queue = MacMarkdownOpenURLQueue()
-        queue.recordCompletion(errorMessage: "First failure")
-        queue.recordCompletion(errorMessage: nil)
+    func testCoordinatorLaterSuccessCannotClearUnacknowledgedError() {
+        let coordinator = MacMarkdownExternalImportCoordinator()
+        let sceneID = UUID()
+        let urlA = URL(fileURLWithPath: "/tmp/A.md")
+        let urlB = URL(fileURLWithPath: "/tmp/B.md")
+        coordinator.enqueue(url: urlA, sceneID: sceneID)
+        let first = coordinator.claimNext(sceneID: sceneID, startupIsReady: true)!
+        coordinator.complete(requestID: first.id, errorMessage: "First failure")
 
-        XCTAssertEqual(queue.errorMessage, "First failure")
+        // Stale or wrong-ID completion must not clear the error.
+        coordinator.complete(requestID: UUID(), errorMessage: nil)
+        XCTAssertEqual(coordinator.pendingError?.message, "First failure")
+
+        // Enqueueing a second URL must not clear the error.
+        coordinator.enqueue(url: urlB, sceneID: sceneID)
+        XCTAssertEqual(coordinator.pendingError?.message, "First failure")
     }
 
-    func testQueuedURLWaitsForStartupReadiness() {
-        let url = URL(fileURLWithPath: "/tmp/Startup.md")
-        var queue = MacMarkdownOpenURLQueue()
-        queue.enqueue(url)
+    // MARK: - 8.1 Two-scene global gate
 
-        XCTAssertNil(
-            queue.takeNextIfReady(startupIsReady: false, operationIsInProgress: false)
-        )
-        XCTAssertEqual(queue.pendingURLs, [url])
-        XCTAssertEqual(
-            queue.takeNextIfReady(startupIsReady: true, operationIsInProgress: false),
-            url
-        )
+    func testTwoSceneGlobalGateBlocksSuccessorUntilAcknowledgment() {
+        let coordinator = MacMarkdownExternalImportCoordinator()
+        let sceneA = UUID()
+        let sceneB = UUID()
+        let urlA = URL(fileURLWithPath: "/tmp/A.md")
+        let urlB = URL(fileURLWithPath: "/tmp/B.md")
+
+        // Step 1–3: scene A fails.
+        coordinator.enqueue(url: urlA, sceneID: sceneA)
+        let requestA = coordinator.claimNext(sceneID: sceneA, startupIsReady: true)!
+        coordinator.complete(requestID: requestA.id, errorMessage: "Read error")
+
+        // Step 4: enqueue valid request B for scene B.
+        coordinator.enqueue(url: urlB, sceneID: sceneB)
+
+        // Step 5: scene B cannot claim B before acknowledgment.
+        XCTAssertNil(coordinator.claimNext(sceneID: sceneB, startupIsReady: true))
+
+        // Step 6: original error is unchanged.
+        XCTAssertEqual(coordinator.pendingError?.message, "Read error")
+
+        // Step 7: presentation ownership moved to scene B without clearing error.
+        XCTAssertTrue(coordinator.shouldPresentError(in: sceneB))
+        XCTAssertFalse(coordinator.shouldPresentError(in: sceneA))
+        XCTAssertEqual(coordinator.pendingError?.message, "Read error")
+
+        // Step 8: acknowledge.
+        coordinator.acknowledgeError(sceneID: sceneB)
+        XCTAssertNil(coordinator.pendingError)
+
+        // Step 9: scene B can now claim B.
+        let requestB = coordinator.claimNext(sceneID: sceneB, startupIsReady: true)
+        XCTAssertNotNil(requestB)
+        XCTAssertEqual(requestB?.url, urlB)
+
+        // Step 10–11: complete B successfully; claimed and completed exactly once.
+        coordinator.complete(requestID: requestB!.id, errorMessage: nil)
+        XCTAssertNil(coordinator.activeRequest)
+        XCTAssertNil(coordinator.pendingError)
+        XCTAssertTrue(coordinator.pendingRequests.isEmpty)
+    }
+
+    // MARK: - 8.2 Cross-scene active-operation ownership
+
+    func testSceneBCannotClaimWhileSceneAIsActive() {
+        let coordinator = MacMarkdownExternalImportCoordinator()
+        let sceneA = UUID()
+        let sceneB = UUID()
+
+        // Step 1: scene A claims request A.
+        coordinator.enqueue(url: URL(fileURLWithPath: "/tmp/A.md"), sceneID: sceneA)
+        let requestA = coordinator.claimNext(sceneID: sceneA, startupIsReady: true)!
+        XCTAssertNotNil(coordinator.activeRequest)
+
+        // Step 2–3: scene B enqueues B; cannot claim while A is active.
+        coordinator.enqueue(url: URL(fileURLWithPath: "/tmp/B.md"), sceneID: sceneB)
+        XCTAssertNil(coordinator.claimNext(sceneID: sceneB, startupIsReady: true))
+
+        // Step 4: complete A.
+        coordinator.complete(requestID: requestA.id, errorMessage: nil)
+        XCTAssertNil(coordinator.activeRequest)
+
+        // Step 5: B becomes claimable exactly once.
+        let requestB = coordinator.claimNext(sceneID: sceneB, startupIsReady: true)
+        XCTAssertNotNil(requestB)
+        // Claiming again yields nil (already active).
+        XCTAssertNil(coordinator.claimNext(sceneID: sceneB, startupIsReady: true))
+    }
+
+    // MARK: - 8.3 Arrival ordering
+
+    func testArrivalOrderingAndTargetSceneLocking() {
+        let coordinator = MacMarkdownExternalImportCoordinator()
+        let sceneA = UUID()
+        let sceneB = UUID()
+        let sceneC = UUID()
+        let urlA = URL(fileURLWithPath: "/tmp/A.md")
+        let urlB = URL(fileURLWithPath: "/tmp/B.md")
+        let urlC = URL(fileURLWithPath: "/tmp/C.md")
+
+        // Step 1: enqueue A, B, C for different scenes.
+        coordinator.enqueue(url: urlA, sceneID: sceneA)
+        coordinator.enqueue(url: urlB, sceneID: sceneB)
+        coordinator.enqueue(url: urlC, sceneID: sceneC)
+
+        // Step 2: B and C cannot bypass A — only scene A can claim first.
+        XCTAssertNil(coordinator.claimNext(sceneID: sceneB, startupIsReady: true))
+        XCTAssertNil(coordinator.claimNext(sceneID: sceneC, startupIsReady: true))
+
+        // Step 3: each request is granted only to its target scene.
+        let claimedA = coordinator.claimNext(sceneID: sceneA, startupIsReady: true)!
+        XCTAssertEqual(claimedA.url, urlA)
+        XCTAssertEqual(claimedA.sceneID, sceneA)
+        coordinator.complete(requestID: claimedA.id, errorMessage: nil)
+
+        let claimedB = coordinator.claimNext(sceneID: sceneB, startupIsReady: true)!
+        XCTAssertEqual(claimedB.url, urlB)
+        XCTAssertEqual(claimedB.sceneID, sceneB)
+        coordinator.complete(requestID: claimedB.id, errorMessage: nil)
+
+        let claimedC = coordinator.claimNext(sceneID: sceneC, startupIsReady: true)!
+        XCTAssertEqual(claimedC.url, urlC)
+        XCTAssertEqual(claimedC.sceneID, sceneC)
+        coordinator.complete(requestID: claimedC.id, errorMessage: nil)
+
+        // Step 4: completion order follows queue order; queue is now empty.
+        XCTAssertTrue(coordinator.pendingRequests.isEmpty)
+        XCTAssertNil(coordinator.activeRequest)
+        XCTAssertNil(coordinator.pendingError)
+    }
+
+    // MARK: - 8.4 Error preservation
+
+    func testErrorPreservationUnderAllNonAcknowledgmentOperations() {
+        let coordinator = MacMarkdownExternalImportCoordinator()
+        let sceneA = UUID()
+        let sceneB = UUID()
+
+        // Establish an unacknowledged error.
+        coordinator.enqueue(url: URL(fileURLWithPath: "/tmp/A.md"), sceneID: sceneA)
+        let requestA = coordinator.claimNext(sceneID: sceneA, startupIsReady: true)!
+        coordinator.complete(requestID: requestA.id, errorMessage: "Injected")
+        let originalError = coordinator.pendingError
+
+        // Enqueueing another URL must not clear the error.
+        coordinator.enqueue(url: URL(fileURLWithPath: "/tmp/B.md"), sceneID: sceneB)
+        XCTAssertEqual(coordinator.pendingError?.message, originalError?.message)
+
+        // A completion call for a non-active (stale) request ID must not clear the error.
+        coordinator.complete(requestID: UUID(), errorMessage: nil)
+        XCTAssertEqual(coordinator.pendingError?.message, originalError?.message)
+
+        // A claim attempt from another scene must not clear the error.
+        XCTAssertNil(coordinator.claimNext(sceneID: sceneB, startupIsReady: true))
+        XCTAssertEqual(coordinator.pendingError?.message, originalError?.message)
+
+        // A successful-looking completion for the wrong ID must not clear the error.
+        coordinator.complete(requestID: UUID(), errorMessage: nil)
+        XCTAssertEqual(coordinator.pendingError?.message, originalError?.message)
     }
 
     func testExportFlushFailureBlocksSourceReadPanelAndWrite() async {
