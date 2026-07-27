@@ -11,6 +11,7 @@ struct MyRAMMacApp: App {
             TextEditingCommands()
             TextFormattingCommands()
             SidebarCommands()
+            MacMarkdownFileCommands()
         }
     }
 }

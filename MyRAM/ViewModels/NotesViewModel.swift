@@ -394,6 +394,48 @@ final class NotesViewModel: ObservableObject {
         return note
     }
 
+    @discardableResult
+    func importMarkdownDocument(_ document: ImportedMarkdownDocument) throws -> Note {
+        let note = Note(title: document.suggestedTitle, content: document.source)
+        let previousFolderModifiedAt = currentFolder?.modifiedAt
+
+        do {
+            let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+                noteID: note.id,
+                body: note.content
+            )
+            _ = try NoteSequenceStateFullBodyIntegration.insertNewNote(
+                note,
+                preparedState: prepared,
+                in: context
+            )
+            note.folder = currentFolder
+            currentFolder?.modifiedAt = .now
+            try saveContext()
+        } catch {
+            context.rollback()
+            if let previousFolderModifiedAt {
+                currentFolder?.modifiedAt = previousFolderModifiedAt
+            }
+            throw error
+        }
+
+        recordSyncBatchChange(SyncConvergenceCapturedLocalChange(
+            change: IPhoneSyncBatchCaptureHook.noteCreated(note),
+            evidence: nil
+        ))
+        if let currentFolder {
+            recordFolderSyncChange(currentFolder)
+        }
+        recordUndoAction(.noteCreation(NoteCreationUndoSnapshot(
+            noteID: note.id,
+            folderID: note.folder?.id
+        )))
+        refreshCurrentFolderContent()
+        selectNote(note)
+        return note
+    }
+
     func createFolder(named name: String = "New Folder") {
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let folder = Folder(
@@ -594,13 +636,14 @@ final class NotesViewModel: ObservableObject {
         fetchNote(withID: noteID)
     }
 
+    @discardableResult
     func commitNoteEdit(
         _ note: Note,
         title: String,
         content: String,
         richTextContentData: Data? = nil
-    ) {
-        guard note.deletedAt == nil else { return }
+    ) -> Bool {
+        guard note.deletedAt == nil else { return false }
         let oldTitle = note.title
         let oldContent = note.content
         let oldRichTextContentData = note.richTextContentData
@@ -618,7 +661,7 @@ final class NotesViewModel: ObservableObject {
             )
         } catch {
             syncBatchErrorMessage = "Unable to capture local sync evidence for the latest edit."
-            return
+            return false
         }
         note.title = title
         note.content = content
@@ -632,10 +675,11 @@ final class NotesViewModel: ObservableObject {
             note.richTextContentData = oldRichTextContentData
             note.modifiedAt = oldModifiedAt
             syncBatchErrorMessage = "Unable to save the latest edit."
-            return
+            return false
         }
         recordActiveNoteTextEdited(note)
         recordPreparedLocalNoteEdit(preparedEdit)
+        return true
     }
 
     func updateNote(

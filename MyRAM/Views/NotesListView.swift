@@ -3,6 +3,7 @@ import SwiftUI
 import SwiftData
 import UIKit
 import Combine
+import UniformTypeIdentifiers
 
 @MainActor
 final class NotesListState: ObservableObject {
@@ -113,6 +114,8 @@ struct NotesListView: View {
 #endif
     @ObservedObject private var state: NotesListState
     @StateObject private var editorToolbarBridge = NoteEditorToolbarBridge()
+    @StateObject private var editorFileOperationBridge = NoteEditorFileOperationBridge()
+    @StateObject private var markdownImportCoordinator = MarkdownImportOperationCoordinator()
     @State private var editMode: EditMode = .inactive
     @State private var selectedNote: Note? = nil
     @State private var showingRecentlyDeleted = false
@@ -121,6 +124,9 @@ struct NotesListView: View {
     @State private var sharePayload: SharePayload?
     @State private var exportErrorMessage: String?
     @State private var importErrorMessage: String?
+    @State private var markdownImportErrorMessage: String?
+    @State private var showingMarkdownImporter = false
+    @State private var pendingOpenURLs: [URL] = []
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
     @State private var folderAwaitingRename: Folder?
@@ -191,6 +197,36 @@ struct NotesListView: View {
                 readyContent
             }
         }
+        .fileImporter(
+            isPresented: $showingMarkdownImporter,
+            allowedContentTypes: [MarkdownFileClassifier.markdownContentType],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                importMarkdownFile(from: url)
+            case .failure(let error):
+                guard !isFilePanelCancellation(error) else { return }
+                markdownImportErrorMessage = "The selected Markdown file could not be opened."
+            }
+        }
+        .onOpenURL { url in
+            pendingOpenURLs.append(url)
+            drainPendingOpenURLsIfReady()
+        }
+        .onChange(of: state.bootstrapState) { _, bootstrapState in
+            guard bootstrapState == .ready else { return }
+            drainPendingOpenURLsIfReady()
+        }
+        .alert("Unable to Import Markdown", isPresented: Binding(
+            get: { markdownImportErrorMessage != nil },
+            set: { if !$0 { markdownImportErrorMessage = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(markdownImportErrorMessage ?? "An unknown Markdown import error occurred.")
+        }
     }
 
     private var readyContent: some View {
@@ -232,6 +268,7 @@ struct NotesListView: View {
             selectedNote: $selectedNote,
             vm: vm,
             syncController: syncController,
+            fileOperationBridge: editorFileOperationBridge,
             onOpenSyncConflicts: {
                 showingNearbySync = true
             }
@@ -279,9 +316,6 @@ struct NotesListView: View {
                             }
                         }
                 }
-            }
-            .onOpenURL { url in
-                importMyRAMFile(from: url)
             }
             .alert("Unable to Export Notes", isPresented: Binding(
                 get: { exportErrorMessage != nil },
@@ -750,6 +784,7 @@ struct NotesListView: View {
                 },
                 showsTopBar: false,
                 toolbarBridge: editorToolbarBridge,
+                fileOperationBridge: editorFileOperationBridge,
                 syncConflicts: vm.activeSyncConflicts(for: selectedNote),
                 currentNoteSearchText: $currentNoteSearchText,
                 currentNoteSearchFocusToken: currentNoteSearchFocusToken,
@@ -803,6 +838,16 @@ struct NotesListView: View {
                         Label("Nearby Sync", systemImage: "dot.radiowaves.left.and.right")
                     }
                     .foregroundStyle(.primary)
+
+                    Divider()
+
+                    Button {
+                        showingMarkdownImporter = true
+                    } label: {
+                        Label("Import Markdown", systemImage: "doc.badge.plus")
+                    }
+                    .foregroundStyle(.primary)
+                    .disabled(markdownImportCoordinator.isProcessing)
 
                     Divider()
 
@@ -919,9 +964,27 @@ struct NotesListView: View {
 
     private var desktopEditorToolbarActions: some View {
         HStack(spacing: 8) {
-            compactActionButton(systemImage: "square.and.arrow.up", identifier: "desktop-topbar-export-note") {
-                editorToolbarBridge.exportNote?()
+            Menu {
+                Button {
+                    editorToolbarBridge.exportMarkdown?()
+                } label: {
+                    Label("Export Markdown", systemImage: "doc.badge.arrow.up")
+                }
+
+                Button {
+                    editorToolbarBridge.exportNote?()
+                } label: {
+                    Label("Export MyRAM Note", systemImage: "square.and.arrow.up")
+                }
+            } label: {
+                Image(systemName: "square.and.arrow.up")
+                    .font(.system(size: topBarIconSize, weight: .semibold))
+                    .frame(width: topBarControlSize, height: topBarControlSize)
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(.primary)
             }
+            .tint(.primary)
+            .accessibilityIdentifier("desktop-topbar-export-note")
 
             Menu {
                 Button {
@@ -1607,6 +1670,58 @@ struct NotesListView: View {
         }
     }
 
+    private func importMarkdownFile(from url: URL) {
+        do {
+            let importedNote = try markdownImportCoordinator.perform(
+                url: url,
+                flushBridge: editorFileOperationBridge,
+                consume: vm.importMarkdownDocument
+            )
+            selectedNote = importedNote
+        } catch {
+            markdownImportErrorMessage = markdownImportMessage(for: error)
+        }
+    }
+
+    private func drainPendingOpenURLsIfReady() {
+        guard state.bootstrapState == .ready,
+              !markdownImportCoordinator.isProcessing else {
+            return
+        }
+
+        while !pendingOpenURLs.isEmpty {
+            let url = pendingOpenURLs.removeFirst()
+            let didStartAccessing = url.startAccessingSecurityScopedResource()
+            let kind = MarkdownFileClassifier().kind(for: url)
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+
+            switch kind {
+            case .markdown:
+                importMarkdownFile(from: url)
+            case .myram:
+                importMyRAMFile(from: url)
+            case .unsupported:
+                importErrorMessage = MarkdownFileIOError.unsupportedFileType.errorDescription
+            }
+        }
+    }
+
+    private func markdownImportMessage(for error: Error) -> String {
+        if let operationError = error as? MarkdownImportOperationError {
+            return operationError.errorDescription ?? "Unable to import the Markdown file."
+        }
+        if let fileError = error as? MarkdownFileIOError {
+            return fileError.errorDescription ?? "Unable to import the Markdown file."
+        }
+        return "The Markdown note could not be created."
+    }
+
+    private func isFilePanelCancellation(_ error: Error) -> Bool {
+        (error as? CocoaError)?.code == .userCancelled
+    }
+
     private var notePreviewContentTextColor: Color {
         colorScheme == .dark ? .primary : .secondary
     }
@@ -1626,6 +1741,7 @@ private struct MobileNoteEditorSheet: ViewModifier {
     @Binding var selectedNote: Note?
     @ObservedObject var vm: NotesViewModel
     @ObservedObject var syncController: MyRAMSyncController
+    @ObservedObject var fileOperationBridge: NoteEditorFileOperationBridge
     let onOpenSyncConflicts: () -> Void
 
     func body(content: Content) -> some View {
@@ -1641,6 +1757,7 @@ private struct MobileNoteEditorSheet: ViewModifier {
                         onNewNote: { newNote in
                             selectedNote = newNote
                         },
+                        fileOperationBridge: fileOperationBridge,
                         syncController: syncController,
                         syncConflicts: vm.activeSyncConflicts(for: note),
                         onOpenSyncConflicts: onOpenSyncConflicts

@@ -25,6 +25,62 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertEqual(record.revision, 0)
     }
 
+    func testMacCreateImportedMarkdownPersistsExactBodyAndRevisionZeroStateTogether() throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let exactBody = "# Café\r\n\r\n👩🏽‍💻\n"
+        var observedAtomicModels = false
+        let adapter = MacNotePersistenceAdapter(context: context, saveOperation: { context in
+            let notes = try context.fetch(FetchDescriptor<Note>())
+            let states = try context.fetch(FetchDescriptor<NoteSequenceStateRecord>())
+            observedAtomicModels = notes.count == 1
+                && notes.first?.title == "Imported"
+                && notes.first?.content == exactBody
+                && notes.first?.richTextContentData == nil
+                && states.count == 1
+            try context.save()
+        })
+
+        let note = try adapter.createNote(
+            title: "Imported",
+            body: exactBody,
+            richTextContentData: nil
+        )
+
+        XCTAssertTrue(observedAtomicModels)
+        XCTAssertEqual(note.title, "Imported")
+        XCTAssertEqual(note.content, exactBody)
+        XCTAssertNil(note.richTextContentData)
+        let record = try XCTUnwrap(
+            ModelContext(container).fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+        )
+        let state = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record,
+            noteID: note.id
+        )
+        XCTAssertEqual(record.noteID, note.id)
+        XCTAssertEqual(record.revision, 0)
+        XCTAssertTrue(NoteSequenceStateExactText.matches(state.visibleText, exactBody))
+    }
+
+    func testMacCreateImportedMarkdownSaveFailureRollsBackNoteAndState() throws {
+        let container = try makeInMemoryContainer()
+        let adapter = MacNotePersistenceAdapter(
+            context: container.mainContext,
+            saveOperation: { _ in throw MacNotePersistenceAdapterTestError.injectedSaveFailure }
+        )
+
+        XCTAssertThrowsError(
+            try adapter.createNote(title: "Imported", body: "Exact body")
+        )
+
+        let verificationContext = ModelContext(container)
+        XCTAssertTrue(try verificationContext.fetch(FetchDescriptor<Note>()).isEmpty)
+        XCTAssertTrue(
+            try verificationContext.fetch(FetchDescriptor<NoteSequenceStateRecord>()).isEmpty
+        )
+    }
+
     func testMacCreateNoteSaveFailureRollsBackNoteAndState() throws {
         let container = try makeInMemoryContainer()
         let adapter = MacNotePersistenceAdapter(

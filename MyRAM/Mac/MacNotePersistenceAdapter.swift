@@ -56,8 +56,13 @@ final class MacNotePersistenceAdapter {
         return try createNote()
     }
 
-    func createNote() throws -> Note {
-        let note = Note()
+    func createNote(
+        title: String = "",
+        body: String = "",
+        richTextContentData: Data? = nil
+    ) throws -> Note {
+        let note = Note(title: title, content: body)
+        note.richTextContentData = richTextContentData
         do {
             let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
                 noteID: note.id,

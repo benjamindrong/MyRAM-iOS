@@ -23,6 +23,9 @@ struct MyRAMMacRootView: View {
     @State private var sidebarCollapseState: MacSidebarCollapsePolicy.CollapseState = .expanded
     @State private var isApplyingAutomaticVisibilityChange = false
     @State private var isExpandingWindowForSidebar = false
+    @State private var isMarkdownFileOperationInProgress = false
+    @State private var pendingMarkdownOpenURLs: [URL] = []
+    @State private var markdownFileErrorMessage: String?
 
     var body: some View {
         Group {
@@ -46,6 +49,29 @@ struct MyRAMMacRootView: View {
         }
         .onDisappear {
             Task { await flushPendingSave() }
+        }
+        .onOpenURL { url in
+            pendingMarkdownOpenURLs.append(url)
+            drainPendingMarkdownOpenURLsIfReady()
+        }
+        .onChange(of: startupCoordinator.state) { _, _ in
+            drainPendingMarkdownOpenURLsIfReady()
+        }
+        .focusedSceneValue(\.markdownCommandActions, markdownCommandActions)
+        .alert(
+            "Markdown File Error",
+            isPresented: Binding(
+                get: { markdownFileErrorMessage != nil },
+                set: { isPresented in
+                    if !isPresented {
+                        markdownFileErrorMessage = nil
+                    }
+                }
+            )
+        ) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(markdownFileErrorMessage ?? "")
         }
     }
 
@@ -104,6 +130,18 @@ struct MyRAMMacRootView: View {
     private var selectedNote: Note? {
         guard let selectedNoteID else { return nil }
         return notes.first { $0.id == selectedNoteID }
+    }
+
+    private var markdownCommandActions: MacMarkdownCommandActions {
+        let isReady = startupCoordinator.state == .ready
+        return MacMarkdownCommandActions(
+            canImport: isReady && !isMarkdownFileOperationInProgress,
+            canExport: isReady
+                && selectedNoteID != nil
+                && !isMarkdownFileOperationInProgress,
+            importMarkdown: beginMarkdownImportWithPanel,
+            exportMarkdown: beginMarkdownExportWithPanel
+        )
     }
 
     private func handleWidthChange(_ width: CGFloat) {
@@ -315,6 +353,165 @@ struct MyRAMMacRootView: View {
                 loadError = "Unable to create note: \(error.localizedDescription)"
             }
         }
+    }
+
+    private func beginMarkdownImportWithPanel() {
+        guard startupCoordinator.state == .ready,
+              !isMarkdownFileOperationInProgress else {
+            return
+        }
+
+        isMarkdownFileOperationInProgress = true
+        Task { @MainActor in
+            do {
+                _ = try await MacMarkdownFileOperationCoordinator().performImport(
+                    flush: { await flushPendingSave() },
+                    selectSource: {
+                        let panel = NSOpenPanel()
+                        panel.title = "Import Markdown"
+                        panel.allowedContentTypes = [MarkdownFileClassifier.markdownContentType]
+                        panel.allowsMultipleSelection = false
+                        panel.canChooseDirectories = false
+                        return panel.runModal() == .OK ? panel.url : nil
+                    },
+                    consume: consumeMarkdownFile,
+                    publish: publishImportedMarkdown,
+                    present: presentImportedMarkdown
+                )
+                finishMarkdownFileOperation()
+            } catch {
+                finishMarkdownFileOperation(errorMessage: markdownErrorMessage(for: error))
+            }
+        }
+    }
+
+    private func beginMarkdownExportWithPanel() {
+        guard startupCoordinator.state == .ready,
+              selectedNoteID != nil,
+              !isMarkdownFileOperationInProgress else {
+            return
+        }
+
+        isMarkdownFileOperationInProgress = true
+        Task { @MainActor in
+            do {
+                _ = try await MacMarkdownFileOperationCoordinator().performExport(
+                    flush: { await flushPendingSave() },
+                    loadSource: {
+                        guard let selectedNoteID,
+                              let note = try MacNotePersistenceAdapter().loadNote(id: selectedNoteID) else {
+                            return nil
+                        }
+                        return MacMarkdownExportSource(title: note.title, source: note.content)
+                    },
+                    selectDestination: { filename in
+                        let panel = NSSavePanel()
+                        panel.title = "Export Markdown"
+                        panel.allowedContentTypes = [MarkdownFileClassifier.markdownContentType]
+                        panel.nameFieldStringValue = filename
+                        return panel.runModal() == .OK ? panel.url : nil
+                    },
+                    write: { source, url in
+                        let didStartAccessing = url.startAccessingSecurityScopedResource()
+                        defer {
+                            if didStartAccessing {
+                                url.stopAccessingSecurityScopedResource()
+                            }
+                        }
+                        try MarkdownFileWriter().write(source: source, to: url)
+                    }
+                )
+                finishMarkdownFileOperation()
+            } catch {
+                finishMarkdownFileOperation(errorMessage: markdownErrorMessage(for: error))
+            }
+        }
+    }
+
+    private func drainPendingMarkdownOpenURLsIfReady() {
+        guard startupCoordinator.state == .ready,
+              !isMarkdownFileOperationInProgress,
+              !pendingMarkdownOpenURLs.isEmpty else {
+            return
+        }
+
+        let url = pendingMarkdownOpenURLs.removeFirst()
+        isMarkdownFileOperationInProgress = true
+        Task { @MainActor in
+            do {
+                _ = try await MacMarkdownFileOperationCoordinator().performImport(
+                    flush: { await flushPendingSave() },
+                    selectSource: { url },
+                    consume: consumeMarkdownFile,
+                    publish: publishImportedMarkdown,
+                    present: presentImportedMarkdown
+                )
+                finishMarkdownFileOperation()
+            } catch {
+                finishMarkdownFileOperation(errorMessage: markdownErrorMessage(for: error))
+            }
+        }
+    }
+
+    private func consumeMarkdownFile(from url: URL) throws -> Note {
+        let didStartAccessing = url.startAccessingSecurityScopedResource()
+        defer {
+            if didStartAccessing {
+                url.stopAccessingSecurityScopedResource()
+            }
+        }
+
+        guard MarkdownFileClassifier().kind(for: url) == .markdown else {
+            throw MarkdownFileIOError.unsupportedFileType
+        }
+
+        let document = try MarkdownFileReader().read(from: url)
+        return try MacNotePersistenceAdapter().createNote(
+            title: document.suggestedTitle,
+            body: document.source,
+            richTextContentData: nil
+        )
+    }
+
+    private func publishImportedMarkdown(_ importedNote: Note) async {
+        let capturedCreate = SyncConvergenceCapturedLocalChange(
+            change: SyncBatchNoteChangeCapture.noteCreated(
+                noteID: importedNote.id,
+                title: importedNote.title,
+                body: importedNote.content,
+                folderID: nil,
+                createdAt: importedNote.createdAt,
+                modifiedAt: importedNote.modifiedAt
+            ),
+            evidence: nil
+        )
+        await syncController.record(capturedCreate, at: importedNote.modifiedAt)
+    }
+
+    private func presentImportedMarkdown(_ importedNote: Note) throws {
+        let adapter = MacNotePersistenceAdapter()
+        notes = try adapter.loadNotesCreatingFirstIfNeeded()
+        selectedNoteID = importedNote.id
+        attributedText = adapter.attributedContent(for: importedNote)
+        hasUnsavedChanges = false
+        editorRevision = UUID()
+        loadError = nil
+        saveError = nil
+        resumeSyncConvergence()
+    }
+
+    private func finishMarkdownFileOperation(errorMessage: String? = nil) {
+        markdownFileErrorMessage = errorMessage
+        isMarkdownFileOperationInProgress = false
+        drainPendingMarkdownOpenURLsIfReady()
+    }
+
+    private func markdownErrorMessage(for error: Error) -> String {
+        if let localizedError = error as? LocalizedError,
+           let description = localizedError.errorDescription {
+            return description
+        }
+        return error.localizedDescription
     }
 
     private func scheduleSave() {
