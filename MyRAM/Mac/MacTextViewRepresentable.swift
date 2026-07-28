@@ -6,6 +6,11 @@ struct MacTextViewRepresentable: NSViewRepresentable {
     @Binding var attributedText: NSAttributedString
     @ObservedObject var syncBridge: MacEditorSyncBridge
     var onTextChanged: () -> Void = {}
+    /// MYR-195 Slice 2: resign-only seam. Token increment causes the representable to call
+    /// makeFirstResponder(nil) only if the text view is currently first responder.
+    /// Must not trigger scheduleSave, flushPendingSave, onTextChanged, buffer replacement,
+    /// revision replacement, or sync publication.
+    var resignFocusToggleToken: Int = 0
 
     func makeCoordinator() -> Coordinator {
         Coordinator(attributedText: $attributedText, syncBridge: syncBridge, onTextChanged: onTextChanged)
@@ -84,6 +89,16 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             textView.setSelectedRange(selectedRange.macClamped(toLength: displayText.length))
             context.coordinator.isApplyingSwiftUIUpdate = false
         }
+
+        // MYR-195 Slice 2: resign-only seam. Identity check prevents disrupting focus when
+        // another control (e.g. sidebar search) is already first responder. Must not trigger
+        // scheduleSave, flushPendingSave, onTextChanged, buffer replacement, or sync publication.
+        if context.coordinator.resignFocusToggleToken != resignFocusToggleToken {
+            context.coordinator.resignFocusToggleToken = resignFocusToggleToken
+            if textView.window?.firstResponder === textView {
+                textView.window?.makeFirstResponder(nil)
+            }
+        }
     }
 
     @MainActor
@@ -93,6 +108,8 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         var onTextChanged: () -> Void
         weak var textView: NSTextView?
         var isApplyingSwiftUIUpdate = false
+        /// MYR-195 Slice 2: resign-only token tracking.
+        var resignFocusToggleToken = 0
 
         init(
             attributedText: Binding<NSAttributedString>,
