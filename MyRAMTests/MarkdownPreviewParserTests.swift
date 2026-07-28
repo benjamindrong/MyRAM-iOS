@@ -181,32 +181,64 @@ final class MarkdownPreviewParserTests: XCTestCase {
 
     // MARK: 14. Unknown Foundation presentation intent maps to .paragraph
     func testUnknownPresentationIntentMapsToParagraphKind() {
-        var counters: [MarkdownOrderedListCounterKey: Int] = [:]
-        let kind = MarkdownBlockKind(from: nil, listCounters: &counters)
+        let kind = MarkdownBlockKind(from: nil)
         XCTAssertEqual(kind, .paragraph, "nil intent must map to .paragraph")
     }
 
-    // MARK: 15. Foundation list ordinal characterization on deployment SDK (§10.5)
+    // MARK: 15. Foundation list ordinal characterization on deployment SDK (§10.5 & §7 Sixth Remediation)
     func testFoundationListOrdinalCharacterizationOnDeploymentSDK() {
-        let sources = [
-            "1. First\n2. Second",
-            "1. Outer\n   1. Inner 1\n   2. Inner 2",
-            "1. List A\n\nParagraph\n\n1. List B"
+        let testCases: [(source: String, expectedListItems: Int, description: String)] = [
+            ("1. First\n2. Second", 2, "Simple ordered list"),
+            ("1. Outer\n   1. Inner 1\n   2. Inner 2", 3, "Nested ordered list"),
+            ("1. List A\n\nParagraph\n\n1. List B", 2, "Separated ordered lists"),
+            ("1. Outer\n   - Inner bullet", 2, "Ordered outer with unordered inner"),
+            ("- Outer bullet\n   1. Inner item", 2, "Unordered outer with ordered inner")
         ]
 
-        for source in sources {
-            guard let attributed = try? AttributedString(markdown: source, options: .init(interpretedSyntax: .full)) else {
+        for testCase in testCases {
+            let attributed: AttributedString
+            do {
+                attributed = try AttributedString(markdown: testCase.source, options: .init(interpretedSyntax: .full))
+            } catch {
+                XCTFail("Foundation Markdown parsing failed for '\(testCase.description)': \(error)")
                 continue
             }
+
+            var observedOrdinals: [Int] = []
             for run in attributed.runs {
                 if let intent = run.presentationIntent {
                     for component in intent.components {
                         if case .listItem(let ordinal) = component.kind {
-                            XCTAssertGreaterThan(ordinal, 0, "Foundation list item ordinal MUST be positive (> 0) on deployment SDK")
+                            observedOrdinals.append(ordinal)
+                            XCTAssertGreaterThan(
+                                ordinal,
+                                0,
+                                "Foundation list item ordinal MUST be positive (> 0) for '\(testCase.description)' on deployment SDK"
+                            )
                         }
                     }
                 }
             }
+            XCTAssertFalse(
+                observedOrdinals.isEmpty,
+                "Foundation MUST produce at least one .listItem component for '\(testCase.description)'"
+            )
+
+            let doc = MarkdownPreviewDocument(from: attributed)
+            let listBlockCount = doc.blocks.filter { block in
+                switch block.kind {
+                case .orderedListItem, .unorderedListItem:
+                    return true
+                default:
+                    return false
+                }
+            }.count
+
+            XCTAssertEqual(
+                listBlockCount,
+                testCase.expectedListItems,
+                "Foundation document projection MUST produce exactly \(testCase.expectedListItems) list item blocks for '\(testCase.description)'"
+            )
         }
     }
 }

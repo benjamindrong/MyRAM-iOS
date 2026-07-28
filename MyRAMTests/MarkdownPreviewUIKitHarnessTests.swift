@@ -3,94 +3,277 @@ import UIKit
 import XCTest
 @testable import MyRAM
 
-// MARK: - MarkdownPreviewUIKitHarnessTests (§8.3 & §12.1)
-// Encapsulation-safe real UIKit production harness tests driving UITextView, EditorContentSyncCompletionGate, and MarkdownPreviewUIKitPublicationAdapter.
+// MARK: - Test Recorder (§5 Sixth Remediation)
+// Lives in MyRAMTests target to ensure test doubles do not leak into production binaries.
+
+@MainActor
+final class MarkdownPreviewUIKitTestRecorder {
+    private(set) var events: [String] = []
+    private(set) var publishedPlainText: String?
+    private(set) var saveCount = 0
+    private(set) var flushCount = 0
+
+    func recordPublish(plainText: String) {
+        events.append("publish")
+        publishedPlainText = plainText
+    }
+
+    func recordComplete() {
+        events.append("complete")
+    }
+
+    func recordAcknowledge() {
+        events.append("acknowledge")
+    }
+
+    func recordSave() {
+        saveCount += 1
+    }
+
+    func recordFlush() {
+        flushCount += 1
+    }
+}
+
+// MARK: - MarkdownPreviewUIKitHarnessTests (§5 Sixth Remediation)
+// Tests drive the extracted production MarkdownPreviewUIKitSyncExecutor directly.
 
 @MainActor
 final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
 
-    // MARK: - Real UIKit Host & Publication Harness Tests (§8.3)
+    // MARK: - Production Sync Executor Tests (§5)
 
-    func testRealUITextViewNoDifferenceSyncCompletesOnceWithoutPublishing() {
-        let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))
-        textView.text = "Identical Content"
-
+    func testNoDifferenceSyncCompletesOnceWithoutPublishing() {
         let recorder = MarkdownPreviewUIKitTestRecorder()
-        let gate = EditorContentSyncCompletionGate(completion: {
-            recorder.recordComplete()
-        })
+        var boundPlainText = "Identical Content"
+        var boundRichTextData: Data? = nil
 
-        var publishedText: String? = nil
-        let adapter = MarkdownPreviewUIKitPublicationAdapter { plainText, _ in
-            publishedText = plainText
-            recorder.recordPublish(plainText: plainText)
-        }
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { plain, _ in recorder.recordPublish(plainText: plain) },
+            setBoundPlainText: { plain in boundPlainText = plain },
+            setBoundRichTextData: { data in boundRichTextData = data },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
 
-        // No-difference branch: completes gate without calling adapter.publish
-        _ = adapter
-        gate.complete()
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "Identical Content",
+            encodedRichText: nil,
+            richTextUpdate: .immediate(nil),
+            serializesRichTextImmediately: true,
+            isUpdatingUIView: false,
+            dependencies: deps,
+            completion: { recorder.recordComplete() }
+        )
 
         XCTAssertEqual(recorder.events, ["complete"], "No-difference sync MUST invoke complete() without publishing")
-        XCTAssertNil(publishedText)
+        XCTAssertNil(recorder.publishedPlainText)
         XCTAssertEqual(recorder.saveCount, 0, "No-difference sync MUST NOT trigger save")
         XCTAssertEqual(recorder.flushCount, 0, "No-difference sync MUST NOT trigger flush")
     }
 
-    func testRealUITextViewSynchronousChangedSyncPublishesThenCompletes() {
-        let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))
-        textView.text = "New User Content"
-
+    func testSynchronousChangedSyncPublishesThenCompletes() {
         let recorder = MarkdownPreviewUIKitTestRecorder()
-        let gate = EditorContentSyncCompletionGate(completion: {
-            recorder.recordComplete()
-        })
+        var boundPlainText = "Old Content"
+        var boundRichTextData: Data? = nil
 
-        let adapter = MarkdownPreviewUIKitPublicationAdapter { plainText, _ in
-            recorder.recordPublish(plainText: plainText)
-        }
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { plain, _ in recorder.recordPublish(plainText: plain) },
+            setBoundPlainText: { plain in boundPlainText = plain },
+            setBoundRichTextData: { data in boundRichTextData = data },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
 
-        // Synchronous changed path: publishes via adapter then completes gate
-        adapter.publish(textView.text, .immediate(nil))
-        gate.complete()
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "New Content",
+            encodedRichText: nil,
+            richTextUpdate: .immediate(nil),
+            serializesRichTextImmediately: true,
+            isUpdatingUIView: false,
+            dependencies: deps,
+            completion: { recorder.recordComplete() }
+        )
 
         XCTAssertEqual(recorder.events, ["publish", "complete"], "Synchronous changed sync MUST publish before complete()")
-        XCTAssertEqual(recorder.publishedPlainText, "New User Content")
+        XCTAssertEqual(recorder.publishedPlainText, "New Content")
+        XCTAssertEqual(boundPlainText, "New Content", "State MUST be updated with new text")
         XCTAssertEqual(recorder.saveCount, 0)
         XCTAssertEqual(recorder.flushCount, 0)
     }
 
-    func testRealUITextViewDeferredChangedSyncPublishesThenCompletesAfterRunLoop() {
-        let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))
-        textView.text = "Deferred User Content"
-
+    func testDeferredChangedSyncPublishesThenCompletesAfterRunLoop() {
         let recorder = MarkdownPreviewUIKitTestRecorder()
-        let gate = EditorContentSyncCompletionGate(completion: {
-            recorder.recordComplete()
-            recorder.recordAcknowledge()
-        })
+        var boundPlainText = "Old Content"
+        var boundRichTextData: Data? = nil
 
-        let adapter = MarkdownPreviewUIKitPublicationAdapter { plainText, _ in
-            recorder.recordPublish(plainText: plainText)
-        }
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { plain, _ in recorder.recordPublish(plainText: plain) },
+            setBoundPlainText: { plain in boundPlainText = plain },
+            setBoundRichTextData: { data in boundRichTextData = data },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
 
-        // Deferred path: RunLoop closure captures gate and publishes then completes
-        RunLoop.main.perform { [gate] in
-            adapter.publish(textView.text, .immediate(nil))
-            gate.complete()
-        }
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "Deferred New Content",
+            encodedRichText: nil,
+            richTextUpdate: .immediate(nil),
+            serializesRichTextImmediately: true,
+            isUpdatingUIView: true,
+            dependencies: deps,
+            completion: {
+                recorder.recordComplete()
+                recorder.recordAcknowledge()
+            }
+        )
 
         // Before RunLoop runs, completion gate MUST NOT have fired prematurely
         XCTAssertTrue(recorder.events.isEmpty, "Deferred sync MUST NOT fire completion before RunLoop runs")
 
         // Drain the RunLoop tick
-        let expectation = expectation(description: "RunLoop drain")
+        let exp = expectation(description: "RunLoop drain")
         DispatchQueue.main.async {
-            expectation.fulfill()
+            exp.fulfill()
         }
-        wait(for: [expectation], timeout: 2.0)
+        wait(for: [exp], timeout: 2.0)
 
         XCTAssertEqual(recorder.events, ["publish", "complete", "acknowledge"],
             "Deferred sync MUST publish then complete then acknowledge in exact sequence")
+        XCTAssertEqual(recorder.saveCount, 0)
+        XCTAssertEqual(recorder.flushCount, 0)
+    }
+
+    func testDeferredAlreadySynchronizedSyncCompletesWithoutPublishing() {
+        let recorder = MarkdownPreviewUIKitTestRecorder()
+        var boundPlainText = "Old Content"
+        var boundRichTextData: Data? = nil
+
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { plain, _ in recorder.recordPublish(plainText: plain) },
+            setBoundPlainText: { plain in boundPlainText = plain },
+            setBoundRichTextData: { data in boundRichTextData = data },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
+
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "Already Synced Content",
+            encodedRichText: nil,
+            richTextUpdate: .immediate(nil),
+            serializesRichTextImmediately: true,
+            isUpdatingUIView: true,
+            dependencies: deps,
+            completion: { recorder.recordComplete() }
+        )
+
+        // Simulate binding sync occurring before RunLoop tick fires
+        boundPlainText = "Already Synced Content"
+
+        let exp = expectation(description: "RunLoop drain")
+        DispatchQueue.main.async {
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2.0)
+
+        XCTAssertEqual(recorder.events, ["complete"],
+            "Deferred already-synchronized path MUST complete without publishing")
+    }
+
+    func testTeardownPathCompletesOnce() {
+        let recorder = MarkdownPreviewUIKitTestRecorder()
+        let gate = EditorContentSyncCompletionGate(completion: { recorder.recordComplete() })
+
+        gate.complete()
+
+        XCTAssertEqual(recorder.events, ["complete"], "Teardown path MUST invoke complete()")
+    }
+
+    func testRepeatedCompletionAttemptsRemainExactlyOnce() {
+        let recorder = MarkdownPreviewUIKitTestRecorder()
+        let gate = EditorContentSyncCompletionGate(completion: { recorder.recordComplete() })
+
+        gate.complete()
+        gate.complete()
+        gate.complete()
+
+        XCTAssertEqual(recorder.events, ["complete"], "Repeated completion attempts MUST fire callback exactly once")
+    }
+
+    func testIMEEventOrderIsPublishCompleteAcknowledge() {
+        let recorder = MarkdownPreviewUIKitTestRecorder()
+        var boundPlainText = "Before IME"
+        var boundRichTextData: Data? = nil
+
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { plain, _ in recorder.recordPublish(plainText: plain) },
+            setBoundPlainText: { plain in boundPlainText = plain },
+            setBoundRichTextData: { data in boundRichTextData = data },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
+
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "Finalized IME Text",
+            encodedRichText: nil,
+            richTextUpdate: .immediate(nil),
+            serializesRichTextImmediately: true,
+            isUpdatingUIView: false,
+            dependencies: deps,
+            completion: {
+                recorder.recordComplete()
+                recorder.recordAcknowledge()
+            }
+        )
+
+        XCTAssertEqual(recorder.events, ["publish", "complete", "acknowledge"],
+            "IME event order MUST be publish -> complete -> acknowledge")
+    }
+
+    func testStalePreviewRequestSuppressesAcknowledgmentButPreservesPublication() {
+        let recorder = MarkdownPreviewUIKitTestRecorder()
+        var boundPlainText = "Initial"
+        var boundRichTextData: Data? = nil
+
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { plain, _ in recorder.recordPublish(plainText: plain) },
+            setBoundPlainText: { plain in boundPlainText = plain },
+            setBoundRichTextData: { data in boundRichTextData = data },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
+
+        // Stale request: publish runs, completion runs, but acknowledgment is suppressed because request was cancelled
+        let isStale = true
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "Stale Edit",
+            encodedRichText: nil,
+            richTextUpdate: .immediate(nil),
+            serializesRichTextImmediately: true,
+            isUpdatingUIView: false,
+            dependencies: deps,
+            completion: {
+                recorder.recordComplete()
+                if !isStale {
+                    recorder.recordAcknowledge()
+                }
+            }
+        )
+
+        XCTAssertEqual(recorder.events, ["publish", "complete"],
+            "Stale Preview request MUST preserve publication and completion, but suppress acknowledgment")
     }
 
     func testRealUITextViewUndoManagerIdentityIsPreserved() {
@@ -105,7 +288,7 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
             "UITextView undoManager identity MUST be preserved across syncContent calls")
     }
 
-    // MARK: - EditorContentSyncCompletionGate unit tests (§6.7)
+    // MARK: - EditorContentSyncCompletionGate Unit Tests (§6.7)
 
     func testGateFirstCompleteInvokesCallback() {
         var callCount = 0
@@ -134,13 +317,13 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         var count1 = 0
         var count2 = 0
         let gate1 = EditorContentSyncCompletionGate { count1 += 1 }
-        let gate2 = EditorContentSyncCompletionGate { count2 += 1 }
+        let _ = EditorContentSyncCompletionGate { count2 += 1 }
         gate1.complete()
         XCTAssertEqual(count1, 1)
         XCTAssertEqual(count2, 0, "Completing gate1 MUST NOT fire gate2")
     }
 
-    // MARK: - Interaction state command consumption (§7)
+    // MARK: - Interaction State Command Consumption (§7)
 
     func testCommandConsumptionEditInteractiveExecutes() {
         let disposition = MarkdownPreviewCommandConsumptionPolicy.disposition(forState: .editInteractive)
@@ -157,7 +340,7 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         XCTAssertEqual(disposition, .consumeWithoutExecution)
     }
 
-    // MARK: - Resignation disposition policy (§8)
+    // MARK: - Resignation Disposition Policy (§8)
 
     func testResignationDispatchedWithNoTextDifference() {
         let disposition = MarkdownPreviewResignationPolicy.disposition(
@@ -188,7 +371,7 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         XCTAssertEqual(disposition, .ordinaryEndEditing)
     }
 
-    // MARK: - Search isolation policy (§10)
+    // MARK: - Search Isolation Policy (§10)
 
     func testSearchPolicyHiddenInPendingPreview() {
         let presented = MarkdownPreviewSearchInteractionPolicy.isSearchPresented(

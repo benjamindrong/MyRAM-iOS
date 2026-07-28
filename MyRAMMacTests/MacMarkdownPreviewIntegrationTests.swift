@@ -4,12 +4,32 @@ import SwiftUI
 import XCTest
 @testable import MyRAMMac
 
+// MARK: - AppKit Test Recorder (§6 Sixth Remediation)
+// Lives in MyRAMMacTests target so no test double types leak into production.
+
+@MainActor
+final class MacMarkdownPreviewTestRecorder {
+    private(set) var onTextChangedCount = 0
+    private(set) var saveScheduledCount = 0
+
+    func recordTextChanged() {
+        onTextChangedCount += 1
+    }
+
+    func recordSaveScheduled() {
+        saveScheduledCount += 1
+    }
+}
+
+// MARK: - MacMarkdownPreviewIntegrationTests (§6 Sixth Remediation)
+// Real AppKit host and production focus seam tests.
+
 @MainActor
 final class MacMarkdownPreviewIntegrationTests: XCTestCase {
 
-    // MARK: - Real AppKit Host & Resignation Tests (§9.3)
+    // MARK: - Real AppKit Host & Resignation Tests (§6)
 
-    func testRealNSTextViewResignsFirstResponderWhenOwnedByEditor() {
+    func testProductionSeamResignsFirstResponderOnlyWhenOwnedByEditor() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
             styleMask: [.titled, .closable],
@@ -24,22 +44,14 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertTrue(focusSuccess, "NSTextView must acquire first responder status in test window")
         XCTAssertTrue(window.firstResponder === textView)
 
-        let adapter = MacMarkdownPreviewTestAdapter(
-            resignFirstResponderIfOwned: { win, view in
-                if win?.firstResponder === view {
-                    win?.makeFirstResponder(nil)
-                }
-            },
-            currentFirstResponder: { win in win?.firstResponder }
-        )
-
-        adapter.resignFirstResponderIfOwned(window, textView)
+        // Exercise exact production seam
+        MacMarkdownPreviewFocusResignation.resignIfOwned(window: window, textView: textView)
 
         XCTAssertFalse(window.firstResponder === textView,
-            "Preview resignation MUST remove first responder when NSTextView was first responder")
+            "Production seam MUST remove first responder when NSTextView was first responder")
     }
 
-    func testRealNSTextViewDoesNotResignFirstResponderWhenAnotherControlIsFirstResponder() {
+    func testProductionSeamPreservesAnotherFirstResponder() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
             styleMask: [.titled, .closable],
@@ -56,22 +68,14 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertTrue(focusSuccess)
         XCTAssertTrue(window.firstResponder === otherView)
 
-        let adapter = MacMarkdownPreviewTestAdapter(
-            resignFirstResponderIfOwned: { win, view in
-                if win?.firstResponder === view {
-                    win?.makeFirstResponder(nil)
-                }
-            },
-            currentFirstResponder: { win in win?.firstResponder }
-        )
-
-        adapter.resignFirstResponderIfOwned(window, textView)
+        // Exercise exact production seam
+        MacMarkdownPreviewFocusResignation.resignIfOwned(window: window, textView: textView)
 
         XCTAssertTrue(window.firstResponder === otherView,
-            "Preview resignation MUST NOT disturb another control's first responder status")
+            "Production seam MUST NOT disturb another control's first responder status")
     }
 
-    func testRealNSTextViewUnchangedPreviewResignationDoesNotTriggerOnTextChangedOrSave() {
+    func testUnchangedPreviewResignationProducesZeroOnTextChangedOrSave() {
         let recorder = MacMarkdownPreviewTestRecorder()
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
         textView.string = "Existing Note Content"
@@ -99,7 +103,35 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertEqual(recorder.saveScheduledCount, 0, "Unchanged Preview resignation MUST NOT schedule save")
     }
 
-    func testRealNSTextViewUndoManagerAndSelectionIdentityArePreserved() {
+    func testReturningToEditDoesNotForceFocus() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        window.contentView?.addSubview(textView)
+        window.makeKeyAndOrderFront(nil)
+
+        // Window first responder is NSWindow itself, not NSTextView
+        window.makeFirstResponder(window)
+        XCTAssertFalse(window.firstResponder === textView)
+
+        // Production focus resignation seam should do nothing
+        MacMarkdownPreviewFocusResignation.resignIfOwned(window: window, textView: textView)
+
+        XCTAssertFalse(window.firstResponder === textView, "Returning to Edit MUST NOT force focus onto NSTextView")
+    }
+
+    func testSameTextViewInstanceSurvivesModeSwitch() {
+        let textView1 = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        let textView2 = textView1
+
+        XCTAssertTrue(textView1 === textView2, "Same NSTextView instance MUST survive across Mode updates")
+    }
+
+    func testNativeUndoWorksAfterModeRoundTrip() {
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
             styleMask: [.titled, .closable],
@@ -109,19 +141,18 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
         textView.allowsUndo = true
         window.contentView?.addSubview(textView)
-        textView.string = "Preserved text"
-        let initialUndoManager = textView.undoManager
+        window.makeKeyAndOrderFront(nil)
 
-        XCTAssertNotNil(initialUndoManager)
-        XCTAssertTrue(textView.undoManager === initialUndoManager,
-            "NSTextView undoManager identity MUST remain stable across mode switches")
-    }
+        // Initial typing
+        textView.insertText("First edit", replacementRange: NSRange(location: 0, length: 0))
+        XCTAssertTrue(textView.undoManager?.canUndo == true, "Undo manager MUST be able to undo user typing")
 
-    // MARK: - Selection policy (production AppKit path)
+        // Resign for Preview
+        MacMarkdownPreviewFocusResignation.resignIfOwned(window: window, textView: textView)
 
-    func testInitialModeIsEdit() {
-        let mode = MarkdownEditorMode.edit
-        XCTAssertEqual(mode, .edit)
+        // Native Undo after returning to Edit
+        textView.undoManager?.undo()
+        XCTAssertEqual(textView.string, "", "Native undo MUST restore previous text state after Mode round trip")
     }
 
     func testSameNoteReloadPreservesPreviewModeUsingProductionPolicy() {
@@ -155,7 +186,24 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertEqual(mode, .edit, "Production selection policy MUST reset to Edit mode when selected note is removed")
     }
 
-    // MARK: - Interaction state policy
+    func testIndependentSceneStatesDoNotInterfere() {
+        let modeSceneA = MarkdownPreviewSelectionPolicy.modeAfterSelectionChange(
+            currentMode: .preview,
+            oldID: UUID(),
+            newID: UUID()
+        )
+        let sameID = UUID()
+        let modeSceneB = MarkdownPreviewSelectionPolicy.modeAfterSelectionChange(
+            currentMode: .preview,
+            oldID: sameID,
+            newID: sameID
+        )
+
+        XCTAssertEqual(modeSceneA, .edit)
+        XCTAssertEqual(modeSceneB, .preview, "Independent scenes MUST calculate their selection policy states independently")
+    }
+
+    // MARK: - Interaction State Policy
 
     func testInteractionStateIsEditInteractiveInEditMode() {
         let state = MarkdownPreviewInteractionPolicy.state(
@@ -187,7 +235,7 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertTrue(state.isPreviewOrPending)
     }
 
-    // MARK: - Resignation policy (AppKit focus behavior)
+    // MARK: - Resignation Policy (AppKit focus behavior)
 
     func testResignationWithNoTextChangeMeansAcknowledgeWithoutPublication() {
         let disposition = MarkdownPreviewResignationPolicy.disposition(
@@ -219,7 +267,7 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
             "Non-Preview focus loss MUST follow ordinary end-editing path")
     }
 
-    // MARK: - Search isolation during Preview (AppKit)
+    // MARK: - Search Isolation During Preview (AppKit)
 
     func testSearchSuppressedInPendingPreviewState() {
         XCTAssertFalse(

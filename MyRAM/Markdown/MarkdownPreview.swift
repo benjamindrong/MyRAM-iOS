@@ -92,12 +92,6 @@ enum MarkdownPreviewResult: Equatable {
     case plainTextFallback(String)
 }
 
-// MARK: - Counter Key
-
-struct MarkdownOrderedListCounterKey: Hashable {
-    let containerIdentity: Int
-    let depth: Int
-}
 
 // MARK: - Block projection
 
@@ -137,12 +131,9 @@ struct MarkdownPreviewDocument: Equatable {
             pendingRuns = []
         }
 
-        // Fallback counters keyed by container identity + depth, so separate lists at the same depth restart at 1
-        var orderedListCounters: [MarkdownOrderedListCounterKey: Int] = [:]
-
         for run in attributed.runs {
             let intent = run.presentationIntent
-            let kind = MarkdownBlockKind(from: intent, listCounters: &orderedListCounters)
+            let kind = MarkdownBlockKind(from: intent)
 
             // Group runs ONLY when their presentation intent identity and block kind match.
             // Distinct list items or separate paragraphs have different intents and will NOT be merged.
@@ -191,7 +182,7 @@ enum MarkdownBlockKind: Equatable {
 }
 
 extension MarkdownBlockKind {
-    init(from intent: PresentationIntent?, listCounters: inout [MarkdownOrderedListCounterKey: Int]) {
+    init(from intent: PresentationIntent?) {
         guard let intent else {
             self = .paragraph
             return
@@ -260,14 +251,8 @@ extension MarkdownBlockKind {
             
             switch innermost {
             case .ordered:
-                let containerID = orderedListContainerID ?? 0
                 let effectiveDepth = max(1, depth)
-                let ordinal = MarkdownOrderedListOrdinalPolicy.ordinal(
-                    foundationOrdinal: foundOrdinal,
-                    containerIdentity: containerID,
-                    depth: effectiveDepth,
-                    counters: &listCounters
-                )
+                let ordinal = MarkdownOrderedListOrdinalPolicy.ordinal(foundationOrdinal: foundOrdinal)
                 self = .orderedListItem(MarkdownListMetadata(style: .ordered(ordinal: ordinal), depth: effectiveDepth))
                 return
 

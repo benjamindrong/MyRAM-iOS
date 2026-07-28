@@ -139,18 +139,10 @@ struct MarkdownPreviewSearchInteractionPolicy {
 // MARK: - List Ordinal Policy (§8)
 
 struct MarkdownOrderedListOrdinalPolicy {
-    static func ordinal(
-        foundationOrdinal: Int?,
-        containerIdentity: Int,
-        depth: Int,
-        counters: inout [MarkdownOrderedListCounterKey: Int]
-    ) -> Int {
-        if let found = foundationOrdinal, found > 0 {
-            return found
+    static func ordinal(foundationOrdinal: Int?) -> Int {
+        guard let found = foundationOrdinal, found > 0 else {
+            return 1
         }
-        let key = MarkdownOrderedListCounterKey(containerIdentity: containerIdentity, depth: max(1, depth))
-        let current = (counters[key] ?? 0) + 1
-        counters[key] = current
-        return current
+        return found
     }
 }

@@ -3300,7 +3300,6 @@ private struct SelectableTextView: UIViewRepresentable {
         var text: Binding<String>
         var richTextContentData: Binding<Data?>
         var onContentChanged: (String, EditorRichTextContentUpdate) -> Void
-        var publicationAdapter: MarkdownPreviewUIKitPublicationAdapter!
         var onRemoteAttributedTextPublished: (NSAttributedString) -> Void
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
@@ -3370,9 +3369,6 @@ private struct SelectableTextView: UIViewRepresentable {
             self.onPinSelection = onPinSelection
             self.onLookupSelection = onLookupSelection
             super.init()
-            self.publicationAdapter = MarkdownPreviewUIKitPublicationAdapter { [weak self] plain, update in
-                self?.onContentChanged(plain, update)
-            }
         }
 
         deinit {
@@ -3800,62 +3796,40 @@ private struct SelectableTextView: UIViewRepresentable {
             serializesRichTextImmediately: Bool = true,
             completion: @escaping @MainActor () -> Void = {}
         ) {
-            let gate = EditorContentSyncCompletionGate(completion: completion)
             let syncSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
             os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.syncContent", signpostID: syncSignpostID)
             defer {
                 os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.syncContent", signpostID: syncSignpostID)
             }
             let plainText = textView.text ?? ""
-            let encodedRichText: Data?
-            if serializesRichTextImmediately {
-                encodedRichText = RichTextContentCodec.encode(storageAttributedText(from: textView))
-            } else {
-                encodedRichText = nil
-            }
-            let richTextUpdate: EditorRichTextContentUpdate
-            if serializesRichTextImmediately {
-                richTextUpdate = .immediate(encodedRichText)
-            } else {
-                richTextUpdate = .deferred(deferredRichTextContentEncoder(for: textView))
-            }
+            let encodedRichText: Data? = serializesRichTextImmediately
+                ? RichTextContentCodec.encode(storageAttributedText(from: textView))
+                : nil
+            let richTextUpdate: EditorRichTextContentUpdate = serializesRichTextImmediately
+                ? .immediate(encodedRichText)
+                : .deferred(deferredRichTextContentEncoder(for: textView))
 
-            guard text.wrappedValue != plainText || (serializesRichTextImmediately && richTextContentData.wrappedValue != encodedRichText) else {
-                clearAppliedContentIfSynced()
-                gate.complete()
-                return
-            }
-
-            if isUpdatingUIView {
-                appliedPlainTextAwaitingBinding = plainText
-                appliedRichTextDataAwaitingBinding = encodedRichText
-                RunLoop.main.perform { [weak self, gate] in
-                    guard let self else {
-                        gate.complete()
-                        return
-                    }
-                    guard self.text.wrappedValue != plainText
-                        || self.richTextContentData.wrappedValue != encodedRichText else {
-                        self.clearAppliedContentIfSynced()
-                        gate.complete()
-                        return
-                    }
-                    self.text.wrappedValue = plainText
-                    self.richTextContentData.wrappedValue = encodedRichText
-                    self.publicationAdapter.publish(plainText, richTextUpdate)
-                    self.clearAppliedContentIfSynced()
-                    gate.complete()
+            let deps = MarkdownPreviewUIKitSyncDependencies(
+                getBoundPlainText: { [weak self] in self?.text.wrappedValue ?? "" },
+                getBoundRichTextData: { [weak self] in self?.richTextContentData.wrappedValue },
+                publish: { [weak self] plain, update in self?.onContentChanged(plain, update) },
+                setBoundPlainText: { [weak self] plain in self?.text.wrappedValue = plain },
+                setBoundRichTextData: { [weak self] data in self?.richTextContentData.wrappedValue = data },
+                clearAppliedContentIfSynced: { [weak self] in self?.clearAppliedContentIfSynced() },
+                setAppliedContentAwaitingBinding: { [weak self] plain, data in
+                    self?.appliedPlainTextAwaitingBinding = plain
+                    self?.appliedRichTextDataAwaitingBinding = data
                 }
-                return
-            }
-
-            text.wrappedValue = plainText
-            if serializesRichTextImmediately {
-                richTextContentData.wrappedValue = encodedRichText
-            }
-            publicationAdapter.publish(plainText, richTextUpdate)
-            clearAppliedContentIfSynced()
-            gate.complete()
+            )
+            MarkdownPreviewUIKitSyncExecutor.synchronize(
+                nativePlainText: plainText,
+                encodedRichText: encodedRichText,
+                richTextUpdate: richTextUpdate,
+                serializesRichTextImmediately: serializesRichTextImmediately,
+                isUpdatingUIView: isUpdatingUIView,
+                dependencies: deps,
+                completion: completion
+            )
         }
 
         private func deferredRichTextContentEncoder(for textView: UITextView) -> DeferredRichTextContentEncoder {

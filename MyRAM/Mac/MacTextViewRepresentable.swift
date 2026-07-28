@@ -90,14 +90,12 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             context.coordinator.isApplyingSwiftUIUpdate = false
         }
 
-        // MYR-195 Slice 2: resign-only seam. Identity check prevents disrupting focus when
-        // another control (e.g. sidebar search) is already first responder. Must not trigger
-        // scheduleSave, flushPendingSave, onTextChanged, buffer replacement, or sync publication.
+        // MYR-195 Slice 2: resign-only seam. MacMarkdownPreviewFocusResignation.resignIfOwned
+        // performs the identity check and must not trigger scheduleSave, flushPendingSave,
+        // onTextChanged, buffer replacement, or sync publication.
         if context.coordinator.resignFocusToggleToken != resignFocusToggleToken {
             context.coordinator.resignFocusToggleToken = resignFocusToggleToken
-            if textView.window?.firstResponder === textView {
-                textView.window?.makeFirstResponder(nil)
-            }
+            MacMarkdownPreviewFocusResignation.resignIfOwned(window: textView.window, textView: textView)
         }
     }
 

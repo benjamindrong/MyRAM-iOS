@@ -135,60 +135,18 @@ final class MarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertNil(highlight, "Body search highlight MUST be nil while in Preview mode")
     }
 
-    // MARK: - List Ordinal Policy Tests (§8)
+    // MARK: - List Ordinal Policy Tests (§8 & §7 Sixth Remediation)
 
     func testListOrdinalPolicyUsesFoundationOrdinalWhenPresent() {
-        var counters: [MarkdownOrderedListCounterKey: Int] = [:]
-        let ordinal = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: 5,
-            containerIdentity: 100,
-            depth: 1,
-            counters: &counters
-        )
+        let ordinal = MarkdownOrderedListOrdinalPolicy.ordinal(foundationOrdinal: 5)
         XCTAssertEqual(ordinal, 5, "Must use explicit Foundation ordinal when > 0")
-        XCTAssertTrue(counters.isEmpty, "Counters map must remain empty when Foundation ordinal is present")
     }
 
-    func testListOrdinalPolicyMissingOrdinalIncrementsCounterForSameContainer() {
-        var counters: [MarkdownOrderedListCounterKey: Int] = [:]
-        let containerID = 200
-        
-        let ord1 = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil,
-            containerIdentity: containerID,
-            depth: 1,
-            counters: &counters
-        )
-        let ord2 = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil,
-            containerIdentity: containerID,
-            depth: 1,
-            counters: &counters
-        )
-        
-        XCTAssertEqual(ord1, 1)
-        XCTAssertEqual(ord2, 2)
-    }
+    func testListOrdinalPolicyMissingOrZeroOrdinalDefaultsToOne() {
+        let nilOrdinal = MarkdownOrderedListOrdinalPolicy.ordinal(foundationOrdinal: nil)
+        let zeroOrdinal = MarkdownOrderedListOrdinalPolicy.ordinal(foundationOrdinal: 0)
 
-    func testListOrdinalPolicySeparateContainersRestartAtOne() {
-        var counters: [MarkdownOrderedListCounterKey: Int] = [:]
-        let containerA = 300
-        let containerB = 400
-        
-        let itemA1 = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil,
-            containerIdentity: containerA,
-            depth: 1,
-            counters: &counters
-        )
-        let itemB1 = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil,
-            containerIdentity: containerB,
-            depth: 1,
-            counters: &counters
-        )
-        
-        XCTAssertEqual(itemA1, 1)
-        XCTAssertEqual(itemB1, 1, "Separate list container B at same depth MUST restart counter at 1")
+        XCTAssertEqual(nilOrdinal, 1, "Nil Foundation ordinal MUST default to 1")
+        XCTAssertEqual(zeroOrdinal, 1, "Zero Foundation ordinal MUST default to 1")
     }
 }
