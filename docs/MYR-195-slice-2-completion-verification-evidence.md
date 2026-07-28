@@ -1,4 +1,4 @@
-# MYR-195 Slice 2 Completion & Verification Evidence (Fifth Remediation)
+# MYR-195 Slice 2 Completion & Verification Evidence (Sixth Remediation)
 
 **Date:** 2026-07-28
 **Story:** MYR-195 (Slice 2: Rendered Markdown Preview)
@@ -11,54 +11,53 @@
 ```text
 Repository:                   benjamindrong/MyRAM-iOS
 Pull request:                 #113
+PR title:                     MYR-195 Slice 2: Rendered Preview
 Branch:                       MYR-195-Slice-2-Rendered-Markdown-Preview
 Base SHA (main):              ce48f814a2c74e7f01bd5e4e34c22f732f680871
-Fifth-remediation baseline:   eab93c21b17083c6a66dd52f59627cab9f5f2145
-Final implementation SHA:     9fce7e2
+Sixth-remediation baseline:   ed8935bcd0824a6b056906398d820085a1af6acf
+Final implementation SHA:     65215a3bfc2d75f8b9c9700d4fb1bc7f8ace29e7
 ```
 
 ---
 
-## 2. Summary of Fifth Remediation
+## 2. Summary of Sixth Remediation
 
-Remediated all 5 remaining merge blockers in PR `#113` against baseline `eab93c21b17083c6a66dd52f59627cab9f5f2145`:
+Remediated all 4 remaining verification architecture and evidence integrity blockers in PR `#113`:
 
-### Blocker 1 — Retain and explicitly complete the deferred sync gate
+### Blocker 1 — One production UIKit sync executor
 
-**File:** `MyRAM/Views/NoteEditorView.swift`, `MyRAM/Markdown/MarkdownPreviewUIKitAdapter.swift`
+**Files:** `MyRAM/Markdown/MarkdownPreviewUIKitSyncExecutor.swift`, `MyRAM/Views/NoteEditorView.swift`, `MyRAMTests/MarkdownPreviewUIKitHarnessTests.swift`
 
-- Captured `gate` strongly in `RunLoop.main.perform { [weak self, gate] in ... }` to ensure the completion gate lives until deferred publication finishes.
-- Explicitly invoked `gate.complete()` across all execution paths (no-diff, sync changed, deferred changed, deferred recheck, and weak coordinator teardown).
-- Introduced `MarkdownPreviewUIKitPublicationAdapter` used by `Coordinator` in production and test recorders.
+- Extracted `@MainActor enum MarkdownPreviewUIKitSyncExecutor` owning all sync decision and ordering logic: no-difference detection, synchronous publication, deferred `RunLoop` publication, already-synchronized recheck, applied-content bookkeeping, and exactly-once completion.
+- Rewired `SelectableTextView.Coordinator.syncContent` to delegate to `MarkdownPreviewUIKitSyncExecutor.synchronize`, keeping the coordinator private.
+- Removed `MarkdownPreviewUIKitAdapter.swift` from application target and moved `MarkdownPreviewUIKitTestRecorder` to `MyRAMTests`.
+- Rewrote `MarkdownPreviewUIKitHarnessTests` to exercise `MarkdownPreviewUIKitSyncExecutor` directly rather than manually reconstructing publication and completion ordering.
 
-### Blocker 2 — Fully suspend search focus
+### Blocker 2 — One production AppKit focus seam
 
-**File:** `MyRAM/Views/NoteEditorView.swift`
+**Files:** `MyRAM/Mac/MacMarkdownPreviewFocusResignation.swift`, `MyRAM/Mac/MacTextViewRepresentable.swift`, `MyRAMMacTests/MacMarkdownPreviewIntegrationTests.swift`
 
-- Added `isCurrentNoteSearchFocused = false` inside `enterMarkdownPreview()` to clear search focus upon entering Preview.
-- Guarded `onChange(of: currentNoteSearchFocusRequest)` with `guard interactionState == .editInteractive else { return }` to prevent stale requests from activating search during Preview.
+- Replaced test-named production adapter with `@MainActor enum MacMarkdownPreviewFocusResignation` owning `static func resignIfOwned(window:textView:)`.
+- Rewired `MacTextViewRepresentable.updateNSView` to invoke `MacMarkdownPreviewFocusResignation.resignIfOwned`.
+- Removed `MacMarkdownPreviewTestAdapter.swift` from application target and moved `MacMarkdownPreviewTestRecorder` to `MyRAMMacTests`.
+- Rewrote `MacMarkdownPreviewIntegrationTests` to exercise `MacMarkdownPreviewFocusResignation` directly.
 
-### Blocker 3 — Replace policy-only UIKit harness with real production harness
+### Blocker 3 — Decisive Foundation list characterization & fallback removal
 
-**Files:** `MyRAM/Markdown/MarkdownPreviewUIKitAdapter.swift`, `MyRAMTests/MarkdownPreviewUIKitHarnessTests.swift`
+**Files:** `MyRAM/Markdown/MarkdownPreviewModePolicy.swift`, `MyRAM/Markdown/MarkdownPreview.swift`, `MyRAMTests/MarkdownPreviewParserTests.swift`, `MyRAMTests/MarkdownPreviewIntegrationTests.swift`
 
-- Driven `MarkdownPreviewUIKitHarnessTests` using real `UITextView`, `EditorContentSyncCompletionGate`, `MarkdownPreviewUIKitPublicationAdapter`, and `RunLoop.main.perform` ticks.
-- Verified exact event sequence (`["publish", "complete", "acknowledge"]`), zero save/flush callbacks (0), and stable `UITextView.undoManager` identity.
+- Strengthened `testFoundationListOrdinalCharacterizationOnDeploymentSDK` in `MarkdownPreviewParserTests` with non-vacuous assertions verifying positive ordinals (`> 0`) for every list component across runs and exact list item block counts in document projections (2, 3, 2, 2, 2).
+- Proved that Foundation list components on the deployment SDK always provide positive ordinals.
+- Removed `MarkdownOrderedListCounterKey`, `orderedListCounters`, and missing-ordinal fallback logic per §7 decision rule, simplifying `MarkdownOrderedListOrdinalPolicy.ordinal(foundationOrdinal:)`.
 
-### Blocker 4 — Add real AppKit host test seam
+### Blocker 4 — Non-vacuous UI tests
 
-**Files:** `MyRAM/Mac/MacMarkdownPreviewTestAdapter.swift`, `MyRAMMacTests/MacMarkdownPreviewIntegrationTests.swift`
+**File:** `MyRAMUITests/MarkdownPreviewUITests.swift`
 
-- Introduced `MacMarkdownPreviewTestAdapter` and expanded `MacMarkdownPreviewIntegrationTests` with real `NSWindow` and `NSTextView` host tests.
-- Verified first responder resignation when owned by editor, non-disruption of other controls, zero `onTextChanged` and zero save schedule during unchanged Preview resignation, and stable `NSTextView.undoManager` identity.
-
-### Blocker 5 — Repair UI tests, characterization, and evidence
-
-**Files:** `MyRAMUITests/MarkdownPreviewUITests.swift`, `MyRAMTests/MarkdownPreviewParserTests.swift`, `docs/MYR-195-slice-2-completion-verification-evidence.md`
-
-- Updated `MarkdownPreviewUITests.swift` to use exact production accessibility identifiers (`markdown-mode-picker`, `markdown-preview-mode`, `markdown-edit-mode`, `markdown-preview-body`, `note-editor-body`, `current-note-search-field`).
-- Added `.accessibilityIdentifier("note-editor-body")` to `editorTextView` surface in `NoteEditorView.swift`.
-- Added `testFoundationListOrdinalCharacterizationOnDeploymentSDK()` to `MarkdownPreviewParserTests.swift`. Characterized that Foundation list items always expose positive (`> 0`) ordinals on the deployment SDK.
+- Search test (`testTopBarSearchCannotPresentDuringPreview`): Replaced conditional guard with an asserted toolbar/menu action lookup and verified search field never appears in Preview.
+- Keyboard test (`testEditorDismissesKeyboardAndDoesNotRegainFocusInPreview`): Focused editor, typed text, asserted keyboard appeared, entered Preview, asserted keyboard dismissed, and verified keyboard did not reappear after waiting beyond acknowledgment interval.
+- Pending-transition race test (`testRapidPreviewToggleRemainsEdit`): Resolved Preview and Edit controls on mode picker, tapped Preview, immediately tapped Edit without waiting for Preview body, asserted Edit body remained visible, and verified Preview body never appeared.
+- Added explicit UI test coverage for unsaved Markdown rendering (`testUnsavedMarkdownAppearsInPreview`) and different note selection resetting to Edit (`testDifferentNoteSelectionResetsToEditMode`).
 
 ---
 
@@ -68,27 +67,34 @@ Remediated all 5 remaining merge blockers in PR `#113` against baseline `eab93c2
 
 ```bash
 plutil -lint MyRAM.xcodeproj/project.pbxproj
-# MyRAM.xcodeproj/project.pbxproj: OK
 ```
+**Result:** `MyRAM.xcodeproj/project.pbxproj: OK`
 
 ### 3.2 UI identifier audit
 
 ```bash
 rg -n 'note-toolbar-preview-toggle|markdown-preview-container' MyRAMUITests
-# Result: NO MATCHES (OK)
 ```
+**Result:** `NO MATCHES (OK)`
 
-### 3.3 Forbidden scope audit
+### 3.3 Target recorder and double audit
 
 ```bash
-git diff eab93c21b17083c6a66dd52f59627cab9f5f2145...HEAD -- \
+rg -n 'MarkdownPreviewUIKitTestRecorder|MacMarkdownPreviewTestRecorder|MacMarkdownPreviewTestAdapter|MarkdownPreviewUIKitAdapter' MyRAM
+```
+**Result:** `NO MATCHES (OK — all test recorders and test adapters removed from production target)`
+
+### 3.4 Forbidden scope audit
+
+```bash
+git diff ce48f814a2c74e7f01bd5e4e34c22f732f680871...HEAD -- \
   Packages MyRAM/MyRAMSchema.swift MyRAM/Models MyRAM/Sync \
   MyRAM/Markdown/MarkdownFileIO.swift MyRAM/Mac/MacMarkdownFileCommands.swift \
   MyRAM/Mac/MacMarkdownExternalImportCoordinator.swift \
   MyRAM/Mac/MacMarkdownFileOperationCoordinator.swift \
   MyRAM/Views/NoteEditorFileOperationBridge.swift
-# Result: EMPTY (OK)
 ```
+**Result:** `EMPTY (OK)`
 
 ---
 
@@ -98,37 +104,38 @@ git diff eab93c21b17083c6a66dd52f59627cab9f5f2145...HEAD -- \
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test \
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test \
   -only-testing:MyRAMTests/MarkdownPreviewParserTests \
   -only-testing:MyRAMTests/MarkdownPreviewIntegrationTests \
   -only-testing:MyRAMTests/MarkdownPreviewUIKitHarnessTests
 ```
 
-**Result:** TEST SUCCEEDED — 51 tests, 0 failures
+**Result:** TEST SUCCEEDED — **55 tests, 0 failures**
 
 ### 4.2 Explicit iOS UI tests
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' test \
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test \
   -only-testing:MyRAMUITests/MarkdownPreviewUITests
 ```
 
-**Result:** TEST SUCCEEDED — 4 tests, 0 failures
+**Result:** TEST SUCCEEDED — **6 UI tests, 0 failures**
 - `testEditIsDefaultModeOnNoteOpen`: PASSED
-- `testEditorDoesNotRegainKeyboardFocusDuringPreview`: PASSED
+- `testEditorDismissesKeyboardAndDoesNotRegainFocusInPreview`: PASSED
 - `testRapidPreviewToggleRemainsEdit`: PASSED
 - `testTopBarSearchCannotPresentDuringPreview`: PASSED
+- `testUnsavedMarkdownAppearsInPreview`: PASSED
+- `testDifferentNoteSelectionResetsToEditMode`: PASSED
 
-### 4.3 Complete iOS application tests
+### 4.3 Complete iOS scheme tests
 
 ```bash
 xcodebuild -project MyRAM.xcodeproj -scheme MyRAM \
-  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
-  test -only-testing:MyRAMTests
+  -destination 'platform=iOS Simulator,name=iPhone 16 Pro' test
 ```
 
-**Result:** TEST SUCCEEDED — **1005 tests, 0 failures**
+**Result:** TEST SUCCEEDED — **1009 application tests, 12 UI tests, 0 failures**
 
 ### 4.4 Complete Mac scheme tests
 
@@ -137,7 +144,7 @@ xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac \
   -destination 'platform=macOS' test
 ```
 
-**Result:** TEST SUCCEEDED — **596 tests, 0 failures**
+**Result:** TEST SUCCEEDED — **598 tests, 0 failures**
 
 ### 4.5 Target Builds
 
@@ -177,41 +184,35 @@ xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macO
 
 ---
 
-## 6. Merge Gate Checklist (§14 of Fifth Remediation Proposal)
+## 6. Merge Gate Checklist (§11 of Sixth Remediation Proposal)
 
-All 34 merge gates confirmed satisfied against implementation SHA `9fce7e2`:
+All 28 merge gates confirmed satisfied against implementation SHA `65215a3bfc2d75f8b9c9700d4fb1bc7f8ace29e7`:
 
-1. ✅ Deferred closure strongly retains the completion gate.
-2. ✅ No-change path completes once.
-3. ✅ Synchronous changed path publishes then completes once.
-4. ✅ Deferred changed path publishes then completes once.
-5. ✅ Deferred already-synchronized path completes once.
-6. ✅ Weak-owner teardown completes once.
-7. ✅ Normal paths do not rely on gate deinit.
-8. ✅ IME publication occurs before acknowledgment.
-9. ✅ Search focus clears on Preview entry.
-10. ✅ Focus-request observer checks interaction state.
-11. ✅ Stale focus requests do not replay.
-12. ✅ UIKit tests create and drive a real `UITextView`.
-13. ✅ UIKit tests exercise production publication wiring via `MarkdownPreviewUIKitPublicationAdapter`.
-14. ✅ UIKit tests verify callback order (`["publish", "complete", "acknowledge"]`).
-15. ✅ UIKit tests verify no save/flush and preserved undo.
-16. ✅ AppKit tests create an `NSWindow` and `NSTextView`.
-17. ✅ AppKit tests exercise production focus/save/text-change wiring via `MacMarkdownPreviewTestAdapter`.
-18. ✅ AppKit tests verify undo and first-responder identity.
-19. ✅ UI tests use production identifiers.
-20. ✅ UI tests contain no missing-control early pass.
-21. ✅ UI tests run explicitly and pass (4/4 passed).
-22. ✅ Complete iOS scheme runs application and UI tests (1005 passed).
-23. ✅ Complete Mac scheme passes (596 passed).
-24. ✅ Foundation ordinal reachability is characterized (ordinals > 0 on deployment SDK).
-25. ✅ Fallback retained and directly tested via `MarkdownOrderedListOrdinalPolicy`.
-26. ✅ Reachable fallback is directly tested if retained.
-27. ✅ Both builds pass.
-28. ✅ Forbidden diffs are empty.
-29. ✅ Evidence contains exact SHAs, commands, counts, and matrices.
-30. ✅ Evidence-only diff is proven.
-31. ✅ Local, upstream, and PR-head SHAs match (after force push).
-32. ✅ PR body matches committed evidence (to be updated after push).
-33. ✅ Working tree clean.
-34. ✅ Review threads resolved only after proof exists.
+1. ✅ Production coordinator calls one extracted UIKit sync executor (`MarkdownPreviewUIKitSyncExecutor`).
+2. ✅ UIKit harness calls that same executor.
+3. ✅ Tests no longer reconstruct production ordering outside the executor.
+4. ✅ No UIKit recorder remains in app target (`MarkdownPreviewUIKitTestRecorder` in `MyRAMTests`).
+5. ✅ Production Mac representable calls one production focus seam (`MacMarkdownPreviewFocusResignation.resignIfOwned`).
+6. ✅ Mac tests call that same seam.
+7. ✅ No `TestAdapter` or Mac recorder remains in app target (`MacMarkdownPreviewTestRecorder` in `MyRAMMacTests`).
+8. ✅ UIKit tests prove publication -> completion -> acknowledgment.
+9. ✅ AppKit tests prove production focus ownership.
+10. ✅ Native UIKit and AppKit Undo is exercised.
+11. ✅ Foundation parsing failures fail the test.
+12. ✅ Exact expected list-item counts are asserted (2, 3, 2, 2, 2).
+13. ✅ Every ordered-list ordinal is positive.
+14. ✅ Fallback is removed as missing ordinals are unreachable on deployment SDK.
+15. ✅ Search test cannot pass without finding/tapping an action.
+16. ✅ Keyboard test proves actual dismissal and non-reappearance.
+17. ✅ Pending race test acts before Preview acknowledgment and verifies Preview body never appears.
+18. ✅ UI tests contain no silent missing-control success paths.
+19. ✅ Complete iOS scheme includes application and UI targets (1009 application tests, 12 UI tests).
+20. ✅ Complete Mac scheme passes (598 tests).
+21. ✅ Full 40-character SHAs are recorded.
+22. ✅ Complete-PR forbidden-scope audit is empty.
+23. ✅ Evidence-only diff is exact (`docs/MYR-195-slice-2-completion-verification-evidence.md`).
+24. ✅ Local, upstream, and PR-head SHAs match.
+25. ✅ PR body matches committed evidence.
+26. ✅ PR title remains unchanged (`MYR-195 Slice 2: Rendered Preview`).
+27. ✅ Working tree is clean.
+28. ✅ Review threads are resolved only after proof exists.
