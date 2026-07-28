@@ -630,10 +630,13 @@ struct NoteEditorView: View {
     }
 
     private var isCurrentNoteSearchPresented: Bool {
-        guard markdownEditorMode == .edit else { return false }
-        return usesExternalCurrentNoteSearch
+        let isPresentedInState = usesExternalCurrentNoteSearch
             ? !currentNoteSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             : isLocalCurrentNoteSearchPresented
+        return MarkdownPreviewSearchInteractionPolicy.isSearchPresented(
+            mode: markdownEditorMode,
+            isSearchActiveInState: isPresentedInState
+        )
     }
 
     private var currentNoteSearchQuery: String {
@@ -641,12 +644,15 @@ struct NoteEditorView: View {
     }
 
     private var selectedCurrentNoteMatch: NoteSearchMatch? {
-        searchSession.selectedMatch
+        guard markdownEditorMode == .edit else { return nil }
+        return searchSession.selectedMatch
     }
 
     private var selectedBodySearchRange: NSRange? {
-        guard markdownEditorMode == .edit else { return nil }
-        return searchSession.selectedBodyHighlightRange(textLength: content.utf16.count)
+        MarkdownPreviewSearchInteractionPolicy.bodyHighlightRange(
+            mode: markdownEditorMode,
+            highlightRange: searchSession.selectedBodyHighlightRange(textLength: content.utf16.count)
+        )
     }
 
     private var selectedPinnedTextSearchID: UUID? {
@@ -3108,27 +3114,10 @@ private struct SelectableTextView: UIViewRepresentable {
             context.coordinator.captureCurrentSelection(in: textView)
         }
 
-        if context.coordinator.keyboardFocusToggleToken != keyboardFocusToggleToken {
-            context.coordinator.keyboardFocusToggleToken = keyboardFocusToggleToken
-            if !textView.isFirstResponder {
-                textView.becomeFirstResponder()
-            }
-        }
-
-        if let request = pendingPreviewFocusRequest, context.coordinator.activePreviewFocusRequestID != request.id {
-            context.coordinator.activePreviewFocusRequestID = request.id
-            if textView.isFirstResponder {
-                context.coordinator.isResigningForPreview = true
-                context.coordinator.pendingPreviewFocusRequestID = request.id
-                textView.resignFirstResponder()
-            } else {
-                onFocusResignationAcknowledged(request.id)
-            }
-        }
-
         // Hidden editor command consumption: when Preview is active, consume unsafe
-        // formatting tokens without executing them so they do not replay on Edit return.
+        // tokens (including keyboard focus) without executing them so they do not replay on Edit return.
         if markdownEditorMode == .preview {
+            context.coordinator.keyboardFocusToggleToken = keyboardFocusToggleToken
             context.coordinator.boldToggleToken = boldToggleToken
             context.coordinator.italicToggleToken = italicToggleToken
             context.coordinator.underlineToggleToken = underlineToggleToken
@@ -3143,6 +3132,27 @@ private struct SelectableTextView: UIViewRepresentable {
             context.coordinator.pinSelectionToggleToken = pinSelectionToggleToken
             context.coordinator.lookupSelectionToggleToken = lookupSelectionToggleToken
             context.coordinator.appendUnpinnedThoughtToggleToken = appendUnpinnedThoughtToggleToken
+        } else {
+            if context.coordinator.keyboardFocusToggleToken != keyboardFocusToggleToken {
+                context.coordinator.keyboardFocusToggleToken = keyboardFocusToggleToken
+                if !textView.isFirstResponder {
+                    textView.becomeFirstResponder()
+                }
+            }
+        }
+
+        if let request = pendingPreviewFocusRequest, context.coordinator.activePreviewFocusRequestID != request.id {
+            context.coordinator.activePreviewFocusRequestID = request.id
+            if textView.isFirstResponder {
+                context.coordinator.isResigningForPreview = true
+                context.coordinator.pendingPreviewFocusRequestID = request.id
+                textView.resignFirstResponder()
+            } else {
+                let ack = onFocusResignationAcknowledged
+                MarkdownPreviewAcknowledgmentDispatcher.dispatch(requestID: request.id) { reqID in
+                    ack(reqID)
+                }
+            }
         }
 
         if context.coordinator.selectAllToggleToken != selectAllToggleToken {
@@ -3468,15 +3478,38 @@ private struct SelectableTextView: UIViewRepresentable {
             onEditingFocusChanged(false)
             updateLastKnownSelectionRange(from: textView)
 
-            if isResigningForPreview {
+            let disposition = MarkdownPreviewResignationPolicy.disposition(
+                isPreviewResignation: isResigningForPreview,
+                boundPlainText: text.wrappedValue,
+                nativePlainText: textView.text ?? ""
+            )
+
+            switch disposition {
+            case .acknowledgeWithoutPublication:
                 isResigningForPreview = false
-                // Synchronize raw text buffer so content binding is current for Preview
-                text.wrappedValue = textView.text
+                text.wrappedValue = textView.text ?? ""
                 if let requestID = pendingPreviewFocusRequestID {
-                    onFocusResignationAcknowledged?(requestID)
+                    let reqID = requestID
+                    let ack = onFocusResignationAcknowledged
+                    MarkdownPreviewAcknowledgmentDispatcher.dispatch(requestID: reqID) { rID in
+                        ack?(rID)
+                    }
                     pendingPreviewFocusRequestID = nil
                 }
-            } else {
+
+            case .publishFinalizedUserEditThenAcknowledge:
+                isResigningForPreview = false
+                syncContent(from: textView)
+                if let requestID = pendingPreviewFocusRequestID {
+                    let reqID = requestID
+                    let ack = onFocusResignationAcknowledged
+                    MarkdownPreviewAcknowledgmentDispatcher.dispatch(requestID: reqID) { rID in
+                        ack?(rID)
+                    }
+                    pendingPreviewFocusRequestID = nil
+                }
+
+            case .ordinaryEndEditing:
                 syncContent(from: textView)
             }
 

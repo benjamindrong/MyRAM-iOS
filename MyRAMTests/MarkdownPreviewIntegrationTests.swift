@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class MarkdownPreviewIntegrationTests: XCTestCase {
 
-    // MARK: - Mode Selection Policy Tests
+    // MARK: - Selection Policy Tests
 
     func testModeAfterSelectionChangeDifferentIDResetsToEdit() {
         let oldID = UUID()
@@ -28,33 +28,65 @@ final class MarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertEqual(mode, .preview, "Same-note selection MUST preserve current Preview mode")
     }
 
-    func testModeAfterSelectionChangeNilToIDResetsToEdit() {
-        let newID = UUID()
-        let mode = MarkdownPreviewSelectionPolicy.modeAfterSelectionChange(
-            currentMode: .preview,
-            oldID: nil,
-            newID: newID
+    // MARK: - Resignation Policy Tests
+
+    func testResignationPolicyUnchangedTextAcknowledgeWithoutPublication() {
+        let disposition = MarkdownPreviewResignationPolicy.disposition(
+            isPreviewResignation: true,
+            boundPlainText: "Hello World",
+            nativePlainText: "Hello World"
         )
-        XCTAssertEqual(mode, .edit, "Nil to new note selection MUST reset mode to Edit")
+        XCTAssertEqual(disposition, .acknowledgeWithoutPublication,
+                       "Unchanged Preview resignation MUST acknowledge without publishing edit")
     }
 
-    func testModeAfterSelectionChangeIDToNilResetsToEdit() {
-        let oldID = UUID()
-        let mode = MarkdownPreviewSelectionPolicy.modeAfterSelectionChange(
-            currentMode: .preview,
-            oldID: oldID,
-            newID: nil
+    func testResignationPolicyChangedTextPublishesFinalizedEdit() {
+        let disposition = MarkdownPreviewResignationPolicy.disposition(
+            isPreviewResignation: true,
+            boundPlainText: "Hello",
+            nativePlainText: "Hello World (IME Finalized)"
         )
-        XCTAssertEqual(mode, .edit, "Note removal (ID to nil) MUST reset mode to Edit")
+        XCTAssertEqual(disposition, .publishFinalizedUserEditThenAcknowledge,
+                       "IME-changed text during resignation MUST publish finalized edit exactly once")
     }
 
-    func testFocusRequestEquality() {
-        let uuid = UUID()
-        let req1 = MarkdownPreviewFocusRequest(id: uuid)
-        let req2 = MarkdownPreviewFocusRequest(id: uuid)
-        let req3 = MarkdownPreviewFocusRequest(id: UUID())
+    func testResignationPolicyOrdinaryEndEditing() {
+        let disposition = MarkdownPreviewResignationPolicy.disposition(
+            isPreviewResignation: false,
+            boundPlainText: "Hello",
+            nativePlainText: "Hello"
+        )
+        XCTAssertEqual(disposition, .ordinaryEndEditing,
+                       "Ordinary focus loss MUST proceed with standard end-editing publication")
+    }
 
-        XCTAssertEqual(req1, req2)
-        XCTAssertNotEqual(req1, req3)
+    // MARK: - Command Consumption Policy Tests
+
+    func testCommandConsumptionPolicyEditExecutes() {
+        let disposition = MarkdownPreviewCommandConsumptionPolicy.disposition(forMode: .edit)
+        XCTAssertEqual(disposition, .execute)
+    }
+
+    func testCommandConsumptionPolicyPreviewConsumesWithoutExecution() {
+        let disposition = MarkdownPreviewCommandConsumptionPolicy.disposition(forMode: .preview)
+        XCTAssertEqual(disposition, .consumeWithoutExecution)
+    }
+
+    // MARK: - Search Interaction Policy Tests
+
+    func testSearchInteractionPolicyHidesInPreview() {
+        let isPresented = MarkdownPreviewSearchInteractionPolicy.isSearchPresented(
+            mode: .preview,
+            isSearchActiveInState: true
+        )
+        XCTAssertFalse(isPresented, "Search controls MUST be hidden while in Preview mode")
+    }
+
+    func testSearchInteractionPolicyRemovesHighlightInPreview() {
+        let highlight = MarkdownPreviewSearchInteractionPolicy.bodyHighlightRange(
+            mode: .preview,
+            highlightRange: NSRange(location: 0, length: 5)
+        )
+        XCTAssertNil(highlight, "Body search highlight MUST be nil while in Preview mode")
     }
 }

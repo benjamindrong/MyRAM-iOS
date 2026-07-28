@@ -92,6 +92,13 @@ enum MarkdownPreviewResult: Equatable {
     case plainTextFallback(String)
 }
 
+// MARK: - Counter Key
+
+struct MarkdownOrderedListCounterKey: Hashable {
+    let containerIdentity: Int
+    let depth: Int
+}
+
 // MARK: - Block projection
 
 /// Immutable, shared block model derived solely from Foundation AttributedString + presentation intents.
@@ -130,8 +137,8 @@ struct MarkdownPreviewDocument: Equatable {
             pendingRuns = []
         }
 
-        // Sibling ordinal counter for ordered list items if Foundation doesn't provide ordinal
-        var orderedListCounters: [Int: Int] = [:] // depth -> current count
+        // Fallback counters keyed by container identity + depth, so separate lists at the same depth restart at 1
+        var orderedListCounters: [MarkdownOrderedListCounterKey: Int] = [:]
 
         for run in attributed.runs {
             let intent = run.presentationIntent
@@ -184,17 +191,22 @@ enum MarkdownBlockKind: Equatable {
 }
 
 extension MarkdownBlockKind {
-    init(from intent: PresentationIntent?, listCounters: inout [Int: Int]) {
+    init(from intent: PresentationIntent?, listCounters: inout [MarkdownOrderedListCounterKey: Int]) {
         guard let intent else {
             self = .paragraph
             return
         }
 
-        var isOrdered = false
-        var isUnordered = false
         var headingLevel: Int? = nil
         var isQuote = false
         var isCode = false
+        
+        // Track list containers in path order to select innermost list style
+        enum ListContainerType {
+            case ordered
+            case unordered
+        }
+        var listContainers: [ListContainerType] = []
         var depth = 0
         var foundOrdinal: Int? = nil
 
@@ -203,10 +215,10 @@ extension MarkdownBlockKind {
             case .header(let level):
                 headingLevel = level
             case .orderedList:
-                isOrdered = true
+                listContainers.append(.ordered)
                 depth += 1
             case .unorderedList:
-                isUnordered = true
+                listContainers.append(.unordered)
                 depth += 1
             case .listItem(let ordinal):
                 if ordinal > 0 {
@@ -235,21 +247,30 @@ extension MarkdownBlockKind {
             self = .blockQuote
             return
         }
-        if isOrdered {
-            let ordinal: Int
-            if let found = foundOrdinal {
-                ordinal = found
-            } else {
-                let current = (listCounters[depth] ?? 0) + 1
-                listCounters[depth] = current
-                ordinal = current
+
+        // Innermost list container takes precedence for marker style (Foundation lists components innermost-first)
+        if let innermost = listContainers.first {
+            let containerIdentity = intent.hashValue
+            let effectiveDepth = max(1, depth)
+            
+            switch innermost {
+            case .ordered:
+                let ordinal: Int
+                if let found = foundOrdinal {
+                    ordinal = found
+                } else {
+                    let key = MarkdownOrderedListCounterKey(containerIdentity: containerIdentity, depth: effectiveDepth)
+                    let current = (listCounters[key] ?? 0) + 1
+                    listCounters[key] = current
+                    ordinal = current
+                }
+                self = .orderedListItem(MarkdownListMetadata(style: .ordered(ordinal: ordinal), depth: effectiveDepth))
+                return
+
+            case .unordered:
+                self = .unorderedListItem(MarkdownListMetadata(style: .unordered, depth: effectiveDepth))
+                return
             }
-            self = .orderedListItem(MarkdownListMetadata(style: .ordered(ordinal: ordinal), depth: max(1, depth)))
-            return
-        }
-        if isUnordered {
-            self = .unorderedListItem(MarkdownListMetadata(style: .unordered, depth: max(1, depth)))
-            return
         }
 
         self = .paragraph

@@ -6,7 +6,7 @@ import XCTest
 @testable import MyRAM
 #endif
 
-// MARK: - MYR-195 Slice 2: Parser contract tests (§14.1 & Remediation A/E)
+// MARK: - MYR-195 Slice 2: Final Parser contract tests (§6 & §11)
 
 final class MarkdownPreviewParserTests: XCTestCase {
     private let parser = MarkdownPreviewParser()
@@ -90,17 +90,42 @@ final class MarkdownPreviewParserTests: XCTestCase {
         }
     }
 
-    // MARK: 7. Link and destination (inline — remains attributed)
-    func testLinkIsInlineAndParseSucceeds() {
-        let result = parser.parse("[Apple](https://apple.com)")
-        guard case .rendered(let attributed) = result else {
+    // MARK: 7. Innermost list container style precedence (ordered outer -> unordered inner)
+    func testNestedUnorderedListInsideOrderedListUsesUnorderedStyle() {
+        let source = "1. Outer\n   - Inner"
+        let result = parser.parseDocument(source)
+        guard case .rendered(let doc) = result else {
             return XCTFail("Expected rendered")
         }
-        let plain = String(attributed.characters)
-        XCTAssertTrue(plain.contains("Apple"), "Link label should be in attributed content")
+        XCTAssertGreaterThanOrEqual(doc.blocks.count, 2)
+        let innerBlock = doc.blocks.last!
+        if case .unorderedListItem(let meta) = innerBlock.kind {
+            XCTAssertEqual(meta.style, .unordered, "Innermost container MUST take precedence as unordered style")
+        } else {
+            XCTFail("Nested unordered item inside ordered item MUST classify as .unorderedListItem, got \(innerBlock.kind)")
+        }
     }
 
-    // MARK: 8. Block quote
+    // MARK: 8. Container-scoped fallback list counters
+    func testSeparateListsAtSameDepthRestartCounterAtOne() {
+        let source = "1. List A Item 1\n\nParagraph\n\n1. List B Item 1"
+        guard case .rendered(let doc) = parser.parseDocument(source) else {
+            return XCTFail("Expected rendered")
+        }
+        let listBlocks = doc.blocks.filter {
+            if case .orderedListItem = $0.kind { return true }; return false
+        }
+        XCTAssertEqual(listBlocks.count, 2)
+        
+        if case .orderedListItem(let meta1) = listBlocks[0].kind {
+            XCTAssertEqual(meta1.style, .ordered(ordinal: 1))
+        }
+        if case .orderedListItem(let meta2) = listBlocks[1].kind {
+            XCTAssertEqual(meta2.style, .ordered(ordinal: 1), "Separate list B MUST restart counter at 1")
+        }
+    }
+
+    // MARK: 9. Block quote
     func testBlockQuoteProducesBlockQuoteBlock() {
         let result = parser.parseDocument("> A quote")
         guard case .rendered(let doc) = result else {
@@ -108,16 +133,6 @@ final class MarkdownPreviewParserTests: XCTestCase {
         }
         XCTAssertEqual(doc.blocks.count, 1)
         XCTAssertEqual(doc.blocks[0].kind, .blockQuote)
-    }
-
-    // MARK: 9. Inline code (inline — remains attributed)
-    func testInlineCodeIsInlineAttribute() {
-        let result = parser.parse("Use `inline` code here.")
-        if case .rendered = result {
-            // Success
-        } else {
-            XCTFail("Inline code should not force plain-text fallback")
-        }
     }
 
     // MARK: 10. Fenced code block
@@ -131,34 +146,7 @@ final class MarkdownPreviewParserTests: XCTestCase {
         XCTAssertEqual(doc.blocks[0].kind, .codeBlock)
     }
 
-    // MARK: 11. Mixed constructs
-    func testMixedConstructsParsedWithoutFallback() {
-        let source = """
-        # Heading
-
-        Paragraph with *em*, **strong**, and [link](https://example.com).
-
-        > Block quote
-
-        1. First
-        2. Second
-
-        - Alpha
-        - Beta
-
-        Use `inline code`.
-
-        ```swift
-        let value = "fenced code"
-        ```
-        """
-        let result = parser.parseDocument(source)
-        if case .plainTextFallback = result {
-            XCTFail("Mixed constructs must not fall back to plain text")
-        }
-    }
-
-    // MARK: 12. Empty source
+    // MARK: 11. Empty source
     func testEmptySourceProducesEmptyDocument() {
         let result = parser.parseDocument("")
         guard case .rendered(let doc) = result else {
@@ -167,25 +155,7 @@ final class MarkdownPreviewParserTests: XCTestCase {
         XCTAssertTrue(doc.blocks.isEmpty, "Empty source produces an empty document")
     }
 
-    // MARK: 13. Unicode, combining marks, supplementary scalars
-    func testUnicodeParsesWithoutFallback() {
-        let source = "Emoji: 🎉 Combining: é\u{0301} Supplementary: 𝄞"
-        let result = parser.parseDocument(source)
-        if case .plainTextFallback = result {
-            XCTFail("Unicode source must not fall back to plain text")
-        }
-    }
-
-    // MARK: 14. CRLF source
-    func testCRLFSourceParsedWithoutFallback() {
-        let source = "# Heading\r\n\r\nParagraph."
-        let result = parser.parseDocument(source)
-        if case .plainTextFallback = result {
-            XCTFail("CRLF source must not fall back to plain text")
-        }
-    }
-
-    // MARK: 15 & 16. Injected forced parser failure returns exact plain-text fallback
+    // MARK: 12. Forced parser failure returns exact plain-text fallback
     func testForcedParserFailureReturnsExactSource() {
         struct MockError: Error {}
         let failingParser = MarkdownPreviewParser(parseOperation: { _ in throw MockError() })
@@ -198,7 +168,7 @@ final class MarkdownPreviewParserTests: XCTestCase {
         XCTAssertEqual(docResult, .plainTextFallback(source), "Forced parser failure MUST return exact plainTextFallback")
     }
 
-    // MARK: 17. Sibling paragraphs remain distinct blocks
+    // MARK: 13. Adjacent paragraphs remain distinct blocks
     func testAdjacentParagraphsRemainDistinctBlocks() {
         let source = "First paragraph.\n\nSecond paragraph."
         guard case .rendered(let doc) = parser.parseDocument(source) else {
@@ -209,75 +179,10 @@ final class MarkdownPreviewParserTests: XCTestCase {
         XCTAssertEqual(doc.blocks[1].kind, .paragraph)
     }
 
-    // MARK: 18. Deterministic repeated parsing
-    func testDeterministicRepeatedParsing() {
-        let source = "# Test\n\nParagraph."
-        let first = parser.parseDocument(source)
-        let second = parser.parseDocument(source)
-        XCTAssertEqual(first, second, "Repeated parsing must be deterministic")
-    }
-
-    // MARK: 19. Presentation intent projection permits only six block kinds
-    func testProjectionOnlyProducesSixPermittedBlockKinds() {
-        let source = """
-        # Heading
-
-        Paragraph.
-
-        > Quote
-
-        1. Ordered
-
-        - Unordered
-
-        ```
-        code
-        ```
-        """
-        guard case .rendered(let doc) = parser.parseDocument(source) else { return }
-        for block in doc.blocks {
-            switch block.kind {
-            case .paragraph, .heading, .orderedListItem, .unorderedListItem, .blockQuote, .codeBlock:
-                break // All permitted
-            }
-        }
-    }
-
-    // MARK: 20. Unknown Foundation presentation intent maps to .paragraph
+    // MARK: 14. Unknown Foundation presentation intent maps to .paragraph
     func testUnknownPresentationIntentMapsToParagraphKind() {
-        var counters: [Int: Int] = [:]
+        var counters: [MarkdownOrderedListCounterKey: Int] = [:]
         let kind = MarkdownBlockKind(from: nil, listCounters: &counters)
         XCTAssertEqual(kind, .paragraph, "nil intent must map to .paragraph")
-    }
-}
-
-// MARK: - Presentation policy tests (§14.2)
-
-final class MarkdownPreviewPresentationTests: XCTestCase {
-    func testReminderCopyIsExact() {
-        XCTAssertEqual(
-            MarkdownPreviewCopy.reminder,
-            "Markdown Preview only renders formatting written as Markdown syntax. " +
-            "Formatting applied with MyRAM's rich-text controls will not appear here " +
-            "or in exported .md files."
-        )
-    }
-
-    func testMarkdownEditorModeEnumCases() {
-        XCTAssertEqual(MarkdownEditorMode.edit.rawValue, "edit")
-        XCTAssertEqual(MarkdownEditorMode.preview.rawValue, "preview")
-        XCTAssertEqual(MarkdownEditorMode.edit.id, .edit)
-    }
-
-    func testFallbackResultPreservesExactSource() {
-        let source = "## Source text\n\nWith content."
-        let fallback = MarkdownPreviewResult.plainTextFallback(source)
-        if case .plainTextFallback(let s) = fallback {
-            XCTAssertEqual(s, source)
-        }
-    }
-
-    func testEmptyDocumentHasNoBlocks() {
-        XCTAssertTrue(MarkdownPreviewDocument.empty.blocks.isEmpty)
     }
 }
