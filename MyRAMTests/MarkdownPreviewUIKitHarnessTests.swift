@@ -35,6 +35,73 @@ final class MarkdownPreviewUIKitTestRecorder {
     }
 }
 
+@MainActor
+final class MarkdownPreviewUIKitHostState: ObservableObject {
+    @Published var text = ""
+    @Published var richTextData: Data?
+    @Published var mode: MarkdownEditorMode = .edit
+    @Published var pendingFocusRequest: MarkdownPreviewFocusRequest?
+    private(set) var acknowledgedRequestID: UUID?
+
+    let syncBridge = UIKitEditorSyncBridge()
+    let formattingController = TextFormattingController()
+
+    func acknowledgePreviewFocusRequest(_ requestID: UUID) {
+        acknowledgedRequestID = requestID
+        pendingFocusRequest = nil
+        mode = .preview
+    }
+}
+
+private struct MarkdownPreviewUIKitHostedEditor: View {
+    @ObservedObject var state: MarkdownPreviewUIKitHostState
+
+    var body: some View {
+        SelectableTextView(
+            text: $state.text,
+            richTextContentData: $state.richTextData,
+            syncBridge: state.syncBridge,
+            markdownEditorMode: state.mode,
+            pendingPreviewFocusRequest: state.pendingFocusRequest,
+            onFocusResignationAcknowledged: state.acknowledgePreviewFocusRequest,
+            keyboardFocusToggleToken: 0,
+            captureSelectionToggleToken: 0,
+            selectAllToggleToken: 0,
+            pinSelectionToggleToken: 0,
+            lookupSelectionToggleToken: 0,
+            appendUnpinnedThoughtToggleToken: 0,
+            pendingUnpinnedThoughtText: "",
+            restoreContentToggleToken: 0,
+            boldToggleToken: 0,
+            italicToggleToken: 0,
+            underlineToggleToken: 0,
+            strikethroughToggleToken: 0,
+            checklistToggleToken: 0,
+            pasteAndMatchFormattingToggleToken: 0,
+            increaseFontSizeToggleToken: 0,
+            decreaseFontSizeToggleToken: 0,
+            textColorToggleToken: 0,
+            pendingTextUIColor: nil,
+            pendingTextColorUsesDefault: false,
+            searchHighlightRange: nil,
+            formattingController: state.formattingController,
+            backgroundColor: .systemBackground,
+            textColor: .label,
+            tintColor: .systemBlue,
+            onContentChanged: { _, _ in },
+            onRemoteAttributedTextPublished: { _ in },
+            onMarkedTextEnded: {},
+            onUndoManagerChanged: { _ in },
+            onFormattingStateChanged: { _ in },
+            onEditingFocusChanged: { _ in },
+            onEditorScrolled: {},
+            onPinSelection: { _ in false },
+            onLookupSelection: { _ in }
+        )
+        .frame(width: 320, height: 240)
+    }
+}
+
 // MARK: - MarkdownPreviewUIKitHarnessTests (§5 Sixth Remediation)
 // Tests drive the extracted production MarkdownPreviewUIKitSyncExecutor directly.
 
@@ -60,9 +127,8 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
 
         MarkdownPreviewUIKitSyncExecutor.synchronize(
             nativePlainText: "Identical Content",
-            encodedRichText: nil,
+            richTextBindingDisposition: .replace(nil),
             richTextUpdate: .immediate(nil),
-            serializesRichTextImmediately: true,
             isUpdatingUIView: false,
             dependencies: deps,
             completion: { recorder.recordComplete() }
@@ -91,9 +157,8 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
 
         MarkdownPreviewUIKitSyncExecutor.synchronize(
             nativePlainText: "New Content",
-            encodedRichText: nil,
+            richTextBindingDisposition: .replace(nil),
             richTextUpdate: .immediate(nil),
-            serializesRichTextImmediately: true,
             isUpdatingUIView: false,
             dependencies: deps,
             completion: { recorder.recordComplete() }
@@ -123,9 +188,8 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
 
         MarkdownPreviewUIKitSyncExecutor.synchronize(
             nativePlainText: "Deferred New Content",
-            encodedRichText: nil,
+            richTextBindingDisposition: .replace(nil),
             richTextUpdate: .immediate(nil),
-            serializesRichTextImmediately: true,
             isUpdatingUIView: true,
             dependencies: deps,
             completion: {
@@ -167,9 +231,8 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
 
         MarkdownPreviewUIKitSyncExecutor.synchronize(
             nativePlainText: "Already Synced Content",
-            encodedRichText: nil,
+            richTextBindingDisposition: .replace(nil),
             richTextUpdate: .immediate(nil),
-            serializesRichTextImmediately: true,
             isUpdatingUIView: true,
             dependencies: deps,
             completion: { recorder.recordComplete() }
@@ -186,6 +249,252 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
 
         XCTAssertEqual(recorder.events, ["complete"],
             "Deferred already-synchronized path MUST complete without publishing")
+    }
+
+    func testDeferredRichTextPublicationPreservesExistingNonNilData() {
+        let existingData = Data("existing RTF".utf8)
+        var boundPlainText = "Before"
+        var boundRichTextData: Data? = existingData
+        var richTextWriteCount = 0
+        var publishedDeferredUpdate = false
+
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { _, update in
+                if case .deferred = update {
+                    publishedDeferredUpdate = true
+                }
+            },
+            setBoundPlainText: { boundPlainText = $0 },
+            setBoundRichTextData: {
+                richTextWriteCount += 1
+                boundRichTextData = $0
+            },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
+
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "After",
+            richTextBindingDisposition: .preserveExisting,
+            richTextUpdate: .deferred(DeferredRichTextContentEncoder { Data("replacement RTF".utf8) }),
+            isUpdatingUIView: false,
+            dependencies: deps,
+            completion: {}
+        )
+
+        XCTAssertEqual(boundPlainText, "After")
+        XCTAssertEqual(boundRichTextData, existingData, "Deferred serialization MUST preserve existing non-nil RTF")
+        XCTAssertEqual(richTextWriteCount, 0, "Deferred serialization MUST NOT write the rich-text binding")
+        XCTAssertTrue(publishedDeferredUpdate, "Legitimate deferred publication MUST emit a deferred update")
+    }
+
+    func testDeferredRichTextPublicationPreservesExistingNilData() {
+        var boundPlainText = "Before"
+        var boundRichTextData: Data?
+        var richTextWriteCount = 0
+
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { _, _ in },
+            setBoundPlainText: { boundPlainText = $0 },
+            setBoundRichTextData: {
+                richTextWriteCount += 1
+                boundRichTextData = $0
+            },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
+
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "After",
+            richTextBindingDisposition: .preserveExisting,
+            richTextUpdate: .deferred(DeferredRichTextContentEncoder { Data("replacement RTF".utf8) }),
+            isUpdatingUIView: false,
+            dependencies: deps,
+            completion: {}
+        )
+
+        XCTAssertNil(boundRichTextData)
+        XCTAssertEqual(richTextWriteCount, 0, "Preserving nil MUST not be represented as replace-with-nil")
+    }
+
+    func testRunLoopDeferredPreservationNeverWritesRichTextBinding() {
+        let existingData = Data("existing RTF".utf8)
+        var boundPlainText = "Before"
+        var boundRichTextData: Data? = existingData
+        var richTextWriteCount = 0
+        var pendingWrite: MarkdownPreviewUIKitPendingRichTextBindingWrite?
+
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { _, _ in },
+            setBoundPlainText: { boundPlainText = $0 },
+            setBoundRichTextData: {
+                richTextWriteCount += 1
+                boundRichTextData = $0
+            },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, write in pendingWrite = write }
+        )
+
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "After",
+            richTextBindingDisposition: .preserveExisting,
+            richTextUpdate: .deferred(DeferredRichTextContentEncoder { Data("replacement RTF".utf8) }),
+            isUpdatingUIView: true,
+            dependencies: deps,
+            completion: {}
+        )
+        drainMainRunLoop()
+
+        XCTAssertEqual(pendingWrite, MarkdownPreviewUIKitPendingRichTextBindingWrite.none)
+        XCTAssertEqual(boundRichTextData, existingData)
+        XCTAssertEqual(richTextWriteCount, 0, "Run-loop deferral MUST never turn preservation into a nil write")
+    }
+
+    func testImmediateReplacementWritesNonNilData() {
+        let replacement = Data("replacement RTF".utf8)
+        var boundPlainText = "Before"
+        var boundRichTextData: Data?
+
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { _, _ in },
+            setBoundPlainText: { boundPlainText = $0 },
+            setBoundRichTextData: { boundRichTextData = $0 },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
+
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "After",
+            richTextBindingDisposition: .replace(replacement),
+            richTextUpdate: .immediate(replacement),
+            isUpdatingUIView: false,
+            dependencies: deps,
+            completion: {}
+        )
+
+        XCTAssertEqual(boundRichTextData, replacement)
+    }
+
+    func testImmediateReplacementWithNilIntentionallyClearsData() {
+        var boundPlainText = "Before"
+        var boundRichTextData: Data? = Data("existing RTF".utf8)
+        var richTextWriteCount = 0
+
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { _, _ in },
+            setBoundPlainText: { boundPlainText = $0 },
+            setBoundRichTextData: {
+                richTextWriteCount += 1
+                boundRichTextData = $0
+            },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
+
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "After",
+            richTextBindingDisposition: .replace(nil),
+            richTextUpdate: .immediate(nil),
+            isUpdatingUIView: false,
+            dependencies: deps,
+            completion: {}
+        )
+
+        XCTAssertNil(boundRichTextData)
+        XCTAssertEqual(richTextWriteCount, 1, "Explicit replace-with-nil MUST remain an intentional binding write")
+    }
+
+    func testNoDifferenceDeferredPathIgnoresUnrelatedRichTextValue() {
+        let recorder = MarkdownPreviewUIKitTestRecorder()
+        var boundPlainText = "Same"
+        var boundRichTextData: Data? = Data("existing RTF".utf8)
+        var richTextWriteCount = 0
+
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { boundRichTextData },
+            publish: { plain, _ in recorder.recordPublish(plainText: plain) },
+            setBoundPlainText: { boundPlainText = $0 },
+            setBoundRichTextData: {
+                richTextWriteCount += 1
+                boundRichTextData = $0
+            },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
+
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "Same",
+            richTextBindingDisposition: .preserveExisting,
+            richTextUpdate: .deferred(DeferredRichTextContentEncoder { nil }),
+            isUpdatingUIView: false,
+            dependencies: deps,
+            completion: { recorder.recordComplete() }
+        )
+
+        XCTAssertEqual(recorder.events, ["complete"])
+        XCTAssertEqual(richTextWriteCount, 0)
+    }
+
+    func testAppliedContentBookkeepingDistinguishesPreserveFromReplaceNil() {
+        var state = MarkdownPreviewUIKitAppliedContentState()
+
+        state.record(plainText: "Pending", richTextWrite: .none)
+        XCTAssertFalse(
+            state.hasUnsyncedContent(boundPlainText: "Pending", boundRichTextData: Data("unrelated".utf8)),
+            "Preservation MUST ignore the current rich-text value"
+        )
+
+        state.record(plainText: "Pending", richTextWrite: .replace(nil))
+        XCTAssertTrue(
+            state.hasUnsyncedContent(boundPlainText: "Pending", boundRichTextData: Data("unrelated".utf8)),
+            "Replace-with-nil MUST remain distinguishable from no pending write"
+        )
+        state.clearIfSynced(boundPlainText: "Pending", boundRichTextData: nil)
+        XCTAssertEqual(state, MarkdownPreviewUIKitAppliedContentState())
+    }
+
+    func testDeferredRichTextPublicationPrecedesExactlyOnceCompletion() {
+        let recorder = MarkdownPreviewUIKitTestRecorder()
+        var boundPlainText = "Before"
+
+        let deps = MarkdownPreviewUIKitSyncDependencies(
+            getBoundPlainText: { boundPlainText },
+            getBoundRichTextData: { Data("existing RTF".utf8) },
+            publish: { plain, update in
+                guard case .deferred = update else {
+                    return XCTFail("Expected deferred rich-text publication")
+                }
+                recorder.recordPublish(plainText: plain)
+            },
+            setBoundPlainText: { boundPlainText = $0 },
+            setBoundRichTextData: { _ in XCTFail("Preservation MUST NOT write rich text") },
+            clearAppliedContentIfSynced: {},
+            setAppliedContentAwaitingBinding: { _, _ in }
+        )
+
+        MarkdownPreviewUIKitSyncExecutor.synchronize(
+            nativePlainText: "After",
+            richTextBindingDisposition: .preserveExisting,
+            richTextUpdate: .deferred(DeferredRichTextContentEncoder { nil }),
+            isUpdatingUIView: true,
+            dependencies: deps,
+            completion: { recorder.recordComplete() }
+        )
+        drainMainRunLoop()
+        drainMainRunLoop()
+
+        XCTAssertEqual(recorder.events, ["publish", "complete"])
     }
 
     func testTeardownPathCompletesOnce() {
@@ -225,9 +534,8 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
 
         MarkdownPreviewUIKitSyncExecutor.synchronize(
             nativePlainText: "Finalized IME Text",
-            encodedRichText: nil,
+            richTextBindingDisposition: .replace(nil),
             richTextUpdate: .immediate(nil),
-            serializesRichTextImmediately: true,
             isUpdatingUIView: false,
             dependencies: deps,
             completion: {
@@ -259,9 +567,8 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         let isStale = true
         MarkdownPreviewUIKitSyncExecutor.synchronize(
             nativePlainText: "Stale Edit",
-            encodedRichText: nil,
+            richTextBindingDisposition: .replace(nil),
             richTextUpdate: .immediate(nil),
-            serializesRichTextImmediately: true,
             isUpdatingUIView: false,
             dependencies: deps,
             completion: {
@@ -286,6 +593,46 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         XCTAssertNotNil(textView.undoManager)
         XCTAssertTrue(textView.undoManager === initialUndoManager,
             "UITextView undoManager identity MUST be preserved across syncContent calls")
+    }
+
+    func testHostedProductionRepresentableNativeUndoWorksAfterPreviewRoundTrip() throws {
+        let state = MarkdownPreviewUIKitHostState()
+        let hostingController = UIHostingController(
+            rootView: MarkdownPreviewUIKitHostedEditor(state: state)
+        )
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 320, height: 240))
+        window.rootViewController = hostingController
+        window.makeKeyAndVisible()
+        hostingController.view.layoutIfNeeded()
+        drainMainRunLoop()
+
+        let textView = try XCTUnwrap(state.syncBridge.textView)
+        let originalIdentity = ObjectIdentifier(textView)
+        XCTAssertTrue(textView.becomeFirstResponder())
+
+        textView.insertText("Native Undo Preview Proof")
+        drainMainRunLoop()
+        XCTAssertEqual(textView.text, "Native Undo Preview Proof")
+        XCTAssertTrue(textView.undoManager?.canUndo == true)
+
+        let requestID = UUID()
+        state.pendingFocusRequest = MarkdownPreviewFocusRequest(id: requestID)
+        drainMainRunLoop()
+        drainMainRunLoop()
+
+        XCTAssertEqual(state.acknowledgedRequestID, requestID)
+        XCTAssertEqual(state.mode, .preview)
+        XCTAssertFalse(textView.isFirstResponder)
+        XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(state.syncBridge.textView)), originalIdentity)
+
+        state.mode = .edit
+        drainMainRunLoop()
+        XCTAssertTrue(textView.becomeFirstResponder())
+        textView.undoManager?.undo()
+        drainMainRunLoop()
+
+        XCTAssertEqual(textView.text, "", "Native UIKit Undo MUST restore text after the production representable mode round trip")
+        XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(state.syncBridge.textView)), originalIdentity)
     }
 
     // MARK: - EditorContentSyncCompletionGate Unit Tests (§6.7)
@@ -422,5 +769,13 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
             highlightRange: range
         )
         XCTAssertEqual(result, range, "Body highlight range MUST pass through unchanged in Edit mode")
+    }
+
+    private func drainMainRunLoop() {
+        let expectation = expectation(description: "RunLoop drain")
+        DispatchQueue.main.async {
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 2)
     }
 }

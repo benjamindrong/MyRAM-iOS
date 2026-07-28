@@ -1371,7 +1371,11 @@ struct NoteEditorView: View {
             .tint(.primary)
             .accessibilityIdentifier("topbar-attachments")
         case .search:
-            topBarActionButton(systemImage: "magnifyingglass", identifier: "topbar-search-note") {
+            topBarActionButton(
+                systemImage: "magnifyingglass",
+                identifier: "topbar-search-note",
+                isDisabled: interactionState.isPreviewOrPending
+            ) {
                 presentCurrentNoteSearch()
             }
         case .deleteNote:
@@ -2394,6 +2398,7 @@ struct NoteEditorView: View {
                 Label("Search Note", systemImage: "magnifyingglass")
             }
             .foregroundStyle(.primary)
+            .disabled(interactionState.isPreviewOrPending)
         case .deleteNote:
             Button(role: .destructive) {
                 vm.deleteNote(note)
@@ -3010,7 +3015,7 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
     }
 }
 
-private struct SelectableTextView: UIViewRepresentable {
+struct SelectableTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var richTextContentData: Data?
     let syncBridge: UIKitEditorSyncBridge
@@ -3116,7 +3121,11 @@ private struct SelectableTextView: UIViewRepresentable {
         } else if !textView.isFirstResponder
             && !context.coordinator.isHandlingUserFocusChange
             && !hasPendingFormattingMutation
-            && !context.coordinator.hasUnsyncedAppliedContent {
+            && !context.coordinator.hasUnsyncedAppliedContent
+            && textView.text != text {
+            // Ordinary SwiftUI refreshes only reconcile a genuine plain-text mismatch.
+            // Same-text rich data can still be awaiting deferred encoding and must not replace
+            // the native buffer or its undo stack. Explicit reloads use restoreContentToggleToken.
             context.coordinator.applyBoundContent(
                 plainText: text,
                 richTextContentData: richTextContentData,
@@ -3338,8 +3347,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var isHandlingUserFocusChange = false
         private var isApplyingBoundContent = false
         private var focusAcquisitionSelectionRange: NSRange?
-        private var appliedPlainTextAwaitingBinding: String?
-        private var appliedRichTextDataAwaitingBinding: Data?
+        private var appliedContentAwaitingBinding = MarkdownPreviewUIKitAppliedContentState()
         private weak var checklistTapRecognizer: UITapGestureRecognizer?
 
         init(
@@ -3805,6 +3813,10 @@ private struct SelectableTextView: UIViewRepresentable {
             let encodedRichText: Data? = serializesRichTextImmediately
                 ? RichTextContentCodec.encode(storageAttributedText(from: textView))
                 : nil
+            let richTextBindingDisposition: MarkdownPreviewUIKitRichTextBindingDisposition =
+                serializesRichTextImmediately
+                    ? .replace(encodedRichText)
+                    : .preserveExisting
             let richTextUpdate: EditorRichTextContentUpdate = serializesRichTextImmediately
                 ? .immediate(encodedRichText)
                 : .deferred(deferredRichTextContentEncoder(for: textView))
@@ -3816,16 +3828,17 @@ private struct SelectableTextView: UIViewRepresentable {
                 setBoundPlainText: { [weak self] plain in self?.text.wrappedValue = plain },
                 setBoundRichTextData: { [weak self] data in self?.richTextContentData.wrappedValue = data },
                 clearAppliedContentIfSynced: { [weak self] in self?.clearAppliedContentIfSynced() },
-                setAppliedContentAwaitingBinding: { [weak self] plain, data in
-                    self?.appliedPlainTextAwaitingBinding = plain
-                    self?.appliedRichTextDataAwaitingBinding = data
+                setAppliedContentAwaitingBinding: { [weak self] plain, richTextWrite in
+                    self?.appliedContentAwaitingBinding.record(
+                        plainText: plain,
+                        richTextWrite: richTextWrite
+                    )
                 }
             )
             MarkdownPreviewUIKitSyncExecutor.synchronize(
                 nativePlainText: plainText,
-                encodedRichText: encodedRichText,
+                richTextBindingDisposition: richTextBindingDisposition,
                 richTextUpdate: richTextUpdate,
-                serializesRichTextImmediately: serializesRichTextImmediately,
                 isUpdatingUIView: isUpdatingUIView,
                 dependencies: deps,
                 completion: completion
@@ -3890,18 +3903,17 @@ private struct SelectableTextView: UIViewRepresentable {
         }
 
         var hasUnsyncedAppliedContent: Bool {
-            guard let appliedPlainTextAwaitingBinding else { return false }
-            return text.wrappedValue != appliedPlainTextAwaitingBinding
-                || richTextContentData.wrappedValue != appliedRichTextDataAwaitingBinding
+            appliedContentAwaitingBinding.hasUnsyncedContent(
+                boundPlainText: text.wrappedValue,
+                boundRichTextData: richTextContentData.wrappedValue
+            )
         }
 
         func clearAppliedContentIfSynced() {
-            guard let appliedPlainTextAwaitingBinding else { return }
-            if text.wrappedValue == appliedPlainTextAwaitingBinding
-                && richTextContentData.wrappedValue == appliedRichTextDataAwaitingBinding {
-                self.appliedPlainTextAwaitingBinding = nil
-                appliedRichTextDataAwaitingBinding = nil
-            }
+            appliedContentAwaitingBinding.clearIfSynced(
+                boundPlainText: text.wrappedValue,
+                boundRichTextData: richTextContentData.wrappedValue
+            )
         }
 
         func reportFormattingState(from textView: UITextView, allowsLargeSelectionScan: Bool = false) {

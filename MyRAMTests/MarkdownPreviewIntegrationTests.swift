@@ -135,18 +135,4 @@ final class MarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertNil(highlight, "Body search highlight MUST be nil while in Preview mode")
     }
 
-    // MARK: - List Ordinal Policy Tests (§8 & §7 Sixth Remediation)
-
-    func testListOrdinalPolicyUsesFoundationOrdinalWhenPresent() {
-        let ordinal = MarkdownOrderedListOrdinalPolicy.ordinal(foundationOrdinal: 5)
-        XCTAssertEqual(ordinal, 5, "Must use explicit Foundation ordinal when > 0")
-    }
-
-    func testListOrdinalPolicyMissingOrZeroOrdinalDefaultsToOne() {
-        let nilOrdinal = MarkdownOrderedListOrdinalPolicy.ordinal(foundationOrdinal: nil)
-        let zeroOrdinal = MarkdownOrderedListOrdinalPolicy.ordinal(foundationOrdinal: 0)
-
-        XCTAssertEqual(nilOrdinal, 1, "Nil Foundation ordinal MUST default to 1")
-        XCTAssertEqual(zeroOrdinal, 1, "Zero Foundation ordinal MUST default to 1")
-    }
 }

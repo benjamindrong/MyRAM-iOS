@@ -10,14 +10,53 @@ import XCTest
 @MainActor
 final class MacMarkdownPreviewTestRecorder {
     private(set) var onTextChangedCount = 0
-    private(set) var saveScheduledCount = 0
 
     func recordTextChanged() {
         onTextChangedCount += 1
     }
+}
 
-    func recordSaveScheduled() {
-        saveScheduledCount += 1
+@MainActor
+final class MacMarkdownPreviewHostState: ObservableObject {
+    @Published var attributedText: NSAttributedString
+    @Published var resignFocusToggleToken = 0
+    @Published var mode: MarkdownEditorMode = .edit
+    let syncBridge = MacEditorSyncBridge()
+    let recorder = MacMarkdownPreviewTestRecorder()
+
+    init(text: String) {
+        attributedText = NSAttributedString(string: text)
+    }
+
+    func enterPreview() {
+        resignFocusToggleToken &+= 1
+        mode = .preview
+    }
+
+    func enterEdit() {
+        mode = .edit
+    }
+}
+
+private struct MacMarkdownPreviewHostedEditor: View {
+    @ObservedObject var state: MacMarkdownPreviewHostState
+
+    var body: some View {
+        ZStack {
+            MacTextViewRepresentable(
+                attributedText: $state.attributedText,
+                syncBridge: state.syncBridge,
+                onTextChanged: { state.recorder.recordTextChanged() },
+                resignFocusToggleToken: state.resignFocusToggleToken
+            )
+            .opacity(state.mode == .edit ? 1 : 0)
+            .allowsHitTesting(state.mode == .edit)
+
+            if state.mode == .preview {
+                MarkdownPreviewView(source: state.attributedText.string)
+            }
+        }
+        .frame(width: 400, height: 300)
     }
 }
 
@@ -29,130 +68,102 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
 
     // MARK: - Real AppKit Host & Resignation Tests (§6)
 
-    func testProductionSeamResignsFirstResponderOnlyWhenOwnedByEditor() {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
+    func testHostedRepresentableTokenResignsOwnedEditorWithoutPublishing() throws {
+        let host = makeHostedEditor(text: "Existing Note Content")
+        let textView = try XCTUnwrap(host.state.syncBridge.textView)
+        let originalIdentity = ObjectIdentifier(textView)
+
+        XCTAssertTrue(host.window.makeFirstResponder(textView))
+        XCTAssertTrue(host.window.firstResponder === textView)
+
+        host.state.enterPreview()
+        drainMainRunLoop()
+
+        let installedTextView = try XCTUnwrap(host.state.syncBridge.textView)
+        XCTAssertEqual(ObjectIdentifier(installedTextView), originalIdentity)
+        XCTAssertFalse(host.window.firstResponder === textView)
+        XCTAssertEqual(
+            host.state.recorder.onTextChangedCount,
+            0,
+            "Focus-only updateNSView token handling MUST not invoke onTextChanged; production save scheduling is owned exclusively by that callback"
         )
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        window.contentView?.addSubview(textView)
-        window.makeKeyAndOrderFront(nil)
-
-        let focusSuccess = window.makeFirstResponder(textView)
-        XCTAssertTrue(focusSuccess, "NSTextView must acquire first responder status in test window")
-        XCTAssertTrue(window.firstResponder === textView)
-
-        // Exercise exact production seam
-        MacMarkdownPreviewFocusResignation.resignIfOwned(window: window, textView: textView)
-
-        XCTAssertFalse(window.firstResponder === textView,
-            "Production seam MUST remove first responder when NSTextView was first responder")
     }
 
-    func testProductionSeamPreservesAnotherFirstResponder() {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 300))
-        let otherView = NSView(frame: NSRect(x: 200, y: 0, width: 200, height: 300))
-        window.contentView?.addSubview(textView)
-        window.contentView?.addSubview(otherView)
-        window.makeKeyAndOrderFront(nil)
+    func testHostedRepresentableTokenPreservesAnotherFirstResponder() throws {
+        let host = makeHostedEditor(text: "Existing Note Content")
+        let textView = try XCTUnwrap(host.state.syncBridge.textView)
+        let otherResponder = NSTextField(frame: NSRect(x: 10, y: 10, width: 180, height: 24))
+        host.container.addSubview(otherResponder)
 
-        let focusSuccess = window.makeFirstResponder(otherView)
-        XCTAssertTrue(focusSuccess)
-        XCTAssertTrue(window.firstResponder === otherView)
+        XCTAssertTrue(host.window.makeFirstResponder(otherResponder))
+        let otherFirstResponder = try XCTUnwrap(host.window.firstResponder)
+        XCTAssertFalse(otherFirstResponder === textView)
 
-        // Exercise exact production seam
-        MacMarkdownPreviewFocusResignation.resignIfOwned(window: window, textView: textView)
+        host.state.enterPreview()
+        drainMainRunLoop()
 
-        XCTAssertTrue(window.firstResponder === otherView,
-            "Production seam MUST NOT disturb another control's first responder status")
+        XCTAssertTrue(host.window.firstResponder === otherFirstResponder)
+        XCTAssertTrue(host.state.syncBridge.textView === textView)
+        XCTAssertEqual(host.state.recorder.onTextChangedCount, 0)
     }
 
-    func testUnchangedPreviewResignationProducesZeroOnTextChangedOrSave() {
-        let recorder = MacMarkdownPreviewTestRecorder()
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
-        textView.string = "Existing Note Content"
+    func testHostedRepresentableReturningToEditDoesNotForceFocus() throws {
+        let host = makeHostedEditor(text: "Existing Note Content")
+        let textView = try XCTUnwrap(host.state.syncBridge.textView)
+        XCTAssertTrue(host.window.makeFirstResponder(textView))
 
-        var attributedTextBinding = NSAttributedString(string: "Existing Note Content")
-        let syncBridge = MacEditorSyncBridge()
+        host.state.enterPreview()
+        drainMainRunLoop()
+        XCTAssertFalse(host.window.firstResponder === textView)
 
-        let coordinator = MacTextViewRepresentable.Coordinator(
-            attributedText: Binding(get: { attributedTextBinding }, set: { attributedTextBinding = $0 }),
-            syncBridge: syncBridge,
-            onTextChanged: { recorder.recordTextChanged() }
-        )
-        coordinator.textView = textView
-        coordinator.register(textView)
+        host.state.enterEdit()
+        drainMainRunLoop()
 
-        // Resign Preview with unchanged text
-        let disposition = MarkdownPreviewResignationPolicy.disposition(
-            isPreviewResignation: true,
-            boundPlainText: "Existing Note Content",
-            nativePlainText: textView.string
-        )
-
-        XCTAssertEqual(disposition, .acknowledgeWithoutPublication)
-        XCTAssertEqual(recorder.onTextChangedCount, 0, "Unchanged Preview resignation MUST NOT trigger onTextChanged")
-        XCTAssertEqual(recorder.saveScheduledCount, 0, "Unchanged Preview resignation MUST NOT schedule save")
+        XCTAssertFalse(host.window.firstResponder === textView, "Returning to Edit MUST NOT force focus")
+        XCTAssertTrue(host.state.syncBridge.textView === textView)
     }
 
-    func testReturningToEditDoesNotForceFocus() {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
-        window.contentView?.addSubview(textView)
-        window.makeKeyAndOrderFront(nil)
+    func testHostedRepresentableNativeUndoWorksAfterModeRoundTrip() throws {
+        let host = makeHostedEditor(text: "")
+        let textView = try XCTUnwrap(host.state.syncBridge.textView)
+        XCTAssertTrue(host.window.makeFirstResponder(textView))
 
-        // Window first responder is NSWindow itself, not NSTextView
-        window.makeFirstResponder(window)
-        XCTAssertFalse(window.firstResponder === textView)
-
-        // Production focus resignation seam should do nothing
-        MacMarkdownPreviewFocusResignation.resignIfOwned(window: window, textView: textView)
-
-        XCTAssertFalse(window.firstResponder === textView, "Returning to Edit MUST NOT force focus onto NSTextView")
-    }
-
-    func testSameTextViewInstanceSurvivesModeSwitch() {
-        let textView1 = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
-        let textView2 = textView1
-
-        XCTAssertTrue(textView1 === textView2, "Same NSTextView instance MUST survive across Mode updates")
-    }
-
-    func testNativeUndoWorksAfterModeRoundTrip() {
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
-            styleMask: [.titled, .closable],
-            backing: .buffered,
-            defer: false
-        )
-        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
-        textView.allowsUndo = true
-        window.contentView?.addSubview(textView)
-        window.makeKeyAndOrderFront(nil)
-
-        // Initial typing
         textView.insertText("First edit", replacementRange: NSRange(location: 0, length: 0))
-        XCTAssertTrue(textView.undoManager?.canUndo == true, "Undo manager MUST be able to undo user typing")
+        drainMainRunLoop()
+        XCTAssertEqual(textView.string, "First edit")
+        XCTAssertTrue(textView.undoManager?.canUndo == true)
 
-        // Resign for Preview
-        MacMarkdownPreviewFocusResignation.resignIfOwned(window: window, textView: textView)
+        host.state.enterPreview()
+        drainMainRunLoop()
+        host.state.enterEdit()
+        drainMainRunLoop()
 
-        // Native Undo after returning to Edit
+        XCTAssertTrue(host.state.syncBridge.textView === textView)
+        XCTAssertFalse(host.window.firstResponder === textView)
         textView.undoManager?.undo()
-        XCTAssertEqual(textView.string, "", "Native undo MUST restore previous text state after Mode round trip")
+        drainMainRunLoop()
+
+        XCTAssertEqual(textView.string, "", "Native Undo MUST restore text after the hosted production mode round trip")
+    }
+
+    func testTwoHostedRepresentablesMaintainIndependentModeAndTokenState() throws {
+        let first = makeHostedEditor(text: "First")
+        let second = makeHostedEditor(text: "Second")
+        let firstTextView = try XCTUnwrap(first.state.syncBridge.textView)
+        let secondTextView = try XCTUnwrap(second.state.syncBridge.textView)
+
+        XCTAssertTrue(first.window.makeFirstResponder(firstTextView))
+        XCTAssertTrue(second.window.makeFirstResponder(secondTextView))
+
+        first.state.enterPreview()
+        drainMainRunLoop()
+
+        XCTAssertEqual(first.state.mode, .preview)
+        XCTAssertEqual(first.state.resignFocusToggleToken, 1)
+        XCTAssertFalse(first.window.firstResponder === firstTextView)
+        XCTAssertEqual(second.state.mode, .edit)
+        XCTAssertEqual(second.state.resignFocusToggleToken, 0)
+        XCTAssertTrue(second.window.firstResponder === secondTextView)
     }
 
     func testSameNoteReloadPreservesPreviewModeUsingProductionPolicy() {
@@ -296,5 +307,38 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         )
         XCTAssertNil(highlight,
             "Body search highlight MUST be nil when AppKit Preview is visible — must not scroll hidden editor")
+    }
+
+    private func makeHostedEditor(
+        text: String
+    ) -> (state: MacMarkdownPreviewHostState, window: NSWindow, container: NSView) {
+        let state = MacMarkdownPreviewHostState(text: text)
+        let hostingView = NSHostingView(rootView: MacMarkdownPreviewHostedEditor(state: state))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        hostingView.frame = container.bounds
+        hostingView.autoresizingMask = [.width, .height]
+        container.addSubview(hostingView)
+
+        let window = NSWindow(
+            contentRect: container.bounds,
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = container
+        window.makeKeyAndOrderFront(nil)
+        hostingView.layoutSubtreeIfNeeded()
+        drainMainRunLoop()
+
+        XCTAssertNotNil(state.syncBridge.textView, "The production representable MUST install an NSTextView")
+        return (state, window, container)
+    }
+
+    private func drainMainRunLoop() {
+        let expectation = expectation(description: "RunLoop drain")
+        DispatchQueue.main.async {
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 2)
     }
 }

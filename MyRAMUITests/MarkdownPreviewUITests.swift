@@ -46,22 +46,9 @@ final class MarkdownPreviewUITests: XCTestCase {
         editor.tap()
         editor.typeText("Search test content for Preview mode")
 
-        // Switch to Preview mode via segmented picker
+        assertSearchAvailableInEdit(in: app)
         switchToPreviewMode(in: app)
-
-        // Attempt search presentation via toolbar action or overflow menu
-        let searchButton = app.buttons["note-toolbar-search"]
-        if searchButton.waitForExistence(timeout: Timeout.short) {
-            searchButton.tap()
-        } else {
-            let overflowButton = app.buttons["notes-list-more"]
-            XCTAssertTrue(overflowButton.waitForExistence(timeout: Timeout.standard), "Toolbar search or overflow button MUST exist")
-            overflowButton.tap()
-            let menuSearchButton = app.buttons["Search"]
-            if menuSearchButton.waitForExistence(timeout: Timeout.short) {
-                menuSearchButton.tap()
-            }
-        }
+        assertSearchUnavailableInPreview(in: app)
 
         let searchField = findElement("current-note-search-field", in: app)
         XCTAssertFalse(
@@ -93,9 +80,10 @@ final class MarkdownPreviewUITests: XCTestCase {
         let previewBody = findElement("markdown-preview-body", in: app)
         let fallbackBody = findElement("markdown-preview-fallback", in: app)
         XCTAssertTrue(
-            previewBody.waitForExistence(timeout: Timeout.standard) || fallbackBody.waitForExistence(timeout: Timeout.standard),
-            "Markdown Preview body or fallback must be visible after tapping preview mode"
+            previewBody.waitForExistence(timeout: Timeout.standard),
+            "Valid plain text MUST use the rendered Markdown document path"
         )
+        XCTAssertFalse(fallbackBody.exists, "Valid plain text MUST NOT use parser-failure fallback")
 
         // Assert keyboard is dismissed upon entering Preview
         XCTAssertFalse(
@@ -164,12 +152,51 @@ final class MarkdownPreviewUITests: XCTestCase {
         let previewBody = findElement("markdown-preview-body", in: app)
         let fallbackBody = findElement("markdown-preview-fallback", in: app)
         XCTAssertTrue(
-            previewBody.waitForExistence(timeout: Timeout.standard) || fallbackBody.waitForExistence(timeout: Timeout.standard),
-            "Unsaved Markdown MUST render in Preview surface"
+            previewBody.waitForExistence(timeout: Timeout.standard),
+            "Unsaved valid Markdown MUST render through the document path"
         )
+        XCTAssertFalse(fallbackBody.exists, "Valid Markdown MUST NOT use plain-text fallback")
+
+        let heading = findElement("markdown-preview-heading", in: app)
+        XCTAssertTrue(heading.waitForExistence(timeout: Timeout.standard))
+        XCTAssertTrue(heading.label.contains("Header Title"))
+
+        let orderedRows = app.descendants(matching: .any)
+            .matching(identifier: "markdown-preview-ordered-list-item")
+        XCTAssertTrue(waitForElementCount(orderedRows, count: 2, timeout: Timeout.standard))
+        let orderedLabels = orderedRows.allElementsBoundByIndex.map(\.label)
+        XCTAssertTrue(orderedLabels.contains { $0.contains("1.") && $0.contains("First item") })
+        XCTAssertTrue(orderedLabels.contains { $0.contains("2.") && $0.contains("Second item") })
     }
 
-    // MARK: - Test 6: Different note selection resets to Edit mode
+    // MARK: - Test 6: Mixed nested Markdown renders with stable semantics
+
+    func testMixedNestedListRendersWithoutFallback() throws {
+        let app = makeApp()
+        app.launch()
+        openNewNote(in: app)
+
+        let editor = findElement("note-editor-body", in: app)
+        XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
+        editor.tap()
+        editor.typeText("1. Ordered parent\n   - Nested bullet")
+
+        switchToPreviewMode(in: app)
+
+        XCTAssertTrue(findElement("markdown-preview-body", in: app).waitForExistence(timeout: Timeout.standard))
+        XCTAssertFalse(findElement("markdown-preview-fallback", in: app).exists)
+
+        let orderedRows = app.descendants(matching: .any)
+            .matching(identifier: "markdown-preview-ordered-list-item")
+        let unorderedRows = app.descendants(matching: .any)
+            .matching(identifier: "markdown-preview-unordered-list-item")
+        XCTAssertTrue(waitForElementCount(orderedRows, count: 1, timeout: Timeout.standard))
+        XCTAssertTrue(waitForElementCount(unorderedRows, count: 1, timeout: Timeout.standard))
+        XCTAssertTrue(orderedRows.element(boundBy: 0).label.contains("Ordered parent"))
+        XCTAssertTrue(unorderedRows.element(boundBy: 0).label.contains("Nested bullet"))
+    }
+
+    // MARK: - Test 7: Different note selection resets to Edit mode
 
     func testDifferentNoteSelectionResetsToEditMode() throws {
         let app = makeApp()
@@ -180,32 +207,11 @@ final class MarkdownPreviewUITests: XCTestCase {
         let previewBody = findElement("markdown-preview-body", in: app)
         let fallbackBody = findElement("markdown-preview-fallback", in: app)
         XCTAssertTrue(
-            previewBody.waitForExistence(timeout: Timeout.standard) || fallbackBody.waitForExistence(timeout: Timeout.standard)
+            previewBody.waitForExistence(timeout: Timeout.standard)
         )
+        XCTAssertFalse(fallbackBody.exists)
 
-        // Navigate back to notes list
-        let notesNav = app.buttons["Notes"]
-        let allNotesNav = app.buttons["All Notes"]
-        if notesNav.waitForExistence(timeout: Timeout.short) {
-            notesNav.tap()
-        } else if allNotesNav.waitForExistence(timeout: Timeout.short) {
-            allNotesNav.tap()
-        } else if app.navigationBars.buttons.element(boundBy: 0).waitForExistence(timeout: Timeout.short) {
-            app.navigationBars.buttons.element(boundBy: 0).tap()
-        }
-
-        // Create another note while on notes list
-        let quickActionButton = app.buttons["notes-topbar-new-note"]
-        if quickActionButton.waitForExistence(timeout: Timeout.short) {
-            quickActionButton.tap()
-        } else {
-            let overflowButton = app.buttons["notes-list-more"]
-            XCTAssertTrue(overflowButton.waitForExistence(timeout: Timeout.standard), "New Note or overflow button MUST be present")
-            overflowButton.tap()
-            let menuNewNoteButton = app.buttons["New Note"]
-            XCTAssertTrue(menuNewNoteButton.waitForExistence(timeout: Timeout.standard))
-            menuNewNoteButton.tap()
-        }
+        createAnotherNoteFromEditor(in: app)
 
         let editor = findElement("note-editor-body", in: app)
         XCTAssertTrue(
@@ -286,6 +292,67 @@ final class MarkdownPreviewUITests: XCTestCase {
         editTag.tap()
     }
 
+    private func assertSearchAvailableInEdit(in app: XCUIApplication) {
+        let visibleSearch = app.buttons["topbar-search-note"]
+        if visibleSearch.waitForExistence(timeout: Timeout.short) {
+            XCTAssertTrue(visibleSearch.isEnabled, "Visible Edit search action MUST be enabled")
+            return
+        }
+
+        let overflow = app.buttons["note-editor-more"]
+        XCTAssertTrue(
+            overflow.waitForExistence(timeout: Timeout.standard),
+            "Edit MUST expose search directly or through the note-editor overflow"
+        )
+        overflow.tap()
+        let menuSearch = app.buttons["Search Note"]
+        XCTAssertTrue(menuSearch.waitForExistence(timeout: Timeout.standard), "Edit overflow MUST contain Search Note")
+        XCTAssertTrue(menuSearch.isEnabled, "Edit overflow Search Note action MUST be enabled")
+        app.tap()
+    }
+
+    private func assertSearchUnavailableInPreview(in app: XCUIApplication) {
+        let visibleSearch = app.buttons["topbar-search-note"]
+        if visibleSearch.waitForExistence(timeout: Timeout.short) {
+            XCTAssertFalse(visibleSearch.isEnabled, "Visible Preview search action MUST be disabled")
+            return
+        }
+
+        let overflow = app.buttons["note-editor-more"]
+        XCTAssertTrue(
+            overflow.waitForExistence(timeout: Timeout.standard),
+            "Preview note-editor overflow MUST remain discoverable when search is not visible"
+        )
+        overflow.tap()
+        let menuSearch = app.buttons["Search Note"]
+        XCTAssertTrue(
+            menuSearch.waitForExistence(timeout: Timeout.standard),
+            "Preview overflow MUST expose a disabled Search Note action rather than silently skipping the assertion"
+        )
+        XCTAssertFalse(menuSearch.isEnabled, "Preview overflow Search Note action MUST be disabled")
+        app.tap()
+    }
+
+    private func createAnotherNoteFromEditor(in app: XCUIApplication) {
+        let visibleNewNote = app.buttons["topbar-new-note"]
+        if visibleNewNote.waitForExistence(timeout: Timeout.short) {
+            XCTAssertTrue(visibleNewNote.isEnabled)
+            visibleNewNote.tap()
+            return
+        }
+
+        let overflow = app.buttons["note-editor-more"]
+        XCTAssertTrue(
+            overflow.waitForExistence(timeout: Timeout.standard),
+            "The editor MUST expose New Note directly or through its overflow"
+        )
+        overflow.tap()
+        let menuNewNote = app.buttons["New Note"]
+        XCTAssertTrue(menuNewNote.waitForExistence(timeout: Timeout.standard))
+        XCTAssertTrue(menuNewNote.isEnabled)
+        menuNewNote.tap()
+    }
+
     private func findElement(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)[identifier]
     }
@@ -300,4 +367,20 @@ final class MarkdownPreviewUITests: XCTestCase {
         }
         return elements.contains(where: \.exists)
     }
+
+    private func waitForElementCount(
+        _ query: XCUIElementQuery,
+        count: Int,
+        timeout: TimeInterval
+    ) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if query.count == count {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return query.count == count
+    }
+
 }

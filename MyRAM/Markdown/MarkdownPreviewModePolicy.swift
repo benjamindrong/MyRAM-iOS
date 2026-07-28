@@ -135,14 +135,3 @@ struct MarkdownPreviewSearchInteractionPolicy {
         return highlightRange
     }
 }
-
-// MARK: - List Ordinal Policy (§8)
-
-struct MarkdownOrderedListOrdinalPolicy {
-    static func ordinal(foundationOrdinal: Int?) -> Int {
-        guard let found = foundationOrdinal, found > 0 else {
-            return 1
-        }
-        return found
-    }
-}

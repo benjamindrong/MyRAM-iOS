@@ -201,8 +201,6 @@ extension MarkdownBlockKind {
         var depth = 0
         var foundOrdinal: Int? = nil
 
-        var orderedListContainerID: Int? = nil
-
         for component in intent.components {
             switch component.kind {
             case .header(let level):
@@ -210,14 +208,13 @@ extension MarkdownBlockKind {
             case .orderedList:
                 listContainers.append(.ordered)
                 depth += 1
-                if orderedListContainerID == nil {
-                    orderedListContainerID = component.identity
-                }
             case .unorderedList:
                 listContainers.append(.unordered)
                 depth += 1
             case .listItem(let ordinal):
-                if ordinal > 0 {
+                // Foundation emits nested presentation components innermost-first, so the first
+                // positive list-item ordinal belongs to the innermost list container rendered here.
+                if foundOrdinal == nil, ordinal > 0 {
                     foundOrdinal = ordinal
                 }
             case .blockQuote:
@@ -225,6 +222,8 @@ extension MarkdownBlockKind {
             case .codeBlock:
                 isCode = true
             case .paragraph:
+                break
+            case .thematicBreak, .table, .tableHeaderRow, .tableRow, .tableCell:
                 break
             @unknown default:
                 break
@@ -246,13 +245,14 @@ extension MarkdownBlockKind {
 
         // Innermost list container takes precedence for marker style (Foundation lists components innermost-first)
         if let innermost = listContainers.first {
-            let containerIdentity = orderedListContainerID ?? 0
             let effectiveDepth = max(1, depth)
             
             switch innermost {
             case .ordered:
-                let effectiveDepth = max(1, depth)
-                let ordinal = MarkdownOrderedListOrdinalPolicy.ordinal(foundationOrdinal: foundOrdinal)
+                guard let ordinal = foundOrdinal, ordinal > 0 else {
+                    self = .paragraph
+                    return
+                }
                 self = .orderedListItem(MarkdownListMetadata(style: .ordered(ordinal: ordinal), depth: effectiveDepth))
                 return
 
@@ -284,6 +284,7 @@ struct MarkdownPreviewView: View {
                 previewBody
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding()
+                    .accessibilityElement(children: .contain)
                     .accessibilityIdentifier("markdown-preview-body")
             }
         }
@@ -320,6 +321,7 @@ private struct MarkdownDocumentView: View {
             }
         }
         .textSelection(.enabled)
+        .accessibilityElement(children: .contain)
     }
 }
 
@@ -335,6 +337,9 @@ private struct MarkdownBlockView: View {
             Text(block.content)
                 .font(headingFont(level: level))
                 .fontWeight(.bold)
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel(String(block.content.characters))
+                .accessibilityIdentifier("markdown-preview-heading")
         case .orderedListItem(let metadata):
             HStack(alignment: .top, spacing: 6) {
                 if case .ordered(let ordinal) = metadata.style {
@@ -347,6 +352,9 @@ private struct MarkdownBlockView: View {
                     .font(.body)
             }
             .padding(.leading, CGFloat(max(0, metadata.depth - 1)) * 16)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(orderedAccessibilityLabel(metadata: metadata))
+            .accessibilityIdentifier("markdown-preview-ordered-list-item")
         case .unorderedListItem(let metadata):
             HStack(alignment: .top, spacing: 6) {
                 Text("•")
@@ -357,6 +365,9 @@ private struct MarkdownBlockView: View {
                     .font(.body)
             }
             .padding(.leading, CGFloat(max(0, metadata.depth - 1)) * 16)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("• \(String(block.content.characters))")
+            .accessibilityIdentifier("markdown-preview-unordered-list-item")
         case .blockQuote:
             HStack(alignment: .top, spacing: 8) {
                 Rectangle()
@@ -382,6 +393,13 @@ private struct MarkdownBlockView: View {
         case 3: return .title3
         default: return .headline
         }
+    }
+
+    private func orderedAccessibilityLabel(metadata: MarkdownListMetadata) -> String {
+        guard case .ordered(let ordinal) = metadata.style else {
+            return String(block.content.characters)
+        }
+        return "\(ordinal). \(String(block.content.characters))"
     }
 }
 

@@ -106,7 +106,7 @@ final class MarkdownPreviewParserTests: XCTestCase {
         }
     }
 
-    // MARK: 8. Container-scoped fallback list counters
+    // MARK: 8. Foundation-projected list restarts
     func testSeparateListsAtSameDepthRestartCounterAtOne() {
         let source = "1. List A Item 1\n\nParagraph\n\n1. List B Item 1"
         guard case .rendered(let doc) = parser.parseDocument(source) else {
@@ -123,6 +123,43 @@ final class MarkdownPreviewParserTests: XCTestCase {
         if case .orderedListItem(let meta2) = listBlocks[1].kind {
             XCTAssertEqual(meta2.style, .ordered(ordinal: 1), "Separate list B MUST restart counter at 1")
         }
+    }
+
+    func testNestedOrderedListPreservesOuterAndInnerOrdinals() {
+        let source = "1. Outer\n   1. Inner 1\n   2. Inner 2"
+        guard case .rendered(let doc) = parser.parseDocument(source) else {
+            return XCTFail("Expected rendered")
+        }
+
+        let metadata = doc.blocks.compactMap { block -> MarkdownListMetadata? in
+            guard case .orderedListItem(let metadata) = block.kind else { return nil }
+            return metadata
+        }
+        XCTAssertEqual(
+            metadata.map(\.style),
+            [.ordered(ordinal: 1), .ordered(ordinal: 1), .ordered(ordinal: 2)]
+        )
+        XCTAssertEqual(metadata.map(\.depth), [1, 2, 2])
+    }
+
+    func testMissingOrNonpositiveOrdinalDoesNotFabricateNumberedItem() {
+        let orderedContainer = PresentationIntent(.orderedList, identity: 1)
+        XCTAssertEqual(
+            MarkdownBlockKind(from: orderedContainer),
+            .paragraph,
+            "An ordered container without a Foundation list-item ordinal MUST remain ordinary content"
+        )
+
+        let invalidListItem = PresentationIntent(
+            .listItem(ordinal: 0),
+            identity: 2,
+            parent: orderedContainer
+        )
+        XCTAssertEqual(
+            MarkdownBlockKind(from: invalidListItem),
+            .paragraph,
+            "A nonpositive Foundation ordinal MUST not be projected as a fabricated numbered item"
+        )
     }
 
     // MARK: 9. Block quote
