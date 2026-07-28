@@ -1088,11 +1088,15 @@ struct NoteEditorView: View {
     }
 
     private func presentCurrentNoteSearch(focusesField: Bool = true) {
+        guard interactionState == .editInteractive else { return }
         isLocalCurrentNoteSearchPresented = true
         scheduleCurrentNoteSearchUpdate()
         selectFirstCurrentNoteMatchIfNeeded()
-        if focusesField && !usesExternalCurrentNoteSearch {
-            currentNoteSearchFocusRequest += 1
+        if focusesField {
+            isCurrentNoteSearchFocused = true
+            if !usesExternalCurrentNoteSearch {
+                currentNoteSearchFocusRequest += 1
+            }
         }
     }
 
@@ -1138,18 +1142,9 @@ struct NoteEditorView: View {
             }
         }
     }
+
     private func selectFirstCurrentNoteMatchIfNeeded() {
         searchSession = searchSession.selectingFirstIfNeeded()
-    }
-
-    private func presentCurrentNoteSearch() {
-        guard interactionState == .editInteractive else { return }
-        if usesExternalCurrentNoteSearch {
-            isCurrentNoteSearchFocused = true
-        } else {
-            isLocalCurrentNoteSearchPresented = true
-            isCurrentNoteSearchFocused = true
-        }
     }
 
     private func dismissCurrentNoteSearch() {
@@ -1173,6 +1168,7 @@ struct NoteEditorView: View {
     }
 
     private func handleSelectedCurrentNoteMatchChanged() {
+        guard interactionState == .editInteractive else { return }
         guard let selectedCurrentNoteMatch else { return }
         if case .pinnedText = selectedCurrentNoteMatch.region, !arePinnedThoughtsExpanded {
             arePinnedThoughtsExpanded = true
@@ -3796,6 +3792,7 @@ private struct SelectableTextView: UIViewRepresentable {
             serializesRichTextImmediately: Bool = true,
             completion: @escaping @MainActor () -> Void = {}
         ) {
+            let gate = EditorContentSyncCompletionGate(completion: completion)
             let syncSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
             os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.syncContent", signpostID: syncSignpostID)
             defer {
@@ -3816,7 +3813,8 @@ private struct SelectableTextView: UIViewRepresentable {
             }
 
             guard text.wrappedValue != plainText || (serializesRichTextImmediately && richTextContentData.wrappedValue != encodedRichText) else {
-                Task { @MainActor in completion() }
+                clearAppliedContentIfSynced()
+                gate.complete()
                 return
             }
 
@@ -4700,6 +4698,31 @@ func chromeAccentPinnedStrokeColor(for colorScheme: ColorScheme) -> Color {
     colorScheme == .dark
         ? Color.white.opacity(0.26)
         : Color(red: 0.60, green: 0.62, blue: 0.68).opacity(0.78)
+}
+
+@MainActor
+final class EditorContentSyncCompletionGate {
+    private var didComplete = false
+    private let completion: @MainActor () -> Void
+
+    init(completion: @escaping @MainActor () -> Void) {
+        self.completion = completion
+    }
+
+    func complete() {
+        guard !didComplete else { return }
+        didComplete = true
+        completion()
+    }
+
+    deinit {
+        if !didComplete {
+            let comp = completion
+            Task { @MainActor in
+                comp()
+            }
+        }
+    }
 }
 
 func chromeAccentPinnedShineGradient(for colorScheme: ColorScheme) -> LinearGradient {

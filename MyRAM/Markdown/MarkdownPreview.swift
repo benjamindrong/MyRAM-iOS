@@ -260,20 +260,19 @@ extension MarkdownBlockKind {
             
             switch innermost {
             case .ordered:
-                let ordinal: Int
-                if let found = foundOrdinal {
-                    ordinal = found
-                } else {
-                    let key = MarkdownOrderedListCounterKey(containerIdentity: containerIdentity, depth: effectiveDepth)
-                    let current = (listCounters[key] ?? 0) + 1
-                    listCounters[key] = current
-                    ordinal = current
-                }
+                let containerID = orderedListContainerID ?? 0
+                let effectiveDepth = max(1, depth)
+                let ordinal = MarkdownOrderedListOrdinalPolicy.ordinal(
+                    foundationOrdinal: foundOrdinal,
+                    containerIdentity: containerID,
+                    depth: effectiveDepth,
+                    counters: &listCounters
+                )
                 self = .orderedListItem(MarkdownListMetadata(style: .ordered(ordinal: ordinal), depth: effectiveDepth))
                 return
 
             case .unordered:
-                self = .unorderedListItem(MarkdownListMetadata(style: .unordered, depth: effectiveDepth))
+                self = .unorderedListItem(MarkdownListMetadata(style: .unordered, depth: max(1, depth)))
                 return
             }
         }

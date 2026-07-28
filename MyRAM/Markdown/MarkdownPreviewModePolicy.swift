@@ -1,5 +1,5 @@
 // MarkdownPreviewModePolicy.swift
-// Pure production selection, resignation, command, search, and interaction state policy types.
+// Pure production selection, resignation, command, search, list ordinal, and interaction state policy types.
 // Shared across production code (NoteEditorView, MyRAMMacRootView) and unit tests.
 
 import Foundation
@@ -133,5 +133,24 @@ struct MarkdownPreviewSearchInteractionPolicy {
     ) -> NSRange? {
         guard state == .editInteractive else { return nil }
         return highlightRange
+    }
+}
+
+// MARK: - List Ordinal Policy (§8)
+
+struct MarkdownOrderedListOrdinalPolicy {
+    static func ordinal(
+        foundationOrdinal: Int?,
+        containerIdentity: Int,
+        depth: Int,
+        counters: inout [MarkdownOrderedListCounterKey: Int]
+    ) -> Int {
+        if let found = foundationOrdinal, found > 0 {
+            return found
+        }
+        let key = MarkdownOrderedListCounterKey(containerIdentity: containerIdentity, depth: max(1, depth))
+        let current = (counters[key] ?? 0) + 1
+        counters[key] = current
+        return current
     }
 }
