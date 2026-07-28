@@ -180,8 +180,11 @@ struct MyRAMMacRootView: View {
     /// Do not call for same-note reloads, attributedText changes, editorRevision bumps,
     /// save state changes, or sync state changes — those are not selection changes.
     private func updateMarkdownModeForSelectionChange(from oldID: UUID?, to newID: UUID?) {
-        guard oldID != newID else { return }
-        markdownEditorMode = .edit
+        markdownEditorMode = MarkdownPreviewSelectionPolicy.modeAfterSelectionChange(
+            currentMode: markdownEditorMode,
+            oldID: oldID,
+            newID: newID
+        )
     }
 
     /// Routes Preview entry: increments the resign token before mode changes.

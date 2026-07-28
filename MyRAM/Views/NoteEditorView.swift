@@ -114,12 +114,9 @@ struct NoteEditorView: View {
     // MYR-195 Slice 2: Markdown Preview mode state.
     // Not persisted, not Codable, not added to Note.
     @State private var markdownEditorMode: MarkdownEditorMode = .edit
-    // Resign-only focus seam for SelectableTextView. Incrementing this causes the
-    // representable to call resignFirstResponder() without committing or mutating content.
+    @State private var requestedMarkdownEditorMode: MarkdownEditorMode = .edit
+    @State private var pendingPreviewFocusRequest: MarkdownPreviewFocusRequest?
     @State private var resignEditorFocusToggleToken = 0
-    // Tracks the deferred Preview mode activation task so it can be cancelled on
-    // note-identity change, Edit entry, reinitialization, or disappearance.
-    @State private var pendingPreviewTransitionTask: Task<Void, Never>?
     
     var body: some View {
         NavigationStack {
@@ -258,22 +255,18 @@ struct NoteEditorView: View {
                 }
             }
             .onDisappear {
-                // Cancel any pending Preview transition before the view disappears so a stale
-                // completion cannot activate Preview after the view is gone.
-                pendingPreviewTransitionTask?.cancel()
-                pendingPreviewTransitionTask = nil
+                pendingPreviewFocusRequest = nil
+                requestedMarkdownEditorMode = .edit
+                markdownEditorMode = .edit
                 clearCurrentNoteSearch()
                 commitActivePinnedThoughtEdit()
                 commitPendingNoteEdit()
                 fileOperationBridge?.unregister(noteID: note.id)
                 vm.unregisterActiveEditor(noteID: note.id)
             }
-            // Reset to Edit when the note identity changes. Same-note refreshes, sync
-            // updates, and editorRevision changes must not reset mode (§10.2 policy applied
-            // symmetrically on iOS).
-            .onChange(of: note.id) { _, _ in
-                pendingPreviewTransitionTask?.cancel()
-                pendingPreviewTransitionTask = nil
+            .onChange(of: note.id) { _, newID in
+                pendingPreviewFocusRequest = nil
+                requestedMarkdownEditorMode = .edit
                 markdownEditorMode = .edit
             }
             .onChange(of: focusedPinnedThoughtID) { oldValue, newValue in
@@ -323,9 +316,8 @@ struct NoteEditorView: View {
     }
 
     private func initializeEditor() {
-        // Cancel any deferred Preview transition that may be pending from the previous note.
-        pendingPreviewTransitionTask?.cancel()
-        pendingPreviewTransitionTask = nil
+        pendingPreviewFocusRequest = nil
+        requestedMarkdownEditorMode = .edit
         markdownEditorMode = .edit
 
         title = note.title
@@ -471,35 +463,29 @@ struct NoteEditorView: View {
 
     // MARK: - Mode transition helpers
 
-    /// Routes Preview entry through token-plus-yield sequencing so the resign-only seam fires
-    /// before Preview obscures the editor. `Task.yield()` suspends and re-enqueues the task and
-    /// may provide an update opportunity, but does not guarantee a SwiftUI render or updateUIView
-    /// call. Empirical verification is required (merge gate §14.3 item 11).
     private func enterMarkdownPreview() {
-        pendingPreviewTransitionTask?.cancel()
+        let request = MarkdownPreviewFocusRequest(id: UUID())
+        pendingPreviewFocusRequest = request
+        requestedMarkdownEditorMode = .preview
         resignEditorFocusToggleToken &+= 1
-        pendingPreviewTransitionTask = Task { @MainActor in
-            await Task.yield()
-            guard !Task.isCancelled else { return }
-            markdownEditorMode = .preview
-            pendingPreviewTransitionTask = nil
-        }
     }
 
-    /// Cancels any pending Preview transition and immediately returns to Edit.
     private func enterMarkdownEdit() {
-        pendingPreviewTransitionTask?.cancel()
-        pendingPreviewTransitionTask = nil
+        pendingPreviewFocusRequest = nil
+        requestedMarkdownEditorMode = .edit
         markdownEditorMode = .edit
     }
 
-    /// Binding that routes Picker selection through the named transition helpers rather than
-    /// assigning mode directly. Prevents a direct Picker binding from bypassing resign logic.
+    private func handlePreviewFocusResignationAcknowledged(requestID: UUID) {
+        guard pendingPreviewFocusRequest?.id == requestID, requestedMarkdownEditorMode == .preview else { return }
+        markdownEditorMode = .preview
+        pendingPreviewFocusRequest = nil
+    }
+
     private var modeSelection: Binding<MarkdownEditorMode> {
         Binding(
-            get: { markdownEditorMode },
+            get: { requestedMarkdownEditorMode },
             set: { requested in
-                guard requested != markdownEditorMode else { return }
                 if requested == .preview {
                     enterMarkdownPreview()
                 } else {
@@ -514,7 +500,9 @@ struct NoteEditorView: View {
             text: $content,
             richTextContentData: $richTextContentData,
             syncBridge: editorSyncBridge,
-            resignEditorFocusToggleToken: resignEditorFocusToggleToken,
+            markdownEditorMode: markdownEditorMode,
+            pendingPreviewFocusRequest: pendingPreviewFocusRequest,
+            onFocusResignationAcknowledged: handlePreviewFocusResignationAcknowledged,
             keyboardFocusToggleToken: keyboardFocusToggleToken,
             captureSelectionToggleToken: captureSelectionToggleToken,
             selectAllToggleToken: selectAllToggleToken,
@@ -642,7 +630,8 @@ struct NoteEditorView: View {
     }
 
     private var isCurrentNoteSearchPresented: Bool {
-        usesExternalCurrentNoteSearch
+        guard markdownEditorMode == .edit else { return false }
+        return usesExternalCurrentNoteSearch
             ? !currentNoteSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             : isLocalCurrentNoteSearchPresented
     }
@@ -656,7 +645,8 @@ struct NoteEditorView: View {
     }
 
     private var selectedBodySearchRange: NSRange? {
-        searchSession.selectedBodyHighlightRange(textLength: content.utf16.count)
+        guard markdownEditorMode == .edit else { return nil }
+        return searchSession.selectedBodyHighlightRange(textLength: content.utf16.count)
     }
 
     private var selectedPinnedTextSearchID: UUID? {
@@ -2990,10 +2980,9 @@ private struct SelectableTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var richTextContentData: Data?
     let syncBridge: UIKitEditorSyncBridge
-    /// MYR-195 Slice 2: resign-only seam. Token increment triggers resignFirstResponder()
-    /// without commit, text mutation, selection clearing, undo clearing, representable
-    /// recreation, or sync/formatting publication.
-    let resignEditorFocusToggleToken: Int
+    let markdownEditorMode: MarkdownEditorMode
+    let pendingPreviewFocusRequest: MarkdownPreviewFocusRequest?
+    let onFocusResignationAcknowledged: (UUID) -> Void
     let keyboardFocusToggleToken: Int
     let captureSelectionToggleToken: Int
     let selectAllToggleToken: Int
@@ -3108,6 +3097,7 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.onUndoManagerChanged = onUndoManagerChanged
         context.coordinator.onFormattingStateChanged = onFormattingStateChanged
         context.coordinator.onEditingFocusChanged = onEditingFocusChanged
+        context.coordinator.onFocusResignationAcknowledged = onFocusResignationAcknowledged
         context.coordinator.onEditorScrolled = onEditorScrolled
         context.coordinator.onPinSelection = onPinSelection
         context.coordinator.onLookupSelection = onLookupSelection
@@ -3125,13 +3115,34 @@ private struct SelectableTextView: UIViewRepresentable {
             }
         }
 
-        // MYR-195 Slice 2: resign-only seam. Must not commit, mutate text, clear selection
-        // or undo, recreate the text view, or publish formatting or sync state.
-        if context.coordinator.resignEditorFocusToggleToken != resignEditorFocusToggleToken {
-            context.coordinator.resignEditorFocusToggleToken = resignEditorFocusToggleToken
+        if let request = pendingPreviewFocusRequest, context.coordinator.activePreviewFocusRequestID != request.id {
+            context.coordinator.activePreviewFocusRequestID = request.id
             if textView.isFirstResponder {
+                context.coordinator.isResigningForPreview = true
+                context.coordinator.pendingPreviewFocusRequestID = request.id
                 textView.resignFirstResponder()
+            } else {
+                onFocusResignationAcknowledged(request.id)
             }
+        }
+
+        // Hidden editor command consumption: when Preview is active, consume unsafe
+        // formatting tokens without executing them so they do not replay on Edit return.
+        if markdownEditorMode == .preview {
+            context.coordinator.boldToggleToken = boldToggleToken
+            context.coordinator.italicToggleToken = italicToggleToken
+            context.coordinator.underlineToggleToken = underlineToggleToken
+            context.coordinator.strikethroughToggleToken = strikethroughToggleToken
+            context.coordinator.checklistToggleToken = checklistToggleToken
+            context.coordinator.pasteAndMatchFormattingToggleToken = pasteAndMatchFormattingToggleToken
+            context.coordinator.increaseFontSizeToggleToken = increaseFontSizeToggleToken
+            context.coordinator.decreaseFontSizeToggleToken = decreaseFontSizeToggleToken
+            context.coordinator.textColorToggleToken = textColorToggleToken
+            context.coordinator.captureSelectionToggleToken = captureSelectionToggleToken
+            context.coordinator.selectAllToggleToken = selectAllToggleToken
+            context.coordinator.pinSelectionToggleToken = pinSelectionToggleToken
+            context.coordinator.lookupSelectionToggleToken = lookupSelectionToggleToken
+            context.coordinator.appendUnpinnedThoughtToggleToken = appendUnpinnedThoughtToggleToken
         }
 
         if context.coordinator.selectAllToggleToken != selectAllToggleToken {
@@ -3250,6 +3261,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
         var onEditingFocusChanged: (Bool) -> Void
+        var onFocusResignationAcknowledged: ((UUID) -> Void)?
         var onEditorScrolled: () -> Void
         var onPinSelection: (String) -> Bool
         var onLookupSelection: (String) -> Void
@@ -3257,8 +3269,9 @@ private struct SelectableTextView: UIViewRepresentable {
         weak var textView: UITextView?
         var captureSelectionToggleToken = 0
         var keyboardFocusToggleToken = 0
-        /// MYR-195 Slice 2: resign-only token. Incremented when Preview is requested.
-        var resignEditorFocusToggleToken = 0
+        var activePreviewFocusRequestID: UUID?
+        var pendingPreviewFocusRequestID: UUID?
+        var isResigningForPreview = false
         var selectAllToggleToken = 0
         var pinSelectionToggleToken = 0
         var lookupSelectionToggleToken = 0
@@ -3454,7 +3467,19 @@ private struct SelectableTextView: UIViewRepresentable {
             focusAcquisitionSelectionRange = nil
             onEditingFocusChanged(false)
             updateLastKnownSelectionRange(from: textView)
-            syncContent(from: textView)
+
+            if isResigningForPreview {
+                isResigningForPreview = false
+                // Synchronize raw text buffer so content binding is current for Preview
+                text.wrappedValue = textView.text
+                if let requestID = pendingPreviewFocusRequestID {
+                    onFocusResignationAcknowledged?(requestID)
+                    pendingPreviewFocusRequestID = nil
+                }
+            } else {
+                syncContent(from: textView)
+            }
+
             reportFormattingState(from: textView)
             onUndoManagerChanged(textView.undoManager)
         }

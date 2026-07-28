@@ -1,6 +1,6 @@
 // MarkdownPreview.swift
 // Shared across the iOS application target and the native Mac application target.
-// Owns: mode enum, reminder copy, parser result, parser, optional block projection, and SwiftUI preview surface.
+// Owns: mode enum, reminder copy, parser result, parser, block projection, and SwiftUI preview surface.
 // Does NOT own: note content, persistence, sync, file I/O, or editor state.
 
 import Foundation
@@ -42,23 +42,27 @@ enum MarkdownPreviewContent: Equatable {
 /// No persistence, view-model, sync, platform, or file-I/O dependencies.
 /// Never inspects richTextContentData.
 struct MarkdownPreviewParser {
+    typealias ParseOperation = (String) throws -> AttributedString
 
-    // Characterization note (Step 2 of implementation sequence):
-    // On the deployment SDK (iOS 26 / macOS 26, Foundation), Text(AttributedString) does NOT
-    // render paragraph-level presentation intents such as header(level:), blockQuote, or
-    // codeBlock when the entire string is passed to a single Text view. Those intents require
-    // per-block rendering via MarkdownPreviewDocument. The projection is therefore activated.
-    // See MarkdownPreviewParserTests for characterization evidence.
+    private let parseOperation: ParseOperation
 
-    /// Returns the inline-attributed parse result. Used by parser contract tests.
-    func parse(_ source: String) -> MarkdownPreviewContent {
+    init(parseOperation: @escaping ParseOperation = Self.defaultFoundationParse) {
+        self.parseOperation = parseOperation
+    }
+
+    private static func defaultFoundationParse(_ source: String) throws -> AttributedString {
         let options = AttributedString.MarkdownParsingOptions(
             interpretedSyntax: .full,
             failurePolicy: .throwError,
             languageCode: nil
         )
+        return try AttributedString(markdown: source, options: options)
+    }
+
+    /// Returns the inline-attributed parse result. Used by parser contract tests.
+    func parse(_ source: String) -> MarkdownPreviewContent {
         do {
-            let attributed = try AttributedString(markdown: source, options: options)
+            let attributed = try parseOperation(source)
             return .rendered(attributed)
         } catch {
             // Contract: exact plain-text fallback on any Foundation parse failure.
@@ -69,13 +73,8 @@ struct MarkdownPreviewParser {
 
     /// Returns the immutable block projection used by MarkdownPreviewView.
     func parseDocument(_ source: String) -> MarkdownPreviewResult {
-        let options = AttributedString.MarkdownParsingOptions(
-            interpretedSyntax: .full,
-            failurePolicy: .throwError,
-            languageCode: nil
-        )
         do {
-            let attributed = try AttributedString(markdown: source, options: options)
+            let attributed = try parseOperation(source)
             let document = MarkdownPreviewDocument(from: attributed)
             return .rendered(document)
         } catch {
@@ -120,6 +119,7 @@ struct MarkdownPreviewDocument: Equatable {
 
         var blocks: [MarkdownPreviewBlock] = []
         var pendingRuns: [AttributedString] = []
+        var currentIntent: PresentationIntent? = nil
         var currentKind: MarkdownBlockKind = .paragraph
 
         func flushPending() {
@@ -130,10 +130,18 @@ struct MarkdownPreviewDocument: Equatable {
             pendingRuns = []
         }
 
+        // Sibling ordinal counter for ordered list items if Foundation doesn't provide ordinal
+        var orderedListCounters: [Int: Int] = [:] // depth -> current count
+
         for run in attributed.runs {
-            let kind = MarkdownBlockKind(from: run.presentationIntent)
-            if kind != currentKind {
+            let intent = run.presentationIntent
+            let kind = MarkdownBlockKind(from: intent, listCounters: &orderedListCounters)
+
+            // Group runs ONLY when their presentation intent identity and block kind match.
+            // Distinct list items or separate paragraphs have different intents and will NOT be merged.
+            if intent != currentIntent || kind != currentKind {
                 flushPending()
+                currentIntent = intent
                 currentKind = kind
             }
             pendingRuns.append(AttributedString(attributed[run.range]))
@@ -144,9 +152,24 @@ struct MarkdownPreviewDocument: Equatable {
     }
 }
 
-struct MarkdownPreviewBlock: Equatable {
+struct MarkdownPreviewBlock: Equatable, Identifiable {
+    let id = UUID()
     let kind: MarkdownBlockKind
     let content: AttributedString
+
+    static func == (lhs: MarkdownPreviewBlock, rhs: MarkdownPreviewBlock) -> Bool {
+        lhs.kind == rhs.kind && lhs.content == rhs.content
+    }
+}
+
+struct MarkdownListMetadata: Equatable {
+    enum Style: Equatable {
+        case ordered(ordinal: Int)
+        case unordered
+    }
+
+    let style: Style
+    let depth: Int
 }
 
 /// The six permitted block classifications from §6.4.
@@ -154,45 +177,81 @@ struct MarkdownPreviewBlock: Equatable {
 enum MarkdownBlockKind: Equatable {
     case paragraph
     case heading(level: Int)
-    case orderedListItem
-    case unorderedListItem
+    case orderedListItem(MarkdownListMetadata)
+    case unorderedListItem(MarkdownListMetadata)
     case blockQuote
     case codeBlock
 }
 
 extension MarkdownBlockKind {
-    init(from intent: PresentationIntent?) {
+    init(from intent: PresentationIntent?, listCounters: inout [Int: Int]) {
         guard let intent else {
             self = .paragraph
             return
         }
-        // Walk intent components from most to least specific.
-        // Unknown components fall through to .paragraph without triggering plain-text fallback.
+
+        var isOrdered = false
+        var isUnordered = false
+        var headingLevel: Int? = nil
+        var isQuote = false
+        var isCode = false
+        var depth = 0
+        var foundOrdinal: Int? = nil
+
         for component in intent.components {
             switch component.kind {
-            case .header(level: let level):
-                self = .heading(level: level)
-                return
+            case .header(let level):
+                headingLevel = level
             case .orderedList:
-                self = .orderedListItem
-                return
+                isOrdered = true
+                depth += 1
             case .unorderedList:
-                self = .unorderedListItem
-                return
+                isUnordered = true
+                depth += 1
+            case .listItem(let ordinal):
+                if ordinal > 0 {
+                    foundOrdinal = ordinal
+                }
             case .blockQuote:
-                self = .blockQuote
-                return
+                isQuote = true
             case .codeBlock:
-                self = .codeBlock
-                return
-            case .paragraph, .listItem:
-                // Ordinary content; continue to check for enclosing context.
-                continue
+                isCode = true
+            case .paragraph:
+                break
             @unknown default:
-                // Unknown/future Foundation intent: render as ordinary attributed content.
-                continue
+                break
             }
         }
+
+        if let level = headingLevel {
+            self = .heading(level: level)
+            return
+        }
+        if isCode {
+            self = .codeBlock
+            return
+        }
+        if isQuote {
+            self = .blockQuote
+            return
+        }
+        if isOrdered {
+            let ordinal: Int
+            if let found = foundOrdinal {
+                ordinal = found
+            } else {
+                let current = (listCounters[depth] ?? 0) + 1
+                listCounters[depth] = current
+                ordinal = current
+            }
+            self = .orderedListItem(MarkdownListMetadata(style: .ordered(ordinal: ordinal), depth: max(1, depth)))
+            return
+        }
+        if isUnordered {
+            self = .unorderedListItem(MarkdownListMetadata(style: .unordered, depth: max(1, depth)))
+            return
+        }
+
         self = .paragraph
     }
 }
@@ -245,8 +304,8 @@ private struct MarkdownDocumentView: View {
     let document: MarkdownPreviewDocument
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            ForEach(Array(document.blocks.enumerated()), id: \.offset) { _, block in
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(document.blocks) { block in
                 MarkdownBlockView(block: block)
             }
         }
@@ -266,12 +325,28 @@ private struct MarkdownBlockView: View {
             Text(block.content)
                 .font(headingFont(level: level))
                 .fontWeight(.bold)
-        case .orderedListItem:
-            Text(block.content)
-                .font(.body)
-        case .unorderedListItem:
-            Text(block.content)
-                .font(.body)
+        case .orderedListItem(let metadata):
+            HStack(alignment: .top, spacing: 6) {
+                if case .ordered(let ordinal) = metadata.style {
+                    Text("\(ordinal).")
+                        .font(.body)
+                        .foregroundStyle(.secondary)
+                        .frame(minWidth: 20, alignment: .trailing)
+                }
+                Text(block.content)
+                    .font(.body)
+            }
+            .padding(.leading, CGFloat(max(0, metadata.depth - 1)) * 16)
+        case .unorderedListItem(let metadata):
+            HStack(alignment: .top, spacing: 6) {
+                Text("•")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .frame(width: 12, alignment: .center)
+                Text(block.content)
+                    .font(.body)
+            }
+            .padding(.leading, CGFloat(max(0, metadata.depth - 1)) * 16)
         case .blockQuote:
             HStack(alignment: .top, spacing: 8) {
                 Rectangle()

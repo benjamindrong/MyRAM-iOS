@@ -4,50 +4,57 @@ import XCTest
 
 @MainActor
 final class MarkdownPreviewIntegrationTests: XCTestCase {
-    
-    // MARK: - Integration Tests (§14.3)
-    
-    func testInitialModeIsEdit() {
-        let mode = MarkdownEditorMode.edit
-        XCTAssertEqual(mode, .edit)
-    }
 
-    func testModeIsPresentationOnly() {
-        // Verify MarkdownEditorMode is Identifiable and has string raw values
-        XCTAssertEqual(MarkdownEditorMode.edit.rawValue, "edit")
-        XCTAssertEqual(MarkdownEditorMode.preview.rawValue, "preview")
-        XCTAssertEqual(MarkdownEditorMode.edit.id, .edit)
-    }
+    // MARK: - Mode Selection Policy Tests
 
-    func testReminderCopyMatchesJiraContract() {
-        XCTAssertEqual(
-            MarkdownPreviewCopy.reminder,
-            "Markdown Preview only renders formatting written as Markdown syntax. Formatting applied with MyRAM's rich-text controls will not appear here or in exported .md files."
+    func testModeAfterSelectionChangeDifferentIDResetsToEdit() {
+        let oldID = UUID()
+        let newID = UUID()
+        let mode = MarkdownPreviewSelectionPolicy.modeAfterSelectionChange(
+            currentMode: .preview,
+            oldID: oldID,
+            newID: newID
         )
+        XCTAssertEqual(mode, .edit, "Selecting a different note MUST reset mode to Edit")
     }
 
-    func testSourceIsRawStringWithoutRichTextData() {
-        let rawContent = "# Hello World\nThis is raw source."
-        let parser = MarkdownPreviewParser()
-        let result = parser.parseDocument(rawContent)
-        
-        if case .rendered(let doc) = result {
-            XCTAssertEqual(doc.blocks.count, 2)
-            XCTAssertEqual(doc.blocks[0].kind, .heading(level: 1))
-            XCTAssertEqual(String(doc.blocks[0].content.characters), "Hello World")
-            XCTAssertEqual(doc.blocks[1].kind, .paragraph)
-            XCTAssertEqual(String(doc.blocks[1].content.characters), "This is raw source.")
-        } else {
-            XCTFail("Expected rendered content for standard markdown")
-        }
+    func testModeAfterSelectionChangeSameIDPreservesPreview() {
+        let sameID = UUID()
+        let mode = MarkdownPreviewSelectionPolicy.modeAfterSelectionChange(
+            currentMode: .preview,
+            oldID: sameID,
+            newID: sameID
+        )
+        XCTAssertEqual(mode, .preview, "Same-note selection MUST preserve current Preview mode")
     }
 
-    func testHiddenRepresentableUpdateClassification() {
-        // §9.5 & §14.3 items 24-28 verification:
-        // 1. Safe & Required while hidden: Content/authoritative updates (text updates from sync/remote).
-        // 2. Safe but Irrelevant while hidden: Selection formatting cache updates, scroll position sync.
-        // 3. Unsafe while hidden & specifically suppressed: Keyboard focus acquisition, visible formatting strip toggles.
-        // Verifies no broad Preview-mode guard suppresses the entire updateUIView path.
-        XCTAssertTrue(true, "Three-way classification verified: updateUIView remains functional while editor is hidden in ZStack.")
+    func testModeAfterSelectionChangeNilToIDResetsToEdit() {
+        let newID = UUID()
+        let mode = MarkdownPreviewSelectionPolicy.modeAfterSelectionChange(
+            currentMode: .preview,
+            oldID: nil,
+            newID: newID
+        )
+        XCTAssertEqual(mode, .edit, "Nil to new note selection MUST reset mode to Edit")
+    }
+
+    func testModeAfterSelectionChangeIDToNilResetsToEdit() {
+        let oldID = UUID()
+        let mode = MarkdownPreviewSelectionPolicy.modeAfterSelectionChange(
+            currentMode: .preview,
+            oldID: oldID,
+            newID: nil
+        )
+        XCTAssertEqual(mode, .edit, "Note removal (ID to nil) MUST reset mode to Edit")
+    }
+
+    func testFocusRequestEquality() {
+        let uuid = UUID()
+        let req1 = MarkdownPreviewFocusRequest(id: uuid)
+        let req2 = MarkdownPreviewFocusRequest(id: uuid)
+        let req3 = MarkdownPreviewFocusRequest(id: UUID())
+
+        XCTAssertEqual(req1, req2)
+        XCTAssertNotEqual(req1, req3)
     }
 }
