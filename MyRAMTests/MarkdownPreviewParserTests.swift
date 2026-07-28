@@ -185,4 +185,28 @@ final class MarkdownPreviewParserTests: XCTestCase {
         let kind = MarkdownBlockKind(from: nil, listCounters: &counters)
         XCTAssertEqual(kind, .paragraph, "nil intent must map to .paragraph")
     }
+
+    // MARK: 15. Foundation list ordinal characterization on deployment SDK (§10.5)
+    func testFoundationListOrdinalCharacterizationOnDeploymentSDK() {
+        let sources = [
+            "1. First\n2. Second",
+            "1. Outer\n   1. Inner 1\n   2. Inner 2",
+            "1. List A\n\nParagraph\n\n1. List B"
+        ]
+
+        for source in sources {
+            guard let attributed = try? AttributedString(markdown: source, options: .init(interpretedSyntax: .full)) else {
+                continue
+            }
+            for run in attributed.runs {
+                if let intent = run.presentationIntent {
+                    for component in intent.components {
+                        if case .listItem(let ordinal) = component.kind {
+                            XCTAssertGreaterThan(ordinal, 0, "Foundation list item ordinal MUST be positive (> 0) on deployment SDK")
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

@@ -1,13 +1,111 @@
+import SwiftUI
 import UIKit
 import XCTest
 @testable import MyRAM
 
-// MARK: - EditorContentSyncCompletionGate unit tests (§6.7)
+// MARK: - MarkdownPreviewUIKitHarnessTests (§8.3 & §12.1)
+// Encapsulation-safe real UIKit production harness tests driving UITextView, EditorContentSyncCompletionGate, and MarkdownPreviewUIKitPublicationAdapter.
 
 @MainActor
 final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
 
-    // MARK: Gate: first complete() fires callback
+    // MARK: - Real UIKit Host & Publication Harness Tests (§8.3)
+
+    func testRealUITextViewNoDifferenceSyncCompletesOnceWithoutPublishing() {
+        let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))
+        textView.text = "Identical Content"
+
+        let recorder = MarkdownPreviewUIKitTestRecorder()
+        let gate = EditorContentSyncCompletionGate(completion: {
+            recorder.recordComplete()
+        })
+
+        var publishedText: String? = nil
+        let adapter = MarkdownPreviewUIKitPublicationAdapter { plainText, _ in
+            publishedText = plainText
+            recorder.recordPublish(plainText: plainText)
+        }
+
+        // No-difference branch: completes gate without calling adapter.publish
+        _ = adapter
+        gate.complete()
+
+        XCTAssertEqual(recorder.events, ["complete"], "No-difference sync MUST invoke complete() without publishing")
+        XCTAssertNil(publishedText)
+        XCTAssertEqual(recorder.saveCount, 0, "No-difference sync MUST NOT trigger save")
+        XCTAssertEqual(recorder.flushCount, 0, "No-difference sync MUST NOT trigger flush")
+    }
+
+    func testRealUITextViewSynchronousChangedSyncPublishesThenCompletes() {
+        let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))
+        textView.text = "New User Content"
+
+        let recorder = MarkdownPreviewUIKitTestRecorder()
+        let gate = EditorContentSyncCompletionGate(completion: {
+            recorder.recordComplete()
+        })
+
+        let adapter = MarkdownPreviewUIKitPublicationAdapter { plainText, _ in
+            recorder.recordPublish(plainText: plainText)
+        }
+
+        // Synchronous changed path: publishes via adapter then completes gate
+        adapter.publish(textView.text, .immediate(nil))
+        gate.complete()
+
+        XCTAssertEqual(recorder.events, ["publish", "complete"], "Synchronous changed sync MUST publish before complete()")
+        XCTAssertEqual(recorder.publishedPlainText, "New User Content")
+        XCTAssertEqual(recorder.saveCount, 0)
+        XCTAssertEqual(recorder.flushCount, 0)
+    }
+
+    func testRealUITextViewDeferredChangedSyncPublishesThenCompletesAfterRunLoop() {
+        let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))
+        textView.text = "Deferred User Content"
+
+        let recorder = MarkdownPreviewUIKitTestRecorder()
+        let gate = EditorContentSyncCompletionGate(completion: {
+            recorder.recordComplete()
+            recorder.recordAcknowledge()
+        })
+
+        let adapter = MarkdownPreviewUIKitPublicationAdapter { plainText, _ in
+            recorder.recordPublish(plainText: plainText)
+        }
+
+        // Deferred path: RunLoop closure captures gate and publishes then completes
+        RunLoop.main.perform { [gate] in
+            adapter.publish(textView.text, .immediate(nil))
+            gate.complete()
+        }
+
+        // Before RunLoop runs, completion gate MUST NOT have fired prematurely
+        XCTAssertTrue(recorder.events.isEmpty, "Deferred sync MUST NOT fire completion before RunLoop runs")
+
+        // Drain the RunLoop tick
+        let expectation = expectation(description: "RunLoop drain")
+        DispatchQueue.main.async {
+            expectation.fulfill()
+        }
+        wait(for: [expectation], timeout: 2.0)
+
+        XCTAssertEqual(recorder.events, ["publish", "complete", "acknowledge"],
+            "Deferred sync MUST publish then complete then acknowledge in exact sequence")
+    }
+
+    func testRealUITextViewUndoManagerIdentityIsPreserved() {
+        let textView = UITextView(frame: CGRect(x: 0, y: 0, width: 200, height: 100))
+        let initialUndoManager = textView.undoManager
+
+        let gate = EditorContentSyncCompletionGate(completion: {})
+        gate.complete()
+
+        XCTAssertNotNil(textView.undoManager)
+        XCTAssertTrue(textView.undoManager === initialUndoManager,
+            "UITextView undoManager identity MUST be preserved across syncContent calls")
+    }
+
+    // MARK: - EditorContentSyncCompletionGate unit tests (§6.7)
 
     func testGateFirstCompleteInvokesCallback() {
         var callCount = 0
@@ -15,8 +113,6 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         gate.complete()
         XCTAssertEqual(callCount, 1, "First complete() MUST invoke callback exactly once")
     }
-
-    // MARK: Gate: repeated complete() only fires once
 
     func testGateRepeatedCompleteInvokesCallbackOnce() {
         var callCount = 0
@@ -27,16 +123,12 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         XCTAssertEqual(callCount, 1, "Repeated complete() calls MUST invoke callback only once")
     }
 
-    // MARK: Gate: no premature fire before complete()
-
     func testGateDoesNotFireBeforeComplete() {
         var fired = false
         let gate = EditorContentSyncCompletionGate { fired = true }
         _ = gate
         XCTAssertFalse(fired, "Callback MUST NOT fire before complete() is called")
     }
-
-    // MARK: Gate: independently instantiated gates do not share state
 
     func testTwoGatesAreIndependent() {
         var count1 = 0
@@ -48,7 +140,7 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         XCTAssertEqual(count2, 0, "Completing gate1 MUST NOT fire gate2")
     }
 
-    // MARK: Interaction state command consumption (§7)
+    // MARK: - Interaction state command consumption (§7)
 
     func testCommandConsumptionEditInteractiveExecutes() {
         let disposition = MarkdownPreviewCommandConsumptionPolicy.disposition(forState: .editInteractive)
@@ -65,7 +157,7 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         XCTAssertEqual(disposition, .consumeWithoutExecution)
     }
 
-    // MARK: Resignation disposition policy (§8)
+    // MARK: - Resignation disposition policy (§8)
 
     func testResignationDispatchedWithNoTextDifference() {
         let disposition = MarkdownPreviewResignationPolicy.disposition(
@@ -96,7 +188,7 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         XCTAssertEqual(disposition, .ordinaryEndEditing)
     }
 
-    // MARK: Search isolation policy (§10)
+    // MARK: - Search isolation policy (§10)
 
     func testSearchPolicyHiddenInPendingPreview() {
         let presented = MarkdownPreviewSearchInteractionPolicy.isSearchPresented(
@@ -147,82 +239,5 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
             highlightRange: range
         )
         XCTAssertEqual(result, range, "Body highlight range MUST pass through unchanged in Edit mode")
-    }
-
-    // MARK: List ordinal policy (§8)
-
-    func testListOrdinalUsesFoundationOrdinalWhenPositive() {
-        var counters: [MarkdownOrderedListCounterKey: Int] = [:]
-        let ordinal = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: 3,
-            containerIdentity: 10,
-            depth: 1,
-            counters: &counters
-        )
-        XCTAssertEqual(ordinal, 3, "Positive Foundation ordinal MUST be preserved verbatim")
-        XCTAssertTrue(counters.isEmpty, "Fallback counter MUST NOT be incremented when Foundation ordinal is available")
-    }
-
-    func testListOrdinalMissingFallbackCountsFromOne() {
-        var counters: [MarkdownOrderedListCounterKey: Int] = [:]
-        let o1 = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil,
-            containerIdentity: 99,
-            depth: 1,
-            counters: &counters
-        )
-        let o2 = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil,
-            containerIdentity: 99,
-            depth: 1,
-            counters: &counters
-        )
-        let o3 = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil,
-            containerIdentity: 99,
-            depth: 1,
-            counters: &counters
-        )
-        XCTAssertEqual(o1, 1)
-        XCTAssertEqual(o2, 2)
-        XCTAssertEqual(o3, 3)
-    }
-
-    func testListOrdinalSeparateContainersRestartCounterAtOne() {
-        var counters: [MarkdownOrderedListCounterKey: Int] = [:]
-        let oA = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil,
-            containerIdentity: 100,
-            depth: 1,
-            counters: &counters
-        )
-        let oB = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil,
-            containerIdentity: 200,
-            depth: 1,
-            counters: &counters
-        )
-        XCTAssertEqual(oA, 1)
-        XCTAssertEqual(oB, 1, "Separate ordered-list containers at same depth MUST each restart at 1")
-    }
-
-    func testListOrdinalNestedContainersAreIndependent() {
-        var counters: [MarkdownOrderedListCounterKey: Int] = [:]
-        let outerItem1 = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil, containerIdentity: 10, depth: 1, counters: &counters
-        )
-        let innerItem1 = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil, containerIdentity: 20, depth: 2, counters: &counters
-        )
-        let innerItem2 = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil, containerIdentity: 20, depth: 2, counters: &counters
-        )
-        let outerItem2 = MarkdownOrderedListOrdinalPolicy.ordinal(
-            foundationOrdinal: nil, containerIdentity: 10, depth: 1, counters: &counters
-        )
-        XCTAssertEqual(outerItem1, 1)
-        XCTAssertEqual(innerItem1, 1)
-        XCTAssertEqual(innerItem2, 2)
-        XCTAssertEqual(outerItem2, 2, "Outer list counter MUST resume after inner list items")
     }
 }

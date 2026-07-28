@@ -1,8 +1,7 @@
 import XCTest
 
-// MARK: - Markdown Preview UI Tests (§9.4)
-// Drives the production iOS app UI to verify visible Preview/search behavior.
-// Uses the same UITEST_MODE launch argument as MyRAMUITests.
+// MARK: - Markdown Preview UI Tests (§10)
+// Drives the production iOS app UI to verify visible Preview/search behavior using exact identifiers.
 
 final class MarkdownPreviewUITests: XCTestCase {
     private enum Timeout {
@@ -21,16 +20,15 @@ final class MarkdownPreviewUITests: XCTestCase {
         app.launch()
         openNewNote(in: app)
 
-        // The note editor body text view should be present in Edit mode
         let editor = findElement("note-editor-body", in: app)
         XCTAssertTrue(
             editor.waitForExistence(timeout: Timeout.standard),
             "Edit mode should be default: note-editor-body text view must appear"
         )
-        // Preview toggle must exist and indicate preview is inactive
-        let previewToggle = findElement("note-toolbar-preview-toggle", in: app)
-        XCTAssertTrue(previewToggle.waitForExistence(timeout: Timeout.standard),
-            "Preview toggle must be present in the note toolbar")
+
+        let modePicker = findElement("markdown-mode-picker", in: app)
+        XCTAssertTrue(modePicker.waitForExistence(timeout: Timeout.standard),
+            "Markdown mode picker must be present above editor surface")
     }
 
     // MARK: - Test 2: Top-bar search cannot present during Preview
@@ -40,26 +38,19 @@ final class MarkdownPreviewUITests: XCTestCase {
         app.launch()
         openNewNote(in: app)
 
-        // Type some content
         let editor = findElement("note-editor-body", in: app)
         XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
         editor.tap()
         editor.typeText("Search test content for Preview mode")
 
-        // Switch to Preview mode
-        let previewToggle = findElement("note-toolbar-preview-toggle", in: app)
-        XCTAssertTrue(previewToggle.waitForExistence(timeout: Timeout.standard))
-        previewToggle.tap()
+        // Switch to Preview mode via segmented picker
+        switchToPreviewMode(in: app)
 
-        // Attempt to trigger search (top-bar search button)
-        let searchButton = findElement("note-toolbar-search", in: app)
-        guard searchButton.exists else {
-            // If the search button is hidden during Preview, that's a pass
-            return
+        let searchButton = app.buttons["note-toolbar-search"]
+        if searchButton.exists {
+            searchButton.tap()
         }
-        searchButton.tap()
 
-        // Search field must NOT appear while Preview is active
         let searchField = findElement("current-note-search-field", in: app)
         XCTAssertFalse(
             searchField.waitForExistence(timeout: Timeout.short),
@@ -79,17 +70,13 @@ final class MarkdownPreviewUITests: XCTestCase {
         editor.tap()
         editor.typeText("Keyboard focus test")
 
-        // Switch to Preview — keyboard should dismiss
-        let previewToggle = findElement("note-toolbar-preview-toggle", in: app)
-        XCTAssertTrue(previewToggle.waitForExistence(timeout: Timeout.standard))
-        previewToggle.tap()
+        switchToPreviewMode(in: app)
 
-        // Keyboards are not directly observable via XCUITest beyond soft-keyboard visibility.
-        // Verify: the editor body is NOT the first responder by checking the preview container appears.
-        let previewContainer = findElement("markdown-preview-container", in: app)
+        let previewBody = findElement("markdown-preview-body", in: app)
+        let fallbackBody = findElement("markdown-preview-fallback", in: app)
         XCTAssertTrue(
-            previewContainer.waitForExistence(timeout: Timeout.standard),
-            "Markdown Preview container must be visible after tapping preview toggle"
+            previewBody.waitForExistence(timeout: Timeout.standard) || fallbackBody.waitForExistence(timeout: Timeout.standard),
+            "Markdown Preview body or fallback must be visible after tapping preview mode"
         )
     }
 
@@ -100,14 +87,9 @@ final class MarkdownPreviewUITests: XCTestCase {
         app.launch()
         openNewNote(in: app)
 
-        let previewToggle = findElement("note-toolbar-preview-toggle", in: app)
-        XCTAssertTrue(previewToggle.waitForExistence(timeout: Timeout.standard))
+        switchToPreviewMode(in: app)
+        switchToEditMode(in: app)
 
-        // Rapid double-tap: Preview then immediately back to Edit
-        previewToggle.tap()
-        previewToggle.tap()
-
-        // After two taps, should be back in Edit
         let editor = findElement("note-editor-body", in: app)
         XCTAssertTrue(
             editor.waitForExistence(timeout: Timeout.standard),
@@ -131,14 +113,71 @@ final class MarkdownPreviewUITests: XCTestCase {
             let overflowButton = app.buttons["notes-list-more"]
             XCTAssertTrue(overflowButton.waitForExistence(timeout: Timeout.standard))
             overflowButton.tap()
+
             let menuNewNoteButton = app.buttons["New Note"]
             XCTAssertTrue(menuNewNoteButton.waitForExistence(timeout: Timeout.standard))
             menuNewNoteButton.tap()
         }
+
         XCTAssertTrue(app.buttons["edit-note-title"].waitForExistence(timeout: Timeout.standard))
+        let controlBar = app.descendants(matching: .any)["keyboard-control-bar"]
+        let pinButton = app.buttons["keyboard-control-pin"]
+        XCTAssertTrue(
+            waitForAnyElement([controlBar, pinButton], timeout: Timeout.standard),
+            "Expected note editor controls to appear after opening a note."
+        )
+    }
+
+    private func switchToPreviewMode(in app: XCUIApplication) {
+        let picker = app.segmentedControls["markdown-mode-picker"]
+        if picker.waitForExistence(timeout: Timeout.short) {
+            let previewButton = picker.buttons["Preview"]
+            if previewButton.exists {
+                previewButton.tap()
+                return
+            }
+        }
+        let previewButton = app.buttons["Preview"]
+        if previewButton.waitForExistence(timeout: Timeout.short) {
+            previewButton.tap()
+            return
+        }
+        let previewTag = app.descendants(matching: .any)["markdown-preview-mode"]
+        XCTAssertTrue(previewTag.waitForExistence(timeout: Timeout.standard))
+        previewTag.tap()
+    }
+
+    private func switchToEditMode(in app: XCUIApplication) {
+        let picker = app.segmentedControls["markdown-mode-picker"]
+        if picker.waitForExistence(timeout: Timeout.short) {
+            let editButton = picker.buttons["Edit"]
+            if editButton.exists {
+                editButton.tap()
+                return
+            }
+        }
+        let editButton = app.buttons["Edit"]
+        if editButton.waitForExistence(timeout: Timeout.short) {
+            editButton.tap()
+            return
+        }
+        let editTag = app.descendants(matching: .any)["markdown-edit-mode"]
+        XCTAssertTrue(editTag.waitForExistence(timeout: Timeout.standard))
+        editTag.tap()
     }
 
     private func findElement(_ identifier: String, in app: XCUIApplication) -> XCUIElement {
         app.descendants(matching: .any)[identifier]
+    }
+
+    private func waitForAnyElement(_ elements: [XCUIElement], timeout: TimeInterval) -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            if elements.contains(where: \.exists) {
+                return true
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.05))
+        }
+        return elements.contains(where: \.exists)
     }
 }

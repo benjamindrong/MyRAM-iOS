@@ -458,6 +458,7 @@ struct NoteEditorView: View {
     private var editorBodySurface: some View {
         ZStack {
             editorTextView
+                .accessibilityIdentifier("note-editor-body")
                 .opacity(markdownEditorMode == .edit ? 1 : 0)
                 .allowsHitTesting(markdownEditorMode == .edit)
                 .accessibilityHidden(markdownEditorMode != .edit)
@@ -472,6 +473,7 @@ struct NoteEditorView: View {
     // MARK: - Mode transition helpers
 
     private func enterMarkdownPreview() {
+        isCurrentNoteSearchFocused = false
         let request = MarkdownPreviewFocusRequest(id: UUID())
         pendingPreviewFocusRequest = request
         requestedMarkdownEditorMode = .preview
@@ -620,6 +622,7 @@ struct NoteEditorView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
         .onChange(of: currentNoteSearchFocusRequest) {
+            guard interactionState == .editInteractive else { return }
             guard !usesExternalCurrentNoteSearch else { return }
             isCurrentNoteSearchFocused = true
         }
@@ -2467,7 +2470,7 @@ private struct TextColorSwatch: Identifiable {
     }
 }
 
-private final class TextFormattingController: ObservableObject {
+final class TextFormattingController: ObservableObject {
     fileprivate var applyTextColorHandler: ((UIColor?) -> Void)?
 
     func applyTextColor(_ color: UIColor?) {
@@ -3297,6 +3300,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var text: Binding<String>
         var richTextContentData: Binding<Data?>
         var onContentChanged: (String, EditorRichTextContentUpdate) -> Void
+        var publicationAdapter: MarkdownPreviewUIKitPublicationAdapter!
         var onRemoteAttributedTextPublished: (NSAttributedString) -> Void
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
@@ -3365,6 +3369,10 @@ private struct SelectableTextView: UIViewRepresentable {
             self.onEditorScrolled = onEditorScrolled
             self.onPinSelection = onPinSelection
             self.onLookupSelection = onLookupSelection
+            super.init()
+            self.publicationAdapter = MarkdownPreviewUIKitPublicationAdapter { [weak self] plain, update in
+                self?.onContentChanged(plain, update)
+            }
         }
 
         deinit {
@@ -3821,17 +3829,22 @@ private struct SelectableTextView: UIViewRepresentable {
             if isUpdatingUIView {
                 appliedPlainTextAwaitingBinding = plainText
                 appliedRichTextDataAwaitingBinding = encodedRichText
-                RunLoop.main.perform { [weak self] in
-                    guard let self else { return }
+                RunLoop.main.perform { [weak self, gate] in
+                    guard let self else {
+                        gate.complete()
+                        return
+                    }
                     guard self.text.wrappedValue != plainText
                         || self.richTextContentData.wrappedValue != encodedRichText else {
                         self.clearAppliedContentIfSynced()
+                        gate.complete()
                         return
                     }
                     self.text.wrappedValue = plainText
                     self.richTextContentData.wrappedValue = encodedRichText
-                    self.onContentChanged(plainText, richTextUpdate)
+                    self.publicationAdapter.publish(plainText, richTextUpdate)
                     self.clearAppliedContentIfSynced()
+                    gate.complete()
                 }
                 return
             }
@@ -3840,8 +3853,9 @@ private struct SelectableTextView: UIViewRepresentable {
             if serializesRichTextImmediately {
                 richTextContentData.wrappedValue = encodedRichText
             }
-            onContentChanged(plainText, richTextUpdate)
+            publicationAdapter.publish(plainText, richTextUpdate)
             clearAppliedContentIfSynced()
+            gate.complete()
         }
 
         private func deferredRichTextContentEncoder(for textView: UITextView) -> DeferredRichTextContentEncoder {

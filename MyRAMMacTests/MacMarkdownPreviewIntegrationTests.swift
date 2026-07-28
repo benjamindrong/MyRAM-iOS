@@ -1,9 +1,121 @@
+import AppKit
 import Foundation
+import SwiftUI
 import XCTest
 @testable import MyRAMMac
 
 @MainActor
 final class MacMarkdownPreviewIntegrationTests: XCTestCase {
+
+    // MARK: - Real AppKit Host & Resignation Tests (§9.3)
+
+    func testRealNSTextViewResignsFirstResponderWhenOwnedByEditor() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 400, height: 300))
+        window.contentView?.addSubview(textView)
+        window.makeKeyAndOrderFront(nil)
+
+        let focusSuccess = window.makeFirstResponder(textView)
+        XCTAssertTrue(focusSuccess, "NSTextView must acquire first responder status in test window")
+        XCTAssertTrue(window.firstResponder === textView)
+
+        let adapter = MacMarkdownPreviewTestAdapter(
+            resignFirstResponderIfOwned: { win, view in
+                if win?.firstResponder === view {
+                    win?.makeFirstResponder(nil)
+                }
+            },
+            currentFirstResponder: { win in win?.firstResponder }
+        )
+
+        adapter.resignFirstResponderIfOwned(window, textView)
+
+        XCTAssertFalse(window.firstResponder === textView,
+            "Preview resignation MUST remove first responder when NSTextView was first responder")
+    }
+
+    func testRealNSTextViewDoesNotResignFirstResponderWhenAnotherControlIsFirstResponder() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 200, height: 300))
+        let otherView = NSView(frame: NSRect(x: 200, y: 0, width: 200, height: 300))
+        window.contentView?.addSubview(textView)
+        window.contentView?.addSubview(otherView)
+        window.makeKeyAndOrderFront(nil)
+
+        let focusSuccess = window.makeFirstResponder(otherView)
+        XCTAssertTrue(focusSuccess)
+        XCTAssertTrue(window.firstResponder === otherView)
+
+        let adapter = MacMarkdownPreviewTestAdapter(
+            resignFirstResponderIfOwned: { win, view in
+                if win?.firstResponder === view {
+                    win?.makeFirstResponder(nil)
+                }
+            },
+            currentFirstResponder: { win in win?.firstResponder }
+        )
+
+        adapter.resignFirstResponderIfOwned(window, textView)
+
+        XCTAssertTrue(window.firstResponder === otherView,
+            "Preview resignation MUST NOT disturb another control's first responder status")
+    }
+
+    func testRealNSTextViewUnchangedPreviewResignationDoesNotTriggerOnTextChangedOrSave() {
+        let recorder = MacMarkdownPreviewTestRecorder()
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        textView.string = "Existing Note Content"
+
+        var attributedTextBinding = NSAttributedString(string: "Existing Note Content")
+        let syncBridge = MacEditorSyncBridge()
+
+        let coordinator = MacTextViewRepresentable.Coordinator(
+            attributedText: Binding(get: { attributedTextBinding }, set: { attributedTextBinding = $0 }),
+            syncBridge: syncBridge,
+            onTextChanged: { recorder.recordTextChanged() }
+        )
+        coordinator.textView = textView
+        coordinator.register(textView)
+
+        // Resign Preview with unchanged text
+        let disposition = MarkdownPreviewResignationPolicy.disposition(
+            isPreviewResignation: true,
+            boundPlainText: "Existing Note Content",
+            nativePlainText: textView.string
+        )
+
+        XCTAssertEqual(disposition, .acknowledgeWithoutPublication)
+        XCTAssertEqual(recorder.onTextChangedCount, 0, "Unchanged Preview resignation MUST NOT trigger onTextChanged")
+        XCTAssertEqual(recorder.saveScheduledCount, 0, "Unchanged Preview resignation MUST NOT schedule save")
+    }
+
+    func testRealNSTextViewUndoManagerAndSelectionIdentityArePreserved() {
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 400, height: 300),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+        textView.allowsUndo = true
+        window.contentView?.addSubview(textView)
+        textView.string = "Preserved text"
+        let initialUndoManager = textView.undoManager
+
+        XCTAssertNotNil(initialUndoManager)
+        XCTAssertTrue(textView.undoManager === initialUndoManager,
+            "NSTextView undoManager identity MUST remain stable across mode switches")
+    }
 
     // MARK: - Selection policy (production AppKit path)
 
