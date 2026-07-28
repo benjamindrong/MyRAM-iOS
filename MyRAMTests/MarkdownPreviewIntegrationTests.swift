@@ -28,6 +28,38 @@ final class MarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertEqual(mode, .preview, "Same-note selection MUST preserve current Preview mode")
     }
 
+    // MARK: - Interaction State Policy Tests
+
+    func testInteractionStatePendingPreviewTransition() {
+        let state = MarkdownPreviewInteractionPolicy.state(
+            requestedMode: .preview,
+            committedMode: .edit,
+            hasPendingFocusRequest: true
+        )
+        XCTAssertEqual(state, .previewTransitionPending)
+        XCTAssertTrue(state.isPreviewOrPending)
+    }
+
+    func testInteractionStateVisiblePreview() {
+        let state = MarkdownPreviewInteractionPolicy.state(
+            requestedMode: .preview,
+            committedMode: .preview,
+            hasPendingFocusRequest: false
+        )
+        XCTAssertEqual(state, .previewVisible)
+        XCTAssertTrue(state.isPreviewOrPending)
+    }
+
+    func testInteractionStateEditInteractive() {
+        let state = MarkdownPreviewInteractionPolicy.state(
+            requestedMode: .edit,
+            committedMode: .edit,
+            hasPendingFocusRequest: false
+        )
+        XCTAssertEqual(state, .editInteractive)
+        XCTAssertFalse(state.isPreviewOrPending)
+    }
+
     // MARK: - Resignation Policy Tests
 
     func testResignationPolicyUnchangedTextAcknowledgeWithoutPublication() {
@@ -63,12 +95,17 @@ final class MarkdownPreviewIntegrationTests: XCTestCase {
     // MARK: - Command Consumption Policy Tests
 
     func testCommandConsumptionPolicyEditExecutes() {
-        let disposition = MarkdownPreviewCommandConsumptionPolicy.disposition(forMode: .edit)
+        let disposition = MarkdownPreviewCommandConsumptionPolicy.disposition(forState: .editInteractive)
         XCTAssertEqual(disposition, .execute)
     }
 
-    func testCommandConsumptionPolicyPreviewConsumesWithoutExecution() {
-        let disposition = MarkdownPreviewCommandConsumptionPolicy.disposition(forMode: .preview)
+    func testCommandConsumptionPolicyPendingPreviewConsumesWithoutExecution() {
+        let disposition = MarkdownPreviewCommandConsumptionPolicy.disposition(forState: .previewTransitionPending)
+        XCTAssertEqual(disposition, .consumeWithoutExecution)
+    }
+
+    func testCommandConsumptionPolicyVisiblePreviewConsumesWithoutExecution() {
+        let disposition = MarkdownPreviewCommandConsumptionPolicy.disposition(forState: .previewVisible)
         XCTAssertEqual(disposition, .consumeWithoutExecution)
     }
 
@@ -76,15 +113,23 @@ final class MarkdownPreviewIntegrationTests: XCTestCase {
 
     func testSearchInteractionPolicyHidesInPreview() {
         let isPresented = MarkdownPreviewSearchInteractionPolicy.isSearchPresented(
-            mode: .preview,
+            state: .previewVisible,
             isSearchActiveInState: true
         )
         XCTAssertFalse(isPresented, "Search controls MUST be hidden while in Preview mode")
     }
 
+    func testSearchInteractionPolicyHidesInPendingPreview() {
+        let isPresented = MarkdownPreviewSearchInteractionPolicy.isSearchPresented(
+            state: .previewTransitionPending,
+            isSearchActiveInState: true
+        )
+        XCTAssertFalse(isPresented, "Search controls MUST be hidden while Preview is pending")
+    }
+
     func testSearchInteractionPolicyRemovesHighlightInPreview() {
         let highlight = MarkdownPreviewSearchInteractionPolicy.bodyHighlightRange(
-            mode: .preview,
+            state: .previewVisible,
             highlightRange: NSRange(location: 0, length: 5)
         )
         XCTAssertNil(highlight, "Body search highlight MUST be nil while in Preview mode")

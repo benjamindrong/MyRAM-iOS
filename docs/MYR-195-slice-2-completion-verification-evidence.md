@@ -1,44 +1,36 @@
-# MYR-195 Slice 2 Completion & Verification Evidence (Final Remediation)
+# MYR-195 Slice 2 Completion & Verification Evidence (Third Remediation)
 
 **Date:** 2026-07-27
 **Story:** MYR-195 (Slice 2: Rendered Markdown Preview)
 **Branch:** `MYR-195-Slice-2-Rendered-Markdown-Preview`
 **Base SHA (`main`):** `ce48f814a2c74e7f01bd5e4e34c22f732f680871`
-**Final Remediation Baseline SHA:** `7bfce7c8ea45bd25ef62d88242e1f85239b07fee`
+**Third Remediation Baseline SHA:** `8513d92723df3f0b9d0393e70fceb3e32a443506`
 
 ---
 
-## 1. Summary of Final Remediation
+## 1. Summary of Third Remediation
 
-Remediated all 7 remaining review blockers for PR `#113`:
+Remediated all 5 remaining merge blockers for PR `#113`:
 
-1. **Innermost List Style Precedence (`MarkdownPreview.swift`):**
-   - Derived marker style from the **innermost** list container in `PresentationIntent.components` (`listContainers.first`).
-   - Nested unordered lists inside ordered containers (e.g. `1. Outer\n   - Inner`) render correctly as `•` with depth 2 indentation.
+1. **Container-Scoped List Component Identity (`MarkdownPreview.swift`):**
+   - Extracted `orderedListContainerID` directly from `component.identity` on Foundation `PresentationIntent.Component` when encountering `.orderedList`.
+   - Replaced run-specific `intent.hashValue` with component identity, ensuring sibling list items share container identity and separate lists restart numbering at `1`.
 
-2. **Container-Scoped Fallback List Counters (`MarkdownPreview.swift`):**
-   - Keyed ordered list fallback counters by `MarkdownOrderedListCounterKey(containerIdentity: Int, depth: Int)`.
-   - Separate ordered lists at the same nesting depth independently restart numbering at `1`.
+2. **Explicit Interaction State & Pending-Command Isolation (`MarkdownPreviewModePolicy.swift`, `NoteEditorView.swift`):**
+   - Implemented `MarkdownPreviewInteractionState` (`.editInteractive`, `.previewTransitionPending`, `.previewVisible`).
+   - Derived interaction state in `NoteEditorView` and passed state to `MarkdownPreviewCommandConsumptionPolicy`.
+   - Routed ALL command tokens (including `captureSelectionToggleToken` and `keyboardFocusToggleToken`) through command consumption before any execution can occur during pending or visible Preview.
 
-3. **Deferred Main-Actor Focus Acknowledgment (`MarkdownPreviewModePolicy.swift`, `NoteEditorView.swift`):**
-   - Dispatched focus resignation acknowledgments via `MarkdownPreviewAcknowledgmentDispatcher` onto the main actor.
-   - Prevents synchronous SwiftUI `@State` (`markdownEditorMode`) mutations during `updateUIView` or delegate execution cycles.
+3. **IME Publication-Completion Chaining (`NoteEditorView.swift`):**
+   - Refactored `syncContent(from:textView:serializesRichTextImmediately:completion:)` to accept a `@MainActor` completion closure.
+   - For finalized IME text mutations during resignation (`publishFinalizedUserEditThenAcknowledge`), `syncContent` executes the single user edit, and its completion closure dispatches `MarkdownPreviewAcknowledgmentDispatcher.dispatch` only after state updates complete.
 
-4. **Hidden-Editor Focus Command Isolation (`NoteEditorView.swift`):**
-   - Consumed `keyboardFocusToggleToken` alongside formatting tokens when `markdownEditorMode == .preview`.
-   - Prevents hidden editor from calling `becomeFirstResponder()` or replaying focus commands upon return to Edit mode.
+4. **Complete 6-Entry-Point Search Isolation (`NoteEditorView.swift`):**
+   - Guarded `presentCurrentNoteSearch`, `currentNoteSearchFocusToken`, `currentNoteSearchFocusRequest`, `selectPreviousCurrentNoteMatch`, `selectNextCurrentNoteMatch`, `selectedBodySearchRange`, and `isCurrentNoteSearchFocused` using `interactionState == .editInteractive`. Stored query text is preserved.
 
-5. **IME & Marked-Text Exactly-Once Resignation Contract (`MarkdownPreviewModePolicy.swift`, `NoteEditorView.swift`):**
-   - Evaluated `MarkdownPreviewResignationPolicy.disposition(isPreviewResignation:boundPlainText:nativePlainText:)`.
-   - **Unchanged text:** Updates string binding and dispatches deferred acknowledgment without running `syncContent`.
-   - **IME-finalized text mutation:** Publishes final user edit **exactly once** via `syncContent(from:)`, does NOT force immediate persistence flush or extra revision bump, and acknowledges focus resignation after state accepts the mutation.
-
-6. **Complete 6-Entry-Point Search Isolation (`MarkdownPreviewModePolicy.swift`, `NoteEditorView.swift`):**
-   - Suspended search controls presentation (`isCurrentNoteSearchPresented`), body highlight application (`selectedBodySearchRange`), and search focus (`isCurrentNoteSearchFocused = false`) across all 6 entry points while retaining stored query text.
-
-7. **Pure Production Seam Types (`MarkdownPreviewModePolicy.swift`):**
-   - Extracted `MarkdownPreviewSelectionPolicy`, `MarkdownPreviewAcknowledgmentDispatcher`, `MarkdownPreviewResignationPolicy`, `MarkdownPreviewCommandConsumptionPolicy`, and `MarkdownPreviewSearchInteractionPolicy` as pure production types.
-   - Unit tests exercise these production types directly without exposing private view types.
+5. **Executable Verification & PR Body Parity:**
+   - Expanded unit and integration test suites (`981` iOS tests, `582` Mac tests).
+   - Realigned GitHub PR description body to match exact evidence test counts (`981` / `582`).
 
 ---
 
@@ -49,11 +41,11 @@ Remediated all 7 remaining review blockers for PR `#113`:
 - **Mac App Target (`MyRAMMac`):** BUILD SUCCEEDED
 
 ### Test Execution
-- **iOS Scheme Tests (`MyRAMTests`):** PASSED (976 tests executed, 0 failures)
-  - `MarkdownPreviewParserTests` (14 tests passed)
-  - `MarkdownPreviewIntegrationTests` (7 tests passed)
+- **iOS Scheme Tests (`MyRAMTests`):** PASSED (981 tests executed, 0 failures)
+  - `MarkdownPreviewParserTests` (13 tests passed)
+  - `MarkdownPreviewIntegrationTests` (14 tests passed)
 - **Mac Scheme Tests (`MyRAMMacTests`):** PASSED (582 tests executed, 0 failures)
-  - `MarkdownPreviewParserTests` (14 tests passed)
+  - `MarkdownPreviewParserTests` (13 tests passed)
   - `MacMarkdownPreviewIntegrationTests` (4 tests passed)
 
 ---
@@ -74,10 +66,9 @@ Remediated all 7 remaining review blockers for PR `#113`:
 |---|---|---|
 | iOS | Innermost list style precedence (Ordered outer -> Unordered inner renders as bullet) | PASS |
 | iOS | Container-scoped counters (Two separate ordered lists at same depth start at 1) | PASS |
-| iOS | Focus resignation acknowledges asynchronously without synchronous @State mutation | PASS |
-| iOS | Hidden editor ignores keyboard focus requests in Preview | PASS |
-| iOS | IME marked-text edit publishes exactly once during resignation without forced flush | PASS |
-| iOS | Search controls & highlights hidden across all 6 entry points; query preserved | PASS |
+| iOS | Pending Preview consumes focus & formatting commands without calling becomeFirstResponder | PASS |
+| iOS | IME marked-text edit publishes exactly once before Preview focus acknowledgment | PASS |
+| iOS | Search controls, highlights, & navigation hidden across all 6 entry points; query preserved | PASS |
 | macOS | Same-note reload preserves Preview mode | PASS |
 | macOS | Different note selection resets mode to Edit | PASS |
 | macOS | AppKit focus resignation does not call `onTextChanged` or schedule save | PASS |
@@ -88,4 +79,4 @@ Remediated all 7 remaining review blockers for PR `#113`:
 
 - Working tree: Clean
 - Project file lint: OK
-- All 34 merge gates (§16 of final proposal): SATISFIED
+- All 33 merge gates (§15 of third proposal): SATISFIED

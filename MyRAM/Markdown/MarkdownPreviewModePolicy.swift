@@ -1,5 +1,5 @@
 // MarkdownPreviewModePolicy.swift
-// Pure production selection, resignation, command, search, and acknowledgment policy types.
+// Pure production selection, resignation, command, search, and interaction state policy types.
 // Shared across production code (NoteEditorView, MyRAMMacRootView) and unit tests.
 
 import Foundation
@@ -40,7 +40,37 @@ struct MarkdownPreviewAcknowledgmentDispatcher {
     }
 }
 
-// MARK: - Resignation Policy
+// MARK: - Interaction State (§7)
+
+enum MarkdownPreviewInteractionState: Equatable {
+    case editInteractive
+    case previewTransitionPending
+    case previewVisible
+
+    var isPreviewOrPending: Bool {
+        self != .editInteractive
+    }
+}
+
+struct MarkdownPreviewInteractionPolicy {
+    static func state(
+        requestedMode: MarkdownEditorMode,
+        committedMode: MarkdownEditorMode,
+        hasPendingFocusRequest: Bool
+    ) -> MarkdownPreviewInteractionState {
+        if hasPendingFocusRequest {
+            return .previewTransitionPending
+        } else if committedMode == .preview {
+            return .previewVisible
+        } else if requestedMode == .preview {
+            return .previewTransitionPending
+        } else {
+            return .editInteractive
+        }
+    }
+}
+
+// MARK: - Resignation Policy (§8)
 
 enum MarkdownPreviewResignationDisposition: Equatable {
     /// Pure Preview focus resignation: update text binding, skip publication, acknowledge focus release.
@@ -67,7 +97,7 @@ struct MarkdownPreviewResignationPolicy {
     }
 }
 
-// MARK: - Command Consumption Policy
+// MARK: - Command Consumption Policy (§7 & §9)
 
 enum MarkdownPreviewCommandDisposition: Equatable {
     case execute
@@ -76,32 +106,32 @@ enum MarkdownPreviewCommandDisposition: Equatable {
 
 struct MarkdownPreviewCommandConsumptionPolicy {
     static func disposition(
-        forMode mode: MarkdownEditorMode
+        forState state: MarkdownPreviewInteractionState
     ) -> MarkdownPreviewCommandDisposition {
-        switch mode {
-        case .edit:
+        switch state {
+        case .editInteractive:
             return .execute
-        case .preview:
+        case .previewTransitionPending, .previewVisible:
             return .consumeWithoutExecution
         }
     }
 }
 
-// MARK: - Search Isolation Policy
+// MARK: - Search Isolation Policy (§10)
 
 struct MarkdownPreviewSearchInteractionPolicy {
     static func isSearchPresented(
-        mode: MarkdownEditorMode,
+        state: MarkdownPreviewInteractionState,
         isSearchActiveInState: Bool
     ) -> Bool {
-        mode == .edit && isSearchActiveInState
+        state == .editInteractive && isSearchActiveInState
     }
 
     static func bodyHighlightRange(
-        mode: MarkdownEditorMode,
+        state: MarkdownPreviewInteractionState,
         highlightRange: NSRange?
     ) -> NSRange? {
-        guard mode == .edit else { return nil }
+        guard state == .editInteractive else { return nil }
         return highlightRange
     }
 }

@@ -210,6 +210,8 @@ extension MarkdownBlockKind {
         var depth = 0
         var foundOrdinal: Int? = nil
 
+        var orderedListContainerID: Int? = nil
+
         for component in intent.components {
             switch component.kind {
             case .header(let level):
@@ -217,6 +219,9 @@ extension MarkdownBlockKind {
             case .orderedList:
                 listContainers.append(.ordered)
                 depth += 1
+                if orderedListContainerID == nil {
+                    orderedListContainerID = component.identity
+                }
             case .unorderedList:
                 listContainers.append(.unordered)
                 depth += 1
@@ -250,7 +255,7 @@ extension MarkdownBlockKind {
 
         // Innermost list container takes precedence for marker style (Foundation lists components innermost-first)
         if let innermost = listContainers.first {
-            let containerIdentity = intent.hashValue
+            let containerIdentity = orderedListContainerID ?? 0
             let effectiveDepth = max(1, depth)
             
             switch innermost {

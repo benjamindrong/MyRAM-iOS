@@ -116,6 +116,14 @@ struct NoteEditorView: View {
     @State private var markdownEditorMode: MarkdownEditorMode = .edit
     @State private var requestedMarkdownEditorMode: MarkdownEditorMode = .edit
     @State private var pendingPreviewFocusRequest: MarkdownPreviewFocusRequest?
+
+    private var interactionState: MarkdownPreviewInteractionState {
+        MarkdownPreviewInteractionPolicy.state(
+            requestedMode: requestedMarkdownEditorMode,
+            committedMode: markdownEditorMode,
+            hasPendingFocusRequest: pendingPreviewFocusRequest != nil
+        )
+    }
     @State private var resignEditorFocusToggleToken = 0
     
     var body: some View {
@@ -634,7 +642,7 @@ struct NoteEditorView: View {
             ? !currentNoteSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             : isLocalCurrentNoteSearchPresented
         return MarkdownPreviewSearchInteractionPolicy.isSearchPresented(
-            mode: markdownEditorMode,
+            state: interactionState,
             isSearchActiveInState: isPresentedInState
         )
     }
@@ -644,13 +652,13 @@ struct NoteEditorView: View {
     }
 
     private var selectedCurrentNoteMatch: NoteSearchMatch? {
-        guard markdownEditorMode == .edit else { return nil }
+        guard interactionState == .editInteractive else { return nil }
         return searchSession.selectedMatch
     }
 
     private var selectedBodySearchRange: NSRange? {
         MarkdownPreviewSearchInteractionPolicy.bodyHighlightRange(
-            mode: markdownEditorMode,
+            state: interactionState,
             highlightRange: searchSession.selectedBodyHighlightRange(textLength: content.utf16.count)
         )
     }
@@ -1130,16 +1138,37 @@ struct NoteEditorView: View {
             }
         }
     }
-
     private func selectFirstCurrentNoteMatchIfNeeded() {
         searchSession = searchSession.selectingFirstIfNeeded()
     }
 
+    private func presentCurrentNoteSearch() {
+        guard interactionState == .editInteractive else { return }
+        if usesExternalCurrentNoteSearch {
+            isCurrentNoteSearchFocused = true
+        } else {
+            isLocalCurrentNoteSearchPresented = true
+            isCurrentNoteSearchFocused = true
+        }
+    }
+
+    private func dismissCurrentNoteSearch() {
+        if usesExternalCurrentNoteSearch {
+            currentNoteSearchText?.wrappedValue = ""
+        } else {
+            localCurrentNoteSearchText = ""
+            isLocalCurrentNoteSearchPresented = false
+        }
+        isCurrentNoteSearchFocused = false
+    }
+
     private func selectPreviousCurrentNoteMatch() {
+        guard interactionState == .editInteractive else { return }
         searchSession = searchSession.selectingPrevious()
     }
 
     private func selectNextCurrentNoteMatch() {
+        guard interactionState == .editInteractive else { return }
         searchSession = searchSession.selectingNext()
     }
 
@@ -3109,14 +3138,14 @@ private struct SelectableTextView: UIViewRepresentable {
         context.coordinator.onLookupSelection = onLookupSelection
         context.coordinator.applySearchHighlight(searchHighlightRange, in: textView)
 
-        if context.coordinator.captureSelectionToggleToken != captureSelectionToggleToken {
-            context.coordinator.captureSelectionToggleToken = captureSelectionToggleToken
-            context.coordinator.captureCurrentSelection(in: textView)
-        }
+        let interactionState = MarkdownPreviewInteractionPolicy.state(
+            requestedMode: markdownEditorMode,
+            committedMode: markdownEditorMode,
+            hasPendingFocusRequest: pendingPreviewFocusRequest != nil
+        )
+        let commandDisposition = MarkdownPreviewCommandConsumptionPolicy.disposition(forState: interactionState)
 
-        // Hidden editor command consumption: when Preview is active, consume unsafe
-        // tokens (including keyboard focus) without executing them so they do not replay on Edit return.
-        if markdownEditorMode == .preview {
+        if commandDisposition == .consumeWithoutExecution {
             context.coordinator.keyboardFocusToggleToken = keyboardFocusToggleToken
             context.coordinator.boldToggleToken = boldToggleToken
             context.coordinator.italicToggleToken = italicToggleToken
@@ -3133,6 +3162,11 @@ private struct SelectableTextView: UIViewRepresentable {
             context.coordinator.lookupSelectionToggleToken = lookupSelectionToggleToken
             context.coordinator.appendUnpinnedThoughtToggleToken = appendUnpinnedThoughtToggleToken
         } else {
+            if context.coordinator.captureSelectionToggleToken != captureSelectionToggleToken {
+                context.coordinator.captureSelectionToggleToken = captureSelectionToggleToken
+                context.coordinator.captureCurrentSelection(in: textView)
+            }
+
             if context.coordinator.keyboardFocusToggleToken != keyboardFocusToggleToken {
                 context.coordinator.keyboardFocusToggleToken = keyboardFocusToggleToken
                 if !textView.isFirstResponder {
@@ -3499,14 +3533,16 @@ private struct SelectableTextView: UIViewRepresentable {
 
             case .publishFinalizedUserEditThenAcknowledge:
                 isResigningForPreview = false
-                syncContent(from: textView)
-                if let requestID = pendingPreviewFocusRequestID {
-                    let reqID = requestID
-                    let ack = onFocusResignationAcknowledged
-                    MarkdownPreviewAcknowledgmentDispatcher.dispatch(requestID: reqID) { rID in
-                        ack?(rID)
+                let reqID = pendingPreviewFocusRequestID
+                let ack = onFocusResignationAcknowledged
+                pendingPreviewFocusRequestID = nil
+
+                syncContent(from: textView) {
+                    if let reqID {
+                        MarkdownPreviewAcknowledgmentDispatcher.dispatch(requestID: reqID) { rID in
+                            ack?(rID)
+                        }
                     }
-                    pendingPreviewFocusRequestID = nil
                 }
 
             case .ordinaryEndEditing:
@@ -3755,31 +3791,32 @@ private struct SelectableTextView: UIViewRepresentable {
             searchHighlighter.apply(range: range, in: textView)
         }
 
-        private func syncContent(
+        func syncContent(
             from textView: UITextView,
-            serializesRichTextImmediately: Bool = true
+            serializesRichTextImmediately: Bool = true,
+            completion: @escaping @MainActor () -> Void = {}
         ) {
-            let syncContentSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
-            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.syncContent", signpostID: syncContentSignpostID)
+            let syncSignpostID = OSSignpostID(log: EditorSelectionProfiling.log)
+            os_signpost(.begin, log: EditorSelectionProfiling.log, name: "Coordinator.syncContent", signpostID: syncSignpostID)
             defer {
-                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.syncContent", signpostID: syncContentSignpostID)
+                os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.syncContent", signpostID: syncSignpostID)
             }
             let plainText = textView.text ?? ""
-            let richTextUpdate: EditorRichTextContentUpdate
             let encodedRichText: Data?
             if serializesRichTextImmediately {
                 encodedRichText = RichTextContentCodec.encode(storageAttributedText(from: textView))
+            } else {
+                encodedRichText = nil
+            }
+            let richTextUpdate: EditorRichTextContentUpdate
+            if serializesRichTextImmediately {
                 richTextUpdate = .immediate(encodedRichText)
             } else {
-                // Typing keeps the live text current; the commit boundary pays
-                // for full RTF serialization.
-                encodedRichText = richTextContentData.wrappedValue
                 richTextUpdate = .deferred(deferredRichTextContentEncoder(for: textView))
             }
 
-            guard text.wrappedValue != plainText
-                || (serializesRichTextImmediately && richTextContentData.wrappedValue != encodedRichText) else {
-                clearAppliedContentIfSynced()
+            guard text.wrappedValue != plainText || (serializesRichTextImmediately && richTextContentData.wrappedValue != encodedRichText) else {
+                Task { @MainActor in completion() }
                 return
             }
 
