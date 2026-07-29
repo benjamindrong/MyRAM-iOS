@@ -51,7 +51,7 @@ final class MarkdownPreviewParserTests: XCTestCase {
             return XCTFail("Expected rendered")
         }
         XCTAssertEqual(doc.blocks.count, 2, "Ordered list must produce TWO distinct blocks")
-        
+
         if case .orderedListItem(let meta1) = doc.blocks[0].kind {
             XCTAssertEqual(meta1.style, .ordered(ordinal: 1))
             XCTAssertEqual(String(doc.blocks[0].content.characters), "First")
@@ -116,7 +116,7 @@ final class MarkdownPreviewParserTests: XCTestCase {
             if case .orderedListItem = $0.kind { return true }; return false
         }
         XCTAssertEqual(listBlocks.count, 2)
-        
+
         if case .orderedListItem(let meta1) = listBlocks[0].kind {
             XCTAssertEqual(meta1.style, .ordered(ordinal: 1))
         }
@@ -197,10 +197,10 @@ final class MarkdownPreviewParserTests: XCTestCase {
         struct MockError: Error {}
         let failingParser = MarkdownPreviewParser(parseOperation: { _ in throw MockError() })
         let source = "  # Leading and trailing spaces \n\r\n Unicode: 🎉  "
-        
+
         let result = failingParser.parse(source)
         XCTAssertEqual(result, .plainText(source), "Forced parser failure MUST return exact unmodified source")
-        
+
         let docResult = failingParser.parseDocument(source)
         XCTAssertEqual(docResult, .plainTextFallback(source), "Forced parser failure MUST return exact plainTextFallback")
     }

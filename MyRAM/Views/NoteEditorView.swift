@@ -3015,7 +3015,7 @@ private final class LiveTextEnabledImageView: UIScrollView, UIScrollViewDelegate
     }
 }
 
-struct SelectableTextView: UIViewRepresentable {
+private struct SelectableTextView: UIViewRepresentable {
     @Binding var text: String
     @Binding var richTextContentData: Data?
     let syncBridge: UIKitEditorSyncBridge
@@ -3108,30 +3108,74 @@ struct SelectableTextView: UIViewRepresentable {
             textColorToggleToken: textColorToggleToken
         )
 
-        context.coordinator.clearAppliedContentIfSynced()
-
-        if context.coordinator.restoreContentToggleToken != restoreContentToggleToken {
-            context.coordinator.restoreContentToggleToken = restoreContentToggleToken
-            context.coordinator.applyBoundContent(
-                plainText: text,
-                richTextContentData: richTextContentData,
-                in: textView
+        let boundAttributedText = context.coordinator.normalizedBoundAttributedText(
+            plainText: text,
+            richTextContentData: richTextContentData,
+            in: textView
+        )
+        let synchronizationGeneration = context.coordinator.synchronizationGenerationOwner.current
+        let appliedContentState = context.coordinator.appliedContentState
+        let reconciliationInput = MarkdownPreviewUIKitPostResignationReconciliation.Input(
+            synchronizationGeneration: synchronizationGeneration,
+            isSynchronizationGenerationCurrent: synchronizationGeneration.map {
+                context.coordinator.synchronizationGenerationOwner.isCurrent($0)
+            } ?? true,
+            nativePlainText: textView.text ?? "",
+            nativeAttributedText: NSAttributedString(attributedString: textView.attributedText),
+            boundPlainText: text,
+            boundRichTextData: richTextContentData,
+            boundAttributedText: boundAttributedText,
+            appliedContentState: appliedContentState,
+            nativeMatchesLatestEditorPublication: appliedContentState.ownsNativeContent(
+                generation: synchronizationGeneration,
+                nativePlainText: textView.text ?? ""
+            ),
+            restoreRequest: context.coordinator.restoreRequest(
+                for: MarkdownPreviewUIKitRestoreToken(rawValue: restoreContentToggleToken),
+                requestedAttributedText: boundAttributedText
+            ),
+            formattingState: .init(
+                hasPendingNativeFormattingMutation: hasPendingFormattingMutation,
+                pendingFormattingToken: hasPendingFormattingMutation ? textColorToggleToken : nil
+            ),
+            focusState: .init(
+                isFirstResponder: textView.isFirstResponder,
+                isHandlingUserFocusChange: context.coordinator.isHandlingUserFocusChange,
+                isResigningForPreview: context.coordinator.isResigningForPreview,
+                hasMarkedText: textView.markedTextRange != nil
+            ),
+            isPreviewTransitionPending: pendingPreviewFocusRequest != nil,
+            isPreviewVisible: markdownEditorMode == .preview
+        )
+        MarkdownPreviewUIKitPostResignationReconciliation.reconcile(
+            textView: textView,
+            input: reconciliationInput,
+            dependencies: .init(
+                willApplyReplacement: {
+                    context.coordinator.beginApplyingReconciledContent()
+                },
+                didApplyReplacement: { previousSelection in
+                    context.coordinator.finishApplyingReconciledContent(
+                        previousSelection: previousSelection,
+                        in: textView
+                    )
+                },
+                markRestoreHandled: { token, generation in
+                    context.coordinator.markRestoreHandled(
+                        token: token,
+                        generation: generation
+                    )
+                    context.coordinator.reportUndoManagerChanged(textView.undoManager)
+                },
+                clearAppliedContentIfOwned: { generation, boundPlainText, boundRichTextData in
+                    context.coordinator.clearAppliedContentIfOwned(
+                        by: generation,
+                        boundPlainText: boundPlainText,
+                        boundRichTextData: boundRichTextData
+                    )
+                }
             )
-            context.coordinator.reportUndoManagerChanged(textView.undoManager)
-        } else if !textView.isFirstResponder
-            && !context.coordinator.isHandlingUserFocusChange
-            && !hasPendingFormattingMutation
-            && !context.coordinator.hasUnsyncedAppliedContent
-            && textView.text != text {
-            // Ordinary SwiftUI refreshes only reconcile a genuine plain-text mismatch.
-            // Same-text rich data can still be awaiting deferred encoding and must not replace
-            // the native buffer or its undo stack. Explicit reloads use restoreContentToggleToken.
-            context.coordinator.applyBoundContent(
-                plainText: text,
-                richTextContentData: richTextContentData,
-                in: textView
-            )
-        }
+        )
         context.coordinator.text = $text
         context.coordinator.richTextContentData = $richTextContentData
         context.coordinator.syncBridge = syncBridge
@@ -3188,7 +3232,7 @@ struct SelectableTextView: UIViewRepresentable {
             if textView.isFirstResponder {
                 context.coordinator.isResigningForPreview = true
                 context.coordinator.pendingPreviewFocusRequestID = request.id
-                textView.resignFirstResponder()
+                MarkdownPreviewUIKitEditorResignation.resignIfOwned(textView)
             } else {
                 let ack = onFocusResignationAcknowledged
                 MarkdownPreviewAcknowledgmentDispatcher.dispatch(requestID: request.id) { reqID in
@@ -3328,7 +3372,12 @@ struct SelectableTextView: UIViewRepresentable {
         var pinSelectionToggleToken = 0
         var lookupSelectionToggleToken = 0
         var appendUnpinnedThoughtToggleToken = 0
-        var restoreContentToggleToken = 0
+        let synchronizationGenerationOwner = MarkdownPreviewUIKitSyncGenerationOwner()
+        private let restoreGenerationOwner = MarkdownPreviewUIKitRestoreGenerationOwner()
+        private var pendingRestoreToken: MarkdownPreviewUIKitRestoreToken?
+        private var pendingRestoreGeneration: MarkdownPreviewUIKitRestoreGeneration?
+        private var lastHandledRestoreToken = MarkdownPreviewUIKitRestoreToken(rawValue: 0)
+        private var lastAppliedRestoreGeneration: MarkdownPreviewUIKitRestoreGeneration?
         var boldToggleToken = 0
         var italicToggleToken = 0
         var underlineToggleToken = 0
@@ -3822,24 +3871,46 @@ struct SelectableTextView: UIViewRepresentable {
                 : .deferred(deferredRichTextContentEncoder(for: textView))
 
             let deps = MarkdownPreviewUIKitSyncDependencies(
+                isAvailable: { [weak self, weak textView] in
+                    self != nil && textView != nil
+                },
                 getBoundPlainText: { [weak self] in self?.text.wrappedValue ?? "" },
                 getBoundRichTextData: { [weak self] in self?.richTextContentData.wrappedValue },
-                publish: { [weak self] plain, update in self?.onContentChanged(plain, update) },
                 setBoundPlainText: { [weak self] plain in self?.text.wrappedValue = plain },
                 setBoundRichTextData: { [weak self] data in self?.richTextContentData.wrappedValue = data },
-                clearAppliedContentIfSynced: { [weak self] in self?.clearAppliedContentIfSynced() },
-                setAppliedContentAwaitingBinding: { [weak self] plain, richTextWrite in
-                    self?.appliedContentAwaitingBinding.record(
+                publish: { [weak self] plain, update in self?.onContentChanged(plain, update) },
+                recordAppliedContentIfCurrent: { [weak self] generation, owner, plain, richTextWrite in
+                    guard let self else { return false }
+                    return self.appliedContentAwaitingBinding.recordAppliedContentIfCurrent(
+                        generation: generation,
+                        generationOwner: owner,
                         plainText: plain,
                         richTextWrite: richTextWrite
                     )
-                }
+                },
+                clearAppliedContentIfOwned: { [weak self] generation, boundPlainText, boundRichTextData in
+                    guard let self else { return false }
+                    return self.appliedContentAwaitingBinding.clearAppliedContentIfOwned(
+                        by: generation,
+                        boundPlainText: boundPlainText,
+                        boundRichTextData: boundRichTextData
+                    )
+                },
+                discardAppliedContentSuperseded: { [weak self] generation, owner in
+                    guard let self else { return false }
+                    return self.appliedContentAwaitingBinding.discardAppliedContentSuperseded(
+                        by: generation,
+                        generationOwner: owner
+                    )
+                },
+                scheduleDeferred: MarkdownPreviewUIKitDeferredScheduler.enqueue
             )
             MarkdownPreviewUIKitSyncExecutor.synchronize(
                 nativePlainText: plainText,
                 richTextBindingDisposition: richTextBindingDisposition,
                 richTextUpdate: richTextUpdate,
                 isUpdatingUIView: isUpdatingUIView,
+                generationOwner: synchronizationGenerationOwner,
                 dependencies: deps,
                 completion: completion
             )
@@ -3902,17 +3973,19 @@ struct SelectableTextView: UIViewRepresentable {
             )
         }
 
-        var hasUnsyncedAppliedContent: Bool {
-            appliedContentAwaitingBinding.hasUnsyncedContent(
-                boundPlainText: text.wrappedValue,
-                boundRichTextData: richTextContentData.wrappedValue
-            )
+        var appliedContentState: MarkdownPreviewUIKitAppliedContentState {
+            appliedContentAwaitingBinding
         }
 
-        func clearAppliedContentIfSynced() {
-            appliedContentAwaitingBinding.clearIfSynced(
-                boundPlainText: text.wrappedValue,
-                boundRichTextData: richTextContentData.wrappedValue
+        func clearAppliedContentIfOwned(
+            by generation: MarkdownPreviewUIKitSyncGeneration,
+            boundPlainText: String,
+            boundRichTextData: Data?
+        ) {
+            _ = appliedContentAwaitingBinding.clearAppliedContentIfOwned(
+                by: generation,
+                boundPlainText: boundPlainText,
+                boundRichTextData: boundRichTextData
             )
         }
 
@@ -3956,38 +4029,78 @@ struct SelectableTextView: UIViewRepresentable {
             onUndoManagerChanged(undoManager)
         }
 
-        func applyBoundContent(
+        func normalizedBoundAttributedText(
             plainText: String,
             richTextContentData: Data?,
             in textView: UITextView
-        ) {
+        ) -> NSAttributedString {
             let desiredAttributedText = RichTextContentCodec.decode(
                 richTextData: richTextContentData,
                 plainText: plainText,
                 baseFont: textView.font ?? EditorTypography.defaultTextFont
             )
-            let normalizedAttributedText = RichTextContentCodec.normalizedForDisplay(
+            return RichTextContentCodec.normalizedForDisplay(
                 desiredAttributedText,
                 traitCollection: textView.traitCollection,
                 defaultTextColor: defaultTextColor
             )
-            guard !textView.attributedText.isEqual(to: normalizedAttributedText) else {
-                return
-            }
+        }
 
-            let selectedRange = textView.selectedRange
+        func beginApplyingReconciledContent() {
             isApplyingBoundContent = true
+        }
+
+        func finishApplyingReconciledContent(
+            previousSelection: NSRange,
+            in textView: UITextView
+        ) {
             defer { isApplyingBoundContent = false }
-            textView.attributedText = normalizedAttributedText
             applyChecklistRendering(in: textView)
             let newLength = textStorageLength(in: textView)
             let restoredRange = EditorSelectionRangeResolver.clampedSelectionRange(
-                selectedRange,
+                previousSelection,
                 textLength: newLength
             )
             restoreSelectionWithoutScrolling(restoredRange, in: textView)
             lastKnownSelectionRange = restoredRange
             reportFormattingState(from: textView)
+        }
+
+        func restoreRequest(
+            for token: MarkdownPreviewUIKitRestoreToken,
+            requestedAttributedText: NSAttributedString
+        ) -> MarkdownPreviewUIKitPostResignationReconciliation.RestoreRequest? {
+            guard token != lastHandledRestoreToken else {
+                pendingRestoreToken = nil
+                pendingRestoreGeneration = nil
+                return nil
+            }
+            if pendingRestoreToken != token {
+                pendingRestoreToken = token
+                pendingRestoreGeneration = restoreGenerationOwner.begin()
+            }
+            guard let generation = pendingRestoreGeneration else { return nil }
+            return .init(
+                token: token,
+                lastHandledToken: lastHandledRestoreToken,
+                generation: generation,
+                lastAppliedGeneration: lastAppliedRestoreGeneration,
+                requestedAttributedText: requestedAttributedText
+            )
+        }
+
+        func markRestoreHandled(
+            token: MarkdownPreviewUIKitRestoreToken,
+            generation: MarkdownPreviewUIKitRestoreGeneration
+        ) {
+            guard pendingRestoreToken == token,
+                  pendingRestoreGeneration == generation else {
+                return
+            }
+            lastHandledRestoreToken = token
+            lastAppliedRestoreGeneration = generation
+            pendingRestoreToken = nil
+            pendingRestoreGeneration = nil
         }
 
         func captureCurrentSelection(in textView: UITextView) {

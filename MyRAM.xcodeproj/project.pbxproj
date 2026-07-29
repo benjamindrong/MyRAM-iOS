@@ -267,6 +267,12 @@
 		D19501000000000000000015 /* MarkdownPreviewUIKitSyncExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000010 /* MarkdownPreviewUIKitSyncExecutor.swift */; };
 		D19501000000000000000016 /* MarkdownPreviewUIKitSyncExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000010 /* MarkdownPreviewUIKitSyncExecutor.swift */; };
 		D19501000000000000000017 /* MacMarkdownPreviewFocusResignation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000011 /* MacMarkdownPreviewFocusResignation.swift */; };
+		D19501000000000000000018 /* MarkdownPreviewUIKitDeferredScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000012 /* MarkdownPreviewUIKitDeferredScheduler.swift */; };
+		D19501000000000000000019 /* MarkdownPreviewUIKitDeferredScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000012 /* MarkdownPreviewUIKitDeferredScheduler.swift */; };
+		D1950100000000000000001A /* MarkdownPreviewUIKitEditorResignation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000013 /* MarkdownPreviewUIKitEditorResignation.swift */; };
+		D1950100000000000000001B /* MarkdownPreviewUIKitEditorResignation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000013 /* MarkdownPreviewUIKitEditorResignation.swift */; };
+		D1950100000000000000001C /* MarkdownPreviewUIKitPostResignationReconciliation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000014 /* MarkdownPreviewUIKitPostResignationReconciliation.swift */; };
+		D1950100000000000000001D /* MarkdownPreviewUIKitPostResignationReconciliation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000014 /* MarkdownPreviewUIKitPostResignationReconciliation.swift */; };
 		D19501000000000000000005 /* NoteEditorFileOperationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */; };
 		D19501000000000000000006 /* MarkdownFileOperationBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000004 /* MarkdownFileOperationBoundaryTests.swift */; };
 		D19501000000000000000007 /* MarkdownImportIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000005 /* MarkdownImportIntegrationTests.swift */; };
@@ -493,6 +499,9 @@
 		D1950200000000000000000D /* MarkdownPreviewModePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewModePolicy.swift; sourceTree = "<group>"; };
 		D19502000000000000000010 /* MarkdownPreviewUIKitSyncExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitSyncExecutor.swift; sourceTree = "<group>"; };
 		D19502000000000000000011 /* MacMarkdownPreviewFocusResignation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownPreviewFocusResignation.swift; sourceTree = "<group>"; };
+		D19502000000000000000012 /* MarkdownPreviewUIKitDeferredScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitDeferredScheduler.swift; sourceTree = "<group>"; };
+		D19502000000000000000013 /* MarkdownPreviewUIKitEditorResignation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitEditorResignation.swift; sourceTree = "<group>"; };
+		D19502000000000000000014 /* MarkdownPreviewUIKitPostResignationReconciliation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitPostResignationReconciliation.swift; sourceTree = "<group>"; };
 		D1950200000000000000000E /* MarkdownPreviewUIKitHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitHarnessTests.swift; sourceTree = "<group>"; };
 		D1950200000000000000000F /* MarkdownPreviewUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUITests.swift; sourceTree = "<group>"; };
 		D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditorFileOperationBridge.swift; sourceTree = "<group>"; };
@@ -602,6 +611,9 @@
 				D19502000000000000000009 /* MarkdownPreview.swift */,
 				D1950200000000000000000D /* MarkdownPreviewModePolicy.swift */,
 				D19502000000000000000010 /* MarkdownPreviewUIKitSyncExecutor.swift */,
+				D19502000000000000000012 /* MarkdownPreviewUIKitDeferredScheduler.swift */,
+				D19502000000000000000013 /* MarkdownPreviewUIKitEditorResignation.swift */,
+				D19502000000000000000014 /* MarkdownPreviewUIKitPostResignationReconciliation.swift */,
 			);
 			path = Markdown;
 			sourceTree = "<group>";
@@ -1165,6 +1177,9 @@
 				D1950100000000000000000B /* MarkdownPreview.swift in Sources */,
 				D19501000000000000000011 /* MarkdownPreviewModePolicy.swift in Sources */,
 				D19501000000000000000015 /* MarkdownPreviewUIKitSyncExecutor.swift in Sources */,
+				D19501000000000000000018 /* MarkdownPreviewUIKitDeferredScheduler.swift in Sources */,
+				D1950100000000000000001A /* MarkdownPreviewUIKitEditorResignation.swift in Sources */,
+				D1950100000000000000001C /* MarkdownPreviewUIKitPostResignationReconciliation.swift in Sources */,
 				D19501000000000000000005 /* NoteEditorFileOperationBridge.swift in Sources */,
 				C16901000000000000000001 /* NoteSequenceStateRecord.swift in Sources */,
 				C17001000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift in Sources */,
@@ -1321,6 +1336,9 @@
 				D1950100000000000000000C /* MarkdownPreview.swift in Sources */,
 				D19501000000000000000012 /* MarkdownPreviewModePolicy.swift in Sources */,
 				D19501000000000000000016 /* MarkdownPreviewUIKitSyncExecutor.swift in Sources */,
+				D19501000000000000000019 /* MarkdownPreviewUIKitDeferredScheduler.swift in Sources */,
+				D1950100000000000000001B /* MarkdownPreviewUIKitEditorResignation.swift in Sources */,
+				D1950100000000000000001D /* MarkdownPreviewUIKitPostResignationReconciliation.swift in Sources */,
 				D19501000000000000000017 /* MacMarkdownPreviewFocusResignation.swift in Sources */,
 				D19501000000000000000008 /* MacMarkdownFileCommands.swift in Sources */,
 				D19501000000000000000009 /* MacMarkdownFileOperationCoordinator.swift in Sources */,

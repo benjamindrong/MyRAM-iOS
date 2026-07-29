@@ -191,7 +191,7 @@ extension MarkdownBlockKind {
         var headingLevel: Int? = nil
         var isQuote = false
         var isCode = false
-        
+
         // Track list containers in path order to select innermost list style
         enum ListContainerType {
             case ordered
@@ -246,7 +246,7 @@ extension MarkdownBlockKind {
         // Innermost list container takes precedence for marker style (Foundation lists components innermost-first)
         if let innermost = listContainers.first {
             let effectiveDepth = max(1, depth)
-            
+
             switch innermost {
             case .ordered:
                 guard let ordinal = foundOrdinal, ordinal > 0 else {
