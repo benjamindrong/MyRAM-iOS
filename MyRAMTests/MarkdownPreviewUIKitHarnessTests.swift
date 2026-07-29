@@ -682,7 +682,13 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         textView.attributedText = NSAttributedString(string: "Native")
         let restoreOwner = MarkdownPreviewUIKitRestoreGenerationOwner()
         let restoreGeneration = restoreOwner.begin()
-        let requested = NSAttributedString(string: "Restored")
+        let requested = NSAttributedString(
+            string: "Native",
+            attributes: [.foregroundColor: UIColor.systemBlue]
+        )
+        let synchronizationOwner = MarkdownPreviewUIKitSyncGenerationOwner()
+        var appliedState = MarkdownPreviewUIKitAppliedContentState()
+        var supersessionCount = 0
         var handled: (MarkdownPreviewUIKitRestoreToken, MarkdownPreviewUIKitRestoreGeneration)?
 
         let input = reconciliationInput(
@@ -701,15 +707,311 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
             textView: textView,
             input: input,
             dependencies: reconciliationDependencies(
+                supersedeAcceptedRestore: {
+                    supersessionCount += 1
+                    return MarkdownPreviewUIKitAcceptedRestoreSupersession.perform(
+                        generationOwner: synchronizationOwner,
+                        appliedContentState: &appliedState
+                    )
+                },
                 markRestoreHandled: { token, generation in
                     handled = (token, generation)
                 }
             )
         )
 
-        XCTAssertEqual(textView.text, "Restored")
+        XCTAssertTrue(textView.attributedText.isEqual(to: requested))
+        XCTAssertEqual(supersessionCount, 1)
+        XCTAssertEqual(
+            synchronizationOwner.current,
+            MarkdownPreviewUIKitSyncGeneration(rawValue: 1)
+        )
         XCTAssertEqual(handled?.0, MarkdownPreviewUIKitRestoreToken(rawValue: 2))
         XCTAssertEqual(handled?.1, restoreGeneration)
+    }
+
+    func testAcceptedNewerRestoreSupersedesQueuedEditorSynchronization() {
+        let richTextA = Data("rich-A".utf8)
+        let richTextB = Data("rich-B".utf8)
+        let harness = MarkdownPreviewUIKitSyncHarness(
+            boundPlainText: "Before A",
+            boundRichTextData: nil
+        )
+        let textView = UITextView()
+        textView.attributedText = NSAttributedString(string: "A")
+
+        harness.synchronize(
+            label: "A",
+            nativePlainText: "A",
+            richTextDisposition: .replace(richTextA),
+            isUpdatingUIView: true
+        )
+        let queuedGeneration = harness.generationOwner.current
+        XCTAssertEqual(harness.scheduledOperations.count, 1)
+        XCTAssertEqual(harness.appliedState.generation, queuedGeneration)
+
+        harness.boundPlainText = "B"
+        harness.boundRichTextData = richTextB
+        let requestedB = NSAttributedString(
+            string: "B",
+            attributes: [.foregroundColor: UIColor.systemPurple]
+        )
+        let restoreOwner = MarkdownPreviewUIKitRestoreGenerationOwner()
+        let lastRestoreGeneration = restoreOwner.begin()
+        let restoreGeneration = restoreOwner.begin()
+        var supersessionCount = 0
+        var replacementCount = 0
+        var completionCount = 0
+        var handledCount = 0
+
+        MarkdownPreviewUIKitPostResignationReconciliation.reconcile(
+            textView: textView,
+            input: reconciliationInput(
+                textView: textView,
+                generation: queuedGeneration,
+                isCurrent: false,
+                appliedState: harness.appliedState,
+                boundPlainText: "B",
+                boundRichTextData: richTextB,
+                boundAttributedText: requestedB,
+                restoreRequest: .init(
+                    token: .init(rawValue: 2),
+                    lastHandledToken: .init(rawValue: 1),
+                    generation: restoreGeneration,
+                    lastAppliedGeneration: lastRestoreGeneration,
+                    requestedAttributedText: requestedB
+                )
+            ),
+            dependencies: reconciliationDependencies(
+                willApplyReplacement: { replacementCount += 1 },
+                didApplyReplacement: { _ in completionCount += 1 },
+                supersedeAcceptedRestore: {
+                    supersessionCount += 1
+                    return MarkdownPreviewUIKitAcceptedRestoreSupersession.perform(
+                        generationOwner: harness.generationOwner,
+                        appliedContentState: &harness.appliedState
+                    )
+                },
+                markRestoreHandled: { _, _ in handledCount += 1 }
+            )
+        )
+
+        let restoreSyncGeneration = harness.generationOwner.current
+        XCTAssertEqual(supersessionCount, 1)
+        XCTAssertEqual(
+            restoreSyncGeneration?.rawValue,
+            (queuedGeneration?.rawValue ?? 0) + 1
+        )
+        XCTAssertFalse(
+            queuedGeneration.map {
+                harness.generationOwner.isCurrent($0)
+            } ?? true
+        )
+        XCTAssertNil(harness.appliedState.generation)
+        XCTAssertEqual(replacementCount, 1)
+        XCTAssertEqual(completionCount, 1)
+        XCTAssertEqual(handledCount, 1)
+        XCTAssertTrue(textView.attributedText.isEqual(to: requestedB))
+        XCTAssertEqual(harness.boundPlainText, "B")
+        XCTAssertEqual(harness.boundRichTextData, richTextB)
+
+        harness.runScheduled(at: 0)
+
+        XCTAssertTrue(harness.plainWrites.isEmpty)
+        XCTAssertTrue(harness.richTextWrites.isEmpty)
+        XCTAssertTrue(harness.publications.isEmpty)
+        XCTAssertEqual(harness.completionCounts, ["A": 1])
+        XCTAssertTrue(textView.attributedText.isEqual(to: requestedB))
+        XCTAssertEqual(harness.boundPlainText, "B")
+        XCTAssertEqual(harness.boundRichTextData, richTextB)
+        XCTAssertNil(harness.appliedState.generation)
+    }
+
+    func testAcceptedFirstRestoreAlreadyMatchingStillSupersedesQueuedSynchronization() {
+        let richTextA = Data("rich-A".utf8)
+        let richTextB = Data("rich-B".utf8)
+        let harness = MarkdownPreviewUIKitSyncHarness(
+            boundPlainText: "Before A",
+            boundRichTextData: nil
+        )
+        let textView = UITextView()
+        textView.attributedText = NSAttributedString(string: "A")
+        harness.synchronize(
+            label: "A",
+            nativePlainText: "A",
+            richTextDisposition: .replace(richTextA),
+            isUpdatingUIView: true
+        )
+        let queuedGeneration = harness.generationOwner.current
+        XCTAssertEqual(harness.scheduledOperations.count, 1)
+
+        let requestedB = NSAttributedString(
+            string: "B",
+            attributes: [.foregroundColor: UIColor.systemOrange]
+        )
+        textView.attributedText = requestedB
+        harness.boundPlainText = "B"
+        harness.boundRichTextData = richTextB
+        let restoreGeneration = MarkdownPreviewUIKitRestoreGenerationOwner().begin()
+        var supersessionCount = 0
+        var replacementStartCount = 0
+        var replacementFinishCount = 0
+        var handledCount = 0
+
+        MarkdownPreviewUIKitPostResignationReconciliation.reconcile(
+            textView: textView,
+            input: reconciliationInput(
+                textView: textView,
+                generation: queuedGeneration,
+                appliedState: harness.appliedState,
+                boundPlainText: "B",
+                boundRichTextData: richTextB,
+                boundAttributedText: requestedB,
+                restoreRequest: .init(
+                    token: .init(rawValue: 1),
+                    lastHandledToken: .init(rawValue: 0),
+                    generation: restoreGeneration,
+                    lastAppliedGeneration: nil,
+                    requestedAttributedText: requestedB
+                )
+            ),
+            dependencies: reconciliationDependencies(
+                willApplyReplacement: { replacementStartCount += 1 },
+                didApplyReplacement: { _ in replacementFinishCount += 1 },
+                supersedeAcceptedRestore: {
+                    supersessionCount += 1
+                    return MarkdownPreviewUIKitAcceptedRestoreSupersession.perform(
+                        generationOwner: harness.generationOwner,
+                        appliedContentState: &harness.appliedState
+                    )
+                },
+                markRestoreHandled: { _, _ in handledCount += 1 }
+            )
+        )
+
+        XCTAssertEqual(supersessionCount, 1)
+        XCTAssertEqual(
+            harness.generationOwner.current?.rawValue,
+            (queuedGeneration?.rawValue ?? 0) + 1
+        )
+        XCTAssertNil(harness.appliedState.generation)
+        XCTAssertEqual(replacementStartCount, 0)
+        XCTAssertEqual(replacementFinishCount, 0)
+        XCTAssertEqual(handledCount, 1)
+        XCTAssertTrue(textView.attributedText.isEqual(to: requestedB))
+
+        harness.runScheduled(at: 0)
+
+        XCTAssertTrue(harness.plainWrites.isEmpty)
+        XCTAssertTrue(harness.richTextWrites.isEmpty)
+        XCTAssertTrue(harness.publications.isEmpty)
+        XCTAssertEqual(harness.completionCounts, ["A": 1])
+        XCTAssertTrue(textView.attributedText.isEqual(to: requestedB))
+        XCTAssertEqual(harness.boundPlainText, "B")
+        XCTAssertEqual(harness.boundRichTextData, richTextB)
+    }
+
+    func testRejectedNonNilRestoresAreTerminalWithoutOrdinaryReplacement() {
+        let requested = NSAttributedString(string: "Restore")
+        let scenarios: [(
+            name: String,
+            token: MarkdownPreviewUIKitRestoreToken,
+            lastHandledToken: MarkdownPreviewUIKitRestoreToken,
+            generation: MarkdownPreviewUIKitRestoreGeneration,
+            lastAppliedGeneration: MarkdownPreviewUIKitRestoreGeneration?
+        )] = [
+            (
+                "already handled token",
+                .init(rawValue: 2),
+                .init(rawValue: 2),
+                .init(rawValue: 3),
+                .init(rawValue: 2)
+            ),
+            (
+                "invalid generation",
+                .init(rawValue: 3),
+                .init(rawValue: 2),
+                .init(rawValue: 0),
+                .init(rawValue: 2)
+            ),
+            (
+                "duplicate generation",
+                .init(rawValue: 3),
+                .init(rawValue: 2),
+                .init(rawValue: 2),
+                .init(rawValue: 2)
+            ),
+            (
+                "stale generation",
+                .init(rawValue: 3),
+                .init(rawValue: 2),
+                .init(rawValue: 1),
+                .init(rawValue: 2)
+            )
+        ]
+
+        for scenario in scenarios {
+            let textView = UITextView()
+            textView.attributedText = NSAttributedString(string: "Native")
+            let synchronizationOwner = MarkdownPreviewUIKitSyncGenerationOwner()
+            let synchronizationGeneration = synchronizationOwner.begin()
+            var appliedState = MarkdownPreviewUIKitAppliedContentState()
+            XCTAssertTrue(
+                appliedState.recordAppliedContentIfCurrent(
+                    generation: synchronizationGeneration,
+                    generationOwner: synchronizationOwner,
+                    plainText: "Native",
+                    richTextWrite: .none
+                ),
+                scenario.name
+            )
+            let originalAppliedState = appliedState
+            var supersessionCount = 0
+            var replacementStartCount = 0
+            var replacementFinishCount = 0
+            var handledCount = 0
+            var clearCount = 0
+
+            MarkdownPreviewUIKitPostResignationReconciliation.reconcile(
+                textView: textView,
+                input: reconciliationInput(
+                    textView: textView,
+                    generation: synchronizationGeneration,
+                    appliedState: appliedState,
+                    boundPlainText: "External",
+                    boundAttributedText: NSAttributedString(string: "External"),
+                    restoreRequest: .init(
+                        token: scenario.token,
+                        lastHandledToken: scenario.lastHandledToken,
+                        generation: scenario.generation,
+                        lastAppliedGeneration: scenario.lastAppliedGeneration,
+                        requestedAttributedText: requested
+                    )
+                ),
+                dependencies: reconciliationDependencies(
+                    willApplyReplacement: { replacementStartCount += 1 },
+                    didApplyReplacement: { _ in replacementFinishCount += 1 },
+                    supersedeAcceptedRestore: {
+                        supersessionCount += 1
+                        return MarkdownPreviewUIKitAcceptedRestoreSupersession.perform(
+                            generationOwner: synchronizationOwner,
+                            appliedContentState: &appliedState
+                        )
+                    },
+                    markRestoreHandled: { _, _ in handledCount += 1 },
+                    clearAppliedContent: { _, _, _ in clearCount += 1 }
+                )
+            )
+
+            XCTAssertEqual(textView.text, "Native", scenario.name)
+            XCTAssertEqual(synchronizationOwner.current, synchronizationGeneration, scenario.name)
+            XCTAssertEqual(appliedState, originalAppliedState, scenario.name)
+            XCTAssertEqual(supersessionCount, 0, scenario.name)
+            XCTAssertEqual(replacementStartCount, 0, scenario.name)
+            XCTAssertEqual(replacementFinishCount, 0, scenario.name)
+            XCTAssertEqual(handledCount, 0, scenario.name)
+            XCTAssertEqual(clearCount, 0, scenario.name)
+        }
     }
 
     func testReconciliationDerivesAuthoritativeBoundReplacementFromRawInputs() {
@@ -750,25 +1052,17 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         }
     }
 
-    func testStaleReconciliationPerformsNoReplacementRestoreMarkOrClear() {
+    func testStaleNonRestoreReconciliationPerformsNoReplacementMarkOrClear() {
         let textView = UITextView()
         textView.attributedText = NSAttributedString(string: "Native")
         var markCount = 0
         var clearCount = 0
-        let restoreGeneration = MarkdownPreviewUIKitRestoreGeneration(rawValue: 1)
         let input = reconciliationInput(
             textView: textView,
             generation: MarkdownPreviewUIKitSyncGeneration(rawValue: 1),
             isCurrent: false,
             boundPlainText: "External",
-            boundAttributedText: NSAttributedString(string: "External"),
-            restoreRequest: .init(
-                token: .init(rawValue: 1),
-                lastHandledToken: .init(rawValue: 0),
-                generation: restoreGeneration,
-                lastAppliedGeneration: nil,
-                requestedAttributedText: NSAttributedString(string: "Restore")
-            )
+            boundAttributedText: NSAttributedString(string: "External")
         )
 
         MarkdownPreviewUIKitPostResignationReconciliation.reconcile(
@@ -864,6 +1158,7 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
         isCurrent: Bool = true,
         appliedState: MarkdownPreviewUIKitAppliedContentState? = nil,
         boundPlainText: String,
+        boundRichTextData: Data? = nil,
         boundAttributedText: NSAttributedString,
         nativeMatchesLatestPublication: Bool = false,
         restoreRequest: MarkdownPreviewUIKitPostResignationReconciliation.RestoreRequest? = nil,
@@ -878,7 +1173,7 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
             nativePlainText: textView.text,
             nativeAttributedText: NSAttributedString(attributedString: textView.attributedText),
             boundPlainText: boundPlainText,
-            boundRichTextData: nil,
+            boundRichTextData: boundRichTextData,
             boundAttributedText: boundAttributedText,
             appliedContentState: appliedState ?? MarkdownPreviewUIKitAppliedContentState(),
             nativeMatchesLatestEditorPublication: nativeMatchesLatestPublication,
@@ -900,6 +1195,11 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
 
     private func reconciliationDependencies(
         willApplyReplacement: @escaping () -> Void = {},
+        didApplyReplacement: @escaping (NSRange) -> Void = { _ in },
+        supersedeAcceptedRestore: @escaping () -> MarkdownPreviewUIKitSyncGeneration = {
+            XCTFail("Accepted restore must supply the production supersession operation")
+            return MarkdownPreviewUIKitSyncGeneration(rawValue: 0)
+        },
         markRestoreHandled: @escaping (
             MarkdownPreviewUIKitRestoreToken,
             MarkdownPreviewUIKitRestoreGeneration
@@ -912,8 +1212,9 @@ final class MarkdownPreviewUIKitHarnessTests: XCTestCase {
     ) -> MarkdownPreviewUIKitPostResignationReconciliation.Dependencies {
         .init(
             willApplyReplacement: willApplyReplacement,
-            didApplyReplacement: { _ in },
+            didApplyReplacement: didApplyReplacement,
             markRestoreHandled: markRestoreHandled,
+            supersedeEditorSynchronizationForAcceptedRestore: supersedeAcceptedRestore,
             clearAppliedContentIfOwned: clearAppliedContent
         )
     }

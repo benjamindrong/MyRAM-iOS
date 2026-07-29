@@ -11,6 +11,15 @@ struct MarkdownPreviewUIKitRestoreGeneration: Equatable, Hashable {
     let rawValue: UInt64
 }
 
+/// Classifies a restore request without consulting synchronization ownership or native content.
+enum MarkdownPreviewUIKitRestoreAcceptance: Equatable {
+    case accepted
+    case rejectedAlreadyHandledToken
+    case rejectedInvalidGeneration
+    case rejectedDuplicateGeneration
+    case rejectedStaleGeneration
+}
+
 /// Issues restore generations independently from editor synchronization generations.
 @MainActor
 final class MarkdownPreviewUIKitRestoreGenerationOwner {
@@ -74,6 +83,9 @@ enum MarkdownPreviewUIKitPostResignationReconciliation {
             _ token: MarkdownPreviewUIKitRestoreToken,
             _ generation: MarkdownPreviewUIKitRestoreGeneration
         ) -> Void
+        /// Invalidates every editor synchronization observed before an accepted restore.
+        let supersedeEditorSynchronizationForAcceptedRestore:
+            () -> MarkdownPreviewUIKitSyncGeneration
         let clearAppliedContentIfOwned: (
             _ generation: MarkdownPreviewUIKitSyncGeneration,
             _ boundPlainText: String,
@@ -86,11 +98,9 @@ enum MarkdownPreviewUIKitPostResignationReconciliation {
         input: Input,
         dependencies: Dependencies
     ) {
-        guard input.isSynchronizationGenerationCurrent else { return }
-
-        if let restoreRequest = input.restoreRequest,
-           restoreRequest.token != restoreRequest.lastHandledToken,
-           restoreRequest.generation != restoreRequest.lastAppliedGeneration {
+        if let restoreRequest = input.restoreRequest {
+            guard classify(restoreRequest) == .accepted else { return }
+            _ = dependencies.supersedeEditorSynchronizationForAcceptedRestore()
             apply(
                 restoreRequest.requestedAttributedText,
                 to: textView,
@@ -103,6 +113,8 @@ enum MarkdownPreviewUIKitPostResignationReconciliation {
             )
             return
         }
+
+        guard input.isSynchronizationGenerationCurrent else { return }
 
         guard !input.focusState.hasMarkedText,
               !input.formattingState.hasPendingNativeFormattingMutation else {
@@ -140,6 +152,27 @@ enum MarkdownPreviewUIKitPostResignationReconciliation {
             input: input,
             dependencies: dependencies
         )
+    }
+
+    private static func classify(
+        _ request: RestoreRequest
+    ) -> MarkdownPreviewUIKitRestoreAcceptance {
+        guard request.generation.rawValue > 0 else {
+            return .rejectedInvalidGeneration
+        }
+        guard request.token != request.lastHandledToken else {
+            return .rejectedAlreadyHandledToken
+        }
+        guard let lastAppliedGeneration = request.lastAppliedGeneration else {
+            return .accepted
+        }
+        if request.generation.rawValue > lastAppliedGeneration.rawValue {
+            return .accepted
+        }
+        if request.generation.rawValue == lastAppliedGeneration.rawValue {
+            return .rejectedDuplicateGeneration
+        }
+        return .rejectedStaleGeneration
     }
 
     private static func clearAppliedContentIfSynchronized(

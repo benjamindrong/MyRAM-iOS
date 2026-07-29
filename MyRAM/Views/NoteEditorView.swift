@@ -3167,6 +3167,9 @@ private struct SelectableTextView: UIViewRepresentable {
                     )
                     context.coordinator.reportUndoManagerChanged(textView.undoManager)
                 },
+                supersedeEditorSynchronizationForAcceptedRestore: {
+                    context.coordinator.supersedeEditorSynchronizationForAcceptedRestore()
+                },
                 clearAppliedContentIfOwned: { generation, boundPlainText, boundRichTextData in
                     context.coordinator.clearAppliedContentIfOwned(
                         by: generation,
@@ -3975,6 +3978,14 @@ private struct SelectableTextView: UIViewRepresentable {
 
         var appliedContentState: MarkdownPreviewUIKitAppliedContentState {
             appliedContentAwaitingBinding
+        }
+
+        func supersedeEditorSynchronizationForAcceptedRestore()
+            -> MarkdownPreviewUIKitSyncGeneration {
+            MarkdownPreviewUIKitAcceptedRestoreSupersession.perform(
+                generationOwner: synchronizationGenerationOwner,
+                appliedContentState: &appliedContentAwaitingBinding
+            )
         }
 
         func clearAppliedContentIfOwned(
