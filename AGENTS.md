@@ -21,10 +21,9 @@ Always sign your PR comments: – Agent
 - If there is any uncertainty about whether a command will rewrite history or affect `main`, stop and ask first.
 
 ## Commit Messages
-DO NOT BE CONDESCENDING
 - Follow the existing ticket-prefix style in the repo.
-- Commit subjects must be specific to the implementation and should not simply duplicate the PR title.
-- Use an extended commit body whenever the change has meaningful context, user-facing behavior, risk, or verification.
+- Commit messages must be specific to the implementation and should not simply duplicate the PR title.
+- Use an extended commit body only when the change has meaningful context, user-facing behavior, risk, or verification.
 - Prefer small, coherent commits.
 - Follow-up bug fixes should be separate commits, not amendments, unless the user explicitly requests cleanup.
 
@@ -32,7 +31,11 @@ Preferred commit format:
 
 ```text
 TICKET-N Specific implementation summary
+```
 
+Only add the following when necessary:
+
+```
 ### Changes
 - Concrete change 1
 - Concrete change 2
@@ -45,10 +48,9 @@ Short explanation of the user problem or technical reason.
 ```
 
 ## Pull Requests
-DO NOT BE CONDESCENDING
 - PR descriptions belong in the PR body, not in comments.
 - Use PR comments only for discussion, review replies, temporary status updates, or follow-up notes.
-- PR titles should be the same as the branch name
+- PR titles should be exactly the same as the ticket name.
 - PR bodies should summarize the full ticket/change set across all relevant commits.
 
 Preferred PR body format:
@@ -71,7 +73,7 @@ DO NOT BE CONDESCENDING
 - Be conservative with Git history.
 - Preserve useful history over making it artificially tidy.
 - Never rewrite shared history without explicit approval.
-- When working across multiple repos or platforms for one ticket, keep ticket/PR naming aligned but make commit subjects specific to each platform's implementation.
+- When working across multiple repos or platforms for one ticket, keep ticket/PR naming aligned.
 - When writing code related to or commenting on any code called 'pinned thought', call it 'pinned text' instead.
 - Always be mindful of scope creep and tech debt
 - Always consider any existing reviews with your own, commenting appropriately.
