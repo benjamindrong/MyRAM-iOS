@@ -77,6 +77,11 @@ final class MarkdownPreviewUITests: XCTestCase {
 
         switchToPreviewMode(in: app)
 
+        let reminder = findElement("markdown-preview-reminder", in: app)
+        XCTAssertTrue(
+            reminder.waitForExistence(timeout: Timeout.standard),
+            "The shared iPhone Preview container must expose markdown-preview-reminder"
+        )
         let previewBody = findElement("markdown-preview-body", in: app)
         let fallbackBody = findElement("markdown-preview-fallback", in: app)
         XCTAssertTrue(

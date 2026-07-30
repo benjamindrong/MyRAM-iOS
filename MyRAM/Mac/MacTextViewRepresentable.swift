@@ -11,6 +11,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
     /// Must not trigger scheduleSave, flushPendingSave, onTextChanged, buffer replacement,
     /// revision replacement, or sync publication.
     var resignFocusToggleToken: Int = 0
+    let zoom: CGFloat
 
     func makeCoordinator() -> Coordinator {
         Coordinator(attributedText: $attributedText, syncBridge: syncBridge, onTextChanged: onTextChanged)
@@ -39,7 +40,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         textView.isRichText = true
         textView.importsGraphics = false
         textView.usesFindBar = true
-        textView.font = .systemFont(ofSize: 15)
+        textView.font = .systemFont(ofSize: 24)
         textView.textColor = .textColor
         textView.backgroundColor = .textBackgroundColor
         textView.insertionPointColor = .controlAccentColor
@@ -62,6 +63,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
 
         scrollView.documentView = textView
+        MacNoteViewZoom.apply(zoom, to: scrollView)
         context.coordinator.textView = textView
         context.coordinator.register(textView)
         return scrollView
@@ -79,6 +81,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.register(textView)
         textView.textStorage?.delegate = context.coordinator
+        MacNoteViewZoom.apply(zoom, to: scrollView)
         let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
         let currentText = textView.attributedString()
         if !currentText.isEqual(to: displayText) {
