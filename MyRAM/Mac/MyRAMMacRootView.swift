@@ -29,6 +29,13 @@ struct MyRAMMacRootView: View {
     @State private var markdownSceneID = UUID()
     @State private var fileOperationState = MacSceneLocalFileOperationState()
 
+    // MYR-195 Slice 2: scene-local mode state. Not persisted, not Codable, not added to Note.
+    // Each window/scene owns its mode independently.
+    @State private var markdownEditorMode: MarkdownEditorMode = .edit
+    // Resign-only seam forwarded to MacTextViewRepresentable. Incrementing causes the text
+    // view to relinquish first responder without save, flush, or onTextChanged.
+    @State private var macResignFocusToggleToken = 0
+
     var body: some View {
         Group {
             switch startupCoordinator.state {
@@ -109,10 +116,12 @@ struct MyRAMMacRootView: View {
             MacNoteEditorView(
                 note: selectedNote,
                 attributedText: $attributedText,
+                markdownEditorMode: macModeBinding,
                 syncBridge: editorSyncBridge,
                 loadError: loadError,
                 saveError: saveError,
-                onTextChanged: scheduleSave
+                onTextChanged: scheduleSave,
+                resignFocusToggleToken: macResignFocusToggleToken
             )
         }
         .navigationSplitViewStyle(.balanced)
@@ -163,6 +172,47 @@ struct MyRAMMacRootView: View {
         )
     }
 
+    // MARK: - MYR-195 Slice 2: mode management
+
+    /// Narrow selection-change helper. Applies the mode-reset rule:
+    ///   oldID != newID  →  reset to Edit
+    ///   oldID == newID  →  preserve mode
+    /// Do not call for same-note reloads, attributedText changes, editorRevision bumps,
+    /// save state changes, or sync state changes — those are not selection changes.
+    private func updateMarkdownModeForSelectionChange(from oldID: UUID?, to newID: UUID?) {
+        markdownEditorMode = MarkdownPreviewSelectionPolicy.modeAfterSelectionChange(
+            currentMode: markdownEditorMode,
+            oldID: oldID,
+            newID: newID
+        )
+    }
+
+    /// Routes Preview entry: increments the resign token before mode changes.
+    private func macMarkdownEnterPreview() {
+        macResignFocusToggleToken &+= 1
+        markdownEditorMode = .preview
+    }
+
+    /// Returns to Edit immediately.
+    private func macMarkdownEnterEdit() {
+        markdownEditorMode = .edit
+    }
+
+    /// Binding that routes Picker selection through the named transition helpers.
+    private var macModeBinding: Binding<MarkdownEditorMode> {
+        Binding(
+            get: { markdownEditorMode },
+            set: { requested in
+                guard requested != markdownEditorMode else { return }
+                if requested == .preview {
+                    macMarkdownEnterPreview()
+                } else {
+                    macMarkdownEnterEdit()
+                }
+            }
+        )
+    }
+
     private func handleWidthChange(_ width: CGFloat) {
         guard !isExpandingWindowForSidebar else { return }
 
@@ -198,7 +248,9 @@ struct MyRAMMacRootView: View {
     private func loadNotesSelectingFirstForStartup() throws {
         let loadedNotes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
         notes = loadedNotes
-        selectedNoteID = loadedNotes.first?.id
+        let newID = loadedNotes.first?.id
+        updateMarkdownModeForSelectionChange(from: selectedNoteID, to: newID)
+        selectedNoteID = newID
         attributedText = loadedNotes.first.map {
             MacNotePersistenceAdapter().attributedContent(for: $0)
         } ?? NSAttributedString(string: "")
@@ -212,11 +264,15 @@ struct MyRAMMacRootView: View {
             let loadedNotes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
             notes = loadedNotes
             if let selectedNoteID, loadedNotes.contains(where: { $0.id == selectedNoteID }) {
+                // Same note still exists: reload buffer but do NOT reset mode.
                 attributedText = selectedNote.map {
                     MacNotePersistenceAdapter().attributedContent(for: $0)
                 } ?? NSAttributedString(string: "")
             } else {
-                selectedNoteID = loadedNotes.first?.id
+                // Note disappeared: fall back to first note — this is a selection change.
+                let newID = loadedNotes.first?.id
+                updateMarkdownModeForSelectionChange(from: selectedNoteID, to: newID)
+                selectedNoteID = newID
                 attributedText = loadedNotes.first.map {
                     MacNotePersistenceAdapter().attributedContent(for: $0)
                 } ?? NSAttributedString(string: "")
@@ -234,7 +290,10 @@ struct MyRAMMacRootView: View {
             let loadedNotes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
             notes = loadedNotes
             guard let selectedNoteID, loadedNotes.contains(where: { $0.id == selectedNoteID }) else {
-                selectedNoteID = loadedNotes.first?.id
+                // Selected note disappeared: fallback is a real selection change.
+                let newID = loadedNotes.first?.id
+                updateMarkdownModeForSelectionChange(from: selectedNoteID, to: newID)
+                selectedNoteID = newID
                 attributedText = loadedNotes.first.map {
                     MacNotePersistenceAdapter().attributedContent(for: $0)
                 } ?? NSAttributedString(string: "")
@@ -257,7 +316,9 @@ struct MyRAMMacRootView: View {
             refreshNotesList: { refreshNotesList() },
             closeRemovedSelectedEditor: { noteID in
                 guard selectedNoteID == noteID else { return }
+                let oldID = selectedNoteID
                 selectedNoteID = nil
+                updateMarkdownModeForSelectionChange(from: oldID, to: nil)
                 attributedText = NSAttributedString(string: "")
                 hasUnsavedChanges = false
                 editorRevision = UUID()
@@ -333,7 +394,9 @@ struct MyRAMMacRootView: View {
 
         Task { @MainActor in
             guard await flushPendingSave() else { return }
+            let oldID = selectedNoteID
             selectedNoteID = note.id
+            updateMarkdownModeForSelectionChange(from: oldID, to: note.id)
             attributedText = MacNotePersistenceAdapter().attributedContent(for: note)
             hasUnsavedChanges = false
             editorRevision = UUID()
@@ -361,7 +424,9 @@ struct MyRAMMacRootView: View {
                 )
                 await syncController.record(capturedCreate, at: newNote.modifiedAt)
                 notes = try MacNotePersistenceAdapter().loadNotesCreatingFirstIfNeeded()
+                let oldID = selectedNoteID
                 selectedNoteID = newNote.id
+                updateMarkdownModeForSelectionChange(from: oldID, to: newNote.id)
                 attributedText = MacNotePersistenceAdapter().attributedContent(for: newNote)
                 hasUnsavedChanges = false
                 editorRevision = UUID()
@@ -514,7 +579,9 @@ struct MyRAMMacRootView: View {
     private func presentImportedMarkdown(_ importedNote: Note) throws {
         let adapter = MacNotePersistenceAdapter()
         notes = try adapter.loadNotesCreatingFirstIfNeeded()
+        let oldID = selectedNoteID
         selectedNoteID = importedNote.id
+        updateMarkdownModeForSelectionChange(from: oldID, to: importedNote.id)
         attributedText = adapter.attributedContent(for: importedNote)
         hasUnsavedChanges = false
         editorRevision = UUID()
