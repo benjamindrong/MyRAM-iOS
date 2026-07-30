@@ -172,11 +172,15 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
     // MARK: - MYR-196 retained native Preview
 
     func testRetainedPreviewDefersHiddenWorkAndBuildsOnlyLatestSourceOnActivation() throws {
+        let latestHiddenSource = (1...120)
+            .map { "Latest hidden paragraph \($0)" }
+            .joined(separator: "\n\n")
         let host = makeHostedEditor(text: "# Initial")
         let editor = try XCTUnwrap(host.state.syncBridge.textView)
         let preview = try XCTUnwrap(previewTextView(in: host.container))
         let previewScrollView = try XCTUnwrap(preview.enclosingScrollView)
         let previewStorage = try XCTUnwrap(preview.textStorage)
+        let scrollViewIdentity = ObjectIdentifier(previewScrollView)
         let previewIdentity = ObjectIdentifier(preview)
         let storageIdentity = ObjectIdentifier(previewStorage)
 
@@ -189,7 +193,7 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
 
         host.state.attributedText = NSAttributedString(string: "# Hidden first")
         drainMainRunLoop()
-        host.state.attributedText = NSAttributedString(string: "# Latest hidden")
+        host.state.attributedText = NSAttributedString(string: latestHiddenSource)
         drainMainRunLoop()
         XCTAssertEqual(host.state.recorder.parsedSources, [])
         XCTAssertTrue(preview.string.isEmpty)
@@ -197,8 +201,9 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         host.state.enterPreview()
         drainMainRunLoop()
 
-        XCTAssertEqual(host.state.recorder.parsedSources, ["# Latest hidden"])
-        XCTAssertEqual(preview.string, "Latest hidden")
+        XCTAssertEqual(host.state.recorder.parsedSources, [latestHiddenSource])
+        XCTAssertTrue(preview.string.hasPrefix("Latest hidden paragraph 1"))
+        XCTAssertTrue(preview.string.hasSuffix("Latest hidden paragraph 120"))
         let accessibilityIdentifiers = accessibilityIdentifiers(in: host.window)
         XCTAssertTrue(accessibilityIdentifiers.contains("markdown-preview-reminder"))
         XCTAssertTrue(accessibilityIdentifiers.contains("markdown-preview-body"))
@@ -206,19 +211,50 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(preview.textStorage)), storageIdentity)
         XCTAssertTrue(host.state.syncBridge.textView === editor)
 
+        previewScrollView.layoutSubtreeIfNeeded()
+        previewScrollView.documentView?.layoutSubtreeIfNeeded()
+        if let textContainer = preview.textContainer {
+            preview.layoutManager?.ensureLayout(for: textContainer)
+        }
+        let maximumY = max(
+            0,
+            (previewScrollView.documentView?.bounds.height ?? 0)
+                - previewScrollView.contentView.bounds.height
+        )
+        XCTAssertGreaterThan(maximumY, 1.0)
+        previewScrollView.contentView.scroll(
+            to: NSPoint(x: 0, y: min(300, maximumY))
+        )
+        previewScrollView.reflectScrolledClipView(previewScrollView.contentView)
+
         preview.setSelectedRange(NSRange(location: 1, length: 5))
         let selectedRange = preview.selectedRange()
         let visibleOrigin = previewScrollView.contentView.bounds.origin
+        XCTAssertGreaterThan(visibleOrigin.y, 1.0)
+        let renderedDocument = NSAttributedString(attributedString: preview.attributedString())
+        let parseCount = host.state.recorder.parsedSources.count
+        let storageRecorder = PreviewTextStorageEditRecorder()
+        previewStorage.delegate = storageRecorder
+
         host.state.enterEdit()
         drainMainRunLoop()
         host.state.enterPreview()
         drainMainRunLoop()
 
-        XCTAssertEqual(host.state.recorder.parsedSources.count, 1)
-        XCTAssertEqual(preview.selectedRange(), selectedRange)
-        XCTAssertEqual(previewScrollView.contentView.bounds.origin, visibleOrigin)
-        XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(previewTextView(in: host.container))), previewIdentity)
-        XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(preview.textStorage)), storageIdentity)
+        let reacquiredPreview = try XCTUnwrap(previewTextView(in: host.container))
+        let reacquiredScrollView = try XCTUnwrap(reacquiredPreview.enclosingScrollView)
+        let reacquiredStorage = try XCTUnwrap(reacquiredPreview.textStorage)
+        let reacquiredOrigin = reacquiredScrollView.contentView.bounds.origin
+
+        XCTAssertEqual(ObjectIdentifier(reacquiredScrollView), scrollViewIdentity)
+        XCTAssertEqual(ObjectIdentifier(reacquiredPreview), previewIdentity)
+        XCTAssertEqual(ObjectIdentifier(reacquiredStorage), storageIdentity)
+        XCTAssertTrue(reacquiredPreview.attributedString().isEqual(to: renderedDocument))
+        XCTAssertEqual(reacquiredPreview.selectedRange(), selectedRange)
+        XCTAssertEqual(host.state.recorder.parsedSources.count, parseCount)
+        XCTAssertEqual(storageRecorder.editTransactionCount, 0)
+        XCTAssertEqual(reacquiredOrigin.x, visibleOrigin.x, accuracy: 1.0)
+        XCTAssertEqual(reacquiredOrigin.y, visibleOrigin.y, accuracy: 1.0)
     }
 
     func testSharedZoomUpdatesBothRetainedSurfacesWithoutTextMutationOrBuild() throws {
@@ -229,9 +265,19 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         let previewScrollView = try XCTUnwrap(preview.enclosingScrollView)
         let originalBinding = host.state.attributedText
         let editorIdentity = ObjectIdentifier(editor)
+        let editorScrollViewIdentity = ObjectIdentifier(editorScrollView)
         let editorStorageIdentity = ObjectIdentifier(try XCTUnwrap(editor.textStorage))
         let editorUndoIdentity = ObjectIdentifier(try XCTUnwrap(editor.undoManager))
+        let previewIdentity = ObjectIdentifier(preview)
+        let previewScrollViewIdentity = ObjectIdentifier(previewScrollView)
+        let previewStorage = try XCTUnwrap(preview.textStorage)
+        let previewStorageIdentity = ObjectIdentifier(previewStorage)
+        let storageRecorder = PreviewTextStorageEditRecorder()
+        previewStorage.delegate = storageRecorder
         editor.setSelectedRange(NSRange(location: 2, length: 3))
+
+        XCTAssertEqual(editorScrollView.magnification, 1.0, accuracy: 0.0001)
+        XCTAssertEqual(previewScrollView.magnification, 1.0, accuracy: 0.0001)
 
         host.state.zoom = MacNoteViewZoom.zoomedIn(from: host.state.zoom)
         drainMainRunLoop()
@@ -239,22 +285,61 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
         XCTAssertEqual(editorScrollView.magnification, 1.1, accuracy: 0.0001)
         XCTAssertEqual(previewScrollView.magnification, 1.1, accuracy: 0.0001)
         XCTAssertEqual(host.state.recorder.parsedSources.count, 0)
-        XCTAssertTrue(host.state.attributedText.isEqual(to: originalBinding))
-        XCTAssertEqual(host.state.recorder.onTextChangedCount, 0)
-        XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(host.state.syncBridge.textView)), editorIdentity)
-        XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(editor.textStorage)), editorStorageIdentity)
-        XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(editor.undoManager)), editorUndoIdentity)
-        XCTAssertEqual(editor.selectedRange(), NSRange(location: 2, length: 3))
+        XCTAssertEqual(storageRecorder.editTransactionCount, 0)
+
+        host.state.zoom = MacNoteViewZoom.zoomedIn(from: host.state.zoom)
+        drainMainRunLoop()
+
+        XCTAssertEqual(editorScrollView.magnification, 1.2, accuracy: 0.0001)
+        XCTAssertEqual(previewScrollView.magnification, 1.2, accuracy: 0.0001)
+        XCTAssertEqual(host.state.recorder.parsedSources.count, 0)
+        XCTAssertEqual(storageRecorder.editTransactionCount, 0)
 
         host.state.enterPreview()
         drainMainRunLoop()
+
+        XCTAssertEqual(editorScrollView.magnification, 1.2, accuracy: 0.0001)
+        XCTAssertEqual(previewScrollView.magnification, 1.2, accuracy: 0.0001)
+        XCTAssertEqual(host.state.recorder.parsedSources.count, 1)
+        XCTAssertEqual(storageRecorder.editTransactionCount, 1)
+        XCTAssertEqual(preview.string, "Zoom source")
+
+        host.state.zoom = MacNoteViewZoom.zoomedOut(from: host.state.zoom)
+        drainMainRunLoop()
+
+        XCTAssertEqual(editorScrollView.magnification, 1.1, accuracy: 0.0001)
+        XCTAssertEqual(previewScrollView.magnification, 1.1, accuracy: 0.0001)
+        XCTAssertEqual(host.state.recorder.parsedSources.count, 1)
+        XCTAssertEqual(storageRecorder.editTransactionCount, 1)
+
         host.state.zoom = MacNoteViewZoom.actualSize
         drainMainRunLoop()
 
         XCTAssertEqual(editorScrollView.magnification, 1.0, accuracy: 0.0001)
         XCTAssertEqual(previewScrollView.magnification, 1.0, accuracy: 0.0001)
         XCTAssertEqual(host.state.recorder.parsedSources.count, 1)
-        XCTAssertEqual(preview.string, "Zoom source")
+        XCTAssertEqual(storageRecorder.editTransactionCount, 1)
+        XCTAssertTrue(host.state.attributedText.isEqual(to: originalBinding))
+        XCTAssertEqual(host.state.recorder.onTextChangedCount, 0)
+        XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(host.state.syncBridge.textView)), editorIdentity)
+        XCTAssertEqual(
+            ObjectIdentifier(try XCTUnwrap(editor.enclosingScrollView)),
+            editorScrollViewIdentity
+        )
+        XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(editor.textStorage)), editorStorageIdentity)
+        XCTAssertEqual(ObjectIdentifier(try XCTUnwrap(editor.undoManager)), editorUndoIdentity)
+        XCTAssertEqual(editor.selectedRange(), NSRange(location: 2, length: 3))
+
+        let reacquiredPreview = try XCTUnwrap(previewTextView(in: host.container))
+        XCTAssertEqual(ObjectIdentifier(reacquiredPreview), previewIdentity)
+        XCTAssertEqual(
+            ObjectIdentifier(try XCTUnwrap(reacquiredPreview.enclosingScrollView)),
+            previewScrollViewIdentity
+        )
+        XCTAssertEqual(
+            ObjectIdentifier(try XCTUnwrap(reacquiredPreview.textStorage)),
+            previewStorageIdentity
+        )
     }
 
     func testHiddenEditsCollapseIntoOneReplacementAndPreserveRetainedIdentities() throws {
