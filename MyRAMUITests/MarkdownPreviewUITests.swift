@@ -150,6 +150,10 @@ final class MarkdownPreviewUITests: XCTestCase {
         let editor = findElement("note-editor-body", in: app)
         XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
         editor.tap()
+        XCTAssertTrue(
+            app.keyboards.element.waitForExistence(timeout: Timeout.standard),
+            "The note editor must acquire keyboard focus before entering Markdown"
+        )
         editor.typeText("# Header Title\n1. First item\n2. Second item")
 
         switchToPreviewMode(in: app)
