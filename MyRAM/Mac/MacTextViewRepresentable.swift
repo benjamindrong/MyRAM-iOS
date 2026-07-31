@@ -53,7 +53,8 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         )
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
+        // Reflow zoom owns document width. AppKit width autoresizing would undo it.
+        textView.autoresizingMask = []
 
         textView.textContainer?.containerSize = NSSize(
             width: scrollView.contentSize.width,
@@ -155,6 +156,9 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             textView.typingAttributes = MacEditorTextColorPolicy.normalizedTypingAttributes(textView.typingAttributes)
             textView.setSelectedRange(selectedRange.macClamped(toLength: displayText.length))
             isApplyingSwiftUIUpdate = false
+            if let scrollView = textView.enclosingScrollView as? MacNoteReflowingScrollView {
+                scrollView.applyZoomAndReflow()
+            }
         }
     }
 }
