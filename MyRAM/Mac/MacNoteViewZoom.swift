@@ -37,64 +37,87 @@ enum MacNoteViewZoom {
         abs(normalized(value) - actualSize) <= equalityEpsilon
     }
 
-    /// Applies view-only font scaling through NSLayoutManager temporary attributes.
-    /// NSTextStorage remains unchanged, while TextKit re-lays out and wraps at the
-    /// existing viewport width.
+    /// Magnifies the document while reducing its TextKit layout width by the same
+    /// factor. The visible width remains equal to the viewport, so text reflows
+    /// instead of extending horizontally beyond the window.
     static func apply(_ value: CGFloat, to scrollView: NSScrollView) {
         let requestedZoom = normalized(value)
         if let reflowingScrollView = scrollView as? MacNoteReflowingScrollView {
             reflowingScrollView.noteZoom = requestedZoom
         }
-        applyDisplayZoom(requestedZoom, to: scrollView)
+        applyZoomAndReflow(requestedZoom, to: scrollView)
     }
 
-    fileprivate static func applyDisplayZoom(_ value: CGFloat, to scrollView: NSScrollView) {
+    fileprivate static func applyZoomAndReflow(
+        _ value: CGFloat,
+        to scrollView: NSScrollView
+    ) {
         guard let textView = scrollView.documentView as? NSTextView,
-              let textStorage = textView.textStorage,
-              let layoutManager = textView.layoutManager,
-              let textContainer = textView.textContainer else { return }
+              let textContainer = textView.textContainer,
+              let layoutManager = textView.layoutManager else {
+            return
+        }
+
+        let requestedZoom = normalized(value)
+        let viewportSize = scrollView.contentSize
+        guard viewportSize.width > 0, viewportSize.height > 0 else { return }
 
         scrollView.allowsMagnification = false
-        scrollView.minMagnification = actualSize
-        scrollView.maxMagnification = actualSize
-        scrollView.magnification = actualSize
+        scrollView.minMagnification = minimum
+        scrollView.maxMagnification = maximum
         scrollView.hasHorizontalScroller = false
 
+        let targetDocumentWidth = max(1, viewportSize.width / requestedZoom)
+        let targetContainerWidth = max(
+            1,
+            targetDocumentWidth - (textView.textContainerInset.width * 2)
+        )
+
+        // AppKit's ordinary width autoresizing would immediately expand the
+        // document view back to the clip-view width and defeat reflow zoom.
+        textView.autoresizingMask = []
         textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
+        textView.isVerticallyResizable = true
+        textView.minSize = NSSize(width: targetDocumentWidth, height: 0)
+        textView.maxSize = NSSize(
+            width: targetDocumentWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        )
         textContainer.widthTracksTextView = true
         textContainer.containerSize = NSSize(
-            width: max(1, scrollView.contentSize.width),
+            width: targetContainerWidth,
             height: CGFloat.greatestFiniteMagnitude
         )
 
-        let fullRange = NSRange(location: 0, length: textStorage.length)
-        guard fullRange.length > 0 else { return }
+        var frame = textView.frame
+        frame.size.width = targetDocumentWidth
+        textView.frame = frame
 
-        layoutManager.removeTemporaryAttribute(.font, forCharacterRange: fullRange)
+        layoutManager.ensureLayout(for: textContainer)
+        let usedHeight = layoutManager.usedRect(for: textContainer).height
+            + (textView.textContainerInset.height * 2)
+        let minimumDocumentHeight = viewportSize.height / requestedZoom
+        let targetDocumentHeight = max(minimumDocumentHeight, ceil(usedHeight))
 
-        textStorage.enumerateAttributes(in: fullRange) { attributes, range, _ in
-            let sourceFont = attributes[.font] as? NSFont
-                ?? textView.font
-                ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
-            let displayFont = NSFont(
-                descriptor: sourceFont.fontDescriptor,
-                size: max(1, sourceFont.pointSize * value)
-            ) ?? sourceFont
-            layoutManager.addTemporaryAttribute(
-                .font,
-                value: displayFont,
-                forCharacterRange: range
-            )
+        if abs(textView.frame.height - targetDocumentHeight) > equalityEpsilon {
+            frame = textView.frame
+            frame.size.height = targetDocumentHeight
+            textView.frame = frame
         }
 
-        layoutManager.invalidateLayout(forCharacterRange: fullRange, actualCharacterRange: nil)
-        layoutManager.invalidateDisplay(forCharacterRange: fullRange)
-        layoutManager.ensureLayout(for: textContainer)
+        guard abs(scrollView.magnification - requestedZoom) > equalityEpsilon else {
+            scrollView.reflectScrolledClipView(scrollView.contentView)
+            return
+        }
+
+        let visibleRect = scrollView.documentVisibleRect
+        let center = NSPoint(x: visibleRect.midX, y: visibleRect.midY)
+        scrollView.setMagnification(requestedZoom, centeredAt: center)
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 }
 
-/// Reapplies display zoom after window and split-view layout changes.
+/// Reapplies reflow whenever the window or split-view viewport changes size.
 final class MacNoteReflowingScrollView: NSScrollView {
     var noteZoom: CGFloat = MacNoteViewZoom.actualSize
     private var isApplyingZoom = false
@@ -103,7 +126,7 @@ final class MacNoteReflowingScrollView: NSScrollView {
         super.layout()
         guard !isApplyingZoom else { return }
         isApplyingZoom = true
-        MacNoteViewZoom.applyDisplayZoom(noteZoom, to: self)
+        MacNoteViewZoom.applyZoomAndReflow(noteZoom, to: self)
         isApplyingZoom = false
     }
 }
