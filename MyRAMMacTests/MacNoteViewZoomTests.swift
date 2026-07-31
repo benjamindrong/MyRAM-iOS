@@ -61,18 +61,37 @@ final class MacNoteViewZoomTests: XCTestCase {
         XCTAssertEqual(secondBinding.wrappedValue, 1.0, accuracy: 0.0001)
     }
 
-    func testAppKitApplicatorUsesNativeMagnificationAndLeavesDocumentUntouched() {
-        let scrollView = NSScrollView(frame: NSRect(x: 0, y: 0, width: 300, height: 200))
+    func testAppKitApplicatorReflowsTextInsideViewportWithoutChangingDocument() {
+        let scrollView = MacNoteReflowingScrollView(
+            frame: NSRect(x: 0, y: 0, width: 300, height: 200)
+        )
+        scrollView.hasHorizontalScroller = false
+
         let textView = NSTextView(frame: NSRect(x: 0, y: 0, width: 300, height: 800))
-        textView.string = "Document content"
+        textView.isVerticallyResizable = true
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+        textView.string = String(repeating: "Document content that must wrap inside the viewport. ", count: 20)
+        let originalString = textView.string
         scrollView.documentView = textView
 
-        MacNoteViewZoom.apply(1.3, to: scrollView)
+        MacNoteViewZoom.apply(2.0, to: scrollView)
+        scrollView.layoutSubtreeIfNeeded()
 
-        XCTAssertEqual(scrollView.magnification, 1.3, accuracy: 0.0001)
+        XCTAssertEqual(scrollView.magnification, 2.0, accuracy: 0.0001)
         XCTAssertEqual(scrollView.minMagnification, 0.5, accuracy: 0.0001)
         XCTAssertEqual(scrollView.maxMagnification, 3.0, accuracy: 0.0001)
         XCTAssertFalse(scrollView.allowsMagnification)
-        XCTAssertEqual(textView.string, "Document content")
+        XCTAssertFalse(scrollView.hasHorizontalScroller)
+        XCTAssertEqual(textView.string, originalString)
+        XCTAssertEqual(
+            textView.frame.width,
+            scrollView.documentVisibleRect.width,
+            accuracy: 1.0
+        )
+        XCTAssertLessThanOrEqual(
+            textView.frame.width * scrollView.magnification,
+            scrollView.contentSize.width + 1.0
+        )
     }
 }
