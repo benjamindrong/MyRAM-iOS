@@ -124,6 +124,10 @@ final class MacNoteReflowingScrollView: NSScrollView {
 
     override func layout() {
         super.layout()
+        applyZoomAndReflow()
+    }
+
+    func applyZoomAndReflow() {
         guard !isApplyingZoom else { return }
         isApplyingZoom = true
         MacNoteViewZoom.applyZoomAndReflow(noteZoom, to: self)
