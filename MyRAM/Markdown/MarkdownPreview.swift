@@ -407,7 +407,7 @@ private struct MarkdownBlockView: View {
 
 /// Persistent, non-scrolling reminder displayed above the preview body.
 /// Never intercepts selection or link interaction in the body.
-private struct MarkdownPreviewReminder: View {
+struct MarkdownPreviewReminder: View {
     var body: some View {
         Text(MarkdownPreviewCopy.reminder)
             .font(.footnote)

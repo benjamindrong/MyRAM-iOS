@@ -11,6 +11,16 @@ import AppKit
 
 @MainActor
 enum MacMarkdownPreviewFocusResignation {
+    /// Finalizes marked text and resigns synchronously before Preview becomes active.
+    /// Returning from this method is the transition's explicit AppKit acknowledgment.
+    static func finalizeAndResignIfOwned(window: NSWindow?, textView: NSTextView) {
+        guard window?.firstResponder === textView else { return }
+        if textView.hasMarkedText() {
+            textView.unmarkText()
+        }
+        window?.makeFirstResponder(nil)
+    }
+
     /// Resigns first-responder status from `textView` only if `window.firstResponder === textView`.
     /// Must not trigger scheduleSave, flushPendingSave, onTextChanged, buffer replacement,
     /// revision replacement, or sync publication.

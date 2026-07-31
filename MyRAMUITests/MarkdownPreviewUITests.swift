@@ -77,6 +77,11 @@ final class MarkdownPreviewUITests: XCTestCase {
 
         switchToPreviewMode(in: app)
 
+        let reminder = findElement("markdown-preview-reminder", in: app)
+        XCTAssertTrue(
+            reminder.waitForExistence(timeout: Timeout.standard),
+            "The shared iPhone Preview container must expose markdown-preview-reminder"
+        )
         let previewBody = findElement("markdown-preview-body", in: app)
         let fallbackBody = findElement("markdown-preview-fallback", in: app)
         XCTAssertTrue(
@@ -145,6 +150,10 @@ final class MarkdownPreviewUITests: XCTestCase {
         let editor = findElement("note-editor-body", in: app)
         XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
         editor.tap()
+        XCTAssertTrue(
+            app.keyboards.element.waitForExistence(timeout: Timeout.standard),
+            "The note editor must acquire keyboard focus before entering Markdown"
+        )
         editor.typeText("# Header Title\n1. First item\n2. Second item")
 
         switchToPreviewMode(in: app)
@@ -179,6 +188,10 @@ final class MarkdownPreviewUITests: XCTestCase {
         let editor = findElement("note-editor-body", in: app)
         XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
         editor.tap()
+        XCTAssertTrue(
+            app.keyboards.element.waitForExistence(timeout: Timeout.standard),
+            "The note editor must acquire keyboard focus before entering nested Markdown"
+        )
         editor.typeText("1. Ordered parent\n   - Nested bullet")
 
         switchToPreviewMode(in: app)

@@ -11,13 +11,14 @@ struct MacTextViewRepresentable: NSViewRepresentable {
     /// Must not trigger scheduleSave, flushPendingSave, onTextChanged, buffer replacement,
     /// revision replacement, or sync publication.
     var resignFocusToggleToken: Int = 0
+    let zoom: CGFloat
 
     func makeCoordinator() -> Coordinator {
         Coordinator(attributedText: $attributedText, syncBridge: syncBridge, onTextChanged: onTextChanged)
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = MacNoteReflowingScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = false
@@ -39,7 +40,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         textView.isRichText = true
         textView.importsGraphics = false
         textView.usesFindBar = true
-        textView.font = .systemFont(ofSize: 15)
+        textView.font = .systemFont(ofSize: 24)
         textView.textColor = .textColor
         textView.backgroundColor = .textBackgroundColor
         textView.insertionPointColor = .controlAccentColor
@@ -52,9 +53,9 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         )
         textView.isVerticallyResizable = true
         textView.isHorizontallyResizable = false
-        textView.autoresizingMask = [.width]
+        // Reflow zoom owns document width. AppKit width autoresizing would undo it.
+        textView.autoresizingMask = []
 
-        // Width tracking keeps AppKit wrapping behavior stable as the SwiftUI window resizes.
         textView.textContainer?.containerSize = NSSize(
             width: scrollView.contentSize.width,
             height: CGFloat.greatestFiniteMagnitude
@@ -62,6 +63,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         textView.textContainer?.widthTracksTextView = true
 
         scrollView.documentView = textView
+        MacNoteViewZoom.apply(zoom, to: scrollView)
         context.coordinator.textView = textView
         context.coordinator.register(textView)
         return scrollView
@@ -79,6 +81,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         context.coordinator.textView = textView
         context.coordinator.register(textView)
         textView.textStorage?.delegate = context.coordinator
+        MacNoteViewZoom.apply(zoom, to: scrollView)
         let displayText = MacEditorTextColorPolicy.normalizedForDisplay(attributedText)
         let currentText = textView.attributedString()
         if !currentText.isEqual(to: displayText) {
@@ -88,11 +91,9 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             textView.typingAttributes = MacEditorTextColorPolicy.normalizedTypingAttributes(textView.typingAttributes)
             textView.setSelectedRange(selectedRange.macClamped(toLength: displayText.length))
             context.coordinator.isApplyingSwiftUIUpdate = false
+            MacNoteViewZoom.apply(zoom, to: scrollView)
         }
 
-        // MYR-195 Slice 2: resign-only seam. MacMarkdownPreviewFocusResignation.resignIfOwned
-        // performs the identity check and must not trigger scheduleSave, flushPendingSave,
-        // onTextChanged, buffer replacement, or sync publication.
         if context.coordinator.resignFocusToggleToken != resignFocusToggleToken {
             context.coordinator.resignFocusToggleToken = resignFocusToggleToken
             MacMarkdownPreviewFocusResignation.resignIfOwned(window: textView.window, textView: textView)
@@ -106,7 +107,6 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         var onTextChanged: () -> Void
         weak var textView: NSTextView?
         var isApplyingSwiftUIUpdate = false
-        /// MYR-195 Slice 2: resign-only token tracking.
         var resignFocusToggleToken = 0
 
         init(
@@ -156,6 +156,9 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             textView.typingAttributes = MacEditorTextColorPolicy.normalizedTypingAttributes(textView.typingAttributes)
             textView.setSelectedRange(selectedRange.macClamped(toLength: displayText.length))
             isApplyingSwiftUIUpdate = false
+            if let scrollView = textView.enclosingScrollView as? MacNoteReflowingScrollView {
+                scrollView.applyZoomAndReflow()
+            }
         }
     }
 }

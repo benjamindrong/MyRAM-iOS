@@ -273,6 +273,11 @@
 		D1950100000000000000001B /* MarkdownPreviewUIKitEditorResignation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000013 /* MarkdownPreviewUIKitEditorResignation.swift */; };
 		D1950100000000000000001C /* MarkdownPreviewUIKitPostResignationReconciliation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000014 /* MarkdownPreviewUIKitPostResignationReconciliation.swift */; };
 		D1950100000000000000001D /* MarkdownPreviewUIKitPostResignationReconciliation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000014 /* MarkdownPreviewUIKitPostResignationReconciliation.swift */; };
+		E19601000000000000000001 /* MacNoteViewZoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000001 /* MacNoteViewZoom.swift */; };
+		E19601000000000000000002 /* MacMarkdownPreviewDocumentBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000002 /* MacMarkdownPreviewDocumentBuilder.swift */; };
+		E19601000000000000000003 /* MacMarkdownPreviewTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000003 /* MacMarkdownPreviewTextView.swift */; };
+		E19601000000000000000004 /* MacNoteViewZoomTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000004 /* MacNoteViewZoomTests.swift */; };
+		E19601000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift */; };
 		D1950100000000000000001E /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000015 /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift */; };
 		D1950100000000000000001F /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000015 /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift */; };
 		D19501000000000000000005 /* NoteEditorFileOperationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */; };
@@ -505,6 +510,11 @@
 		D19502000000000000000013 /* MarkdownPreviewUIKitEditorResignation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitEditorResignation.swift; sourceTree = "<group>"; };
 		D19502000000000000000014 /* MarkdownPreviewUIKitPostResignationReconciliation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitPostResignationReconciliation.swift; sourceTree = "<group>"; };
 		D19502000000000000000015 /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitAcceptedRestoreSupersession.swift; sourceTree = "<group>"; };
+		E19602000000000000000001 /* MacNoteViewZoom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteViewZoom.swift; sourceTree = "<group>"; };
+		E19602000000000000000002 /* MacMarkdownPreviewDocumentBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownPreviewDocumentBuilder.swift; sourceTree = "<group>"; };
+		E19602000000000000000003 /* MacMarkdownPreviewTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownPreviewTextView.swift; sourceTree = "<group>"; };
+		E19602000000000000000004 /* MacNoteViewZoomTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteViewZoomTests.swift; sourceTree = "<group>"; };
+		E19602000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownPreviewDocumentBuilderTests.swift; sourceTree = "<group>"; };
 		D1950200000000000000000E /* MarkdownPreviewUIKitHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitHarnessTests.swift; sourceTree = "<group>"; };
 		D1950200000000000000000F /* MarkdownPreviewUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUITests.swift; sourceTree = "<group>"; };
 		D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditorFileOperationBridge.swift; sourceTree = "<group>"; };
@@ -656,6 +666,9 @@
 				BCA106020000000000000007 /* MacEditorSyncBridge.swift */,
 				BCA106020000000000000008 /* MacNSRangeClamp.swift */,
 				D19502000000000000000011 /* MacMarkdownPreviewFocusResignation.swift */,
+				E19602000000000000000001 /* MacNoteViewZoom.swift */,
+				E19602000000000000000002 /* MacMarkdownPreviewDocumentBuilder.swift */,
+				E19602000000000000000003 /* MacMarkdownPreviewTextView.swift */,
 				BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */,
 				BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */,
 				BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */,
@@ -818,6 +831,8 @@
 				BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */,
 				D19502000000000000000008 /* MacMarkdownFileIOIntegrationTests.swift */,
 				D1950200000000000000000C /* MacMarkdownPreviewIntegrationTests.swift */,
+				E19602000000000000000004 /* MacNoteViewZoomTests.swift */,
+				E19602000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift */,
 				BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */,
 				BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */,
 				BCA122020000000000000006 /* MacSyncDeviceIdentityTests.swift */,
@@ -1346,6 +1361,9 @@
 				D1950100000000000000001D /* MarkdownPreviewUIKitPostResignationReconciliation.swift in Sources */,
 				D1950100000000000000001F /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift in Sources */,
 				D19501000000000000000017 /* MacMarkdownPreviewFocusResignation.swift in Sources */,
+				E19601000000000000000001 /* MacNoteViewZoom.swift in Sources */,
+				E19601000000000000000002 /* MacMarkdownPreviewDocumentBuilder.swift in Sources */,
+				E19601000000000000000003 /* MacMarkdownPreviewTextView.swift in Sources */,
 				D19501000000000000000008 /* MacMarkdownFileCommands.swift in Sources */,
 				D19501000000000000000009 /* MacMarkdownFileOperationCoordinator.swift in Sources */,
 				C16901000000000000000002 /* NoteSequenceStateRecord.swift in Sources */,
@@ -1445,6 +1463,8 @@
 				D1950100000000000000000A /* MacMarkdownFileIOIntegrationTests.swift in Sources */,
 				D1950100000000000000000E /* MarkdownPreviewParserTests.swift in Sources */,
 				D19501000000000000000010 /* MacMarkdownPreviewIntegrationTests.swift in Sources */,
+				E19601000000000000000004 /* MacNoteViewZoomTests.swift in Sources */,
+				E19601000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift in Sources */,
 				BCA164010000000000000004 /* MacEditorTextColorPolicyTests.swift in Sources */,
 				BCA10A010000000000000002 /* MacSidebarCollapsePolicyTests.swift in Sources */,
 				BCA122010000000000000006 /* MacSyncDeviceIdentityTests.swift in Sources */,

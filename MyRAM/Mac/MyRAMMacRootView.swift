@@ -32,6 +32,8 @@ struct MyRAMMacRootView: View {
     // MYR-195 Slice 2: scene-local mode state. Not persisted, not Codable, not added to Note.
     // Each window/scene owns its mode independently.
     @State private var markdownEditorMode: MarkdownEditorMode = .edit
+    /// Scene-local presentation state shared by Edit and Preview. It is never persisted.
+    @State private var noteViewZoom: CGFloat = MacNoteViewZoom.actualSize
     // Resign-only seam forwarded to MacTextViewRepresentable. Incrementing causes the text
     // view to relinquish first responder without save, flush, or onTextChanged.
     @State private var macResignFocusToggleToken = 0
@@ -70,6 +72,7 @@ struct MyRAMMacRootView: View {
             drainPendingMarkdownOpenURLsIfReady()
         }
         .focusedSceneValue(\.markdownCommandActions, markdownCommandActions)
+        .focusedSceneValue(\.macNoteViewZoom, $noteViewZoom)
         .alert(
             "Markdown File Error",
             isPresented: Binding(
@@ -121,7 +124,8 @@ struct MyRAMMacRootView: View {
                 loadError: loadError,
                 saveError: saveError,
                 onTextChanged: scheduleSave,
-                resignFocusToggleToken: macResignFocusToggleToken
+                resignFocusToggleToken: macResignFocusToggleToken,
+                noteViewZoom: noteViewZoom
             )
         }
         .navigationSplitViewStyle(.balanced)
@@ -187,28 +191,17 @@ struct MyRAMMacRootView: View {
         )
     }
 
-    /// Routes Preview entry: increments the resign token before mode changes.
-    private func macMarkdownEnterPreview() {
-        macResignFocusToggleToken &+= 1
-        markdownEditorMode = .preview
-    }
-
-    /// Returns to Edit immediately.
-    private func macMarkdownEnterEdit() {
-        markdownEditorMode = .edit
-    }
-
-    /// Binding that routes Picker selection through the named transition helpers.
+    /// Routes user mode changes through the same production seam used by hosted tests.
     private var macModeBinding: Binding<MarkdownEditorMode> {
-        Binding(
-            get: { markdownEditorMode },
-            set: { requested in
-                guard requested != markdownEditorMode else { return }
-                if requested == .preview {
-                    macMarkdownEnterPreview()
-                } else {
-                    macMarkdownEnterEdit()
-                }
+        MacMarkdownModeBindingFactory.make(
+            mode: $markdownEditorMode,
+            resignFocusToggleToken: $macResignFocusToggleToken,
+            prepareForPreview: {
+                guard let textView = editorSyncBridge.textView else { return }
+                MacMarkdownPreviewFocusResignation.finalizeAndResignIfOwned(
+                    window: textView.window,
+                    textView: textView
+                )
             }
         )
     }
@@ -1045,6 +1038,29 @@ private struct MacSyncStatusView: View {
             }
         }
         .padding(.vertical, 6)
+    }
+}
+
+/// Owns the exact Edit/Preview transition ordering shared by the root and integration tests.
+enum MacMarkdownModeBindingFactory {
+    static func make(
+        mode: Binding<MarkdownEditorMode>,
+        resignFocusToggleToken: Binding<Int>,
+        prepareForPreview: @escaping () -> Void
+    ) -> Binding<MarkdownEditorMode> {
+        Binding(
+            get: { mode.wrappedValue },
+            set: { requested in
+                guard requested != mode.wrappedValue else { return }
+
+                if requested == .preview {
+                    prepareForPreview()
+                    resignFocusToggleToken.wrappedValue &+= 1
+                }
+
+                mode.wrappedValue = requested
+            }
+        )
     }
 }
 

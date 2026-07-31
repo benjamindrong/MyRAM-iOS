@@ -14,6 +14,34 @@ struct MacNoteEditorView: View {
     let onTextChanged: () -> Void
     /// MYR-195 Slice 2: resign-only seam token forwarded to MacTextViewRepresentable.
     let resignFocusToggleToken: Int
+    let noteViewZoom: CGFloat
+    /// Constructor-threaded test seam; production callers use the parser-backed default.
+    let markdownPreviewBuilder: MacMarkdownPreviewDocumentBuilder
+
+    init(
+        note: Note?,
+        attributedText: Binding<NSAttributedString>,
+        markdownEditorMode: Binding<MarkdownEditorMode>,
+        syncBridge: MacEditorSyncBridge,
+        loadError: String?,
+        saveError: String?,
+        onTextChanged: @escaping () -> Void,
+        resignFocusToggleToken: Int,
+        noteViewZoom: CGFloat,
+        markdownPreviewBuilder: MacMarkdownPreviewDocumentBuilder =
+            MacMarkdownPreviewDocumentBuilder()
+    ) {
+        self.note = note
+        _attributedText = attributedText
+        _markdownEditorMode = markdownEditorMode
+        self.syncBridge = syncBridge
+        self.loadError = loadError
+        self.saveError = saveError
+        self.onTextChanged = onTextChanged
+        self.resignFocusToggleToken = resignFocusToggleToken
+        self.noteViewZoom = noteViewZoom
+        self.markdownPreviewBuilder = markdownPreviewBuilder
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -36,7 +64,8 @@ struct MacNoteEditorView: View {
                     attributedText: $attributedText,
                     syncBridge: syncBridge,
                     onTextChanged: onTextChanged,
-                    resignFocusToggleToken: resignFocusToggleToken
+                    resignFocusToggleToken: resignFocusToggleToken,
+                    zoom: noteViewZoom
                 )
                 .frame(minWidth: 160, minHeight: 200)
                 .clipShape(RoundedRectangle(cornerRadius: 8))
@@ -48,15 +77,21 @@ struct MacNoteEditorView: View {
                 .allowsHitTesting(markdownEditorMode == .edit)
                 .accessibilityHidden(markdownEditorMode != .edit)
 
-                if markdownEditorMode == .preview {
-                    MarkdownPreviewView(source: attributedText.string)
-                        .frame(minWidth: 160, minHeight: 200)
-                        .clipShape(RoundedRectangle(cornerRadius: 8))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(.separator, lineWidth: 1)
-                        }
+                MacMarkdownPreviewTextView(
+                    source: attributedText.string,
+                    zoom: noteViewZoom,
+                    isActive: markdownEditorMode == .preview,
+                    builder: markdownPreviewBuilder
+                )
+                .frame(minWidth: 160, minHeight: 200)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 8)
+                        .stroke(.separator, lineWidth: 1)
                 }
+                .opacity(markdownEditorMode == .preview ? 1 : 0)
+                .allowsHitTesting(markdownEditorMode == .preview)
+                .accessibilityHidden(markdownEditorMode != .preview)
             }
             .frame(minWidth: 160, minHeight: 200)
 
