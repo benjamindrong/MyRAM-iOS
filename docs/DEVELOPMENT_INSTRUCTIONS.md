@@ -6,11 +6,13 @@ Build MyRAM as a user-controlled external-memory notes app. The product should s
 
 ## Desktop Build Direction
 
-The first mac desktop build uses the existing iOS app target with Mac Catalyst enabled. This keeps the current UIKit-backed editor, sharing flow, SwiftData models, and SwiftUI screens on one implementation path while desktop-specific behavior is still being defined.
+Desktop Mac support targets the native macOS `MyRAMMac` target. New desktop editor work should stay on the native macOS/AppKit path and keep platform-specific behavior behind explicit platform boundaries.
 
-Do not exclude Intel architecture support from the desktop build unless a ticket explicitly narrows support. A 2019 Intel Mac should remain supported when it runs the required macOS version for the APIs used by the app.
+The main `MyRAM` app target continues to support iPhone and iPadOS. Do not remove iPad support or change iPhone/iPad behavior when working on desktop-only tickets.
 
-If the desktop app later needs AppKit-native behavior that Catalyst cannot provide cleanly, add a dedicated macOS target behind a separate ticket and keep platform-specific code isolated.
+Mac Catalyst is not the desktop strategy and is not part of standard PR verification. Existing Catalyst-specific source branches may remain as legacy/transitional compatibility, but they should not be treated as an active product path unless a ticket explicitly asks for Catalyst-specific work.
+
+Standard platform verification should use the main `MyRAM` scheme for iPhone/iPad simulator coverage and the `MyRAMMac` scheme, including `MyRAMMacTests`, for native macOS coverage.
 
 ## Non-Negotiable Product Rule
 

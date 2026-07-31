@@ -1,5 +1,7 @@
 # MYR-93 Catalyst Selection Profiling
 
+Note: This document is historical. The current desktop strategy was superseded by the native macOS direction established in MYR-104+ and formalized by MYR-110. Mac Catalyst is no longer the active desktop support path.
+
 ## Goal
 
 Use Instruments to identify the actual Mac Catalyst large-selection and auto-scroll hot path before making more optimization changes.
