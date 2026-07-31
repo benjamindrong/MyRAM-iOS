@@ -18,7 +18,7 @@ struct MacTextViewRepresentable: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = MacNoteReflowingScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = false
@@ -55,7 +55,6 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         textView.isHorizontallyResizable = false
         textView.autoresizingMask = [.width]
 
-        // Width tracking keeps AppKit wrapping behavior stable as the SwiftUI window resizes.
         textView.textContainer?.containerSize = NSSize(
             width: scrollView.contentSize.width,
             height: CGFloat.greatestFiniteMagnitude
@@ -91,11 +90,9 @@ struct MacTextViewRepresentable: NSViewRepresentable {
             textView.typingAttributes = MacEditorTextColorPolicy.normalizedTypingAttributes(textView.typingAttributes)
             textView.setSelectedRange(selectedRange.macClamped(toLength: displayText.length))
             context.coordinator.isApplyingSwiftUIUpdate = false
+            MacNoteViewZoom.apply(zoom, to: scrollView)
         }
 
-        // MYR-195 Slice 2: resign-only seam. MacMarkdownPreviewFocusResignation.resignIfOwned
-        // performs the identity check and must not trigger scheduleSave, flushPendingSave,
-        // onTextChanged, buffer replacement, or sync publication.
         if context.coordinator.resignFocusToggleToken != resignFocusToggleToken {
             context.coordinator.resignFocusToggleToken = resignFocusToggleToken
             MacMarkdownPreviewFocusResignation.resignIfOwned(window: textView.window, textView: textView)
@@ -109,7 +106,6 @@ struct MacTextViewRepresentable: NSViewRepresentable {
         var onTextChanged: () -> Void
         weak var textView: NSTextView?
         var isApplyingSwiftUIUpdate = false
-        /// MYR-195 Slice 2: resign-only token tracking.
         var resignFocusToggleToken = 0
 
         init(
