@@ -2,14 +2,14 @@
 import AppKit
 import SwiftUI
 
-/// Scene-local document magnification shared by the native editor and Preview.
+/// Scene-local reading zoom shared by the native editor and Preview.
 enum MacNoteViewZoom {
     static let actualSize: CGFloat = 1.0
     static let minimum: CGFloat = 0.5
     static let maximum: CGFloat = 3.0
     static let step: CGFloat = 0.1
 
-    private static let equalityEpsilon: CGFloat = 0.0001
+    fileprivate static let equalityEpsilon: CGFloat = 0.0001
 
     static func zoomedIn(from value: CGFloat) -> CGFloat {
         normalized(value + step)
@@ -37,20 +37,78 @@ enum MacNoteViewZoom {
         abs(normalized(value) - actualSize) <= equalityEpsilon
     }
 
-    /// Uses AppKit document magnification without changing text or attributed content.
+    /// Magnifies glyphs while narrowing the TextKit layout width by the same factor.
+    /// The resulting text remains inside the viewport and rewraps as zoom increases.
     static func apply(_ value: CGFloat, to scrollView: NSScrollView) {
+        if let reflowingScrollView = scrollView as? MacNoteReflowingScrollView {
+            reflowingScrollView.noteZoom = normalized(value)
+            reflowingScrollView.applyZoomAndReflow()
+            return
+        }
+
+        applyZoomAndReflow(normalized(value), to: scrollView)
+    }
+
+    fileprivate static func applyZoomAndReflow(_ value: CGFloat, to scrollView: NSScrollView) {
         let requestedMagnification = normalized(value)
         scrollView.allowsMagnification = false
         scrollView.minMagnification = minimum
         scrollView.maxMagnification = maximum
+        scrollView.hasHorizontalScroller = false
 
-        guard abs(scrollView.magnification - requestedMagnification) > equalityEpsilon else {
-            return
+        if abs(scrollView.magnification - requestedMagnification) > equalityEpsilon {
+            let visibleRect = scrollView.documentVisibleRect
+            let center = NSPoint(x: visibleRect.midX, y: visibleRect.midY)
+            scrollView.setMagnification(requestedMagnification, centeredAt: center)
         }
 
-        let visibleRect = scrollView.documentVisibleRect
-        let center = NSPoint(x: visibleRect.midX, y: visibleRect.midY)
-        scrollView.setMagnification(requestedMagnification, centeredAt: center)
+        guard let textView = scrollView.documentView as? NSTextView else { return }
+
+        let layoutWidth = max(1, scrollView.documentVisibleRect.width)
+        if abs(textView.frame.width - layoutWidth) > equalityEpsilon {
+            var frame = textView.frame
+            frame.size.width = layoutWidth
+            textView.frame = frame
+        }
+
+        textView.isHorizontallyResizable = false
+        textView.textContainer?.widthTracksTextView = true
+        textView.textContainer?.containerSize = NSSize(
+            width: layoutWidth,
+            height: CGFloat.greatestFiniteMagnitude
+        )
+
+        guard let textContainer = textView.textContainer,
+              let layoutManager = textView.layoutManager else { return }
+
+        layoutManager.ensureLayout(for: textContainer)
+        let usedHeight = layoutManager.usedRect(for: textContainer).height
+            + (textView.textContainerInset.height * 2)
+        let minimumHeight = scrollView.documentVisibleRect.height
+        let requiredHeight = max(minimumHeight, ceil(usedHeight))
+        if abs(textView.frame.height - requiredHeight) > equalityEpsilon {
+            var frame = textView.frame
+            frame.size.height = requiredHeight
+            textView.frame = frame
+        }
+    }
+}
+
+/// Reapplies reflow whenever the window or split-view viewport changes size.
+final class MacNoteReflowingScrollView: NSScrollView {
+    var noteZoom: CGFloat = MacNoteViewZoom.actualSize
+    private var isApplyingZoom = false
+
+    override func layout() {
+        super.layout()
+        applyZoomAndReflow()
+    }
+
+    func applyZoomAndReflow() {
+        guard !isApplyingZoom else { return }
+        isApplyingZoom = true
+        MacNoteViewZoom.applyZoomAndReflow(noteZoom, to: self)
+        isApplyingZoom = false
     }
 }
 
