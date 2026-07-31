@@ -2,7 +2,7 @@
 import AppKit
 import SwiftUI
 
-/// Retained Mac Preview container whose reminder remains outside document magnification.
+/// Retained Mac Preview container whose reminder remains outside document zoom.
 struct MacMarkdownPreviewTextView: View {
     let source: String
     let zoom: CGFloat
@@ -37,7 +37,6 @@ struct MacMarkdownPreviewTextView: View {
     }
 }
 
-/// Gives the shared reminder a concrete AppKit accessibility container on Mac.
 private struct MacMarkdownPreviewReminderContainer: NSViewRepresentable {
     func makeNSView(context: Context) -> NSHostingView<MarkdownPreviewReminder> {
         let hostingView = NSHostingView(rootView: MarkdownPreviewReminder())
@@ -64,7 +63,7 @@ struct MacMarkdownPreviewNSViewRepresentable: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> NSScrollView {
-        let scrollView = NSScrollView()
+        let scrollView = MacNoteReflowingScrollView()
         scrollView.hasVerticalScroller = true
         scrollView.hasHorizontalScroller = false
         scrollView.autohidesScrollers = true
@@ -124,6 +123,7 @@ struct MacMarkdownPreviewNSViewRepresentable: NSViewRepresentable {
         let visibleOrigin = scrollView.contentView.bounds.origin
         textView.textStorage?.setAttributedString(candidate)
         textView.setSelectedRange(selectedRange.macClamped(toLength: candidate.length))
+        MacNoteViewZoom.apply(zoom, to: scrollView)
         restoreVisibleOrigin(visibleOrigin, in: scrollView)
         context.coordinator.lastRenderedSource = source
         context.coordinator.lastRenderedDocument = candidate
