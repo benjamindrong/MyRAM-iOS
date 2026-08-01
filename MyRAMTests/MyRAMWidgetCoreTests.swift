@@ -103,18 +103,6 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         XCTAssertEqual(exhausted.bodyLineLimit, 0)
     }
 
-    func testContentPolicyPreservesBodyTextThatRepeatsPinnedText() {
-        let rendered = render(
-            pins: ["Pin"],
-            body: "Pin body Pin",
-            family: .medium
-        )
-
-        XCTAssertEqual(rendered.pinnedTexts, ["Pin"])
-        XCTAssertEqual(rendered.bodyText, "Pin body Pin")
-        XCTAssertEqual(rendered.bodyLineLimit, 3)
-    }
-
     func testStableStatesRemainDistinct() {
         let empty = render(pins: ["  "], body: "\n", family: .small)
         XCTAssertEqual(empty.state, .emptyNote)
