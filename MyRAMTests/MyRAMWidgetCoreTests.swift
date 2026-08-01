@@ -103,17 +103,16 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         XCTAssertEqual(exhausted.bodyLineLimit, 0)
     }
 
-    func testDuplicateExclusionRemovesOnlyFirstExactOccurrencePerPin() {
-        let policy = MyRAMWidgetContentSelectionPolicy()
-        let body = "Pin body Pin pin"
-        XCTAssertEqual(
-            policy.bodyExcludingFirstExactOccurrenceOfEachPin(body, pinnedTexts: ["Pin"]),
-            "body Pin pin"
+    func testContentPolicyPreservesBodyTextThatRepeatsPinnedText() {
+        let rendered = render(
+            pins: ["Pin"],
+            body: "Pin body Pin",
+            family: .medium
         )
-        XCTAssertEqual(
-            policy.bodyExcludingFirstExactOccurrenceOfEachPin(body, pinnedTexts: ["PIN"]),
-            body
-        )
+
+        XCTAssertEqual(rendered.pinnedTexts, ["Pin"])
+        XCTAssertEqual(rendered.bodyText, "Pin body Pin")
+        XCTAssertEqual(rendered.bodyLineLimit, 3)
     }
 
     func testStableStatesRemainDistinct() {

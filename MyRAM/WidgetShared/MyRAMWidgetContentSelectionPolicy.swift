@@ -67,10 +67,7 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
             return trimmed.isEmpty ? nil : trimmed
         }
-        let body = bodyExcludingFirstExactOccurrenceOfEachPin(
-            note.bodyPreviewSource,
-            pinnedTexts: pins
-        )
+        let body = note.bodyPreviewSource
         let budget = family.contentLineBudget
         let fittingPins = Array(pins.prefix(budget))
         let allPinsFit = fittingPins.count == pins.count
@@ -96,21 +93,6 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
             state: .content,
             noteURL: MyRAMWidgetDeepLink.url(noteID: note.id, platform: platform)
         )
-    }
-
-    func bodyExcludingFirstExactOccurrenceOfEachPin(
-        _ body: String,
-        pinnedTexts: [String]
-    ) -> String {
-        var result = body
-        for pinnedText in pinnedTexts {
-            guard !pinnedText.isEmpty,
-                  let range = result.range(of: pinnedText, options: [.literal]) else {
-                continue
-            }
-            result.removeSubrange(range)
-        }
-        return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func stableState(
