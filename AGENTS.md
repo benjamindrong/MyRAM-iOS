@@ -93,4 +93,6 @@ When finished, report only:
 
 Do not repeat the full audit checklist unless asked. Keep the final report concise.
 
+Do not invent edge-case behavior, validation, filtering, deduplication, or tests unless the ticket explicitly requires it or it is necessary for correctness or safety.
+
 Don't write code that handles an edge case by checking for it and rejecting it after the fact — write the code so the edge case cannot occur in the first place.
