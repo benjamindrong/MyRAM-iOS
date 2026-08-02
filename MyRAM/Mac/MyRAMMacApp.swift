@@ -5,6 +5,7 @@ import SwiftUI
 struct MyRAMMacApp: App {
     @StateObject private var markdownExternalImportCoordinator =
         MacMarkdownExternalImportCoordinator()
+    @StateObject private var externalOpenDispatcher = MyRAMExternalOpenDispatcher()
     @StateObject private var widgetCoordinator: MyRAMWidgetHostCoordinator
 
     init() {
@@ -19,6 +20,7 @@ struct MyRAMMacApp: App {
         WindowGroup {
             MyRAMMacRootView()
                 .environmentObject(markdownExternalImportCoordinator)
+                .environmentObject(externalOpenDispatcher)
                 .environmentObject(widgetCoordinator)
                 .onAppear {
                     widgetCoordinator.start()
