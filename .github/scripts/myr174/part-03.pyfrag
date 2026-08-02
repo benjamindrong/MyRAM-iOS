@@ -1,0 +1,75 @@
+# Migrate existing production-transport test call sites to the batch API.
+call_pattern = (
+    r"MultipeerSyncMessageCoding\.encodeBatchEnvelope\(\s*"
+    r"SyncBatchEnvelope\(batch:\s*([A-Za-z_][A-Za-z0-9_\.]*)\)\s*\)"
+)
+for test_path in [
+    "MyRAMTests/MyRAMSyncControllerTests.swift",
+    "MyRAMTests/SyncBatchPayloadCompatibilityTests.swift",
+    "MyRAMTests/SyncBatchAnchoredPayloadTests.swift",
+    "MyRAMMacTests/MacSyncBatchControllerTests.swift",
+]:
+    replace_regex(
+        test_path,
+        call_pattern,
+        r"MultipeerSyncMessageCoding.encodeBatch(\1)",
+    )
+
+compat_path = "MyRAMTests/SyncBatchPayloadCompatibilityTests.swift"
+compat = read(compat_path)
+old_future = '''    func testFutureBatchSchemaIsIgnoredByCurrentDecoder() throws {
+        let futureEnvelope = SyncBatchEnvelope(
+            schemaVersion: SyncBatchEnvelope.currentSchemaVersion + 1,
+            batch: makeBatch()
+        )
+        let data = try MultipeerSyncMessageCoding.encodeBatchEnvelope(futureEnvelope)
+
+        let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+        let envelope = try JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload)
+
+        XCTAssertFalse(envelope.canDecodeWithCurrentSchema)
+    }
+'''
+new_future = '''    func testFutureBatchSchemaIsRejectedBeforeNestedBatchDecode() throws {
+        let data = Data(#"{"schemaVersion":3,"batch":"malformed"}"#.utf8)
+
+        XCTAssertThrowsError(try SyncBatchEnvelopeCodec.decode(data)) {
+            XCTAssertEqual(
+                $0 as? SyncBatchEnvelopeError,
+                .unsupportedSchemaVersion(3)
+            )
+        }
+    }
+'''
+if old_future not in compat:
+    raise RuntimeError("Compatibility future-version test baseline changed")
+compat = compat.replace(old_future, new_future)
+compat = compat.replace(
+    "let envelope = try JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload)\n        XCTAssertTrue(envelope.canDecodeWithCurrentSchema)",
+    "let envelope = try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload)\n        XCTAssertEqual(envelope.schemaVersion, .v1)",
+)
+compat = compat.replace("XCTAssertEqual(envelope.schemaVersion, 1)", "XCTAssertEqual(envelope.schemaVersion, .v1)")
+compat = compat.replace("XCTAssertEqual(decoded.schemaVersion, 1)", "XCTAssertEqual(decoded.schemaVersion, .v1)")
+compat = compat.replace(
+    "XCTAssertEqual(SyncBatchEnvelope.currentSchemaVersion, 1)",
+    "XCTAssertEqual(SyncBatchEnvelopeSchemaVersion.allCases, [.v1, .v2])",
+)
+compat = compat.replace(
+    "try JSONDecoder().decode(\n                    SyncBatchEnvelope.self,\n                    from: legacy.innerEnvelopeData\n                )",
+    "try SyncBatchEnvelopeCodec.decode(legacy.innerEnvelopeData)",
+)
+write(compat_path, compat)
+
+# Exact focused test suites. The same frozen bytes are embedded in both targets.
+fixture = r'''{"batch":{"batchSequence":7,"changes":[{"noteBodyTextInsertedAnchored":{"_0":{"baseContentHash":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","modifiedAt":-978306199,"noteID":"17400000-0000-0000-0000-000000000003","payload":{"anchor":{"kind":"empty"},"formatVersion":1,"operationID":{"deviceID":"17400000-0000-0000-0000-000000000002","localCounter":9}},"text":"A","utf16Offset":0}}},{"noteTitleChanged":{"_0":{"modifiedAt":-978306198,"noteID":"17400000-0000-0000-0000-000000000003","title":"Title"}}}],"createdAt":-978306200,"id":"17400000-0000-0000-0000-000000000001","originDeviceID":"17400000-0000-0000-0000-000000000002"},"schemaVersion":2}'''
+
+def test_source(module: str) -> str:
+    return f'''import AnchoredSequenceCore
+import Foundation
+import XCTest
+@testable import {module}
+
+final class SyncBatchEnvelopeV2Tests: XCTestCase {{
+    private let noteID = UUID(uuidString: "17400000-0000-0000-0000-000000000003")!
+    private let deviceID = UUID(uuidString: "17400000-0000-0000-0000-000000000002")!
+
