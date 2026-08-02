@@ -57,6 +57,32 @@ final class MyRAMWidgetHostTests: XCTestCase {
         XCTAssertEqual(second.kind, .file(fileURL))
     }
 
+    func testDelayedMacRequestCannotBeClaimedByAnotherScene() throws {
+        let sceneA = MyRAMExternalOpenDispatcher()
+        let sceneB = MyRAMExternalOpenDispatcher()
+        let noteID = UUID()
+        let widgetURL = try XCTUnwrap(
+            MyRAMWidgetDeepLink.url(noteID: noteID, platform: .macOS)
+        )
+
+        XCTAssertNotNil(sceneA.enqueue(url: widgetURL, platform: .macOS))
+        XCTAssertNil(sceneA.claimNextIfReady(
+            startupIsReady: false,
+            externalOperationIsAvailable: true
+        ))
+
+        XCTAssertNil(sceneB.claimNextIfReady(
+            startupIsReady: true,
+            externalOperationIsAvailable: true
+        ))
+
+        let claimedByOriginatingScene = try XCTUnwrap(sceneA.claimNextIfReady(
+            startupIsReady: true,
+            externalOperationIsAvailable: true
+        ))
+        XCTAssertEqual(claimedByOriginatingScene.kind, .widgetNote(noteID))
+    }
+
     func testDispatcherRejectsMalformedWidgetURLWithoutQueueing() {
         let dispatcher = MyRAMExternalOpenDispatcher()
         let malformed = URL(string: "myram://note/not-a-uuid")!
