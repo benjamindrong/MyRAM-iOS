@@ -24,10 +24,13 @@ struct MyRAMMacRootView: View {
     @State private var isApplyingAutomaticVisibilityChange = false
     @State private var isExpandingWindowForSidebar = false
     @EnvironmentObject private var externalImportCoordinator: MacMarkdownExternalImportCoordinator
+    @EnvironmentObject private var externalOpenDispatcher: MyRAMExternalOpenDispatcher
+    @EnvironmentObject private var widgetCoordinator: MyRAMWidgetHostCoordinator
     /// Stable in-memory identity for this scene. Used only to associate an
     /// external Open With URL with the scene that received it. Not persisted.
     @State private var markdownSceneID = UUID()
     @State private var fileOperationState = MacSceneLocalFileOperationState()
+    @State private var activeExternalFileRequestID: UUID?
 
     // MYR-195 Slice 2: scene-local mode state. Not persisted, not Codable, not added to Note.
     // Each window/scene owns its mode independently.
@@ -62,14 +65,14 @@ struct MyRAMMacRootView: View {
             Task { await flushPendingSave() }
         }
         .onOpenURL { url in
-            externalImportCoordinator.enqueue(url: url, sceneID: markdownSceneID)
-            drainPendingMarkdownOpenURLsIfReady()
+            _ = externalOpenDispatcher.enqueue(url: url, platform: .macOS)
+            drainPendingExternalOpenRequestsIfReady()
         }
         .onChange(of: startupCoordinator.state) { _, _ in
-            drainPendingMarkdownOpenURLsIfReady()
+            drainPendingExternalOpenRequestsIfReady()
         }
         .onChange(of: externalImportCoordinator.revision) { _, _ in
-            drainPendingMarkdownOpenURLsIfReady()
+            drainPendingExternalOpenRequestsIfReady()
         }
         .focusedSceneValue(\.markdownCommandActions, markdownCommandActions)
         .focusedSceneValue(\.macNoteViewZoom, $noteViewZoom)
@@ -80,7 +83,8 @@ struct MyRAMMacRootView: View {
                 set: { isPresented in
                     if !isPresented {
                         externalImportCoordinator.acknowledgeError(sceneID: markdownSceneID)
-                        drainPendingMarkdownOpenURLsIfReady()
+                        completeActiveExternalFileRequest()
+                        drainPendingExternalOpenRequestsIfReady()
                     }
                 }
             )
@@ -112,6 +116,7 @@ struct MyRAMMacRootView: View {
                 notes: notes,
                 selectedNoteID: selectedNoteID,
                 syncController: syncController,
+                widgetCoordinator: widgetCoordinator,
                 onSelect: selectNote,
                 onCreateNote: createNote
             )
@@ -250,6 +255,7 @@ struct MyRAMMacRootView: View {
         hasUnsavedChanges = false
         editorRevision = UUID()
         loadError = nil
+        widgetCoordinator.publishNow()
     }
 
     private func loadNotesKeepingSelection() {
@@ -501,6 +507,48 @@ struct MyRAMMacRootView: View {
         }
     }
 
+    private func drainPendingExternalOpenRequestsIfReady() {
+        if activeExternalFileRequestID != nil {
+            drainPendingMarkdownOpenURLsIfReady()
+            return
+        }
+
+        guard let request = externalOpenDispatcher.claimNextIfReady(
+            startupIsReady: startupCoordinator.state == .ready,
+            externalOperationIsAvailable: !fileOperationState.isOperationInProgress
+                && externalImportCoordinator.activeRequest == nil
+                && externalImportCoordinator.pendingError == nil
+        ) else {
+            return
+        }
+
+        switch request.kind {
+        case .file(let url):
+            activeExternalFileRequestID = request.id
+            externalImportCoordinator.enqueue(url: url, sceneID: markdownSceneID)
+            drainPendingMarkdownOpenURLsIfReady()
+
+        case .widgetNote(let noteID):
+            Task { @MainActor in
+                let outcome = await MyRAMWidgetMacNoteRouter().route(
+                    noteID: noteID,
+                    flushPendingSave: flushPendingSave,
+                    fetchActiveNote: { noteID in
+                        try MacNotePersistenceAdapter().loadNote(id: noteID)
+                    },
+                    present: presentWidgetNote
+                )
+                switch outcome {
+                case .completed:
+                    externalOpenDispatcher.complete(requestID: request.id)
+                    drainPendingExternalOpenRequestsIfReady()
+                case .retainedForRetry:
+                    externalOpenDispatcher.retainForRetry(requestID: request.id)
+                }
+            }
+        }
+    }
+
     private func drainPendingMarkdownOpenURLsIfReady() {
         guard !fileOperationState.isOperationInProgress else { return }
         guard let request = externalImportCoordinator.claimNext(
@@ -529,7 +577,6 @@ struct MyRAMMacRootView: View {
                     errorMessage: markdownErrorMessage(for: error)
                 )
                 finishMarkdownFileOperation()
-                drainPendingMarkdownOpenURLsIfReady()
             }
         }
     }
@@ -583,9 +630,24 @@ struct MyRAMMacRootView: View {
         resumeSyncConvergence()
     }
 
+    private func presentWidgetNote(_ note: Note) throws {
+        let adapter = MacNotePersistenceAdapter()
+        notes = try adapter.loadNotesCreatingFirstIfNeeded()
+        let oldID = selectedNoteID
+        selectedNoteID = note.id
+        updateMarkdownModeForSelectionChange(from: oldID, to: note.id)
+        attributedText = adapter.attributedContent(for: note)
+        hasUnsavedChanges = false
+        editorRevision = UUID()
+        loadError = nil
+        saveError = nil
+        resumeSyncConvergence()
+    }
+
     /// Cleans up after a File-menu panel import or export. Does not touch the external coordinator.
     private func finishMarkdownFileOperation(errorMessage: String? = nil) {
         fileOperationState.finishOperation(errorMessage: errorMessage)
+        drainPendingExternalOpenRequestsIfReady()
     }
 
     /// Cleans up after a File-menu panel import result. Does not touch the external coordinator.
@@ -607,14 +669,22 @@ struct MyRAMMacRootView: View {
         switch result {
         case .cancelled, .importedAndPresented:
             externalImportCoordinator.complete(requestID: requestID, errorMessage: nil)
+            finishMarkdownFileOperation()
+            completeActiveExternalFileRequest()
+            drainPendingExternalOpenRequestsIfReady()
         case .importedButPresentationFailed:
             externalImportCoordinator.complete(
                 requestID: requestID,
                 errorMessage: "The Markdown note was imported, but MyRAM could not open it automatically."
             )
+            finishMarkdownFileOperation()
         }
-        finishMarkdownFileOperation()
-        drainPendingMarkdownOpenURLsIfReady()
+    }
+
+    private func completeActiveExternalFileRequest() {
+        guard let requestID = activeExternalFileRequestID else { return }
+        externalOpenDispatcher.complete(requestID: requestID)
+        activeExternalFileRequestID = nil
     }
 
     private func markdownErrorMessage(for error: Error) -> String {
@@ -754,6 +824,7 @@ struct MyRAMMacRootView: View {
         switch result {
         case .noChanges, .savedWithoutBodyMutation, .savedWithPendingBodyMutation:
             resumeSyncConvergence()
+            drainPendingExternalOpenRequestsIfReady()
         case .superseded, .failed:
             break
         }
@@ -905,6 +976,7 @@ private struct MacNoteListView: View {
     let notes: [Note]
     let selectedNoteID: UUID?
     @ObservedObject var syncController: MacSyncBatchController
+    @ObservedObject var widgetCoordinator: MyRAMWidgetHostCoordinator
     let onSelect: (Note) -> Void
     let onCreateNote: () -> Void
 
@@ -936,6 +1008,12 @@ private struct MacNoteListView: View {
                 }
                 .buttonStyle(.plain)
                 .tag(note.id)
+                .contextMenu {
+                    MyRAMWidgetSelectionButton(
+                        coordinator: widgetCoordinator,
+                        noteID: note.id
+                    )
+                }
             }
         }
         .safeAreaInset(edge: .top) {

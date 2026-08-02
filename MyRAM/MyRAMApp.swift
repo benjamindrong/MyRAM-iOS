@@ -7,11 +7,23 @@ struct MyRAMApp: App {
     @AppStorage("appearanceSetting") private var appearanceSettingRaw = AppearanceSetting.system.rawValue
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     @StateObject private var notesState: NotesListState
+#if !targetEnvironment(macCatalyst)
+    @StateObject private var externalOpenDispatcher = MyRAMExternalOpenDispatcher()
+    @StateObject private var widgetCoordinator: MyRAMWidgetHostCoordinator
+#endif
     private let isUITestMode = ProcessInfo.processInfo.arguments.contains("UITEST_MODE")
     private let usesBareTextViewProfiling = ProcessInfo.processInfo.arguments.contains("MYR_PROFILE_BARE_TEXTVIEW")
 
     init() {
-        _notesState = StateObject(wrappedValue: NotesListState(context: PersistenceManager.shared.context))
+        let context = PersistenceManager.shared.context
+        _notesState = StateObject(wrappedValue: NotesListState(context: context))
+#if !targetEnvironment(macCatalyst)
+        _widgetCoordinator = StateObject(wrappedValue: MyRAMWidgetHostCoordinator(
+            container: PersistenceManager.shared.container,
+            observedContext: context,
+            platform: .iOS
+        ))
+#endif
 
         if let forcedAppearance = ProcessInfo.processInfo.environment["UITEST_FORCE_APPEARANCE"],
            AppearanceSetting(rawValue: forcedAppearance) != nil {
@@ -26,6 +38,20 @@ struct MyRAMApp: App {
                     BareTextViewProfilingView()
                 } else {
                     NotesListView(state: notesState)
+#if !targetEnvironment(macCatalyst)
+                        .environmentObject(externalOpenDispatcher)
+                        .environmentObject(widgetCoordinator)
+                        .onAppear {
+                            widgetCoordinator.start()
+                            if notesState.bootstrapState == .ready {
+                                widgetCoordinator.publishNow()
+                            }
+                        }
+                        .onChange(of: notesState.bootstrapState) { _, state in
+                            guard state == .ready else { return }
+                            widgetCoordinator.publishNow()
+                        }
+#endif
                 }
             }
                 .preferredColorScheme(editorChromeStyle.colorSchemeOverride ?? appearanceSetting.colorScheme)

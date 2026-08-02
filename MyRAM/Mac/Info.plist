@@ -21,6 +21,19 @@
 			</array>
 		</dict>
 	</array>
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeRole</key>
+			<string>Editor</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>myram-mac</string>
+			</array>
+		</dict>
+	</array>
+	<key>MyRAMWidgetAppGroupIdentifier</key>
+	<string>$(MYRAM_WIDGET_APP_GROUP_IDENTIFIER)</string>
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_myram-sync._tcp</string>
