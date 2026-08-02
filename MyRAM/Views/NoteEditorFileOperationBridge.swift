@@ -28,6 +28,8 @@ final class NoteEditorFileOperationBridge: ObservableObject {
         let flush: @MainActor () -> EditorLocalFlushOutcome
     }
 
+    @Published private(set) var externalOpenRetryRevision = 0
+
     private var registration: Registration?
 
     func register(
@@ -35,11 +37,18 @@ final class NoteEditorFileOperationBridge: ObservableObject {
         flush: @escaping @MainActor () -> EditorLocalFlushOutcome
     ) {
         registration = Registration(noteID: noteID, flush: flush)
+        externalOpenRetryRevision &+= 1
     }
 
     func unregister(noteID: UUID) {
         guard registration?.noteID == noteID else { return }
         registration = nil
+        externalOpenRetryRevision &+= 1
+    }
+
+    func notifyPersistenceSucceeded(noteID: UUID) {
+        guard registration?.noteID == noteID else { return }
+        externalOpenRetryRevision &+= 1
     }
 
     /// Authorizes the registered editor identity before invoking editor-owned persistence.
