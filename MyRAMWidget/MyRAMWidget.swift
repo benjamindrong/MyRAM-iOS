@@ -1,84 +1,125 @@
-//
-//  MyRAMWidget.swift
-//  MyRAMWidget
-//
-//  Created by Benjamin Drong on 8/1/26.
-//
-
-import WidgetKit
 import SwiftUI
+import WidgetKit
 
-struct Provider: TimelineProvider {
-    func placeholder(in context: Context) -> SimpleEntry {
-        SimpleEntry(date: Date(), emoji: "😀")
+private struct MyRAMWidgetEntry: TimelineEntry {
+    let date: Date
+    let model: MyRAMWidgetRenderModel
+}
+
+private struct MyRAMWidgetProvider: TimelineProvider {
+    func placeholder(in context: Context) -> MyRAMWidgetEntry {
+        MyRAMWidgetEntry(
+            date: .now,
+            model: MyRAMWidgetRenderModel(
+                title: "Pinned Text",
+                pinnedTexts: ["Your most important text"],
+                bodyText: "Additional note text appears when space remains.",
+                bodyLineLimit: context.family == .systemMedium ? 3 : 2,
+                state: .content,
+                noteURL: nil
+            )
+        )
     }
 
-    func getSnapshot(in context: Context, completion: @escaping (SimpleEntry) -> ()) {
-        let entry = SimpleEntry(date: Date(), emoji: "😀")
-        completion(entry)
+    func getSnapshot(
+        in context: Context,
+        completion: @escaping (MyRAMWidgetEntry) -> Void
+    ) {
+        completion(entry(for: context.family))
     }
 
-    func getTimeline(in context: Context, completion: @escaping (Timeline<Entry>) -> ()) {
-        var entries: [SimpleEntry] = []
+    func getTimeline(
+        in context: Context,
+        completion: @escaping (Timeline<MyRAMWidgetEntry>) -> Void
+    ) {
+        completion(Timeline(entries: [entry(for: context.family)], policy: .never))
+    }
 
-        // Generate a timeline consisting of five entries an hour apart, starting from the current date.
-        let currentDate = Date()
-        for hourOffset in 0 ..< 5 {
-            let entryDate = Calendar.current.date(byAdding: .hour, value: hourOffset, to: currentDate)!
-            let entry = SimpleEntry(date: entryDate, emoji: "😀")
-            entries.append(entry)
+    private func entry(for family: WidgetFamily) -> MyRAMWidgetEntry {
+        let readResult: MyRAMWidgetSnapshotReadResult
+        if let configuration = MyRAMWidgetRuntimeConfiguration() {
+            readResult = MyRAMWidgetSnapshotStore(
+                containerURLProvider: { configuration.containerURL() }
+            ).read()
+        } else {
+            readResult = .inaccessible
         }
 
-        let timeline = Timeline(entries: entries, policy: .atEnd)
-        completion(timeline)
+        let model = MyRAMWidgetContentSelectionPolicy().renderModel(
+            from: readResult,
+            family: family == .systemMedium ? .medium : .small,
+            platform: .iOS
+        )
+        return MyRAMWidgetEntry(date: .now, model: model)
     }
-
-//    func relevances() async -> WidgetRelevances<Void> {
-//        // Generate a list containing the contexts this widget is relevant in.
-//    }
 }
 
-struct SimpleEntry: TimelineEntry {
-    let date: Date
-    let emoji: String
-}
-
-struct MyRAMWidgetEntryView : View {
-    var entry: Provider.Entry
+private struct MyRAMWidgetEntryView: View {
+    let entry: MyRAMWidgetEntry
 
     var body: some View {
-        VStack {
-            Text("Time:")
-            Text(entry.date, style: .time)
+        VStack(alignment: .leading, spacing: 6) {
+            if !entry.model.title.isEmpty {
+                Text(entry.model.title)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
 
-            Text("Emoji:")
-            Text(entry.emoji)
+            ForEach(Array(entry.model.pinnedTexts.enumerated()), id: \.offset) { _, text in
+                HStack(spacing: 5) {
+                    Image(systemName: "pin.fill")
+                        .font(.caption2)
+                        .foregroundStyle(.tint)
+                    Text(text)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+            }
+
+            if let bodyText = entry.model.bodyText, entry.model.bodyLineLimit > 0 {
+                Text(bodyText)
+                    .font(.footnote)
+                    .foregroundStyle(entry.model.state == .content ? .secondary : .primary)
+                    .lineLimit(entry.model.bodyLineLimit)
+                    .truncationMode(.tail)
+            }
+
+            Spacer(minLength: 0)
         }
+        .padding()
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .widgetURL(entry.model.noteURL)
+        .containerBackground(.background, for: .widget)
     }
 }
 
 struct MyRAMWidget: Widget {
-    let kind: String = "MyRAMWidget"
+    static let kind = "com.northsignalstudio.myram.priority-widget"
 
     var body: some WidgetConfiguration {
-        StaticConfiguration(kind: kind, provider: Provider()) { entry in
-            if #available(iOS 17.0, *) {
-                MyRAMWidgetEntryView(entry: entry)
-                    .containerBackground(.fill.tertiary, for: .widget)
-            } else {
-                MyRAMWidgetEntryView(entry: entry)
-                    .padding()
-                    .background()
-            }
+        StaticConfiguration(kind: Self.kind, provider: MyRAMWidgetProvider()) { entry in
+            MyRAMWidgetEntryView(entry: entry)
         }
-        .configurationDisplayName("My Widget")
-        .description("This is an example widget.")
+        .configurationDisplayName("Pinned Text")
+        .description("Keeps your selected note and its most important text visible.")
+        .supportedFamilies([.systemSmall, .systemMedium])
     }
 }
 
 #Preview(as: .systemSmall) {
     MyRAMWidget()
 } timeline: {
-    SimpleEntry(date: .now, emoji: "😀")
-    SimpleEntry(date: .now, emoji: "🤩")
+    MyRAMWidgetEntry(
+        date: .now,
+        model: MyRAMWidgetRenderModel(
+            title: "Project Notes",
+            pinnedTexts: ["Review the release checklist"],
+            bodyText: "Confirm the remaining verification items before publishing.",
+            bodyLineLimit: 2,
+            state: .content,
+            noteURL: nil
+        )
+    )
 }
