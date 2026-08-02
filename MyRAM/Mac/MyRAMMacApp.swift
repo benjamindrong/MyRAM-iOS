@@ -5,7 +5,6 @@ import SwiftUI
 struct MyRAMMacApp: App {
     @StateObject private var markdownExternalImportCoordinator =
         MacMarkdownExternalImportCoordinator()
-    @StateObject private var externalOpenDispatcher = MyRAMExternalOpenDispatcher()
     @StateObject private var widgetCoordinator: MyRAMWidgetHostCoordinator
 
     init() {
@@ -18,13 +17,10 @@ struct MyRAMMacApp: App {
 
     var body: some Scene {
         WindowGroup {
-            MyRAMMacRootView()
-                .environmentObject(markdownExternalImportCoordinator)
-                .environmentObject(externalOpenDispatcher)
-                .environmentObject(widgetCoordinator)
-                .onAppear {
-                    widgetCoordinator.start()
-                }
+            MyRAMMacSceneRoot(
+                markdownExternalImportCoordinator: markdownExternalImportCoordinator,
+                widgetCoordinator: widgetCoordinator
+            )
         }
         .commands {
             TextEditingCommands()
@@ -33,6 +29,22 @@ struct MyRAMMacApp: App {
             MacNoteViewZoomCommands()
             MacMarkdownFileCommands()
         }
+    }
+}
+
+private struct MyRAMMacSceneRoot: View {
+    @ObservedObject var markdownExternalImportCoordinator: MacMarkdownExternalImportCoordinator
+    @ObservedObject var widgetCoordinator: MyRAMWidgetHostCoordinator
+    @StateObject private var externalOpenDispatcher = MyRAMExternalOpenDispatcher()
+
+    var body: some View {
+        MyRAMMacRootView()
+            .environmentObject(markdownExternalImportCoordinator)
+            .environmentObject(externalOpenDispatcher)
+            .environmentObject(widgetCoordinator)
+            .onAppear {
+                widgetCoordinator.start()
+            }
     }
 }
 #endif
