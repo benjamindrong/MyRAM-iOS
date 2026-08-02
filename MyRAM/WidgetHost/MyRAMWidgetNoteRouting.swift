@@ -6,6 +6,7 @@ enum MyRAMWidgetNoteRouteOutcome: Equatable {
     case retainedForRetry
 }
 
+#if os(iOS)
 @MainActor
 struct MyRAMWidgetIOSNoteRouter {
     func route(
@@ -30,7 +31,9 @@ struct MyRAMWidgetIOSNoteRouter {
         return .completed
     }
 }
+#endif
 
+#if os(macOS)
 @MainActor
 struct MyRAMWidgetMacNoteRouter {
     func route(
@@ -54,3 +57,4 @@ struct MyRAMWidgetMacNoteRouter {
         }
     }
 }
+#endif
