@@ -8,6 +8,7 @@ struct MyRAMApp: App {
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
     @StateObject private var notesState: NotesListState
 #if !targetEnvironment(macCatalyst)
+    @StateObject private var externalOpenDispatcher = MyRAMExternalOpenDispatcher()
     @StateObject private var widgetCoordinator: MyRAMWidgetHostCoordinator
 #endif
     private let isUITestMode = ProcessInfo.processInfo.arguments.contains("UITEST_MODE")
@@ -38,6 +39,7 @@ struct MyRAMApp: App {
                 } else {
                     NotesListView(state: notesState)
 #if !targetEnvironment(macCatalyst)
+                        .environmentObject(externalOpenDispatcher)
                         .environmentObject(widgetCoordinator)
                         .onAppear {
                             widgetCoordinator.start()
