@@ -33,7 +33,6 @@ struct MyRAMWidgetIOSNoteRouter {
 }
 #endif
 
-#if os(macOS)
 @MainActor
 struct MyRAMWidgetMacNoteRouter {
     func route(
@@ -57,4 +56,3 @@ struct MyRAMWidgetMacNoteRouter {
         }
     }
 }
-#endif
