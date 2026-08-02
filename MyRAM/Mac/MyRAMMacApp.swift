@@ -8,11 +8,11 @@ struct MyRAMMacApp: App {
     @StateObject private var widgetCoordinator: MyRAMWidgetHostCoordinator
 
     init() {
-        widgetCoordinator = MyRAMWidgetHostCoordinator(
+        _widgetCoordinator = StateObject(wrappedValue: MyRAMWidgetHostCoordinator(
             container: PersistenceManager.shared.container,
             observedContext: PersistenceManager.shared.context,
             platform: .macOS
-        )
+        ))
     }
 
     var body: some Scene {
