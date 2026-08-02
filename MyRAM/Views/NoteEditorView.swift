@@ -1477,6 +1477,7 @@ struct NoteEditorView: View {
         }
         lastSnapshot = currentNoteSnapshot()
         vm.resumePendingConvergencePresentationIfNeeded()
+        fileOperationBridge?.notifyPersistenceSucceeded(noteID: note.id)
         return true
     }
 

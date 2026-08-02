@@ -17,7 +17,10 @@ struct MyRAMWidgetSnapshotCodec: Sendable {
 
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        encoder.dateEncodingStrategy = .iso8601
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(date.timeIntervalSinceReferenceDate.bitPattern)
+        }
         do {
             return try encoder.encode(envelope)
         } catch {
@@ -39,7 +42,13 @@ struct MyRAMWidgetSnapshotCodec: Sendable {
         }
 
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let bitPattern = try container.decode(UInt64.self)
+            return Date(
+                timeIntervalSinceReferenceDate: Double(bitPattern: bitPattern)
+            )
+        }
         let envelope: MyRAMWidgetSnapshotEnvelope
         do {
             envelope = try decoder.decode(MyRAMWidgetSnapshotEnvelope.self, from: data)

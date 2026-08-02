@@ -30,7 +30,7 @@
 		BC4CB4C6301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B8301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift */; };
 		BC4CB4D0301EF1DF0062C4D6 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC4CB4CF301EF1DF0062C4D6 /* WidgetKit.framework */; };
 		BC4CB4D2301EF1DF0062C4D6 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC4CB4D1301EF1DF0062C4D6 /* SwiftUI.framework */; };
-		BC4CB4DF301EF1E20062C4D6 /* MyRAMWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BC4CB4CD301EF1DF0062C4D6 /* MyRAMWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		BC4CB4DF301EF1E20062C4D6 /* MyRAMWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BC4CB4CD301EF1DF0062C4D6 /* MyRAMWidgetExtension.appex */; platformFilter = ios; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		BC4CB4EA301EF31A0062C4D6 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC4CB4CF301EF1DF0062C4D6 /* WidgetKit.framework */; };
 		BC4CB4EB301EF31A0062C4D6 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC4CB4D1301EF1DF0062C4D6 /* SwiftUI.framework */; };
 		BC4CB4F8301EF31C0062C4D6 /* MyRAMMacWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BC4CB4E9301EF31A0062C4D6 /* MyRAMMacWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
@@ -312,6 +312,15 @@
 		E19601000000000000000003 /* MacMarkdownPreviewTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000003 /* MacMarkdownPreviewTextView.swift */; };
 		E19601000000000000000004 /* MacNoteViewZoomTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000004 /* MacNoteViewZoomTests.swift */; };
 		E19601000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift */; };
+		F19701000000000000000001 /* MyRAMExternalOpenDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19702000000000000000001 /* MyRAMExternalOpenDispatcher.swift */; };
+		F19701000000000000000002 /* MyRAMExternalOpenDispatcher.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19702000000000000000001 /* MyRAMExternalOpenDispatcher.swift */; };
+		F19701000000000000000003 /* MyRAMWidgetHostCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19702000000000000000002 /* MyRAMWidgetHostCoordinator.swift */; };
+		F19701000000000000000004 /* MyRAMWidgetHostCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19702000000000000000002 /* MyRAMWidgetHostCoordinator.swift */; };
+		F19701000000000000000005 /* MyRAMWidgetNoteRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19702000000000000000003 /* MyRAMWidgetNoteRouting.swift */; };
+		F19701000000000000000006 /* MyRAMWidgetNoteRouting.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19702000000000000000003 /* MyRAMWidgetNoteRouting.swift */; };
+		F19701000000000000000007 /* MyRAMWidgetSelectionButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19702000000000000000004 /* MyRAMWidgetSelectionButton.swift */; };
+		F19701000000000000000008 /* MyRAMWidgetSelectionButton.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19702000000000000000004 /* MyRAMWidgetSelectionButton.swift */; };
+		F19701000000000000000009 /* MyRAMWidgetHostTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F19702000000000000000005 /* MyRAMWidgetHostTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -603,6 +612,11 @@
 		E19602000000000000000003 /* MacMarkdownPreviewTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownPreviewTextView.swift; sourceTree = "<group>"; };
 		E19602000000000000000004 /* MacNoteViewZoomTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteViewZoomTests.swift; sourceTree = "<group>"; };
 		E19602000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownPreviewDocumentBuilderTests.swift; sourceTree = "<group>"; };
+		F19702000000000000000001 /* MyRAMExternalOpenDispatcher.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMExternalOpenDispatcher.swift; sourceTree = "<group>"; };
+		F19702000000000000000002 /* MyRAMWidgetHostCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMWidgetHostCoordinator.swift; sourceTree = "<group>"; };
+		F19702000000000000000003 /* MyRAMWidgetNoteRouting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMWidgetNoteRouting.swift; sourceTree = "<group>"; };
+		F19702000000000000000004 /* MyRAMWidgetSelectionButton.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMWidgetSelectionButton.swift; sourceTree = "<group>"; };
+		F19702000000000000000005 /* MyRAMWidgetHostTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMWidgetHostTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -750,6 +764,7 @@
 			children = (
 				BC4CB50A301F65510062C4D6 /* MyRAM.entitlements */,
 				BC4CB4BA301EF17C0062C4D6 /* WidgetShared */,
+				F19703000000000000000001 /* WidgetHost */,
 				BC7009FD2FBF927F00F513B4 /* MyRAMSchema.swift */,
 				D19503000000000000000001 /* Markdown */,
 				BCE65D142EA5453D00F2D0AA /* Views */,
@@ -784,6 +799,7 @@
 			isa = PBXGroup;
 			children = (
 				BC4CB50E301F70E00062C4D6 /* MyRAMWidgetCoreTests.swift */,
+				F19702000000000000000005 /* MyRAMWidgetHostTests.swift */,
 				D19502000000000000000002 /* MarkdownFileIOTests.swift */,
 				D19502000000000000000004 /* MarkdownFileOperationBoundaryTests.swift */,
 				D19502000000000000000005 /* MarkdownImportIntegrationTests.swift */,
@@ -1139,6 +1155,17 @@
 			path = Markdown;
 			sourceTree = "<group>";
 		};
+		F19703000000000000000001 /* WidgetHost */ = {
+			isa = PBXGroup;
+			children = (
+				F19702000000000000000001 /* MyRAMExternalOpenDispatcher.swift */,
+				F19702000000000000000002 /* MyRAMWidgetHostCoordinator.swift */,
+				F19702000000000000000003 /* MyRAMWidgetNoteRouting.swift */,
+				F19702000000000000000004 /* MyRAMWidgetSelectionButton.swift */,
+			);
+			path = WidgetHost;
+			sourceTree = "<group>";
+		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
@@ -1444,6 +1471,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F19701000000000000000001 /* MyRAMExternalOpenDispatcher.swift in Sources */,
+				F19701000000000000000003 /* MyRAMWidgetHostCoordinator.swift in Sources */,
+				F19701000000000000000005 /* MyRAMWidgetNoteRouting.swift in Sources */,
+				F19701000000000000000007 /* MyRAMWidgetSelectionButton.swift in Sources */,
 				D19501000000000000000001 /* MarkdownFileIO.swift in Sources */,
 				D1950100000000000000000B /* MarkdownPreview.swift in Sources */,
 				D19501000000000000000011 /* MarkdownPreviewModePolicy.swift in Sources */,
@@ -1558,6 +1589,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F19701000000000000000009 /* MyRAMWidgetHostTests.swift in Sources */,
 				D19501000000000000000003 /* MarkdownFileIOTests.swift in Sources */,
 				D19501000000000000000006 /* MarkdownFileOperationBoundaryTests.swift in Sources */,
 				D19501000000000000000007 /* MarkdownImportIntegrationTests.swift in Sources */,
@@ -1611,6 +1643,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F19701000000000000000002 /* MyRAMExternalOpenDispatcher.swift in Sources */,
+				F19701000000000000000004 /* MyRAMWidgetHostCoordinator.swift in Sources */,
+				F19701000000000000000006 /* MyRAMWidgetNoteRouting.swift in Sources */,
+				F19701000000000000000008 /* MyRAMWidgetSelectionButton.swift in Sources */,
 				D19501000000000000000002 /* MarkdownFileIO.swift in Sources */,
 				D1950100000000000000000C /* MarkdownPreview.swift in Sources */,
 				D19501000000000000000012 /* MarkdownPreviewModePolicy.swift in Sources */,
@@ -1756,6 +1792,7 @@
 /* Begin PBXTargetDependency section */
 		BC4CB4DE301EF1E20062C4D6 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
+			platformFilter = ios;
 			target = BC4CB4CC301EF1DF0062C4D6 /* MyRAMWidgetExtension */;
 			targetProxy = BC4CB4DD301EF1E20062C4D6 /* PBXContainerItemProxy */;
 		};
@@ -1802,7 +1839,7 @@
 					"@executable_path/../../Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				MYRAM_WIDGET_APP_GROUP_IDENTIFIER = "group.com.northsignalstudio.myram.dev.widget\n";
+				MYRAM_WIDGET_APP_GROUP_IDENTIFIER = group.com.northsignalstudio.myram.dev.widget;
 				PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.dev.widget;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SKIP_INSTALL = YES;

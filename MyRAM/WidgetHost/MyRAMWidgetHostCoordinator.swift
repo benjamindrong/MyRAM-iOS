@@ -65,7 +65,7 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
         container: ModelContainer,
         observedContext: ModelContext,
         platform: Platform,
-        selectionStore: MyRAMWidgetNoteSelectionStore = MyRAMWidgetNoteSelectionStore(),
+        selectionStore: MyRAMWidgetNoteSelectionStore? = nil,
         snapshotStore: MyRAMWidgetSnapshotStore? = nil,
         bundle: Bundle = .main,
         notificationCenter: NotificationCenter = .default,
@@ -74,14 +74,15 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
             WidgetCenter.shared.reloadTimelines(ofKind: kind)
         }
     ) {
+        let resolvedSelectionStore = selectionStore ?? MyRAMWidgetNoteSelectionStore()
         self.container = container
         self.observedContext = observedContext
         self.platform = platform
-        self.selectionStore = selectionStore
+        self.selectionStore = resolvedSelectionStore
         self.notificationCenter = notificationCenter
         self.debounceNanoseconds = debounceNanoseconds
         self.reloadTimelines = reloadTimelines
-        selectedNoteID = selectionStore.selectedNoteID
+        selectedNoteID = resolvedSelectionStore.selectedNoteID
 
         if let snapshotStore {
             self.snapshotStore = snapshotStore
@@ -93,7 +94,7 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
             self.snapshotStore = nil
         }
 
-        selectionCancellable = selectionStore.$selectedNoteID
+        selectionCancellable = resolvedSelectionStore.$selectedNoteID
             .sink { [weak self] noteID in
                 self?.selectedNoteID = noteID
             }

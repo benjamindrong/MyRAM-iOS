@@ -42,6 +42,32 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         XCTAssertEqual(try codec.decode(first), envelope)
     }
 
+    func testFractionalSecondDateSurvivesExactCodecAndStoreRoundTrip() throws {
+        let envelope = MyRAMWidgetSnapshotEnvelope(
+            generatedAt: Date(timeIntervalSince1970: 1_700_000_000.123456),
+            note: MyRAMWidgetSnapshotBounds.makeNoteSnapshot(
+                id: UUID(uuidString: "8F59F206-8C0B-42D2-A52C-151F6D5EFB2B")!,
+                title: "Title",
+                orderedPinnedTexts: ["Pin"],
+                bodyPreviewSource: "Body"
+            )
+        )
+        let codec = MyRAMWidgetSnapshotCodec()
+        let encoded = try codec.encode(envelope)
+        let decoded = try codec.decode(encoded)
+
+        XCTAssertEqual(
+            decoded.generatedAt.timeIntervalSinceReferenceDate.bitPattern,
+            envelope.generatedAt.timeIntervalSinceReferenceDate.bitPattern
+        )
+        XCTAssertEqual(decoded, envelope)
+
+        let root = temporaryDirectory()
+        let store = MyRAMWidgetSnapshotStore(containerURLProvider: { root })
+        XCTAssertEqual(store.publish(envelope), .published)
+        XCTAssertEqual(store.read(), .snapshot(envelope))
+    }
+
     func testCodecRejectsUnsupportedVersionBeforeFullDecode() {
         for version in [0, -1, 2, 99] {
             let data = Data("{\"schemaVersion\":\(version),\"garbage\":true}".utf8)

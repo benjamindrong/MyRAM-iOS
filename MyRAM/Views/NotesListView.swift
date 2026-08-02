@@ -117,6 +117,10 @@ struct NotesListView: View {
     @StateObject private var editorFileOperationBridge = NoteEditorFileOperationBridge()
     @StateObject private var markdownImportCoordinator = MarkdownImportOperationCoordinator()
     private let externalImportRouter = ExternalImportURLRouter()
+#if !targetEnvironment(macCatalyst)
+    @EnvironmentObject private var externalOpenDispatcher: MyRAMExternalOpenDispatcher
+    @EnvironmentObject private var widgetCoordinator: MyRAMWidgetHostCoordinator
+#endif
     @State private var editMode: EditMode = .inactive
     @State private var selectedNote: Note? = nil
     @State private var showingRecentlyDeleted = false
@@ -127,7 +131,9 @@ struct NotesListView: View {
     @State private var importErrorMessage: String?
     @State private var markdownImportErrorMessage: String?
     @State private var showingMarkdownImporter = false
+#if targetEnvironment(macCatalyst)
     @State private var pendingOpenURLs: [URL] = []
+#endif
     @State private var showingCreateFolderPrompt = false
     @State private var newFolderName = ""
     @State private var folderAwaitingRename: Folder?
@@ -213,13 +219,34 @@ struct NotesListView: View {
             }
         }
         .onOpenURL { url in
+#if targetEnvironment(macCatalyst)
             pendingOpenURLs.append(url)
+#else
+            _ = externalOpenDispatcher.enqueue(url: url, platform: .iOS)
+#endif
             drainPendingOpenURLsIfReady()
         }
         .onChange(of: state.bootstrapState) { _, bootstrapState in
             guard bootstrapState == .ready else { return }
             drainPendingOpenURLsIfReady()
         }
+#if !targetEnvironment(macCatalyst)
+        .onChange(of: editorFileOperationBridge.externalOpenRetryRevision) { _, _ in
+            drainPendingOpenURLsIfReady()
+        }
+        .onChange(of: markdownImportCoordinator.isProcessing) { _, isProcessing in
+            guard !isProcessing else { return }
+            drainPendingOpenURLsIfReady()
+        }
+        .onChange(of: markdownImportErrorMessage) { _, errorMessage in
+            guard errorMessage == nil else { return }
+            drainPendingOpenURLsIfReady()
+        }
+        .onChange(of: importErrorMessage) { _, errorMessage in
+            guard errorMessage == nil else { return }
+            drainPendingOpenURLsIfReady()
+        }
+#endif
         .alert("Unable to Import Markdown", isPresented: Binding(
             get: { markdownImportErrorMessage != nil },
             set: { if !$0 { markdownImportErrorMessage = nil } }
@@ -454,9 +481,14 @@ struct NotesListView: View {
                         context: context,
                         selectedCount: selectedNotes.count,
                         pinActionTitle: pinActionTitle(for: context),
+                        widgetActionTitle: widgetActionTitle(for: context),
                         onDismiss: { noteActionDialogContext = nil },
                         onPin: {
                             performPinAction(for: context)
+                            noteActionDialogContext = nil
+                        },
+                        onWidget: {
+                            performWidgetAction(for: context)
                             noteActionDialogContext = nil
                         },
                         onMove: {
@@ -1680,6 +1712,24 @@ struct NotesListView: View {
         selectedNote.map { .note($0.id) } ?? .none
     }
 
+#if !targetEnvironment(macCatalyst)
+    private func widgetActionTitle(for context: NoteActionDialogContext) -> String? {
+        guard case .single(let note) = context else { return nil }
+        return widgetCoordinator.isSelected(noteID: note.id)
+            ? "Remove from Widget"
+            : "Use in Widget"
+    }
+
+    private func performWidgetAction(for context: NoteActionDialogContext) {
+        guard case .single(let note) = context else { return }
+        if widgetCoordinator.isSelected(noteID: note.id) {
+            widgetCoordinator.removeSelection()
+        } else {
+            widgetCoordinator.select(noteID: note.id)
+        }
+    }
+#endif
+
     private func routeExternalImport(from url: URL) {
         do {
             let result = try externalImportRouter.route(
@@ -1707,6 +1757,7 @@ struct NotesListView: View {
     }
 
     private func drainPendingOpenURLsIfReady() {
+#if targetEnvironment(macCatalyst)
         guard state.bootstrapState == .ready,
               !markdownImportCoordinator.isProcessing else {
             return
@@ -1716,6 +1767,48 @@ struct NotesListView: View {
             let url = pendingOpenURLs.removeFirst()
             routeExternalImport(from: url)
         }
+#else
+        guard let request = externalOpenDispatcher.claimNextIfReady(
+            startupIsReady: state.bootstrapState == .ready,
+            externalOperationIsAvailable: !markdownImportCoordinator.isProcessing
+                && markdownImportErrorMessage == nil
+                && importErrorMessage == nil
+        ) else {
+            return
+        }
+
+        switch request.kind {
+        case .file(let url):
+            routeExternalImport(from: url)
+            externalOpenDispatcher.complete(requestID: request.id)
+            drainPendingOpenURLsIfReady()
+
+        case .widgetNote(let noteID):
+            let outcome = MyRAMWidgetIOSNoteRouter().route(
+                noteID: noteID,
+                expectedEditor: expectedEditor,
+                flushBridge: editorFileOperationBridge,
+                fetchActiveNote: vm.refreshedNote(withID:),
+                present: { note in
+                    if let folder = note.folder {
+                        vm.openFolder(folder)
+                    } else {
+                        vm.currentFolder = nil
+                        vm.refreshCurrentFolderContent()
+                    }
+                    vm.selectNote(note)
+                    selectedNote = note
+                }
+            )
+            switch outcome {
+            case .completed:
+                externalOpenDispatcher.complete(requestID: request.id)
+                drainPendingOpenURLsIfReady()
+            case .retainedForRetry:
+                externalOpenDispatcher.retainForRetry(requestID: request.id)
+            }
+        }
+#endif
     }
 
     private func markdownImportMessage(for error: Error) -> String {
@@ -1888,8 +1981,10 @@ private struct NoteActionSheetOverlay: View {
     let context: NoteActionDialogContext
     let selectedCount: Int
     let pinActionTitle: String
+    let widgetActionTitle: String?
     let onDismiss: () -> Void
     let onPin: () -> Void
+    let onWidget: () -> Void
     let onMove: () -> Void
     let onExport: () -> Void
     let onDelete: () -> Void
@@ -1918,6 +2013,9 @@ private struct NoteActionSheetOverlay: View {
 
                 VStack(spacing: 0) {
                     NoteActionSheetRow(title: pinActionTitle, action: onPin)
+                    if let widgetActionTitle {
+                        NoteActionSheetRow(title: widgetActionTitle, action: onWidget)
+                    }
                     NoteActionSheetRow(title: moveTitle, action: onMove)
                     NoteActionSheetRow(title: exportTitle, action: onExport)
                     NoteActionSheetRow(title: deleteTitle, role: .destructive, showDivider: false, action: onDelete)
