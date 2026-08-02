@@ -1,0 +1,62 @@
+name: MYR-174 Slice 1 remote implementation
+
+on:
+  push:
+    branches:
+      - MYR-174-Slice-1-anchored-envelope-v2
+
+permissions:
+  contents: write
+
+jobs:
+  implement:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: MYR-174-Slice-1-anchored-envelope-v2
+          fetch-depth: 0
+
+      - name: Assemble and apply exact Slice 1 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .github/scripts/myr174/part-*.pyfrag > /tmp/myr174_slice1_patch.py
+          python3 -m py_compile /tmp/myr174_slice1_patch.py
+          python3 /tmp/myr174_slice1_patch.py
+          rm -rf .github/scripts/myr174
+
+      - name: Audit and commit implementation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+
+          allowed='^(MyRAM/Sync/Batch/SyncBatchEnvelope\.swift|MyRAM/Sync/Batch/MultipeerSyncMessageEnvelope\.swift|MyRAM/Sync/MyRAMSyncController\.swift|MyRAM/Mac/Sync/MacSyncBatchController\.swift|MyRAMTests/MyRAMSyncControllerTests\.swift|MyRAMTests/SyncBatchPayloadCompatibilityTests\.swift|MyRAMTests/SyncBatchAnchoredPayloadTests\.swift|MyRAMMacTests/MacSyncBatchControllerTests\.swift|MyRAMTests/SyncBatchEnvelopeV2Tests\.swift|MyRAMMacTests/SyncBatchEnvelopeV2Tests\.swift|MyRAM\.xcodeproj/project\.pbxproj|\.github/scripts/myr174/part-[0-9]+\.pyfrag)$'
+          unexpected="$(git status --short | sed -E 's/^.. //' | grep -Ev "$allowed" || true)"
+          if [[ -n "$unexpected" ]]; then
+            printf 'Unexpected changed paths:\n%s\n' "$unexpected" >&2
+            exit 1
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit \
+            -m 'MYR-174 Add exact V2 batch-envelope encoding' \
+            -m '### Changes
+          - Add representation-derived V1/V2 inner envelope coding.
+          - Migrate iPhone and Mac batch transport to exact codec APIs.
+          - Add focused V2 compatibility and dark-state tests.
+
+          ### Why
+          Establish the anchored envelope contract while production activation remains disabled.
+
+          ### Verification
+          - Python patcher syntax validation passed.
+          - Static codec, host-migration, activation, and scope audits passed.
+          - git diff --check passed.
+          - Full Xcode builds and tests remain for local verification.'
+          git push origin HEAD:MYR-174-Slice-1-anchored-envelope-v2
