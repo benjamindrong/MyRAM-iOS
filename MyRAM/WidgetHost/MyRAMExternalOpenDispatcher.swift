@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 struct MyRAMExternalOpenRequest: Equatable, Identifiable {
@@ -16,7 +17,7 @@ struct MyRAMExternalOpenRequest: Equatable, Identifiable {
 }
 
 @MainActor
-final class MyRAMExternalOpenDispatcher {
+final class MyRAMExternalOpenDispatcher: ObservableObject {
     private var queue: [MyRAMExternalOpenRequest] = []
     private var activeRequestID: UUID?
 
