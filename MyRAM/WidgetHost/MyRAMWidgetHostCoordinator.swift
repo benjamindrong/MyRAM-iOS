@@ -66,6 +66,7 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
         observedContext: ModelContext,
         platform: Platform,
         selectionStore: MyRAMWidgetNoteSelectionStore = MyRAMWidgetNoteSelectionStore(),
+        snapshotStore: MyRAMWidgetSnapshotStore? = nil,
         bundle: Bundle = .main,
         notificationCenter: NotificationCenter = .default,
         debounceNanoseconds: UInt64 = 150_000_000,
@@ -82,12 +83,14 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
         self.reloadTimelines = reloadTimelines
         selectedNoteID = selectionStore.selectedNoteID
 
-        if let configuration = MyRAMWidgetRuntimeConfiguration(bundle: bundle) {
-            snapshotStore = MyRAMWidgetSnapshotStore(
+        if let snapshotStore {
+            self.snapshotStore = snapshotStore
+        } else if let configuration = MyRAMWidgetRuntimeConfiguration(bundle: bundle) {
+            self.snapshotStore = MyRAMWidgetSnapshotStore(
                 containerURLProvider: { configuration.containerURL() }
             )
         } else {
-            snapshotStore = nil
+            self.snapshotStore = nil
         }
 
         selectionCancellable = selectionStore.$selectedNoteID
