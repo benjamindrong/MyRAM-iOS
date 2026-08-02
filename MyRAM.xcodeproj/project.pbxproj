@@ -3,19 +3,50 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 60;
+	objectVersion = 70;
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AC50000000000000000000A3 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
+		AC50000000000000000000A4 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
 		BC24E3042FDF8F94004694D1 /* SyncConflictStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */; };
 		BC24E3052FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */; };
-		C07100362FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */; };
-		C07100382FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */; };
-		BC24E3102FDF8F94004694D1 /* SyncConflictStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */; };
-		BC24E3112FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */; };
 		BC24E3072FDF8F94004694D1 /* SyncStatusIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */; };
 		BC24E3092FDF8F94004694D1 /* SyncConflictViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E30A2FDF8F94004694D1 /* SyncConflictViews.swift */; };
 		BC24E30B2FDF8F94004694D1 /* MyRAMSyncConflictService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */; };
+		BC24E3102FDF8F94004694D1 /* SyncConflictStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */; };
+		BC24E3112FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */; };
+		BC4CB4BB301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B4301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift */; };
+		BC4CB4BC301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B9301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift */; };
+		BC4CB4BD301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B7301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift */; };
+		BC4CB4BE301EF17C0062C4D6 /* MyRAMWidgetDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B5301EF17C0062C4D6 /* MyRAMWidgetDeepLink.swift */; };
+		BC4CB4BF301EF17C0062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B6301EF17C0062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift */; };
+		BC4CB4C0301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B8301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift */; };
+		BC4CB4C1301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B4301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift */; };
+		BC4CB4C2301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B9301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift */; };
+		BC4CB4C3301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B7301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift */; };
+		BC4CB4C4301EF17C0062C4D6 /* MyRAMWidgetDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B5301EF17C0062C4D6 /* MyRAMWidgetDeepLink.swift */; };
+		BC4CB4C5301EF17C0062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B6301EF17C0062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift */; };
+		BC4CB4C6301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B8301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift */; };
+		BC4CB4D0301EF1DF0062C4D6 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC4CB4CF301EF1DF0062C4D6 /* WidgetKit.framework */; };
+		BC4CB4D2301EF1DF0062C4D6 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC4CB4D1301EF1DF0062C4D6 /* SwiftUI.framework */; };
+		BC4CB4DF301EF1E20062C4D6 /* MyRAMWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BC4CB4CD301EF1DF0062C4D6 /* MyRAMWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		BC4CB4EA301EF31A0062C4D6 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC4CB4CF301EF1DF0062C4D6 /* WidgetKit.framework */; };
+		BC4CB4EB301EF31A0062C4D6 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BC4CB4D1301EF1DF0062C4D6 /* SwiftUI.framework */; };
+		BC4CB4F8301EF31C0062C4D6 /* MyRAMMacWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BC4CB4E9301EF31A0062C4D6 /* MyRAMMacWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		BC4CB4FE301EF4400062C4D6 /* MyRAMWidgetSnapshotCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B8301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift */; };
+		BC4CB4FF301EF4400062C4D6 /* MyRAMWidgetDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B5301EF17C0062C4D6 /* MyRAMWidgetDeepLink.swift */; };
+		BC4CB500301EF4400062C4D6 /* MyRAMWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B7301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift */; };
+		BC4CB501301EF4400062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B6301EF17C0062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift */; };
+		BC4CB502301EF4400062C4D6 /* MyRAMWidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B9301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift */; };
+		BC4CB503301EF4400062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B4301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift */; };
+		BC4CB504301EF4400062C4D6 /* MyRAMWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B7301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift */; };
+		BC4CB505301EF4400062C4D6 /* MyRAMWidgetDeepLink.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B5301EF17C0062C4D6 /* MyRAMWidgetDeepLink.swift */; };
+		BC4CB506301EF4400062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B6301EF17C0062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift */; };
+		BC4CB507301EF4400062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B4301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift */; };
+		BC4CB508301EF4400062C4D6 /* MyRAMWidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B9301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift */; };
+		BC4CB509301EF4400062C4D6 /* MyRAMWidgetSnapshotCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B8301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift */; };
+		BC4CB50F301F70E00062C4D6 /* MyRAMWidgetCoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB50E301F70E00062C4D6 /* MyRAMWidgetCoreTests.swift */; };
 		BC7009FE2FBF928500F513B4 /* MyRAMSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC7009FD2FBF927F00F513B4 /* MyRAMSchema.swift */; };
 		BC8A7F8E2FCA1F1200A9C001 /* docs/note-intelligence in Resources */ = {isa = PBXBuildFile; fileRef = BC8A7F8D2FCA1F1200A9C001 /* docs/note-intelligence */; };
 		BC9F1BB02EA47D2E0045FD72 /* MyRAMApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BAF2EA47D2E0045FD72 /* MyRAMApp.swift */; };
@@ -27,13 +58,8 @@
 		BC9F1BCF2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */; };
 		BCA104010000000000000001 /* RTFCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA104020000000000000001 /* RTFCoding.swift */; };
 		BCA104010000000000000002 /* RTFCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA104020000000000000001 /* RTFCoding.swift */; };
-		BCA164010000000000000001 /* AttributedTextStorageKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000001 /* AttributedTextStorageKeys.swift */; };
-		BCA164010000000000000002 /* AttributedTextStorageKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000001 /* AttributedTextStorageKeys.swift */; };
-		BCA164010000000000000003 /* MacEditorTextColorPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */; };
-		BCA164010000000000000004 /* MacEditorTextColorPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */; };
 		BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000002 /* MyRAMMacApp.swift */; };
 		BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000003 /* MyRAMMacRootView.swift */; };
-		BCA170010000000000000001 /* MacStartupCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA170020000000000000001 /* MacStartupCoordinator.swift */; };
 		BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCA105010000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BC9F1BB52EA47D300045FD72 /* Assets.xcassets */; };
 		BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000001 /* MacNoteEditorView.swift */; };
@@ -59,18 +85,11 @@
 		BCA122010000000000000002 /* MacSyncDeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000002 /* MacSyncDeviceIdentity.swift */; };
 		BCA122010000000000000003 /* MacSyncSeenBatchStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000003 /* MacSyncSeenBatchStore.swift */; };
 		BCA122010000000000000004 /* MacSyncBatchAccumulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000004 /* MacSyncBatchAccumulator.swift */; };
-		BCA122010000000000000005 /* MacSyncBatchApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000005 /* MacSyncBatchApplier.swift */; };
 		BCA122010000000000000006 /* MacSyncDeviceIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000006 /* MacSyncDeviceIdentityTests.swift */; };
 		BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */; };
 		BCA122010000000000000008 /* MacSyncBatchAccumulatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000008 /* MacSyncBatchAccumulatorTests.swift */; };
-		BCA122010000000000000009 /* MacSyncBatchApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000009 /* MacSyncBatchApplierTests.swift */; };
-		BCA153010000000000000008 /* MacExplicitDeleteProvenanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000005 /* MacExplicitDeleteProvenanceTests.swift */; };
 		BCA12201000000000000000A /* MacAppliedSyncBatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA12202000000000000000A /* MacAppliedSyncBatch.swift */; };
 		BCA12201000000000000000B /* MacSyncBatchControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */; };
-		BCA162010000000000101 /* MacSyncConvergencePresentationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000101 /* MacSyncConvergencePresentationAdapterTests.swift */; };
-		BCA162010000000000102 /* MacSyncConvergenceCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000102 /* MacSyncConvergenceCoordinatorTests.swift */; };
-		BCA162010000000000103 /* MacSyncIncomingLocalBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000103 /* MacSyncIncomingLocalBoundaryTests.swift */; };
-		C07100342FF1600000000001 /* MacLegacySyncReceiverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100352FF1600000000001 /* MacLegacySyncReceiverTests.swift */; };
 		BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000001 /* SyncBatchPayload.swift */; };
 		BCA123010000000000000002 /* SyncBatchEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000002 /* SyncBatchEnvelope.swift */; };
 		BCA123010000000000000003 /* MultipeerSyncMessageEnvelope.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000003 /* MultipeerSyncMessageEnvelope.swift */; };
@@ -90,85 +109,93 @@
 		BCA123010000000000000017 /* SyncBatchNoteChangeCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000012 /* SyncBatchNoteChangeCapture.swift */; };
 		BCA123010000000000000018 /* SyncBatchNoteChangeCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000012 /* SyncBatchNoteChangeCapture.swift */; };
 		BCA123010000000000000019 /* MacSyncBatchController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000013 /* MacSyncBatchController.swift */; };
-		BCA162010000000000000001 /* MacSyncConvergenceCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000000001 /* MacSyncConvergenceCoordinator.swift */; };
-		BCA162010000000000000002 /* MacSyncConvergencePresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000000002 /* MacSyncConvergencePresentationAdapter.swift */; };
 		BCA123010000000000000020 /* SyncBatchUnsentQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000014 /* SyncBatchUnsentQueue.swift */; };
 		BCA123010000000000000021 /* SyncBatchUnsentQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000014 /* SyncBatchUnsentQueue.swift */; };
 		BCA123010000000000000022 /* SyncBatchUnsentQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */; };
 		BCA123010000000000000023 /* FileBackedSyncBatchQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */; };
 		BCA123010000000000000024 /* FileBackedSyncBatchQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */; };
 		BCA123010000000000000025 /* SyncBatchUnsentQueueTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */; };
-		BCA154010000000000000001 /* AppliedEditorMutation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000001 /* AppliedEditorMutation.swift */; };
-		BCA154010000000000000002 /* AppliedEditorMutation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000001 /* AppliedEditorMutation.swift */; };
-		BCA154010000000000000003 /* ActiveEditorApplicationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */; };
-		BCA154010000000000000004 /* ActiveEditorApplicationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */; };
-		BCA15401000000000000000D /* ActiveEditorSyncUpdateHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */; };
-		BCA15401000000000000000E /* ActiveEditorSyncUpdateHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */; };
-		BCA154010000000000000005 /* EditorSelectionMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000003 /* EditorSelectionMapper.swift */; };
-		BCA154010000000000000006 /* EditorSelectionMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000003 /* EditorSelectionMapper.swift */; };
-		BCA154010000000000000007 /* EditorRemoteApplyResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000004 /* EditorRemoteApplyResult.swift */; };
-		BCA154010000000000000008 /* EditorRemoteApplyResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000004 /* EditorRemoteApplyResult.swift */; };
-		BCA154010000000000000009 /* ActiveEditorApplicationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000005 /* ActiveEditorApplicationPolicyTests.swift */; };
-		BCA15401000000000000000F /* ActiveEditorSyncUpdateHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA15402000000000000000A /* ActiveEditorSyncUpdateHandlerTests.swift */; };
-		BCA15401000000000000000A /* EditorSelectionMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000006 /* EditorSelectionMapperTests.swift */; };
-		BCA15401000000000000000B /* UIKitEditorSyncBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000007 /* UIKitEditorSyncBridge.swift */; };
-		BCA15401000000000000000C /* UIKitEditorSyncBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000008 /* UIKitEditorSyncBridgeTests.swift */; };
 		BCA132010000000000000001 /* SyncConvergenceTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000001 /* SyncConvergenceTypes.swift */; };
 		BCA132010000000000000002 /* SyncConvergenceTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000001 /* SyncConvergenceTypes.swift */; };
 		BCA132010000000000000003 /* SyncConvergenceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000002 /* SyncConvergenceModels.swift */; };
 		BCA132010000000000000004 /* SyncConvergenceModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000002 /* SyncConvergenceModels.swift */; };
 		BCA132010000000000000005 /* SyncConvergenceFoundationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */; };
+		BCA132010000000000000006 /* MyRAMSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC7009FD2FBF927F00F513B4 /* MyRAMSchema.swift */; };
 		BCA132010000000000000010 /* SyncConvergencePlanningTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000010 /* SyncConvergencePlanningTypes.swift */; };
 		BCA132010000000000000011 /* SyncConvergencePlanningTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000010 /* SyncConvergencePlanningTypes.swift */; };
-		BCA155010000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */; };
-		BCA155010000000000000002 /* SyncConvergenceRewriteSafetyPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */; };
+		BCA132010000000000000012 /* SyncConvergencePlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000011 /* SyncConvergencePlanner.swift */; };
+		BCA132010000000000000013 /* SyncConvergencePlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000011 /* SyncConvergencePlanner.swift */; };
+		BCA132010000000000000014 /* SyncConvergencePlanningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */; };
+		BCA132010000000000000015 /* SyncConvergencePlanningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */; };
+		BCA132010000000000000016 /* SyncConvergenceIncorporationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000013 /* SyncConvergenceIncorporationTests.swift */; };
+		BCA132010000000000000017 /* ../MyRAMTests/SyncConvergenceIncorporationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000014 /* ../MyRAMTests/SyncConvergenceIncorporationTests.swift */; };
+		BCA132010000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */; };
+		BCA132010000000000000031 /* SwiftDataSyncConvergencePersistenceTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */; };
+		BCA132010000000000000050 /* SyncConvergencePostCommitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000050 /* SyncConvergencePostCommitTypes.swift */; };
+		BCA132010000000000000051 /* SyncConvergencePostCommitGating.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000051 /* SyncConvergencePostCommitGating.swift */; };
+		BCA132010000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift */; };
+		BCA132010000000000000053 /* SyncConvergencePostCommitExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */; };
+		BCA132010000000000000054 /* SyncConvergencePostCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000054 /* SyncConvergencePostCommitTests.swift */; };
+		BCA132010000000000000055 /* ../MyRAMTests/SyncConvergencePostCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000055 /* ../MyRAMTests/SyncConvergencePostCommitTests.swift */; };
+		BCA132010000000000000056 /* SyncConvergencePostCommitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000050 /* SyncConvergencePostCommitTypes.swift */; };
+		BCA132010000000000000057 /* SyncConvergencePostCommitGating.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000051 /* SyncConvergencePostCommitGating.swift */; };
+		BCA132010000000000000058 /* SwiftDataSyncConvergencePostCommitStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift */; };
+		BCA132010000000000000059 /* SyncConvergencePostCommitExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */; };
+		BCA132010000000000000070 /* SyncConvergenceRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000070 /* SyncConvergenceRuntime.swift */; };
+		BCA132010000000000000071 /* SyncConvergenceRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000070 /* SyncConvergenceRuntime.swift */; };
+		BCA135010000000000000001 /* SyncConvergenceIdentityTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA135020000000000000001 /* SyncConvergenceIdentityTestSupport.swift */; };
+		BCA135010000000000000002 /* ../MyRAMTests/SyncConvergenceIdentityTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA135020000000000000002 /* ../MyRAMTests/SyncConvergenceIdentityTestSupport.swift */; };
+		BCA137010000000000000001 /* SyncConvergencePostCommitTestDoubles.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA137020000000000000001 /* SyncConvergencePostCommitTestDoubles.swift */; };
+		BCA137010000000000000002 /* ../MyRAMTests/SyncConvergencePostCommitTestDoubles.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA137020000000000000002 /* ../MyRAMTests/SyncConvergencePostCommitTestDoubles.swift */; };
+		BCA152010000000000000001 /* IncrementalEditIntegrationTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000001 /* IncrementalEditIntegrationTypes.swift */; };
+		BCA152010000000000000002 /* IncrementalEditIntegrationTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000001 /* IncrementalEditIntegrationTypes.swift */; };
+		BCA152010000000000000003 /* RetainedOperationCausalGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000002 /* RetainedOperationCausalGraph.swift */; };
+		BCA152010000000000000004 /* RetainedOperationCausalGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000002 /* RetainedOperationCausalGraph.swift */; };
+		BCA152010000000000000005 /* IncrementalEditIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000003 /* IncrementalEditIntegrationTests.swift */; };
 		BCA153010000000000000001 /* ExplicitDeleteProvenanceTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000001 /* ExplicitDeleteProvenanceTypes.swift */; };
 		BCA153010000000000000002 /* ExplicitDeleteProvenanceTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000001 /* ExplicitDeleteProvenanceTypes.swift */; };
 		BCA153010000000000000003 /* ExplicitDeleteProvenanceBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000002 /* ExplicitDeleteProvenanceBuilder.swift */; };
 		BCA153010000000000000004 /* ExplicitDeleteProvenanceBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000002 /* ExplicitDeleteProvenanceBuilder.swift */; };
 		BCA153010000000000000005 /* ExplicitDeleteProvenanceValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000003 /* ExplicitDeleteProvenanceValidator.swift */; };
 		BCA153010000000000000006 /* ExplicitDeleteProvenanceValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000003 /* ExplicitDeleteProvenanceValidator.swift */; };
-		BCA132010000000000000012 /* SyncConvergencePlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000011 /* SyncConvergencePlanner.swift */; };
-		BCA132010000000000000013 /* SyncConvergencePlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000011 /* SyncConvergencePlanner.swift */; };
-		BCA132010000000000000014 /* SyncConvergencePlanningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */; };
-		BCA132010000000000000015 /* SyncConvergencePlanningTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */; };
+		BCA153010000000000000007 /* ExplicitDeleteProvenanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000004 /* ExplicitDeleteProvenanceTests.swift */; };
+		BCA153010000000000000008 /* MacExplicitDeleteProvenanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000005 /* MacExplicitDeleteProvenanceTests.swift */; };
+		BCA154010000000000000001 /* AppliedEditorMutation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000001 /* AppliedEditorMutation.swift */; };
+		BCA154010000000000000002 /* AppliedEditorMutation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000001 /* AppliedEditorMutation.swift */; };
+		BCA154010000000000000003 /* ActiveEditorApplicationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */; };
+		BCA154010000000000000004 /* ActiveEditorApplicationPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */; };
+		BCA154010000000000000005 /* EditorSelectionMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000003 /* EditorSelectionMapper.swift */; };
+		BCA154010000000000000006 /* EditorSelectionMapper.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000003 /* EditorSelectionMapper.swift */; };
+		BCA154010000000000000007 /* EditorRemoteApplyResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000004 /* EditorRemoteApplyResult.swift */; };
+		BCA154010000000000000008 /* EditorRemoteApplyResult.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000004 /* EditorRemoteApplyResult.swift */; };
+		BCA154010000000000000009 /* ActiveEditorApplicationPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000005 /* ActiveEditorApplicationPolicyTests.swift */; };
+		BCA15401000000000000000A /* EditorSelectionMapperTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000006 /* EditorSelectionMapperTests.swift */; };
+		BCA15401000000000000000B /* UIKitEditorSyncBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000007 /* UIKitEditorSyncBridge.swift */; };
+		BCA15401000000000000000C /* UIKitEditorSyncBridgeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000008 /* UIKitEditorSyncBridgeTests.swift */; };
+		BCA15401000000000000000D /* ActiveEditorSyncUpdateHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */; };
+		BCA15401000000000000000E /* ActiveEditorSyncUpdateHandler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */; };
+		BCA15401000000000000000F /* ActiveEditorSyncUpdateHandlerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA15402000000000000000A /* ActiveEditorSyncUpdateHandlerTests.swift */; };
+		BCA155010000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */; };
+		BCA155010000000000000002 /* SyncConvergenceRewriteSafetyPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */; };
 		BCA155010000000000000003 /* SyncConvergenceRewriteSafetyPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA155020000000000000002 /* SyncConvergenceRewriteSafetyPolicyTests.swift */; };
 		BCA155010000000000000004 /* SyncConvergenceRewriteSafetyPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA155020000000000000002 /* SyncConvergenceRewriteSafetyPolicyTests.swift */; };
-		BCA132010000000000000016 /* SyncConvergenceIncorporationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000013 /* SyncConvergenceIncorporationTests.swift */; };
-		BCA132010000000000000017 /* SyncConvergenceIncorporationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000014 /* SyncConvergenceIncorporationTests.swift */; };
-		BCA132010000000000000050 /* SyncConvergencePostCommitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000050 /* SyncConvergencePostCommitTypes.swift */; };
-		BCA132010000000000000051 /* SyncConvergencePostCommitGating.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000051 /* SyncConvergencePostCommitGating.swift */; };
-		BCA132010000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift */; };
-		BCA132010000000000000053 /* SyncConvergencePostCommitExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */; };
-		BCA132010000000000000070 /* SyncConvergenceRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000070 /* SyncConvergenceRuntime.swift */; };
 		BCA161010000000000000001 /* SyncConvergenceLocalObligation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000001 /* SyncConvergenceLocalObligation.swift */; };
 		BCA161010000000000000002 /* SyncConvergenceLocalObligation.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000001 /* SyncConvergenceLocalObligation.swift */; };
 		BCA161010000000000000003 /* FileBackedSyncConvergenceLocalObligationQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000002 /* FileBackedSyncConvergenceLocalObligationQueue.swift */; };
 		BCA161010000000000000004 /* FileBackedSyncConvergenceLocalObligationQueue.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000002 /* FileBackedSyncConvergenceLocalObligationQueue.swift */; };
 		BCA161010000000000000005 /* SyncConvergenceDrainPassScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000003 /* SyncConvergenceDrainPassScheduler.swift */; };
 		BCA161010000000000000006 /* SyncConvergenceDrainPassScheduler.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA161020000000000000003 /* SyncConvergenceDrainPassScheduler.swift */; };
-		BCA132010000000000000054 /* SyncConvergencePostCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000054 /* SyncConvergencePostCommitTests.swift */; };
-		BCA132010000000000000055 /* SyncConvergencePostCommitTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000055 /* SyncConvergencePostCommitTests.swift */; };
-		BCA137010000000000000001 /* SyncConvergencePostCommitTestDoubles.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA137020000000000000001 /* SyncConvergencePostCommitTestDoubles.swift */; };
-		BCA137010000000000000002 /* SyncConvergencePostCommitTestDoubles.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA137020000000000000002 /* SyncConvergencePostCommitTestDoubles.swift */; };
-		BCA135010000000000000001 /* SyncConvergenceIdentityTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA135020000000000000001 /* SyncConvergenceIdentityTestSupport.swift */; };
-		BCA135010000000000000002 /* SyncConvergenceIdentityTestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA135020000000000000002 /* SyncConvergenceIdentityTestSupport.swift */; };
-		BCA132010000000000000056 /* SyncConvergencePostCommitTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000050 /* SyncConvergencePostCommitTypes.swift */; };
-		BCA132010000000000000057 /* SyncConvergencePostCommitGating.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000051 /* SyncConvergencePostCommitGating.swift */; };
-		BCA132010000000000000058 /* SwiftDataSyncConvergencePostCommitStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift */; };
-		BCA132010000000000000059 /* SyncConvergencePostCommitExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */; };
-		BCA132010000000000000071 /* SyncConvergenceRuntime.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000070 /* SyncConvergenceRuntime.swift */; };
-		BCA132010000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */; };
-		BCA132010000000000000031 /* SwiftDataSyncConvergencePersistenceTransaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */; };
-		BCA152010000000000000001 /* IncrementalEditIntegrationTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000001 /* IncrementalEditIntegrationTypes.swift */; };
-		BCA152010000000000000002 /* IncrementalEditIntegrationTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000001 /* IncrementalEditIntegrationTypes.swift */; };
-		BCA152010000000000000003 /* RetainedOperationCausalGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000002 /* RetainedOperationCausalGraph.swift */; };
-		BCA152010000000000000004 /* RetainedOperationCausalGraph.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000002 /* RetainedOperationCausalGraph.swift */; };
-		BCA152010000000000000005 /* IncrementalEditIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA152020000000000000003 /* IncrementalEditIntegrationTests.swift */; };
-		BCA153010000000000000007 /* ExplicitDeleteProvenanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA153020000000000000004 /* ExplicitDeleteProvenanceTests.swift */; };
-		BCA132010000000000000006 /* MyRAMSchema.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC7009FD2FBF927F00F513B4 /* MyRAMSchema.swift */; };
+		BCA162010000000000000001 /* MacSyncConvergenceCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000000001 /* MacSyncConvergenceCoordinator.swift */; };
+		BCA162010000000000000002 /* MacSyncConvergencePresentationAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000000002 /* MacSyncConvergencePresentationAdapter.swift */; };
+		BCA162010000000000101 /* MacSyncConvergencePresentationAdapterTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000101 /* MacSyncConvergencePresentationAdapterTests.swift */; };
+		BCA162010000000000102 /* MacSyncConvergenceCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000102 /* MacSyncConvergenceCoordinatorTests.swift */; };
+		BCA162010000000000103 /* MacSyncIncomingLocalBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA162020000000000103 /* MacSyncIncomingLocalBoundaryTests.swift */; };
+		BCA164010000000000000001 /* AttributedTextStorageKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000001 /* AttributedTextStorageKeys.swift */; };
+		BCA164010000000000000002 /* AttributedTextStorageKeys.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000001 /* AttributedTextStorageKeys.swift */; };
+		BCA164010000000000000003 /* MacEditorTextColorPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */; };
+		BCA164010000000000000004 /* MacEditorTextColorPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */; };
+		BCA170010000000000000001 /* MacStartupCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA170020000000000000001 /* MacStartupCoordinator.swift */; };
 		BCB610022FEC610000610061 /* DebugDemoDataGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */; };
-		BCF104022FF1040000000104 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCE65D0C2EA5447D00F2D0AA /* Note.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D0B2EA5447D00F2D0AA /* Note.swift */; };
 		BCE65D112EA544FB00F2D0AA /* NotesViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D102EA544FB00F2D0AA /* NotesViewModel.swift */; };
 		BCE65D162EA5457600F2D0AA /* NotesListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D152EA5457600F2D0AA /* NotesListView.swift */; };
@@ -176,33 +203,15 @@
 		BCE65D1C2EA569BD00F2D0AA /* PersistenceManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D1B2EA569BD00F2D0AA /* PersistenceManager.swift */; };
 		BCE65D202EA57BCC00F2D0AA /* .gitignore in Resources */ = {isa = PBXBuildFile; fileRef = BCE65D1F2EA57BCC00F2D0AA /* .gitignore */; };
 		BCE65D222EA6000000F2D0AA /* Folder.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCE65D212EA6000000F2D0AA /* Folder.swift */; };
-		C097F01012FF000000000001 /* BareTextViewProfilingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00012FF000000000001 /* BareTextViewProfilingView.swift */; };
-		C097F01022FF000000000002 /* EditorChecklistRendering.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00022FF000000000002 /* EditorChecklistRendering.swift */; };
-		C097F01032FF000000000003 /* EditorPasteFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00032FF000000000003 /* EditorPasteFormatter.swift */; };
-		C097F01042FF000000000004 /* EditorPolicies.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00042FF000000000004 /* EditorPolicies.swift */; };
-		C097F01102FF000000000010 /* EditorFocusSelectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00102FF000000000010 /* EditorFocusSelectionPolicy.swift */; };
-		C097F010F2FF00000000000F /* EditorFormattingCommandResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000F2FF00000000000F /* EditorFormattingCommandResolver.swift */; };
-		C097F010E2FF00000000000E /* EditorFormattingStateResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000E2FF00000000000E /* EditorFormattingStateResolver.swift */; };
-		C097F01112FF000000000011 /* EditorFocusSelectionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00112FF000000000011 /* EditorFocusSelectionPolicyTests.swift */; };
-		C108F0102FF0000000000001 /* EditorFormattingMutationApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = C108F0002FF0000000000001 /* EditorFormattingMutationApplier.swift */; };
-		C108F0112FF0000000000001 /* EditorFormattingMutationApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */; };
-		C097F01052FF000000000005 /* EditorProfilingFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00052FF000000000005 /* EditorProfilingFixtures.swift */; };
-		C097F01062FF000000000006 /* EditorRichTextContentCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */; };
-		C097F010D2FF00000000000D /* EditorSelectionRangeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000D2FF00000000000D /* EditorSelectionRangeResolver.swift */; };
-		C097F01072FF000000000007 /* EditorSelectionProfiling.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00072FF000000000007 /* EditorSelectionProfiling.swift */; };
-		C097F010B2FF00000000000B /* EditorSearchHighlighting.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000B2FF00000000000B /* EditorSearchHighlighting.swift */; };
-		C097F010C2FF00000000000C /* EditorSearchMatchResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000C2FF00000000000C /* EditorSearchMatchResolver.swift */; };
-		C11200102FF1120000000001 /* EditorSearchSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11200012FF1120000000001 /* EditorSearchSession.swift */; };
-		C11200112FF1120000000001 /* EditorSearchSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11200022FF1120000000001 /* EditorSearchSessionTests.swift */; };
-		C097F01082FF000000000008 /* EditorTextPlacementResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00082FF000000000008 /* EditorTextPlacementResolver.swift */; };
-		C097F01092FF000000000009 /* EditorTextViewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00092FF000000000009 /* EditorTextViewFactory.swift */; };
-		C097F010A2FF00000000000A /* EditorTimingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000A2FF00000000000A /* EditorTimingPolicy.swift */; };
+		BCF104022FF1040000000104 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		C07100072FF0000000000001 /* MyRAMSyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100172FF0000000000001 /* MyRAMSyncModels.swift */; };
-		C071000D2FF0000000000001 /* MyRAMSyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100172FF0000000000001 /* MyRAMSyncModels.swift */; };
 		C07100082FF0000000000001 /* MyRAMDeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */; };
 		C07100092FF0000000000001 /* MyRAMSyncController.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100192FF0000000000001 /* MyRAMSyncController.swift */; };
 		C071000A2FF0000000000001 /* NearbySyncView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001A2FF0000000000001 /* NearbySyncView.swift */; };
+		C071000B2FF0000000000001 /* NearbySyncCore in Frameworks */ = {isa = PBXBuildFile; productRef = C07100302FF0000000000001 /* NearbySyncCore */; };
 		C071000C2FF0000000000001 /* MacLegacySyncReceiver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001C2FF0000000000001 /* MacLegacySyncReceiver.swift */; };
+		C071000D2FF0000000000001 /* MyRAMSyncModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100172FF0000000000001 /* MyRAMSyncModels.swift */; };
+		C071000E2FF0000000000001 /* NearbySyncCore in Frameworks */ = {isa = PBXBuildFile; productRef = C07100302FF0000000000001 /* NearbySyncCore */; };
 		C071000F2FF0000000000001 /* PendingSyncStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001F2FF0000000000001 /* PendingSyncStatus.swift */; };
 		C07100102FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C071001E2FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift */; };
 		C07100202FF1600000000001 /* PendingSyncRecoveryJournal.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100222FF1600000000001 /* PendingSyncRecoveryJournal.swift */; };
@@ -210,16 +219,37 @@
 		C07100252FF1600000000001 /* SyncRecoveryStateBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100272FF1600000000001 /* SyncRecoveryStateBuilder.swift */; };
 		C07100282FF1600000000001 /* PendingSyncRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100292FF1600000000001 /* PendingSyncRecoveryTests.swift */; };
 		C07100322FF1600000000001 /* MyRAMSyncControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100332FF1600000000001 /* MyRAMSyncControllerTests.swift */; };
-		C071000B2FF0000000000001 /* NearbySyncCore in Frameworks */ = {isa = PBXBuildFile; productRef = C07100302FF0000000000001 /* NearbySyncCore */; };
-		C071000E2FF0000000000001 /* NearbySyncCore in Frameworks */ = {isa = PBXBuildFile; productRef = C07100302FF0000000000001 /* NearbySyncCore */; };
-		AC50000000000000000000A3 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
-		AC50000000000000000000A4 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
+		C07100342FF1600000000001 /* MacLegacySyncReceiverTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100352FF1600000000001 /* MacLegacySyncReceiverTests.swift */; };
+		C07100362FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */; };
+		C07100382FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */; };
+		C097F01012FF000000000001 /* BareTextViewProfilingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00012FF000000000001 /* BareTextViewProfilingView.swift */; };
+		C097F01022FF000000000002 /* EditorChecklistRendering.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00022FF000000000002 /* EditorChecklistRendering.swift */; };
+		C097F01032FF000000000003 /* EditorPasteFormatter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00032FF000000000003 /* EditorPasteFormatter.swift */; };
+		C097F01042FF000000000004 /* EditorPolicies.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00042FF000000000004 /* EditorPolicies.swift */; };
+		C097F01052FF000000000005 /* EditorProfilingFixtures.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00052FF000000000005 /* EditorProfilingFixtures.swift */; };
+		C097F01062FF000000000006 /* EditorRichTextContentCodec.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */; };
+		C097F01072FF000000000007 /* EditorSelectionProfiling.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00072FF000000000007 /* EditorSelectionProfiling.swift */; };
+		C097F01082FF000000000008 /* EditorTextPlacementResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00082FF000000000008 /* EditorTextPlacementResolver.swift */; };
+		C097F01092FF000000000009 /* EditorTextViewFactory.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00092FF000000000009 /* EditorTextViewFactory.swift */; };
+		C097F010A2FF00000000000A /* EditorTimingPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000A2FF00000000000A /* EditorTimingPolicy.swift */; };
+		C097F010B2FF00000000000B /* EditorSearchHighlighting.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000B2FF00000000000B /* EditorSearchHighlighting.swift */; };
+		C097F010C2FF00000000000C /* EditorSearchMatchResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000C2FF00000000000C /* EditorSearchMatchResolver.swift */; };
+		C097F010D2FF00000000000D /* EditorSelectionRangeResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000D2FF00000000000D /* EditorSelectionRangeResolver.swift */; };
+		C097F010E2FF00000000000E /* EditorFormattingStateResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000E2FF00000000000E /* EditorFormattingStateResolver.swift */; };
+		C097F010F2FF00000000000F /* EditorFormattingCommandResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F000F2FF00000000000F /* EditorFormattingCommandResolver.swift */; };
+		C097F01102FF000000000010 /* EditorFocusSelectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00102FF000000000010 /* EditorFocusSelectionPolicy.swift */; };
+		C097F01112FF000000000011 /* EditorFocusSelectionPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C097F00112FF000000000011 /* EditorFocusSelectionPolicyTests.swift */; };
+		C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */; };
+		C108F0102FF0000000000001 /* EditorFormattingMutationApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = C108F0002FF0000000000001 /* EditorFormattingMutationApplier.swift */; };
+		C108F0112FF0000000000001 /* EditorFormattingMutationApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */; };
+		C11200102FF1120000000001 /* EditorSearchSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11200012FF1120000000001 /* EditorSearchSession.swift */; };
+		C11200112FF1120000000001 /* EditorSearchSessionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C11200022FF1120000000001 /* EditorSearchSessionTests.swift */; };
 		C16801000000000000000001 /* MyRAMSyncOperationIDAllocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000001 /* MyRAMSyncOperationIDAllocator.swift */; };
 		C16801000000000000000002 /* MyRAMSyncOperationIDAllocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000001 /* MyRAMSyncOperationIDAllocator.swift */; };
 		C16801000000000000000003 /* FileBackedSyncOperationIDReservationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000002 /* FileBackedSyncOperationIDReservationStore.swift */; };
 		C16801000000000000000004 /* FileBackedSyncOperationIDReservationStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000002 /* FileBackedSyncOperationIDReservationStore.swift */; };
 		C16801000000000000000005 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000003 /* MyRAMSyncOperationIDAllocatorTests.swift */; };
-		C16801000000000000000006 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000004 /* MyRAMSyncOperationIDAllocatorTests.swift */; };
+		C16801000000000000000006 /* ../MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16802000000000000000004 /* ../MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift */; };
 		C16801000000000000000007 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
 		C16801000000000000000008 /* AnchoredSequenceCore in Frameworks */ = {isa = PBXBuildFile; productRef = AC50000000000000000000A2 /* AnchoredSequenceCore */; };
 		C16901000000000000000001 /* NoteSequenceStateRecord.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000001 /* NoteSequenceStateRecord.swift */; };
@@ -227,7 +257,7 @@
 		C16901000000000000000003 /* SwiftDataNoteSequenceStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000002 /* SwiftDataNoteSequenceStateStore.swift */; };
 		C16901000000000000000004 /* SwiftDataNoteSequenceStateStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000002 /* SwiftDataNoteSequenceStateStore.swift */; };
 		C16901000000000000000005 /* SwiftDataNoteSequenceStateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000003 /* SwiftDataNoteSequenceStateStoreTests.swift */; };
-		C16901000000000000000006 /* SwiftDataNoteSequenceStateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000004 /* SwiftDataNoteSequenceStateStoreTests.swift */; };
+		C16901000000000000000006 /* ../MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C16902000000000000000004 /* ../MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift */; };
 		C17001000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift */; };
 		C17001000000000000000002 /* NoteSequenceStateBootstrapAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift */; };
 		C17001000000000000000003 /* NoteSequenceStateFullBodyIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000002 /* NoteSequenceStateFullBodyIntegration.swift */; };
@@ -235,9 +265,9 @@
 		C17001000000000000000005 /* NoteSequenceStateBootstrapMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000003 /* NoteSequenceStateBootstrapMigrator.swift */; };
 		C17001000000000000000006 /* NoteSequenceStateBootstrapMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000003 /* NoteSequenceStateBootstrapMigrator.swift */; };
 		C17001000000000000000007 /* NoteSequenceStateFullBodyIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000004 /* NoteSequenceStateFullBodyIntegrationTests.swift */; };
-		C17001000000000000000008 /* NoteSequenceStateFullBodyIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000005 /* NoteSequenceStateFullBodyIntegrationTests.swift */; };
+		C17001000000000000000008 /* ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000005 /* ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift */; };
 		C17001000000000000000009 /* NoteSequenceStateBootstrapMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000006 /* NoteSequenceStateBootstrapMigratorTests.swift */; };
-		C1700100000000000000000A /* NoteSequenceStateBootstrapMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000007 /* NoteSequenceStateBootstrapMigratorTests.swift */; };
+		C1700100000000000000000A /* ../MyRAMTests/NoteSequenceStateBootstrapMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000007 /* ../MyRAMTests/NoteSequenceStateBootstrapMigratorTests.swift */; };
 		C1700100000000000000000B /* MYR170FullBodyPathIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000008 /* MYR170FullBodyPathIntegrationTests.swift */; };
 		C1700100000000000000000C /* MYR170MacFullBodyPathIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */; };
 		C1700100000000000000000D /* MacStartupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1700200000000000000000A /* MacStartupCoordinatorTests.swift */; };
@@ -246,11 +276,13 @@
 		C17101000000000000000003 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */; };
 		C17101000000000000000004 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */; };
 		C17101000000000000000005 /* SyncBatchAnchoredPayloadTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000003 /* SyncBatchAnchoredPayloadTests.swift */; };
-		C0A100022FEC111100A1B2C3 /* NoteIntelligence.swift in Sources */ = {isa = PBXBuildFile; fileRef = C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */; };
 		D19501000000000000000001 /* MarkdownFileIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000001 /* MarkdownFileIO.swift */; };
 		D19501000000000000000002 /* MarkdownFileIO.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000001 /* MarkdownFileIO.swift */; };
 		D19501000000000000000003 /* MarkdownFileIOTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000002 /* MarkdownFileIOTests.swift */; };
 		D19501000000000000000004 /* MarkdownFileIOTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000002 /* MarkdownFileIOTests.swift */; };
+		D19501000000000000000005 /* NoteEditorFileOperationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */; };
+		D19501000000000000000006 /* MarkdownFileOperationBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000004 /* MarkdownFileOperationBoundaryTests.swift */; };
+		D19501000000000000000007 /* MarkdownImportIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000005 /* MarkdownImportIntegrationTests.swift */; };
 		D19501000000000000000008 /* MacMarkdownFileCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000006 /* MacMarkdownFileCommands.swift */; };
 		D19501000000000000000009 /* MacMarkdownFileOperationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000007 /* MacMarkdownFileOperationCoordinator.swift */; };
 		D1950100000000000000000A /* MacMarkdownFileIOIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000008 /* MacMarkdownFileIOIntegrationTests.swift */; };
@@ -260,10 +292,10 @@
 		D1950100000000000000000E /* MarkdownPreviewParserTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1950200000000000000000A /* MarkdownPreviewParserTests.swift */; };
 		D1950100000000000000000F /* MarkdownPreviewIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1950200000000000000000B /* MarkdownPreviewIntegrationTests.swift */; };
 		D19501000000000000000010 /* MacMarkdownPreviewIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1950200000000000000000C /* MacMarkdownPreviewIntegrationTests.swift */; };
-		D19501000000000000000013 /* MarkdownPreviewUIKitHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1950200000000000000000E /* MarkdownPreviewUIKitHarnessTests.swift */; };
-		D19501000000000000000014 /* MarkdownPreviewUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1950200000000000000000F /* MarkdownPreviewUITests.swift */; };
 		D19501000000000000000011 /* MarkdownPreviewModePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1950200000000000000000D /* MarkdownPreviewModePolicy.swift */; };
 		D19501000000000000000012 /* MarkdownPreviewModePolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1950200000000000000000D /* MarkdownPreviewModePolicy.swift */; };
+		D19501000000000000000013 /* MarkdownPreviewUIKitHarnessTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1950200000000000000000E /* MarkdownPreviewUIKitHarnessTests.swift */; };
+		D19501000000000000000014 /* MarkdownPreviewUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1950200000000000000000F /* MarkdownPreviewUITests.swift */; };
 		D19501000000000000000015 /* MarkdownPreviewUIKitSyncExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000010 /* MarkdownPreviewUIKitSyncExecutor.swift */; };
 		D19501000000000000000016 /* MarkdownPreviewUIKitSyncExecutor.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000010 /* MarkdownPreviewUIKitSyncExecutor.swift */; };
 		D19501000000000000000017 /* MacMarkdownPreviewFocusResignation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000011 /* MacMarkdownPreviewFocusResignation.swift */; };
@@ -273,19 +305,30 @@
 		D1950100000000000000001B /* MarkdownPreviewUIKitEditorResignation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000013 /* MarkdownPreviewUIKitEditorResignation.swift */; };
 		D1950100000000000000001C /* MarkdownPreviewUIKitPostResignationReconciliation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000014 /* MarkdownPreviewUIKitPostResignationReconciliation.swift */; };
 		D1950100000000000000001D /* MarkdownPreviewUIKitPostResignationReconciliation.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000014 /* MarkdownPreviewUIKitPostResignationReconciliation.swift */; };
+		D1950100000000000000001E /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000015 /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift */; };
+		D1950100000000000000001F /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000015 /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift */; };
 		E19601000000000000000001 /* MacNoteViewZoom.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000001 /* MacNoteViewZoom.swift */; };
 		E19601000000000000000002 /* MacMarkdownPreviewDocumentBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000002 /* MacMarkdownPreviewDocumentBuilder.swift */; };
 		E19601000000000000000003 /* MacMarkdownPreviewTextView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000003 /* MacMarkdownPreviewTextView.swift */; };
 		E19601000000000000000004 /* MacNoteViewZoomTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000004 /* MacNoteViewZoomTests.swift */; };
 		E19601000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E19602000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift */; };
-		D1950100000000000000001E /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000015 /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift */; };
-		D1950100000000000000001F /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000015 /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift */; };
-		D19501000000000000000005 /* NoteEditorFileOperationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */; };
-		D19501000000000000000006 /* MarkdownFileOperationBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000004 /* MarkdownFileOperationBoundaryTests.swift */; };
-		D19501000000000000000007 /* MarkdownImportIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000005 /* MarkdownImportIntegrationTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		BC4CB4DD301EF1E20062C4D6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BC9F1BA42EA47D2E0045FD72 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BC4CB4CC301EF1DF0062C4D6;
+			remoteInfo = MyRAMWidgetExtension;
+		};
+		BC4CB4F6301EF31C0062C4D6 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BC9F1BA42EA47D2E0045FD72 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BC4CB4E8301EF31A0062C4D6;
+			remoteInfo = MyRAMMacWidgetExtension;
+		};
 		BC9F1BBF2EA47D310045FD72 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = BC9F1BA42EA47D2E0045FD72 /* Project object */;
@@ -309,13 +352,52 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		BC4CB4E4301EF1E20062C4D6 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				BC4CB4DF301EF1E20062C4D6 /* MyRAMWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BC4CB4FD301EF31C0062C4D6 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				BC4CB4F8301EF31C0062C4D6 /* MyRAMMacWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConflictStore.swift; sourceTree = "<group>"; };
 		BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncChangeApplier.swift; sourceTree = "<group>"; };
-		C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMLegacySyncChangeValidator.swift; sourceTree = "<group>"; };
 		BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncStatusIndicator.swift; sourceTree = "<group>"; };
 		BC24E30A2FDF8F94004694D1 /* SyncConflictViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConflictViews.swift; sourceTree = "<group>"; };
 		BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncConflictService.swift; sourceTree = "<group>"; };
+		BC4CB4B4301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMWidgetContentSelectionPolicy.swift; sourceTree = "<group>"; };
+		BC4CB4B5301EF17C0062C4D6 /* MyRAMWidgetDeepLink.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMWidgetDeepLink.swift; sourceTree = "<group>"; };
+		BC4CB4B6301EF17C0062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMWidgetRuntimeConfiguration.swift; sourceTree = "<group>"; };
+		BC4CB4B7301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMWidgetSnapshot.swift; sourceTree = "<group>"; };
+		BC4CB4B8301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMWidgetSnapshotCodec.swift; sourceTree = "<group>"; };
+		BC4CB4B9301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMWidgetSnapshotStore.swift; sourceTree = "<group>"; };
+		BC4CB4CD301EF1DF0062C4D6 /* MyRAMWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MyRAMWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		BC4CB4CF301EF1DF0062C4D6 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = System/Library/Frameworks/WidgetKit.framework; sourceTree = SDKROOT; };
+		BC4CB4D1301EF1DF0062C4D6 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = System/Library/Frameworks/SwiftUI.framework; sourceTree = SDKROOT; };
+		BC4CB4E9301EF31A0062C4D6 /* MyRAMMacWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = MyRAMMacWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		BC4CB50A301F65510062C4D6 /* MyRAM.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MyRAM.entitlements; sourceTree = "<group>"; };
+		BC4CB50B301F65610062C4D6 /* MyRAMMac.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MyRAMMac.entitlements; sourceTree = "<group>"; };
+		BC4CB50C301F65720062C4D6 /* MyRAMWidgetExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MyRAMWidgetExtension.entitlements; sourceTree = "<group>"; };
+		BC4CB50D301F65790062C4D6 /* MyRAMMacWidgetExtension.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = MyRAMMacWidgetExtension.entitlements; sourceTree = "<group>"; };
+		BC4CB50E301F70E00062C4D6 /* MyRAMWidgetCoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMWidgetCoreTests.swift; sourceTree = "<group>"; };
 		BC7009FD2FBF927F00F513B4 /* MyRAMSchema.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSchema.swift; sourceTree = "<group>"; };
 		BC8A7F8D2FCA1F1200A9C001 /* docs/note-intelligence */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "docs/note-intelligence"; sourceTree = "<group>"; };
 		BC9F1BAC2EA47D2E0045FD72 /* MyRAM.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyRAM.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -328,12 +410,10 @@
 		BC9F1BC82EA47D310045FD72 /* MyRAMUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyRAMUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BC9F1BCC2EA47D310045FD72 /* MyRAMUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITests.swift; sourceTree = "<group>"; };
 		BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITestsLaunchTests.swift; sourceTree = "<group>"; };
-		BCA105020000000000000001 /* MyRAMMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyRAMMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BCA104020000000000000001 /* RTFCoding.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RTFCoding.swift; sourceTree = "<group>"; };
-		BCA164020000000000000001 /* AttributedTextStorageKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttributedTextStorageKeys.swift; sourceTree = "<group>"; };
+		BCA105020000000000000001 /* MyRAMMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyRAMMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BCA105020000000000000002 /* MyRAMMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacApp.swift; sourceTree = "<group>"; };
 		BCA105020000000000000003 /* MyRAMMacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacRootView.swift; sourceTree = "<group>"; };
-		BCA170020000000000000001 /* MacStartupCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStartupCoordinator.swift; sourceTree = "<group>"; };
 		BCA106020000000000000001 /* MacNoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteEditorView.swift; sourceTree = "<group>"; };
 		BCA106020000000000000002 /* MacTextViewRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTextViewRepresentable.swift; sourceTree = "<group>"; };
 		BCA106020000000000000003 /* MacEditorSampleDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSampleDocument.swift; sourceTree = "<group>"; };
@@ -341,7 +421,6 @@
 		BCA106020000000000000006 /* MacIncomingSyncApplicationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacIncomingSyncApplicationPolicy.swift; sourceTree = "<group>"; };
 		BCA106020000000000000007 /* MacEditorSyncBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSyncBridge.swift; sourceTree = "<group>"; };
 		BCA106020000000000000008 /* MacNSRangeClamp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNSRangeClamp.swift; sourceTree = "<group>"; };
-		BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorTextColorPolicy.swift; sourceTree = "<group>"; };
 		BCA107020000000000000001 /* MacEditorSampleDocumentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSampleDocumentTests.swift; sourceTree = "<group>"; };
 		BCA107020000000000000002 /* MyRAMMacTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyRAMMacTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BCA107020000000000000003 /* MacEditorSelectionMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSelectionMapperTests.swift; sourceTree = "<group>"; };
@@ -350,7 +429,6 @@
 		BCA107020000000000000006 /* MacEditorSyncBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSyncBridgeTests.swift; sourceTree = "<group>"; };
 		BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotePersistenceAdapter.swift; sourceTree = "<group>"; };
 		BCA109020000000000000002 /* MacNotePersistenceAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNotePersistenceAdapterTests.swift; sourceTree = "<group>"; };
-		BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorTextColorPolicyTests.swift; sourceTree = "<group>"; };
 		BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSidebarCollapsePolicy.swift; sourceTree = "<group>"; };
 		BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSidebarCollapsePolicyTests.swift; sourceTree = "<group>"; };
 		BCA122020000000000000001 /* MacSyncModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncModels.swift; sourceTree = "<group>"; };
@@ -362,13 +440,8 @@
 		BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncSeenBatchStoreTests.swift; sourceTree = "<group>"; };
 		BCA122020000000000000008 /* MacSyncBatchAccumulatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchAccumulatorTests.swift; sourceTree = "<group>"; };
 		BCA122020000000000000009 /* MacSyncBatchApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchApplierTests.swift; sourceTree = "<group>"; };
-		BCA153020000000000000005 /* MacExplicitDeleteProvenanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacExplicitDeleteProvenanceTests.swift; sourceTree = "<group>"; };
 		BCA12202000000000000000A /* MacAppliedSyncBatch.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacAppliedSyncBatch.swift; sourceTree = "<group>"; };
 		BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchControllerTests.swift; sourceTree = "<group>"; };
-		BCA162020000000000101 /* MacSyncConvergencePresentationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConvergencePresentationAdapterTests.swift; sourceTree = "<group>"; };
-		BCA162020000000000102 /* MacSyncConvergenceCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConvergenceCoordinatorTests.swift; sourceTree = "<group>"; };
-		BCA162020000000000103 /* MacSyncIncomingLocalBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncIncomingLocalBoundaryTests.swift; sourceTree = "<group>"; };
-		C07100352FF1600000000001 /* MacLegacySyncReceiverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLegacySyncReceiverTests.swift; sourceTree = "<group>"; };
 		BCA123020000000000000001 /* SyncBatchPayload.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchPayload.swift; sourceTree = "<group>"; };
 		BCA123020000000000000002 /* SyncBatchEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchEnvelope.swift; sourceTree = "<group>"; };
 		BCA123020000000000000003 /* MultipeerSyncMessageEnvelope.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MultipeerSyncMessageEnvelope.swift; sourceTree = "<group>"; };
@@ -382,56 +455,63 @@
 		BCA123020000000000000011 /* IPhoneSyncBatchApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPhoneSyncBatchApplierTests.swift; sourceTree = "<group>"; };
 		BCA123020000000000000012 /* SyncBatchNoteChangeCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchNoteChangeCapture.swift; sourceTree = "<group>"; };
 		BCA123020000000000000013 /* MacSyncBatchController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncBatchController.swift; sourceTree = "<group>"; };
-		BCA162020000000000000001 /* MacSyncConvergenceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConvergenceCoordinator.swift; sourceTree = "<group>"; };
-		BCA162020000000000000002 /* MacSyncConvergencePresentationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConvergencePresentationAdapter.swift; sourceTree = "<group>"; };
 		BCA123020000000000000014 /* SyncBatchUnsentQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchUnsentQueue.swift; sourceTree = "<group>"; };
 		BCA123020000000000000015 /* SyncBatchUnsentQueueTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchUnsentQueueTests.swift; sourceTree = "<group>"; };
 		BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBackedSyncBatchQueue.swift; sourceTree = "<group>"; };
-		BCA154020000000000000001 /* AppliedEditorMutation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppliedEditorMutation.swift; sourceTree = "<group>"; };
-		BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorApplicationPolicy.swift; sourceTree = "<group>"; };
-		BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorSyncUpdateHandler.swift; sourceTree = "<group>"; };
-		BCA154020000000000000003 /* EditorSelectionMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionMapper.swift; sourceTree = "<group>"; };
-		BCA154020000000000000004 /* EditorRemoteApplyResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorRemoteApplyResult.swift; sourceTree = "<group>"; };
-		BCA154020000000000000005 /* ActiveEditorApplicationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorApplicationPolicyTests.swift; sourceTree = "<group>"; };
-		BCA15402000000000000000A /* ActiveEditorSyncUpdateHandlerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorSyncUpdateHandlerTests.swift; sourceTree = "<group>"; };
-		BCA154020000000000000006 /* EditorSelectionMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionMapperTests.swift; sourceTree = "<group>"; };
-		BCA154020000000000000007 /* UIKitEditorSyncBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitEditorSyncBridge.swift; sourceTree = "<group>"; };
-		BCA154020000000000000008 /* UIKitEditorSyncBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitEditorSyncBridgeTests.swift; sourceTree = "<group>"; };
 		BCA132020000000000000001 /* SyncConvergenceTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceTypes.swift; sourceTree = "<group>"; };
 		BCA132020000000000000002 /* SyncConvergenceModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceModels.swift; sourceTree = "<group>"; };
 		BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceFoundationTests.swift; sourceTree = "<group>"; };
 		BCA132020000000000000010 /* SyncConvergencePlanningTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePlanningTypes.swift; sourceTree = "<group>"; };
-		BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceRewriteSafetyPolicy.swift; sourceTree = "<group>"; };
-		BCA153020000000000000001 /* ExplicitDeleteProvenanceTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceTypes.swift; sourceTree = "<group>"; };
-		BCA153020000000000000002 /* ExplicitDeleteProvenanceBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceBuilder.swift; sourceTree = "<group>"; };
-		BCA153020000000000000003 /* ExplicitDeleteProvenanceValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceValidator.swift; sourceTree = "<group>"; };
 		BCA132020000000000000011 /* SyncConvergencePlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePlanner.swift; sourceTree = "<group>"; };
 		BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePlanningTests.swift; sourceTree = "<group>"; };
-		BCA155020000000000000002 /* SyncConvergenceRewriteSafetyPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceRewriteSafetyPolicyTests.swift; sourceTree = "<group>"; };
 		BCA132020000000000000013 /* SyncConvergenceIncorporationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceIncorporationTests.swift; sourceTree = "<group>"; };
-		BCA132020000000000000014 /* SyncConvergenceIncorporationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergenceIncorporationTests.swift; sourceTree = "<group>"; };
-		BCA153020000000000000004 /* ExplicitDeleteProvenanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceTests.swift; sourceTree = "<group>"; };
+		BCA132020000000000000014 /* ../MyRAMTests/SyncConvergenceIncorporationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergenceIncorporationTests.swift; sourceTree = "<group>"; };
+		BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataSyncConvergencePersistenceTransaction.swift; sourceTree = "<group>"; };
 		BCA132020000000000000050 /* SyncConvergencePostCommitTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitTypes.swift; sourceTree = "<group>"; };
 		BCA132020000000000000051 /* SyncConvergencePostCommitGating.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitGating.swift; sourceTree = "<group>"; };
 		BCA132020000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataSyncConvergencePostCommitStore.swift; sourceTree = "<group>"; };
 		BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitExecutor.swift; sourceTree = "<group>"; };
-		BCA132020000000000000070 /* SyncConvergenceRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceRuntime.swift; sourceTree = "<group>"; };
-		BCA161020000000000000001 /* SyncConvergenceLocalObligation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceLocalObligation.swift; sourceTree = "<group>"; };
-		BCA161020000000000000002 /* FileBackedSyncConvergenceLocalObligationQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBackedSyncConvergenceLocalObligationQueue.swift; sourceTree = "<group>"; };
-		BCA161020000000000000003 /* SyncConvergenceDrainPassScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceDrainPassScheduler.swift; sourceTree = "<group>"; };
 		BCA132020000000000000054 /* SyncConvergencePostCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitTests.swift; sourceTree = "<group>"; };
-		BCA132020000000000000055 /* SyncConvergencePostCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergencePostCommitTests.swift; sourceTree = "<group>"; };
-		BCA137020000000000000001 /* SyncConvergencePostCommitTestDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitTestDoubles.swift; sourceTree = "<group>"; };
-		BCA137020000000000000002 /* SyncConvergencePostCommitTestDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergencePostCommitTestDoubles.swift; sourceTree = "<group>"; };
+		BCA132020000000000000055 /* ../MyRAMTests/SyncConvergencePostCommitTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergencePostCommitTests.swift; sourceTree = "<group>"; };
+		BCA132020000000000000070 /* SyncConvergenceRuntime.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceRuntime.swift; sourceTree = "<group>"; };
 		BCA135020000000000000001 /* SyncConvergenceIdentityTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceIdentityTestSupport.swift; sourceTree = "<group>"; };
-		BCA135020000000000000002 /* SyncConvergenceIdentityTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergenceIdentityTestSupport.swift; sourceTree = "<group>"; };
-		BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataSyncConvergencePersistenceTransaction.swift; sourceTree = "<group>"; };
+		BCA135020000000000000002 /* ../MyRAMTests/SyncConvergenceIdentityTestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergenceIdentityTestSupport.swift; sourceTree = "<group>"; };
+		BCA137020000000000000001 /* SyncConvergencePostCommitTestDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergencePostCommitTestDoubles.swift; sourceTree = "<group>"; };
+		BCA137020000000000000002 /* ../MyRAMTests/SyncConvergencePostCommitTestDoubles.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SyncConvergencePostCommitTestDoubles.swift; sourceTree = "<group>"; };
 		BCA152020000000000000001 /* IncrementalEditIntegrationTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncrementalEditIntegrationTypes.swift; sourceTree = "<group>"; };
 		BCA152020000000000000002 /* RetainedOperationCausalGraph.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RetainedOperationCausalGraph.swift; sourceTree = "<group>"; };
 		BCA152020000000000000003 /* IncrementalEditIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IncrementalEditIntegrationTests.swift; sourceTree = "<group>"; };
+		BCA153020000000000000001 /* ExplicitDeleteProvenanceTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceTypes.swift; sourceTree = "<group>"; };
+		BCA153020000000000000002 /* ExplicitDeleteProvenanceBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceBuilder.swift; sourceTree = "<group>"; };
+		BCA153020000000000000003 /* ExplicitDeleteProvenanceValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceValidator.swift; sourceTree = "<group>"; };
+		BCA153020000000000000004 /* ExplicitDeleteProvenanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExplicitDeleteProvenanceTests.swift; sourceTree = "<group>"; };
+		BCA153020000000000000005 /* MacExplicitDeleteProvenanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacExplicitDeleteProvenanceTests.swift; sourceTree = "<group>"; };
+		BCA154020000000000000001 /* AppliedEditorMutation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppliedEditorMutation.swift; sourceTree = "<group>"; };
+		BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorApplicationPolicy.swift; sourceTree = "<group>"; };
+		BCA154020000000000000003 /* EditorSelectionMapper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionMapper.swift; sourceTree = "<group>"; };
+		BCA154020000000000000004 /* EditorRemoteApplyResult.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorRemoteApplyResult.swift; sourceTree = "<group>"; };
+		BCA154020000000000000005 /* ActiveEditorApplicationPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorApplicationPolicyTests.swift; sourceTree = "<group>"; };
+		BCA154020000000000000006 /* EditorSelectionMapperTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionMapperTests.swift; sourceTree = "<group>"; };
+		BCA154020000000000000007 /* UIKitEditorSyncBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitEditorSyncBridge.swift; sourceTree = "<group>"; };
+		BCA154020000000000000008 /* UIKitEditorSyncBridgeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UIKitEditorSyncBridgeTests.swift; sourceTree = "<group>"; };
+		BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorSyncUpdateHandler.swift; sourceTree = "<group>"; };
+		BCA15402000000000000000A /* ActiveEditorSyncUpdateHandlerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActiveEditorSyncUpdateHandlerTests.swift; sourceTree = "<group>"; };
+		BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceRewriteSafetyPolicy.swift; sourceTree = "<group>"; };
+		BCA155020000000000000002 /* SyncConvergenceRewriteSafetyPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceRewriteSafetyPolicyTests.swift; sourceTree = "<group>"; };
+		BCA161020000000000000001 /* SyncConvergenceLocalObligation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceLocalObligation.swift; sourceTree = "<group>"; };
+		BCA161020000000000000002 /* FileBackedSyncConvergenceLocalObligationQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBackedSyncConvergenceLocalObligationQueue.swift; sourceTree = "<group>"; };
+		BCA161020000000000000003 /* SyncConvergenceDrainPassScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncConvergenceDrainPassScheduler.swift; sourceTree = "<group>"; };
+		BCA162020000000000000001 /* MacSyncConvergenceCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConvergenceCoordinator.swift; sourceTree = "<group>"; };
+		BCA162020000000000000002 /* MacSyncConvergencePresentationAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConvergencePresentationAdapter.swift; sourceTree = "<group>"; };
+		BCA162020000000000101 /* MacSyncConvergencePresentationAdapterTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConvergencePresentationAdapterTests.swift; sourceTree = "<group>"; };
+		BCA162020000000000102 /* MacSyncConvergenceCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConvergenceCoordinatorTests.swift; sourceTree = "<group>"; };
+		BCA162020000000000103 /* MacSyncIncomingLocalBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncIncomingLocalBoundaryTests.swift; sourceTree = "<group>"; };
+		BCA164020000000000000001 /* AttributedTextStorageKeys.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AttributedTextStorageKeys.swift; sourceTree = "<group>"; };
+		BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorTextColorPolicy.swift; sourceTree = "<group>"; };
+		BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorTextColorPolicyTests.swift; sourceTree = "<group>"; };
+		BCA170020000000000000001 /* MacStartupCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStartupCoordinator.swift; sourceTree = "<group>"; };
 		BCB610012FEC610000610061 /* DebugDemoDataGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugDemoDataGenerator.swift; sourceTree = "<group>"; };
 		BCCAFE012FEE000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		BCF104012FF1040000000104 /* MyRAMPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMPlatform.swift; sourceTree = "<group>"; };
 		BCE65D0B2EA5447D00F2D0AA /* Note.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Note.swift; sourceTree = "<group>"; };
 		BCE65D102EA544FB00F2D0AA /* NotesViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesViewModel.swift; sourceTree = "<group>"; };
 		BCE65D152EA5457600F2D0AA /* NotesListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotesListView.swift; sourceTree = "<group>"; };
@@ -439,27 +519,7 @@
 		BCE65D1B2EA569BD00F2D0AA /* PersistenceManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PersistenceManager.swift; sourceTree = "<group>"; };
 		BCE65D1F2EA57BCC00F2D0AA /* .gitignore */ = {isa = PBXFileReference; lastKnownFileType = text; path = .gitignore; sourceTree = "<group>"; };
 		BCE65D212EA6000000F2D0AA /* Folder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Folder.swift; sourceTree = "<group>"; };
-		C097F00012FF000000000001 /* BareTextViewProfilingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareTextViewProfilingView.swift; sourceTree = "<group>"; };
-		C097F00022FF000000000002 /* EditorChecklistRendering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorChecklistRendering.swift; sourceTree = "<group>"; };
-		C097F00032FF000000000003 /* EditorPasteFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPasteFormatter.swift; sourceTree = "<group>"; };
-		C097F00042FF000000000004 /* EditorPolicies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPolicies.swift; sourceTree = "<group>"; };
-		C097F00102FF000000000010 /* EditorFocusSelectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFocusSelectionPolicy.swift; sourceTree = "<group>"; };
-		C097F000F2FF00000000000F /* EditorFormattingCommandResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingCommandResolver.swift; sourceTree = "<group>"; };
-		C097F000E2FF00000000000E /* EditorFormattingStateResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingStateResolver.swift; sourceTree = "<group>"; };
-		C097F00112FF000000000011 /* EditorFocusSelectionPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFocusSelectionPolicyTests.swift; sourceTree = "<group>"; };
-		C108F0002FF0000000000001 /* EditorFormattingMutationApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingMutationApplier.swift; sourceTree = "<group>"; };
-		C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingMutationApplierTests.swift; sourceTree = "<group>"; };
-		C097F00052FF000000000005 /* EditorProfilingFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorProfilingFixtures.swift; sourceTree = "<group>"; };
-		C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorRichTextContentCodec.swift; sourceTree = "<group>"; };
-		C097F000D2FF00000000000D /* EditorSelectionRangeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionRangeResolver.swift; sourceTree = "<group>"; };
-		C097F00072FF000000000007 /* EditorSelectionProfiling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionProfiling.swift; sourceTree = "<group>"; };
-		C097F000B2FF00000000000B /* EditorSearchHighlighting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSearchHighlighting.swift; sourceTree = "<group>"; };
-		C097F000C2FF00000000000C /* EditorSearchMatchResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSearchMatchResolver.swift; sourceTree = "<group>"; };
-		C11200012FF1120000000001 /* EditorSearchSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSearchSession.swift; sourceTree = "<group>"; };
-		C11200022FF1120000000001 /* EditorSearchSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSearchSessionTests.swift; sourceTree = "<group>"; };
-		C097F00082FF000000000008 /* EditorTextPlacementResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextPlacementResolver.swift; sourceTree = "<group>"; };
-		C097F00092FF000000000009 /* EditorTextViewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextViewFactory.swift; sourceTree = "<group>"; };
-		C097F000A2FF00000000000A /* EditorTimingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTimingPolicy.swift; sourceTree = "<group>"; };
+		BCF104012FF1040000000104 /* MyRAMPlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMPlatform.swift; sourceTree = "<group>"; };
 		C07100172FF0000000000001 /* MyRAMSyncModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncModels.swift; sourceTree = "<group>"; };
 		C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMDeviceIdentity.swift; sourceTree = "<group>"; };
 		C07100192FF0000000000001 /* MyRAMSyncController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncController.swift; sourceTree = "<group>"; };
@@ -472,30 +532,56 @@
 		C07100272FF1600000000001 /* SyncRecoveryStateBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncRecoveryStateBuilder.swift; sourceTree = "<group>"; };
 		C07100292FF1600000000001 /* PendingSyncRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PendingSyncRecoveryTests.swift; sourceTree = "<group>"; };
 		C07100332FF1600000000001 /* MyRAMSyncControllerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncControllerTests.swift; sourceTree = "<group>"; };
+		C07100352FF1600000000001 /* MacLegacySyncReceiverTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacLegacySyncReceiverTests.swift; sourceTree = "<group>"; };
+		C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMLegacySyncChangeValidator.swift; sourceTree = "<group>"; };
+		C097F00012FF000000000001 /* BareTextViewProfilingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BareTextViewProfilingView.swift; sourceTree = "<group>"; };
+		C097F00022FF000000000002 /* EditorChecklistRendering.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorChecklistRendering.swift; sourceTree = "<group>"; };
+		C097F00032FF000000000003 /* EditorPasteFormatter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPasteFormatter.swift; sourceTree = "<group>"; };
+		C097F00042FF000000000004 /* EditorPolicies.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorPolicies.swift; sourceTree = "<group>"; };
+		C097F00052FF000000000005 /* EditorProfilingFixtures.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorProfilingFixtures.swift; sourceTree = "<group>"; };
+		C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorRichTextContentCodec.swift; sourceTree = "<group>"; };
+		C097F00072FF000000000007 /* EditorSelectionProfiling.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionProfiling.swift; sourceTree = "<group>"; };
+		C097F00082FF000000000008 /* EditorTextPlacementResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextPlacementResolver.swift; sourceTree = "<group>"; };
+		C097F00092FF000000000009 /* EditorTextViewFactory.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTextViewFactory.swift; sourceTree = "<group>"; };
+		C097F000A2FF00000000000A /* EditorTimingPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorTimingPolicy.swift; sourceTree = "<group>"; };
+		C097F000B2FF00000000000B /* EditorSearchHighlighting.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSearchHighlighting.swift; sourceTree = "<group>"; };
+		C097F000C2FF00000000000C /* EditorSearchMatchResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSearchMatchResolver.swift; sourceTree = "<group>"; };
+		C097F000D2FF00000000000D /* EditorSelectionRangeResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSelectionRangeResolver.swift; sourceTree = "<group>"; };
+		C097F000E2FF00000000000E /* EditorFormattingStateResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingStateResolver.swift; sourceTree = "<group>"; };
+		C097F000F2FF00000000000F /* EditorFormattingCommandResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingCommandResolver.swift; sourceTree = "<group>"; };
+		C097F00102FF000000000010 /* EditorFocusSelectionPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFocusSelectionPolicy.swift; sourceTree = "<group>"; };
+		C097F00112FF000000000011 /* EditorFocusSelectionPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFocusSelectionPolicyTests.swift; sourceTree = "<group>"; };
+		C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteIntelligence.swift; sourceTree = "<group>"; };
+		C108F0002FF0000000000001 /* EditorFormattingMutationApplier.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingMutationApplier.swift; sourceTree = "<group>"; };
+		C108F0012FF0000000000001 /* EditorFormattingMutationApplierTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorFormattingMutationApplierTests.swift; sourceTree = "<group>"; };
+		C11200012FF1120000000001 /* EditorSearchSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSearchSession.swift; sourceTree = "<group>"; };
+		C11200022FF1120000000001 /* EditorSearchSessionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorSearchSessionTests.swift; sourceTree = "<group>"; };
 		C16802000000000000000001 /* MyRAMSyncOperationIDAllocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncOperationIDAllocator.swift; sourceTree = "<group>"; };
 		C16802000000000000000002 /* FileBackedSyncOperationIDReservationStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBackedSyncOperationIDReservationStore.swift; sourceTree = "<group>"; };
 		C16802000000000000000003 /* MyRAMSyncOperationIDAllocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMSyncOperationIDAllocatorTests.swift; sourceTree = "<group>"; };
-		C16802000000000000000004 /* MyRAMSyncOperationIDAllocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift; sourceTree = "<group>"; };
+		C16802000000000000000004 /* ../MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift; sourceTree = "<group>"; };
 		C16902000000000000000001 /* NoteSequenceStateRecord.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateRecord.swift; sourceTree = "<group>"; };
 		C16902000000000000000002 /* SwiftDataNoteSequenceStateStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataNoteSequenceStateStore.swift; sourceTree = "<group>"; };
 		C16902000000000000000003 /* SwiftDataNoteSequenceStateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SwiftDataNoteSequenceStateStoreTests.swift; sourceTree = "<group>"; };
-		C16902000000000000000004 /* SwiftDataNoteSequenceStateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift; sourceTree = "<group>"; };
+		C16902000000000000000004 /* ../MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift; sourceTree = "<group>"; };
 		C17002000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateBootstrapAdapter.swift; sourceTree = "<group>"; };
 		C17002000000000000000002 /* NoteSequenceStateFullBodyIntegration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateFullBodyIntegration.swift; sourceTree = "<group>"; };
 		C17002000000000000000003 /* NoteSequenceStateBootstrapMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateBootstrapMigrator.swift; sourceTree = "<group>"; };
 		C17002000000000000000004 /* NoteSequenceStateFullBodyIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateFullBodyIntegrationTests.swift; sourceTree = "<group>"; };
-		C17002000000000000000005 /* NoteSequenceStateFullBodyIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift; sourceTree = "<group>"; };
+		C17002000000000000000005 /* ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift; sourceTree = "<group>"; };
 		C17002000000000000000006 /* NoteSequenceStateBootstrapMigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateBootstrapMigratorTests.swift; sourceTree = "<group>"; };
-		C17002000000000000000007 /* NoteSequenceStateBootstrapMigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/NoteSequenceStateBootstrapMigratorTests.swift; sourceTree = "<group>"; };
+		C17002000000000000000007 /* ../MyRAMTests/NoteSequenceStateBootstrapMigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/NoteSequenceStateBootstrapMigratorTests.swift; sourceTree = "<group>"; };
 		C17002000000000000000008 /* MYR170FullBodyPathIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR170FullBodyPathIntegrationTests.swift; sourceTree = "<group>"; };
 		C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR170MacFullBodyPathIntegrationTests.swift; sourceTree = "<group>"; };
 		C1700200000000000000000A /* MacStartupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStartupCoordinatorTests.swift; sourceTree = "<group>"; };
 		C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadAdapter.swift; sourceTree = "<group>"; };
 		C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadPolicy.swift; sourceTree = "<group>"; };
 		C17102000000000000000003 /* SyncBatchAnchoredPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadTests.swift; sourceTree = "<group>"; };
-		C0A100012FEC111100A1B2C3 /* NoteIntelligence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteIntelligence.swift; sourceTree = "<group>"; };
 		D19502000000000000000001 /* MarkdownFileIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileIO.swift; sourceTree = "<group>"; };
 		D19502000000000000000002 /* MarkdownFileIOTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileIOTests.swift; sourceTree = "<group>"; };
+		D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditorFileOperationBridge.swift; sourceTree = "<group>"; };
+		D19502000000000000000004 /* MarkdownFileOperationBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileOperationBoundaryTests.swift; sourceTree = "<group>"; };
+		D19502000000000000000005 /* MarkdownImportIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownImportIntegrationTests.swift; sourceTree = "<group>"; };
 		D19502000000000000000006 /* MacMarkdownFileCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownFileCommands.swift; sourceTree = "<group>"; };
 		D19502000000000000000007 /* MacMarkdownFileOperationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownFileOperationCoordinator.swift; sourceTree = "<group>"; };
 		D19502000000000000000008 /* MacMarkdownFileIOIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownFileIOIntegrationTests.swift; sourceTree = "<group>"; };
@@ -504,6 +590,8 @@
 		D1950200000000000000000B /* MarkdownPreviewIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewIntegrationTests.swift; sourceTree = "<group>"; };
 		D1950200000000000000000C /* MacMarkdownPreviewIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownPreviewIntegrationTests.swift; sourceTree = "<group>"; };
 		D1950200000000000000000D /* MarkdownPreviewModePolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewModePolicy.swift; sourceTree = "<group>"; };
+		D1950200000000000000000E /* MarkdownPreviewUIKitHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitHarnessTests.swift; sourceTree = "<group>"; };
+		D1950200000000000000000F /* MarkdownPreviewUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUITests.swift; sourceTree = "<group>"; };
 		D19502000000000000000010 /* MarkdownPreviewUIKitSyncExecutor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitSyncExecutor.swift; sourceTree = "<group>"; };
 		D19502000000000000000011 /* MacMarkdownPreviewFocusResignation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownPreviewFocusResignation.swift; sourceTree = "<group>"; };
 		D19502000000000000000012 /* MarkdownPreviewUIKitDeferredScheduler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitDeferredScheduler.swift; sourceTree = "<group>"; };
@@ -515,14 +603,49 @@
 		E19602000000000000000003 /* MacMarkdownPreviewTextView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownPreviewTextView.swift; sourceTree = "<group>"; };
 		E19602000000000000000004 /* MacNoteViewZoomTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteViewZoomTests.swift; sourceTree = "<group>"; };
 		E19602000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownPreviewDocumentBuilderTests.swift; sourceTree = "<group>"; };
-		D1950200000000000000000E /* MarkdownPreviewUIKitHarnessTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUIKitHarnessTests.swift; sourceTree = "<group>"; };
-		D1950200000000000000000F /* MarkdownPreviewUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownPreviewUITests.swift; sourceTree = "<group>"; };
-		D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditorFileOperationBridge.swift; sourceTree = "<group>"; };
-		D19502000000000000000004 /* MarkdownFileOperationBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileOperationBoundaryTests.swift; sourceTree = "<group>"; };
-		D19502000000000000000005 /* MarkdownImportIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownImportIntegrationTests.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		BC4CB4E0301EF1E20062C4D6 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = BC4CB4CC301EF1DF0062C4D6 /* MyRAMWidgetExtension */;
+		};
+		BC4CB4F9301EF31C0062C4D6 /* PBXFileSystemSynchronizedBuildFileExceptionSet */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = BC4CB4E8301EF31A0062C4D6 /* MyRAMMacWidgetExtension */;
+		};
+/* End PBXFileSystemSynchronizedBuildFileExceptionSet section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		BC4CB4D3301EF1DF0062C4D6 /* MyRAMWidget */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (BC4CB4E0301EF1E20062C4D6 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = MyRAMWidget; sourceTree = "<group>"; };
+		BC4CB4EC301EF31A0062C4D6 /* MyRAMMacWidget */ = {isa = PBXFileSystemSynchronizedRootGroup; exceptions = (BC4CB4F9301EF31C0062C4D6 /* PBXFileSystemSynchronizedBuildFileExceptionSet */, ); explicitFileTypes = {}; explicitFolders = (); path = MyRAMMacWidget; sourceTree = "<group>"; };
+/* End PBXFileSystemSynchronizedRootGroup section */
+
 /* Begin PBXFrameworksBuildPhase section */
+		BC4CB4CA301EF1DF0062C4D6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BC4CB4D2301EF1DF0062C4D6 /* SwiftUI.framework in Frameworks */,
+				BC4CB4D0301EF1DF0062C4D6 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BC4CB4E6301EF31A0062C4D6 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BC4CB4EB301EF31A0062C4D6 /* SwiftUI.framework in Frameworks */,
+				BC4CB4EA301EF31A0062C4D6 /* WidgetKit.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		BC9F1BA92EA47D2E0045FD72 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -567,15 +690,43 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		BC4CB4BA301EF17C0062C4D6 /* WidgetShared */ = {
+			isa = PBXGroup;
+			children = (
+				BC4CB4B4301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift */,
+				BC4CB4B5301EF17C0062C4D6 /* MyRAMWidgetDeepLink.swift */,
+				BC4CB4B6301EF17C0062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift */,
+				BC4CB4B7301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift */,
+				BC4CB4B8301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift */,
+				BC4CB4B9301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift */,
+			);
+			path = WidgetShared;
+			sourceTree = "<group>";
+		};
+		BC4CB4CE301EF1DF0062C4D6 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				BC4CB4CF301EF1DF0062C4D6 /* WidgetKit.framework */,
+				BC4CB4D1301EF1DF0062C4D6 /* SwiftUI.framework */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
 		BC9F1BA32EA47D2E0045FD72 = {
 			isa = PBXGroup;
 			children = (
+				BC4CB50D301F65790062C4D6 /* MyRAMMacWidgetExtension.entitlements */,
+				BC4CB50C301F65720062C4D6 /* MyRAMWidgetExtension.entitlements */,
+				BC4CB50B301F65610062C4D6 /* MyRAMMac.entitlements */,
 				BCE65D1F2EA57BCC00F2D0AA /* .gitignore */,
 				BC8A7F8D2FCA1F1200A9C001 /* docs/note-intelligence */,
 				BC9F1BAE2EA47D2E0045FD72 /* MyRAM */,
 				BC9F1BC12EA47D310045FD72 /* MyRAMTests */,
 				BC9F1BCB2EA47D310045FD72 /* MyRAMUITests */,
 				BCA107030000000000000001 /* MyRAMMacTests */,
+				BC4CB4D3301EF1DF0062C4D6 /* MyRAMWidget */,
+				BC4CB4EC301EF31A0062C4D6 /* MyRAMMacWidget */,
+				BC4CB4CE301EF1DF0062C4D6 /* Frameworks */,
 				BC9F1BAD2EA47D2E0045FD72 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -588,6 +739,8 @@
 				BC9F1BBE2EA47D310045FD72 /* MyRAMTests.xctest */,
 				BC9F1BC82EA47D310045FD72 /* MyRAMUITests.xctest */,
 				BCA107020000000000000002 /* MyRAMMacTests.xctest */,
+				BC4CB4CD301EF1DF0062C4D6 /* MyRAMWidgetExtension.appex */,
+				BC4CB4E9301EF31A0062C4D6 /* MyRAMMacWidgetExtension.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -595,6 +748,8 @@
 		BC9F1BAE2EA47D2E0045FD72 /* MyRAM */ = {
 			isa = PBXGroup;
 			children = (
+				BC4CB50A301F65510062C4D6 /* MyRAM.entitlements */,
+				BC4CB4BA301EF17C0062C4D6 /* WidgetShared */,
 				BC7009FD2FBF927F00F513B4 /* MyRAMSchema.swift */,
 				D19503000000000000000001 /* Markdown */,
 				BCE65D142EA5453D00F2D0AA /* Views */,
@@ -617,21 +772,6 @@
 			path = MyRAM;
 			sourceTree = "<group>";
 		};
-		D19503000000000000000001 /* Markdown */ = {
-			isa = PBXGroup;
-			children = (
-				D19502000000000000000001 /* MarkdownFileIO.swift */,
-				D19502000000000000000009 /* MarkdownPreview.swift */,
-				D1950200000000000000000D /* MarkdownPreviewModePolicy.swift */,
-				D19502000000000000000010 /* MarkdownPreviewUIKitSyncExecutor.swift */,
-				D19502000000000000000012 /* MarkdownPreviewUIKitDeferredScheduler.swift */,
-				D19502000000000000000013 /* MarkdownPreviewUIKitEditorResignation.swift */,
-				D19502000000000000000014 /* MarkdownPreviewUIKitPostResignationReconciliation.swift */,
-				D19502000000000000000015 /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift */,
-			);
-			path = Markdown;
-			sourceTree = "<group>";
-		};
 		BC9F1BB72EA47D300045FD72 /* Preview Content */ = {
 			isa = PBXGroup;
 			children = (
@@ -640,131 +780,10 @@
 			path = "Preview Content";
 			sourceTree = "<group>";
 		};
-		BCA104030000000000000001 /* Persistence */ = {
-			isa = PBXGroup;
-			children = (
-				BCA104020000000000000001 /* RTFCoding.swift */,
-				BCA164020000000000000001 /* AttributedTextStorageKeys.swift */,
-			);
-			path = Persistence;
-			sourceTree = "<group>";
-		};
-		BCA105030000000000000001 /* Mac */ = {
-			isa = PBXGroup;
-			children = (
-				BCA122030000000000000001 /* Sync */,
-				BCA105020000000000000002 /* MyRAMMacApp.swift */,
-				D19502000000000000000006 /* MacMarkdownFileCommands.swift */,
-				D19502000000000000000007 /* MacMarkdownFileOperationCoordinator.swift */,
-				BCA105020000000000000003 /* MyRAMMacRootView.swift */,
-				BCA170020000000000000001 /* MacStartupCoordinator.swift */,
-				BCA106020000000000000001 /* MacNoteEditorView.swift */,
-				BCA106020000000000000002 /* MacTextViewRepresentable.swift */,
-				BCA106020000000000000003 /* MacEditorSampleDocument.swift */,
-				BCA106020000000000000005 /* MacRemoteInsertionAttributePolicy.swift */,
-				BCA106020000000000000006 /* MacIncomingSyncApplicationPolicy.swift */,
-				BCA106020000000000000007 /* MacEditorSyncBridge.swift */,
-				BCA106020000000000000008 /* MacNSRangeClamp.swift */,
-				D19502000000000000000011 /* MacMarkdownPreviewFocusResignation.swift */,
-				E19602000000000000000001 /* MacNoteViewZoom.swift */,
-				E19602000000000000000002 /* MacMarkdownPreviewDocumentBuilder.swift */,
-				E19602000000000000000003 /* MacMarkdownPreviewTextView.swift */,
-				BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */,
-				BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */,
-				BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */,
-			);
-			path = Mac;
-			sourceTree = "<group>";
-		};
-		BCA122030000000000000001 /* Sync */ = {
-			isa = PBXGroup;
-			children = (
-				BCA122020000000000000001 /* MacSyncModels.swift */,
-				BCA122020000000000000002 /* MacSyncDeviceIdentity.swift */,
-				BCA122020000000000000003 /* MacSyncSeenBatchStore.swift */,
-				BCA122020000000000000004 /* MacSyncBatchAccumulator.swift */,
-				BCA122020000000000000005 /* MacSyncBatchApplier.swift */,
-				BCA12202000000000000000A /* MacAppliedSyncBatch.swift */,
-				BCA123020000000000000013 /* MacSyncBatchController.swift */,
-				BCA162020000000000000001 /* MacSyncConvergenceCoordinator.swift */,
-				BCA162020000000000000002 /* MacSyncConvergencePresentationAdapter.swift */,
-				C071001C2FF0000000000001 /* MacLegacySyncReceiver.swift */,
-			);
-			path = Sync;
-			sourceTree = "<group>";
-		};
-		BCA123030000000000000001 /* Batch */ = {
-			isa = PBXGroup;
-			children = (
-				BCA123020000000000000001 /* SyncBatchPayload.swift */,
-				C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */,
-				C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */,
-				BCA123020000000000000002 /* SyncBatchEnvelope.swift */,
-				BCA123020000000000000003 /* MultipeerSyncMessageEnvelope.swift */,
-				BCA123020000000000000004 /* SyncBatchSeenBatchStore.swift */,
-				BCA123020000000000000005 /* SyncBatchUTF16Helpers.swift */,
-				BCA123020000000000000012 /* SyncBatchNoteChangeCapture.swift */,
-				BCA123020000000000000014 /* SyncBatchUnsentQueue.swift */,
-				BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */,
-			);
-			path = Batch;
-			sourceTree = "<group>";
-		};
-		BCA132030000000000000001 /* Convergence */ = {
-			isa = PBXGroup;
-			children = (
-				BCA132020000000000000001 /* SyncConvergenceTypes.swift */,
-				BCA132020000000000000002 /* SyncConvergenceModels.swift */,
-				BCA132020000000000000010 /* SyncConvergencePlanningTypes.swift */,
-				BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */,
-				BCA153020000000000000001 /* ExplicitDeleteProvenanceTypes.swift */,
-				BCA153020000000000000002 /* ExplicitDeleteProvenanceBuilder.swift */,
-				BCA153020000000000000003 /* ExplicitDeleteProvenanceValidator.swift */,
-				BCA132020000000000000011 /* SyncConvergencePlanner.swift */,
-				BCA152020000000000000001 /* IncrementalEditIntegrationTypes.swift */,
-				BCA152020000000000000002 /* RetainedOperationCausalGraph.swift */,
-				BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */,
-				BCA132020000000000000050 /* SyncConvergencePostCommitTypes.swift */,
-				BCA132020000000000000051 /* SyncConvergencePostCommitGating.swift */,
-				BCA132020000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift */,
-				BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */,
-				BCA161020000000000000001 /* SyncConvergenceLocalObligation.swift */,
-				BCA161020000000000000002 /* FileBackedSyncConvergenceLocalObligationQueue.swift */,
-				BCA161020000000000000003 /* SyncConvergenceDrainPassScheduler.swift */,
-				BCA132020000000000000070 /* SyncConvergenceRuntime.swift */,
-			);
-			path = Convergence;
-			sourceTree = "<group>";
-		};
-		BCA123031000000000000001 /* iOS */ = {
-			isa = PBXGroup;
-			children = (
-				BCA123032000000000000001 /* Sync */,
-			);
-			path = iOS;
-			sourceTree = "<group>";
-		};
-		BCA123032000000000000001 /* Sync */ = {
-			isa = PBXGroup;
-			children = (
-				BCA123033000000000000001 /* Batch */,
-			);
-			path = Sync;
-			sourceTree = "<group>";
-		};
-		BCA123033000000000000001 /* Batch */ = {
-			isa = PBXGroup;
-			children = (
-				BCA123020000000000000006 /* IPhoneSyncBatchAccumulator.swift */,
-				BCA123020000000000000007 /* IPhoneSyncBatchCaptureHook.swift */,
-				BCA123020000000000000008 /* IPhoneSyncBatchApplier.swift */,
-			);
-			path = Batch;
-			sourceTree = "<group>";
-		};
 		BC9F1BC12EA47D310045FD72 /* MyRAMTests */ = {
 			isa = PBXGroup;
 			children = (
+				BC4CB50E301F70E00062C4D6 /* MyRAMWidgetCoreTests.swift */,
 				D19502000000000000000002 /* MarkdownFileIOTests.swift */,
 				D19502000000000000000004 /* MarkdownFileOperationBoundaryTests.swift */,
 				D19502000000000000000005 /* MarkdownImportIntegrationTests.swift */,
@@ -814,15 +833,51 @@
 			path = MyRAMUITests;
 			sourceTree = "<group>";
 		};
+		BCA104030000000000000001 /* Persistence */ = {
+			isa = PBXGroup;
+			children = (
+				BCA104020000000000000001 /* RTFCoding.swift */,
+				BCA164020000000000000001 /* AttributedTextStorageKeys.swift */,
+			);
+			path = Persistence;
+			sourceTree = "<group>";
+		};
+		BCA105030000000000000001 /* Mac */ = {
+			isa = PBXGroup;
+			children = (
+				BCA122030000000000000001 /* Sync */,
+				BCA105020000000000000002 /* MyRAMMacApp.swift */,
+				D19502000000000000000006 /* MacMarkdownFileCommands.swift */,
+				D19502000000000000000007 /* MacMarkdownFileOperationCoordinator.swift */,
+				BCA105020000000000000003 /* MyRAMMacRootView.swift */,
+				BCA170020000000000000001 /* MacStartupCoordinator.swift */,
+				BCA106020000000000000001 /* MacNoteEditorView.swift */,
+				BCA106020000000000000002 /* MacTextViewRepresentable.swift */,
+				BCA106020000000000000003 /* MacEditorSampleDocument.swift */,
+				BCA106020000000000000005 /* MacRemoteInsertionAttributePolicy.swift */,
+				BCA106020000000000000006 /* MacIncomingSyncApplicationPolicy.swift */,
+				BCA106020000000000000007 /* MacEditorSyncBridge.swift */,
+				BCA106020000000000000008 /* MacNSRangeClamp.swift */,
+				D19502000000000000000011 /* MacMarkdownPreviewFocusResignation.swift */,
+				E19602000000000000000001 /* MacNoteViewZoom.swift */,
+				E19602000000000000000002 /* MacMarkdownPreviewDocumentBuilder.swift */,
+				E19602000000000000000003 /* MacMarkdownPreviewTextView.swift */,
+				BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */,
+				BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */,
+				BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */,
+			);
+			path = Mac;
+			sourceTree = "<group>";
+		};
 		BCA107030000000000000001 /* MyRAMMacTests */ = {
 			isa = PBXGroup;
 			children = (
-				C16902000000000000000004 /* SwiftDataNoteSequenceStateStoreTests.swift */,
-				C17002000000000000000005 /* NoteSequenceStateFullBodyIntegrationTests.swift */,
-				C17002000000000000000007 /* NoteSequenceStateBootstrapMigratorTests.swift */,
+				C16902000000000000000004 /* ../MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift */,
+				C17002000000000000000005 /* ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift */,
+				C17002000000000000000007 /* ../MyRAMTests/NoteSequenceStateBootstrapMigratorTests.swift */,
 				C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */,
 				C1700200000000000000000A /* MacStartupCoordinatorTests.swift */,
-				C16802000000000000000004 /* MyRAMSyncOperationIDAllocatorTests.swift */,
+				C16802000000000000000004 /* ../MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift */,
 				BCA107020000000000000001 /* MacEditorSampleDocumentTests.swift */,
 				BCA107020000000000000003 /* MacEditorSelectionMapperTests.swift */,
 				BCA107020000000000000004 /* MacRemoteInsertionAttributePolicyTests.swift */,
@@ -845,12 +900,110 @@
 				BCA162020000000000102 /* MacSyncConvergenceCoordinatorTests.swift */,
 				BCA162020000000000103 /* MacSyncIncomingLocalBoundaryTests.swift */,
 				C07100352FF1600000000001 /* MacLegacySyncReceiverTests.swift */,
-				BCA132020000000000000014 /* SyncConvergenceIncorporationTests.swift */,
-				BCA132020000000000000055 /* SyncConvergencePostCommitTests.swift */,
-				BCA137020000000000000002 /* SyncConvergencePostCommitTestDoubles.swift */,
-				BCA135020000000000000002 /* SyncConvergenceIdentityTestSupport.swift */,
+				BCA132020000000000000014 /* ../MyRAMTests/SyncConvergenceIncorporationTests.swift */,
+				BCA132020000000000000055 /* ../MyRAMTests/SyncConvergencePostCommitTests.swift */,
+				BCA137020000000000000002 /* ../MyRAMTests/SyncConvergencePostCommitTestDoubles.swift */,
+				BCA135020000000000000002 /* ../MyRAMTests/SyncConvergenceIdentityTestSupport.swift */,
 			);
 			path = MyRAMMacTests;
+			sourceTree = "<group>";
+		};
+		BCA122030000000000000001 /* Sync */ = {
+			isa = PBXGroup;
+			children = (
+				BCA122020000000000000001 /* MacSyncModels.swift */,
+				BCA122020000000000000002 /* MacSyncDeviceIdentity.swift */,
+				BCA122020000000000000003 /* MacSyncSeenBatchStore.swift */,
+				BCA122020000000000000004 /* MacSyncBatchAccumulator.swift */,
+				BCA122020000000000000005 /* MacSyncBatchApplier.swift */,
+				BCA12202000000000000000A /* MacAppliedSyncBatch.swift */,
+				BCA123020000000000000013 /* MacSyncBatchController.swift */,
+				BCA162020000000000000001 /* MacSyncConvergenceCoordinator.swift */,
+				BCA162020000000000000002 /* MacSyncConvergencePresentationAdapter.swift */,
+				C071001C2FF0000000000001 /* MacLegacySyncReceiver.swift */,
+			);
+			path = Sync;
+			sourceTree = "<group>";
+		};
+		BCA123030000000000000001 /* Batch */ = {
+			isa = PBXGroup;
+			children = (
+				BCA123020000000000000001 /* SyncBatchPayload.swift */,
+				C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */,
+				C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */,
+				BCA123020000000000000002 /* SyncBatchEnvelope.swift */,
+				BCA123020000000000000003 /* MultipeerSyncMessageEnvelope.swift */,
+				BCA123020000000000000004 /* SyncBatchSeenBatchStore.swift */,
+				BCA123020000000000000005 /* SyncBatchUTF16Helpers.swift */,
+				BCA123020000000000000012 /* SyncBatchNoteChangeCapture.swift */,
+				BCA123020000000000000014 /* SyncBatchUnsentQueue.swift */,
+				BCA123020000000000000016 /* FileBackedSyncBatchQueue.swift */,
+			);
+			path = Batch;
+			sourceTree = "<group>";
+		};
+		BCA123031000000000000001 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				BCA123032000000000000001 /* Sync */,
+			);
+			path = iOS;
+			sourceTree = "<group>";
+		};
+		BCA123032000000000000001 /* Sync */ = {
+			isa = PBXGroup;
+			children = (
+				BCA123033000000000000001 /* Batch */,
+			);
+			path = Sync;
+			sourceTree = "<group>";
+		};
+		BCA123033000000000000001 /* Batch */ = {
+			isa = PBXGroup;
+			children = (
+				BCA123020000000000000006 /* IPhoneSyncBatchAccumulator.swift */,
+				BCA123020000000000000007 /* IPhoneSyncBatchCaptureHook.swift */,
+				BCA123020000000000000008 /* IPhoneSyncBatchApplier.swift */,
+			);
+			path = Batch;
+			sourceTree = "<group>";
+		};
+		BCA132030000000000000001 /* Convergence */ = {
+			isa = PBXGroup;
+			children = (
+				BCA132020000000000000001 /* SyncConvergenceTypes.swift */,
+				BCA132020000000000000002 /* SyncConvergenceModels.swift */,
+				BCA132020000000000000010 /* SyncConvergencePlanningTypes.swift */,
+				BCA155020000000000000001 /* SyncConvergenceRewriteSafetyPolicy.swift */,
+				BCA153020000000000000001 /* ExplicitDeleteProvenanceTypes.swift */,
+				BCA153020000000000000002 /* ExplicitDeleteProvenanceBuilder.swift */,
+				BCA153020000000000000003 /* ExplicitDeleteProvenanceValidator.swift */,
+				BCA132020000000000000011 /* SyncConvergencePlanner.swift */,
+				BCA152020000000000000001 /* IncrementalEditIntegrationTypes.swift */,
+				BCA152020000000000000002 /* RetainedOperationCausalGraph.swift */,
+				BCA132020000000000000030 /* SwiftDataSyncConvergencePersistenceTransaction.swift */,
+				BCA132020000000000000050 /* SyncConvergencePostCommitTypes.swift */,
+				BCA132020000000000000051 /* SyncConvergencePostCommitGating.swift */,
+				BCA132020000000000000052 /* SwiftDataSyncConvergencePostCommitStore.swift */,
+				BCA132020000000000000053 /* SyncConvergencePostCommitExecutor.swift */,
+				BCA161020000000000000001 /* SyncConvergenceLocalObligation.swift */,
+				BCA161020000000000000002 /* FileBackedSyncConvergenceLocalObligationQueue.swift */,
+				BCA161020000000000000003 /* SyncConvergenceDrainPassScheduler.swift */,
+				BCA132020000000000000070 /* SyncConvergenceRuntime.swift */,
+			);
+			path = Convergence;
+			sourceTree = "<group>";
+		};
+		BCA154030000000000000001 /* EditorApplication */ = {
+			isa = PBXGroup;
+			children = (
+				BCA154020000000000000001 /* AppliedEditorMutation.swift */,
+				BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */,
+				BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */,
+				BCA154020000000000000003 /* EditorSelectionMapper.swift */,
+				BCA154020000000000000004 /* EditorRemoteApplyResult.swift */,
+			);
+			path = EditorApplication;
 			sourceTree = "<group>";
 		};
 		BCE65D0A2EA5446600F2D0AA /* Models */ = {
@@ -870,14 +1023,6 @@
 			path = ViewModels;
 			sourceTree = "<group>";
 		};
-		BCF104032FF1040000000104 /* Platform */ = {
-			isa = PBXGroup;
-			children = (
-				BCF104012FF1040000000104 /* MyRAMPlatform.swift */,
-			);
-			path = Platform;
-			sourceTree = "<group>";
-		};
 		BCE65D142EA5453D00F2D0AA /* Views */ = {
 			isa = PBXGroup;
 			children = (
@@ -890,6 +1035,53 @@
 				BC24E3082FDF8F94004694D1 /* SyncStatusIndicator.swift */,
 			);
 			path = Views;
+			sourceTree = "<group>";
+		};
+		BCF104032FF1040000000104 /* Platform */ = {
+			isa = PBXGroup;
+			children = (
+				BCF104012FF1040000000104 /* MyRAMPlatform.swift */,
+			);
+			path = Platform;
+			sourceTree = "<group>";
+		};
+		C07100212FF0000000000001 /* Sync */ = {
+			isa = PBXGroup;
+			children = (
+				C16803000000000000000001 /* AnchoredSequence */,
+				BCA123030000000000000001 /* Batch */,
+				BCA132030000000000000001 /* Convergence */,
+				BCA154030000000000000001 /* EditorApplication */,
+				C07100232FF1600000000001 /* Recovery */,
+				C07100392FF1600000000001 /* Legacy */,
+				BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */,
+				BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */,
+				BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */,
+				C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */,
+				C071001E2FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift */,
+				C07100192FF0000000000001 /* MyRAMSyncController.swift */,
+				C07100172FF0000000000001 /* MyRAMSyncModels.swift */,
+				C071001F2FF0000000000001 /* PendingSyncStatus.swift */,
+			);
+			path = Sync;
+			sourceTree = "<group>";
+		};
+		C07100232FF1600000000001 /* Recovery */ = {
+			isa = PBXGroup;
+			children = (
+				C07100262FF1600000000001 /* PendingSyncRecoveryCoordinator.swift */,
+				C07100222FF1600000000001 /* PendingSyncRecoveryJournal.swift */,
+				C07100272FF1600000000001 /* SyncRecoveryStateBuilder.swift */,
+			);
+			path = Recovery;
+			sourceTree = "<group>";
+		};
+		C07100392FF1600000000001 /* Legacy */ = {
+			isa = PBXGroup;
+			children = (
+				C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */,
+			);
+			path = Legacy;
 			sourceTree = "<group>";
 		};
 		C097F02012FF000000000001 /* Editor */ = {
@@ -918,27 +1110,6 @@
 			path = Editor;
 			sourceTree = "<group>";
 		};
-		C07100212FF0000000000001 /* Sync */ = {
-			isa = PBXGroup;
-			children = (
-				C16803000000000000000001 /* AnchoredSequence */,
-				BCA123030000000000000001 /* Batch */,
-				BCA132030000000000000001 /* Convergence */,
-				BCA154030000000000000001 /* EditorApplication */,
-				C07100232FF1600000000001 /* Recovery */,
-				C07100392FF1600000000001 /* Legacy */,
-				BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */,
-				BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */,
-				BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */,
-				C07100182FF0000000000001 /* MyRAMDeviceIdentity.swift */,
-				C071001E2FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift */,
-				C07100192FF0000000000001 /* MyRAMSyncController.swift */,
-				C07100172FF0000000000001 /* MyRAMSyncModels.swift */,
-				C071001F2FF0000000000001 /* PendingSyncStatus.swift */,
-			);
-			path = Sync;
-			sourceTree = "<group>";
-		};
 		C16803000000000000000001 /* AnchoredSequence */ = {
 			isa = PBXGroup;
 			children = (
@@ -953,39 +1124,68 @@
 			path = AnchoredSequence;
 			sourceTree = "<group>";
 		};
-		C07100232FF1600000000001 /* Recovery */ = {
+		D19503000000000000000001 /* Markdown */ = {
 			isa = PBXGroup;
 			children = (
-				C07100262FF1600000000001 /* PendingSyncRecoveryCoordinator.swift */,
-				C07100222FF1600000000001 /* PendingSyncRecoveryJournal.swift */,
-				C07100272FF1600000000001 /* SyncRecoveryStateBuilder.swift */,
+				D19502000000000000000001 /* MarkdownFileIO.swift */,
+				D19502000000000000000009 /* MarkdownPreview.swift */,
+				D1950200000000000000000D /* MarkdownPreviewModePolicy.swift */,
+				D19502000000000000000010 /* MarkdownPreviewUIKitSyncExecutor.swift */,
+				D19502000000000000000012 /* MarkdownPreviewUIKitDeferredScheduler.swift */,
+				D19502000000000000000013 /* MarkdownPreviewUIKitEditorResignation.swift */,
+				D19502000000000000000014 /* MarkdownPreviewUIKitPostResignationReconciliation.swift */,
+				D19502000000000000000015 /* MarkdownPreviewUIKitAcceptedRestoreSupersession.swift */,
 			);
-			path = Recovery;
-			sourceTree = "<group>";
-		};
-			C07100392FF1600000000001 /* Legacy */ = {
-				isa = PBXGroup;
-				children = (
-					C07100372FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift */,
-				);
-				path = Legacy;
-				sourceTree = "<group>";
-			};
-		BCA154030000000000000001 /* EditorApplication */ = {
-			isa = PBXGroup;
-			children = (
-				BCA154020000000000000001 /* AppliedEditorMutation.swift */,
-				BCA154020000000000000002 /* ActiveEditorApplicationPolicy.swift */,
-				BCA154020000000000000009 /* ActiveEditorSyncUpdateHandler.swift */,
-				BCA154020000000000000003 /* EditorSelectionMapper.swift */,
-				BCA154020000000000000004 /* EditorRemoteApplyResult.swift */,
-			);
-			path = EditorApplication;
+			path = Markdown;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+		BC4CB4CC301EF1DF0062C4D6 /* MyRAMWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BC4CB4E1301EF1E20062C4D6 /* Build configuration list for PBXNativeTarget "MyRAMWidgetExtension" */;
+			buildPhases = (
+				BC4CB4C9301EF1DF0062C4D6 /* Sources */,
+				BC4CB4CA301EF1DF0062C4D6 /* Frameworks */,
+				BC4CB4CB301EF1DF0062C4D6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				BC4CB4D3301EF1DF0062C4D6 /* MyRAMWidget */,
+			);
+			name = MyRAMWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = MyRAMWidgetExtension;
+			productReference = BC4CB4CD301EF1DF0062C4D6 /* MyRAMWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		BC4CB4E8301EF31A0062C4D6 /* MyRAMMacWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BC4CB4FA301EF31C0062C4D6 /* Build configuration list for PBXNativeTarget "MyRAMMacWidgetExtension" */;
+			buildPhases = (
+				BC4CB4E5301EF31A0062C4D6 /* Sources */,
+				BC4CB4E6301EF31A0062C4D6 /* Frameworks */,
+				BC4CB4E7301EF31A0062C4D6 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				BC4CB4EC301EF31A0062C4D6 /* MyRAMMacWidget */,
+			);
+			name = MyRAMMacWidgetExtension;
+			packageProductDependencies = (
+			);
+			productName = MyRAMMacWidgetExtension;
+			productReference = BC4CB4E9301EF31A0062C4D6 /* MyRAMMacWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 		BC9F1BAB2EA47D2E0045FD72 /* MyRAM */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = BC9F1BD22EA47D310045FD72 /* Build configuration list for PBXNativeTarget "MyRAM" */;
@@ -993,10 +1193,12 @@
 				BC9F1BA82EA47D2E0045FD72 /* Sources */,
 				BC9F1BA92EA47D2E0045FD72 /* Frameworks */,
 				BC9F1BAA2EA47D2E0045FD72 /* Resources */,
+				BC4CB4E4301EF1E20062C4D6 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				BC4CB4DE301EF1E20062C4D6 /* PBXTargetDependency */,
 			);
 			name = MyRAM;
 			packageProductDependencies = (
@@ -1053,10 +1255,12 @@
 				BCA105040000000000000001 /* Sources */,
 				BCA105040000000000000002 /* Frameworks */,
 				BCA105040000000000000003 /* Resources */,
+				BC4CB4FD301EF31C0062C4D6 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				BC4CB4F7301EF31C0062C4D6 /* PBXTargetDependency */,
 			);
 			name = MyRAMMac;
 			packageProductDependencies = (
@@ -1095,9 +1299,15 @@
 			isa = PBXProject;
 			attributes = {
 				BuildIndependentTargetsInParallel = 1;
-				LastSwiftUpdateCheck = 1500;
+				LastSwiftUpdateCheck = 2650;
 				LastUpgradeCheck = 1500;
 				TargetAttributes = {
+					BC4CB4CC301EF1DF0062C4D6 = {
+						CreatedOnToolsVersion = 26.5;
+					};
+					BC4CB4E8301EF31A0062C4D6 = {
+						CreatedOnToolsVersion = 26.5;
+					};
 					BC9F1BAB2EA47D2E0045FD72 = {
 						CreatedOnToolsVersion = 15.0;
 					};
@@ -1140,11 +1350,27 @@
 				BC9F1BBD2EA47D310045FD72 /* MyRAMTests */,
 				BC9F1BC72EA47D310045FD72 /* MyRAMUITests */,
 				BCA107050000000000000001 /* MyRAMMacTests */,
+				BC4CB4CC301EF1DF0062C4D6 /* MyRAMWidgetExtension */,
+				BC4CB4E8301EF31A0062C4D6 /* MyRAMMacWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		BC4CB4CB301EF1DF0062C4D6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BC4CB4E7301EF31A0062C4D6 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		BC9F1BAA2EA47D2E0045FD72 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1188,6 +1414,32 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		BC4CB4C9301EF1DF0062C4D6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BC4CB4FE301EF4400062C4D6 /* MyRAMWidgetSnapshotCodec.swift in Sources */,
+				BC4CB4FF301EF4400062C4D6 /* MyRAMWidgetDeepLink.swift in Sources */,
+				BC4CB500301EF4400062C4D6 /* MyRAMWidgetSnapshot.swift in Sources */,
+				BC4CB501301EF4400062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift in Sources */,
+				BC4CB502301EF4400062C4D6 /* MyRAMWidgetSnapshotStore.swift in Sources */,
+				BC4CB503301EF4400062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BC4CB4E5301EF31A0062C4D6 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BC4CB504301EF4400062C4D6 /* MyRAMWidgetSnapshot.swift in Sources */,
+				BC4CB505301EF4400062C4D6 /* MyRAMWidgetDeepLink.swift in Sources */,
+				BC4CB506301EF4400062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift in Sources */,
+				BC4CB507301EF4400062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift in Sources */,
+				BC4CB508301EF4400062C4D6 /* MyRAMWidgetSnapshotStore.swift in Sources */,
+				BC4CB509301EF4400062C4D6 /* MyRAMWidgetSnapshotCodec.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		BC9F1BA82EA47D2E0045FD72 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -1254,6 +1506,12 @@
 				C07100102FF1600000000001 /* MyRAMLegacySyncPayloadBuilder.swift in Sources */,
 				C071000F2FF0000000000001 /* PendingSyncStatus.swift in Sources */,
 				C07100242FF1600000000001 /* PendingSyncRecoveryCoordinator.swift in Sources */,
+				BC4CB4C1301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift in Sources */,
+				BC4CB4C2301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift in Sources */,
+				BC4CB4C3301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift in Sources */,
+				BC4CB4C4301EF17C0062C4D6 /* MyRAMWidgetDeepLink.swift in Sources */,
+				BC4CB4C5301EF17C0062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift in Sources */,
+				BC4CB4C6301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift in Sources */,
 				C07100202FF1600000000001 /* PendingSyncRecoveryJournal.swift in Sources */,
 				C07100252FF1600000000001 /* SyncRecoveryStateBuilder.swift in Sources */,
 				C097F01082FF000000000008 /* EditorTextPlacementResolver.swift in Sources */,
@@ -1335,6 +1593,7 @@
 				C097F01112FF000000000011 /* EditorFocusSelectionPolicyTests.swift in Sources */,
 				C11200112FF1120000000001 /* EditorSearchSessionTests.swift in Sources */,
 				BC9F1BC32EA47D310045FD72 /* MyRAMTests.swift in Sources */,
+				BC4CB50F301F70E00062C4D6 /* MyRAMWidgetCoreTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -1424,6 +1683,12 @@
 				BCA123010000000000000024 /* FileBackedSyncBatchQueue.swift in Sources */,
 				C071000D2FF0000000000001 /* MyRAMSyncModels.swift in Sources */,
 				BC24E3102FDF8F94004694D1 /* SyncConflictStore.swift in Sources */,
+				BC4CB4BB301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift in Sources */,
+				BC4CB4BC301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift in Sources */,
+				BC4CB4BD301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift in Sources */,
+				BC4CB4BE301EF17C0062C4D6 /* MyRAMWidgetDeepLink.swift in Sources */,
+				BC4CB4BF301EF17C0062C4D6 /* MyRAMWidgetRuntimeConfiguration.swift in Sources */,
+				BC4CB4C0301EF17C0062C4D6 /* MyRAMWidgetSnapshotCodec.swift in Sources */,
 				BC24E3112FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */,
 				C07100382FF1600000000001 /* MyRAMLegacySyncChangeValidator.swift in Sources */,
 				BCA154010000000000000002 /* AppliedEditorMutation.swift in Sources */,
@@ -1448,12 +1713,12 @@
 			buildActionMask = 2147483647;
 			files = (
 				D19501000000000000000004 /* MarkdownFileIOTests.swift in Sources */,
-				C16901000000000000000006 /* SwiftDataNoteSequenceStateStoreTests.swift in Sources */,
-				C17001000000000000000008 /* NoteSequenceStateFullBodyIntegrationTests.swift in Sources */,
-				C1700100000000000000000A /* NoteSequenceStateBootstrapMigratorTests.swift in Sources */,
+				C16901000000000000000006 /* ../MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift in Sources */,
+				C17001000000000000000008 /* ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift in Sources */,
+				C1700100000000000000000A /* ../MyRAMTests/NoteSequenceStateBootstrapMigratorTests.swift in Sources */,
 				C1700100000000000000000C /* MYR170MacFullBodyPathIntegrationTests.swift in Sources */,
 				C1700100000000000000000D /* MacStartupCoordinatorTests.swift in Sources */,
-				C16801000000000000000006 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */,
+				C16801000000000000000006 /* ../MyRAMTests/MyRAMSyncOperationIDAllocatorTests.swift in Sources */,
 				BCA107010000000000000001 /* MacEditorSampleDocumentTests.swift in Sources */,
 				BCA107010000000000000003 /* MacEditorSelectionMapperTests.swift in Sources */,
 				BCA107010000000000000004 /* MacRemoteInsertionAttributePolicyTests.swift in Sources */,
@@ -1479,16 +1744,26 @@
 				BCA123010000000000000025 /* SyncBatchUnsentQueueTests.swift in Sources */,
 				BCA132010000000000000015 /* SyncConvergencePlanningTests.swift in Sources */,
 				BCA155010000000000000004 /* SyncConvergenceRewriteSafetyPolicyTests.swift in Sources */,
-				BCA132010000000000000017 /* SyncConvergenceIncorporationTests.swift in Sources */,
-				BCA132010000000000000055 /* SyncConvergencePostCommitTests.swift in Sources */,
-				BCA137010000000000000002 /* SyncConvergencePostCommitTestDoubles.swift in Sources */,
-				BCA135010000000000000002 /* SyncConvergenceIdentityTestSupport.swift in Sources */,
+				BCA132010000000000000017 /* ../MyRAMTests/SyncConvergenceIncorporationTests.swift in Sources */,
+				BCA132010000000000000055 /* ../MyRAMTests/SyncConvergencePostCommitTests.swift in Sources */,
+				BCA137010000000000000002 /* ../MyRAMTests/SyncConvergencePostCommitTestDoubles.swift in Sources */,
+				BCA135010000000000000002 /* ../MyRAMTests/SyncConvergenceIdentityTestSupport.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		BC4CB4DE301EF1E20062C4D6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BC4CB4CC301EF1DF0062C4D6 /* MyRAMWidgetExtension */;
+			targetProxy = BC4CB4DD301EF1E20062C4D6 /* PBXContainerItemProxy */;
+		};
+		BC4CB4F7301EF31C0062C4D6 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BC4CB4E8301EF31A0062C4D6 /* MyRAMMacWidgetExtension */;
+			targetProxy = BC4CB4F6301EF31C0062C4D6 /* PBXContainerItemProxy */;
+		};
 		BC9F1BC02EA47D310045FD72 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = BC9F1BAB2EA47D2E0045FD72 /* MyRAM */;
@@ -1507,6 +1782,144 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		BC4CB4E2301EF1E20062C4D6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = MyRAMWidgetExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5FF5MBB334;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MyRAMWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MyRAMWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				MYRAM_WIDGET_APP_GROUP_IDENTIFIER = "group.com.northsignalstudio.myram.dev.widget\n";
+				PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.dev.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		BC4CB4E3301EF1E20062C4D6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = MyRAMWidgetExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5FF5MBB334;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MyRAMWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MyRAMWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				MYRAM_WIDGET_APP_GROUP_IDENTIFIER = group.com.northsignalstudio.myram.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		BC4CB4FB301EF31C0062C4D6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = MyRAMMacWidgetExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5FF5MBB334;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MyRAMMacWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MyRAMMacWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				MYRAM_WIDGET_APP_GROUP_IDENTIFIER = group.com.northsignalstudio.myram.mac.dev.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.mac.dev.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		BC4CB4FC301EF31C0062C4D6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_ENTITLEMENTS = MyRAMMacWidgetExtension.entitlements;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 5FF5MBB334;
+				ENABLE_APP_SANDBOX = YES;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = MyRAMMacWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = MyRAMMacWidget;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0;
+				MYRAM_WIDGET_APP_GROUP_IDENTIFIER = group.com.northsignalstudio.myram.mac.widget;
+				PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.mac.widget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
 		BC9F1BD02EA47D310045FD72 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -1631,6 +2044,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MyRAM/MyRAM.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"MyRAM/Preview Content\"";
@@ -1645,8 +2059,10 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				MYRAM_WIDGET_APP_GROUP_IDENTIFIER = group.com.northsignalstudio.myram.dev.widget;
 				PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
 				SUPPORTS_MACCATALYST = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -1659,6 +2075,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = MyRAM/MyRAM.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "\"MyRAM/Preview Content\"";
@@ -1673,8 +2090,10 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
+				MYRAM_WIDGET_APP_GROUP_IDENTIFIER = group.com.northsignalstudio.myram.widget;
 				PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
 				SUPPORTS_MACCATALYST = YES;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_VERSION = 5.0;
@@ -1762,6 +2181,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = MyRAMMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5FF5MBB334;
@@ -1771,6 +2191,7 @@
 				INFOPLIST_FILE = MyRAM/Mac/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = MyRAMMac;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MyRAM uses the local network to sync notes with your nearby trusted devices.";
 				IPHONEOS_DEPLOYMENT_TARGET = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1778,8 +2199,10 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
+				MYRAM_WIDGET_APP_GROUP_IDENTIFIER = group.com.northsignalstudio.myram.mac.dev.widget;
 				PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.mac.dev;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1791,6 +2214,7 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = MyRAMMac.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 5FF5MBB334;
@@ -1800,6 +2224,7 @@
 				INFOPLIST_FILE = MyRAM/Mac/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = MyRAMMac;
 				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.utilities";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "MyRAM uses the local network to sync notes with your nearby trusted devices.";
 				IPHONEOS_DEPLOYMENT_TARGET = "";
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -1807,8 +2232,10 @@
 				);
 				MACOSX_DEPLOYMENT_TARGET = 14.0;
 				MARKETING_VERSION = 1.0;
+				MYRAM_WIDGET_APP_GROUP_IDENTIFIER = group.com.northsignalstudio.myram.mac.widget;
 				PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.mac;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
 				SDKROOT = macosx;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -1863,6 +2290,24 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		BC4CB4E1301EF1E20062C4D6 /* Build configuration list for PBXNativeTarget "MyRAMWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BC4CB4E2301EF1E20062C4D6 /* Debug */,
+				BC4CB4E3301EF1E20062C4D6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BC4CB4FA301EF31C0062C4D6 /* Build configuration list for PBXNativeTarget "MyRAMMacWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BC4CB4FB301EF31C0062C4D6 /* Debug */,
+				BC4CB4FC301EF31C0062C4D6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		BC9F1BA72EA47D2E0045FD72 /* Build configuration list for PBXProject "MyRAM" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
@@ -1920,24 +2365,24 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		C07100312FF0000000000001 /* XCLocalSwiftPackageReference "../NearbySyncCore" */ = {
-			isa = XCLocalSwiftPackageReference;
-			relativePath = ../NearbySyncCore;
-		};
 		AC50000000000000000000A1 /* XCLocalSwiftPackageReference "Packages/AnchoredSequenceCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = Packages/AnchoredSequenceCore;
 		};
+		C07100312FF0000000000001 /* XCLocalSwiftPackageReference "../NearbySyncCore" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../NearbySyncCore;
+		};
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		C07100302FF0000000000001 /* NearbySyncCore */ = {
-			isa = XCSwiftPackageProductDependency;
-			productName = NearbySyncCore;
-		};
 		AC50000000000000000000A2 /* AnchoredSequenceCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = AnchoredSequenceCore;
+		};
+		C07100302FF0000000000001 /* NearbySyncCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = NearbySyncCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
