@@ -1,0 +1,75 @@
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+ROOT = Path.cwd()
+
+
+def read(path: str) -> str:
+    return (ROOT / path).read_text()
+
+
+def write(path: str, content: str) -> None:
+    target = ROOT / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content)
+
+
+def replace_exact(path: str, old: str, new: str, count: int = 1) -> None:
+    text = read(path)
+    actual = text.count(old)
+    if actual != count:
+        raise RuntimeError(f"{path}: expected {count} copies, found {actual}: {old[:80]!r}")
+    write(path, text.replace(old, new, count))
+
+
+def replace_regex(path: str, pattern: str, replacement: str) -> int:
+    text = read(path)
+    updated, count = re.subn(pattern, replacement, text, flags=re.MULTILINE | re.DOTALL)
+    if count:
+        write(path, updated)
+    return count
+
+
+envelope_source = '''import Foundation
+
+enum SyncBatchEnvelopeSchemaVersion: Int, Codable, CaseIterable, Hashable, Sendable {
+    case v1 = 1
+    case v2 = 2
+}
+
+enum SyncBatchEnvelopeError: Error, Equatable, Sendable {
+    case unsupportedSchemaVersion(Int)
+    case mixedBodyOperationRepresentations
+    case representationMismatch(
+        schema: SyncBatchEnvelopeSchemaVersion,
+        representation: SyncBatchBodyOperationRepresentation
+    )
+}
+
+struct SyncBatchEnvelope: Codable, Equatable, Sendable {
+    let schemaVersion: SyncBatchEnvelopeSchemaVersion
+    let batch: SyncBatch
+
+    /// Retained only for source compatibility with existing tests. The schema is
+    /// still derived from the batch and cannot be selected by the caller.
+    init(batch: SyncBatch) {
+        do {
+            try self.init(validating: batch)
+        } catch {
+            preconditionFailure("Invalid SyncBatchEnvelope batch: \\(error)")
+        }
+    }
+
+    fileprivate init(validating batch: SyncBatch) throws {
+        let schemaVersion: SyncBatchEnvelopeSchemaVersion
+        switch batch.bodyOperationRepresentation {
+        case .none, .legacy:
+            schemaVersion = .v1
+        case .anchored:
+            schemaVersion = .v2
+        case .mixed:
+            throw SyncBatchEnvelopeError.mixedBodyOperationRepresentations
+        }
+
