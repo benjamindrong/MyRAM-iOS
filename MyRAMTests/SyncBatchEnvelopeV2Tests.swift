@@ -6,6 +6,14 @@ import XCTest
 final class SyncBatchEnvelopeV2Tests: XCTestCase {
     private let noteID = UUID(uuidString: "17400000-0000-0000-0000-000000000003")!
     private let deviceID = UUID(uuidString: "17400000-0000-0000-0000-000000000002")!
+    private let leftAnchorOperationID = SyncOperationID(
+        deviceID: UUID(uuidString: "17400000-0000-0000-0000-000000000004")!,
+        localCounter: 4
+    )
+    private let rightAnchorOperationID = SyncOperationID(
+        deviceID: UUID(uuidString: "17400000-0000-0000-0000-000000000005")!,
+        localCounter: 5
+    )
 
     func testSchemaIsDerivedFromBodyRepresentation() throws {
         XCTAssertEqual(try roundTrip(metadataBatch()).schemaVersion, .v1)
@@ -113,10 +121,30 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
     func testV2EncodingIsCanonicalAndMatchesFrozenFixture() throws {
         let first = try SyncBatchEnvelopeCodec.encode(batch: anchoredBatch())
         let second = try SyncBatchEnvelopeCodec.encode(batch: anchoredBatch())
+        let decoded = try SyncBatchEnvelopeCodec.decode(first)
 
         XCTAssertEqual(first, second)
         XCTAssertEqual(first, Data(Self.frozenV2JSON.utf8))
-        XCTAssertEqual(try SyncBatchEnvelopeCodec.decode(first).schemaVersion, .v2)
+        XCTAssertEqual(decoded.schemaVersion, .v2)
+        guard let firstChange = decoded.batch.changes.first,
+              case .noteBodyTextInsertedAnchored(let inserted) = firstChange else {
+            return XCTFail("Expected anchored insertion fixture")
+        }
+        XCTAssertEqual(inserted.payload.anchor.kind, .between)
+        XCTAssertEqual(
+            inserted.payload.anchor.leftElementID,
+            try SyncTextElementID(
+                operationID: leftAnchorOperationID,
+                elementOffset: 0
+            )
+        )
+        XCTAssertEqual(
+            inserted.payload.anchor.rightElementID,
+            try SyncTextElementID(
+                operationID: rightAnchorOperationID,
+                elementOffset: 0
+            )
+        )
     }
 
     func testOuterV1CanCarryInnerV2WhileProductionTransportRemainsDark() throws {
@@ -172,7 +200,7 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
         XCTAssertEqual(downstreamCount, 0)
     }
 
-    private static let frozenV2JSON = #"{"batch":{"batchSequence":7,"changes":[{"noteBodyTextInsertedAnchored":{"_0":{"baseContentHash":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","modifiedAt":-978306199,"noteID":"17400000-0000-0000-0000-000000000003","payload":{"anchor":{"kind":"empty"},"formatVersion":1,"operationID":{"deviceID":"17400000-0000-0000-0000-000000000002","localCounter":9}},"text":"A","utf16Offset":0}}},{"noteTitleChanged":{"_0":{"modifiedAt":-978306198,"noteID":"17400000-0000-0000-0000-000000000003","title":"Title"}}}],"createdAt":-978306200,"id":"17400000-0000-0000-0000-000000000001","originDeviceID":"17400000-0000-0000-0000-000000000002"},"schemaVersion":2}"#
+    private static let frozenV2JSON = #"{"batch":{"batchSequence":7,"changes":[{"noteBodyTextInsertedAnchored":{"_0":{"baseContentHash":"096d92ee9c796a7c2419a6ff814b2c0322f13c2eae282894002f99e433ec5641","modifiedAt":-978306199,"noteID":"17400000-0000-0000-0000-000000000003","payload":{"anchor":{"kind":"between","leftElementID":{"elementOffset":0,"operationID":{"deviceID":"17400000-0000-0000-0000-000000000004","localCounter":4}},"rightElementID":{"elementOffset":0,"operationID":{"deviceID":"17400000-0000-0000-0000-000000000005","localCounter":5}}},"formatVersion":1,"operationID":{"deviceID":"17400000-0000-0000-0000-000000000002","localCounter":9}},"text":"A","utf16Offset":1}}},{"noteTitleChanged":{"_0":{"modifiedAt":-978306198,"noteID":"17400000-0000-0000-0000-000000000003","title":"Title"}}}],"createdAt":-978306200,"id":"17400000-0000-0000-0000-000000000001","originDeviceID":"17400000-0000-0000-0000-000000000002"},"schemaVersion":2}"#
 
     private struct LegacyV1Envelope: Codable {
         let schemaVersion: Int
@@ -237,13 +265,13 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
     }
 
     private func anchoredBatch() throws -> SyncBatch {
-        let state = try SyncTextSequenceState(runs: [], fragments: [])
+        let state = try anchoredFixtureState()
         let anchored = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
             noteID: noteID,
-            utf16Offset: 0,
+            utf16Offset: 1,
             text: "A",
             modifiedAt: Date(timeIntervalSince1970: 1_001),
-            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: state.visibleText),
             operationID: SyncOperationID(deviceID: deviceID, localCounter: 9),
             state: state
         )
@@ -255,6 +283,47 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
                 modifiedAt: Date(timeIntervalSince1970: 1_002)
             ))
         ])
+    }
+
+    private func anchoredFixtureState() throws -> SyncTextSequenceState {
+        let leftElementID = try SyncTextElementID(
+            operationID: leftAnchorOperationID,
+            elementOffset: 0
+        )
+        return try SyncTextSequenceState(
+            runs: [
+                try SyncTextSequenceRun(
+                    operationID: leftAnchorOperationID,
+                    origin: SyncTextInsertionOrigin(
+                        leftElementID: nil,
+                        rightElementID: nil
+                    ),
+                    text: "L"
+                ),
+                try SyncTextSequenceRun(
+                    operationID: rightAnchorOperationID,
+                    origin: SyncTextInsertionOrigin(
+                        leftElementID: leftElementID,
+                        rightElementID: nil
+                    ),
+                    text: "R"
+                )
+            ],
+            fragments: [
+                try SyncTextSequenceFragment(
+                    operationID: leftAnchorOperationID,
+                    startOffset: 0,
+                    utf16Length: 1,
+                    visibility: .visible
+                ),
+                try SyncTextSequenceFragment(
+                    operationID: rightAnchorOperationID,
+                    startOffset: 0,
+                    utf16Length: 1,
+                    visibility: .visible
+                )
+            ]
+        )
     }
 
     private func mixedBatch() throws -> SyncBatch {
