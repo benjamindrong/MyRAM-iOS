@@ -769,7 +769,7 @@ extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
-                  message.schemaVersion <= MultipeerSyncMessageEnvelope.currentSchemaVersion else {
+                  message.schemaVersion == MultipeerSyncMessageEnvelope.currentSchemaVersion else {
                 return
             }
 
