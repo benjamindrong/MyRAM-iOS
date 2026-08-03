@@ -35,7 +35,11 @@ struct TrustedPeerReconnectTracker {
 }
 
 protocol MyRAMSyncTransporting: AnyObject {
-    func invite(_ peerID: MCPeerID, timeout: TimeInterval)
+    func invite(
+        _ peerID: MCPeerID,
+        context: Data,
+        timeout: TimeInterval
+    )
     func connectedPeers() async -> [MCPeerID]
     func send(_ data: Data, toPeers peers: [MCPeerID], mode: MCSessionSendDataMode) async throws
 }
@@ -51,9 +55,18 @@ private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
         self.session = session
     }
 
-    func invite(_ peerID: MCPeerID, timeout: TimeInterval) {
+    func invite(
+        _ peerID: MCPeerID,
+        context: Data,
+        timeout: TimeInterval
+    ) {
         queue.async { [browser, session] in
-            browser.invitePeer(peerID, to: session, withContext: nil, timeout: timeout)
+            browser.invitePeer(
+                peerID,
+                to: session,
+                withContext: context,
+                timeout: timeout
+            )
         }
     }
 
@@ -180,6 +193,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private let browser: MCNearbyServiceBrowser
     private let transport: MyRAMSyncTransporting
     private var reconnectTracker = TrustedPeerReconnectTracker()
+    private var peerCapabilityRegistry = SyncBatchPeerCapabilityRegistry()
     private lazy var debouncedSender = DebouncedChangeSender { [weak self] in
         await self?.requestLegacyFlush()
     }
@@ -210,7 +224,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             ))
         )
         session = MCSession(peer: peer, securityIdentity: nil, encryptionPreference: .required)
-        advertiser = MCNearbyServiceAdvertiser(peer: peer, discoveryInfo: nil, serviceType: serviceType)
+        advertiser = MCNearbyServiceAdvertiser(
+            peer: peer,
+            discoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo,
+            serviceType: serviceType
+        )
         browser = MCNearbyServiceBrowser(peer: peer, serviceType: serviceType)
         unsentBatches = FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
         self.transport = transport ?? MyRAMMultipeerTransport(browser: browser, session: session)
@@ -256,12 +274,36 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         syncEngine.deviceID
     }
 
+    var advertisedBatchSchemaDiscoveryInfo: [String: String] {
+        SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
+    }
+
+    func effectivePeerCapability(
+        forPeerDeviceID peerDeviceID: String
+    ) -> SyncBatchPeerCapability {
+        peerCapabilityRegistry.effectiveCapability(
+            forPeerDeviceID: peerDeviceID
+        )
+    }
+
+    func hasExplicitPeerV2Support(
+        forPeerDeviceID peerDeviceID: String
+    ) -> Bool {
+        peerCapabilityRegistry.hasExplicitCurrentSessionV2Support(
+            forPeerDeviceID: peerDeviceID
+        )
+    }
+
     func invite(_ peer: MyRAMDiscoveredPeer) {
         guard let attempt = reconnectTracker.beginConnecting(to: peer.deviceID) else { return }
 
         lastConnectionEvent = "Inviting \(peer.displayName)"
         let timeout: TimeInterval = 12
-        transport.invite(peer.peerID, timeout: timeout)
+        transport.invite(
+            peer.peerID,
+            context: SyncBatchPeerCapabilityCodec.productionInvitationContext,
+            timeout: timeout
+        )
         clearConnectingStateAfterInviteTimeout(for: attempt, timeout: timeout)
     }
 
@@ -347,8 +389,25 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func acceptLocalBatch(_ batch: SyncBatch) async throws {
-        try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
+        try validateDurableAdmission(batch)
         try await sendBatch(batch)
+    }
+
+    private func validateDurableAdmission(_ batch: SyncBatch) throws {
+        let decision = SyncBatchTransportAdmissionPlanner.durableAdmission(
+            representation: batch.bodyOperationRepresentation,
+            activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
+        )
+
+        switch decision {
+        case .admitV1, .admitV2:
+            try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
+        case .reject:
+            try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
+            preconditionFailure(
+                "Planner rejected a batch that the lower-level payload policy admitted"
+            )
+        }
     }
 
     private func updatePendingCount() async {
@@ -434,7 +493,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func sendBatch(_ batch: SyncBatch) async throws {
-        try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
         // Durability comes first: a peer accepting a `send()` call only means the
         // data was handed to the transport, not that it survived to the other side.
         // Removal from this queue happens only once the peer acknowledges receipt
@@ -453,18 +511,48 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             return
         }
 
-        _ = await sendQueuedBatch(batch)
+        let connectedPeers = await transport.connectedPeers()
+        _ = await sendQueuedBatch(batch, connectedPeers: connectedPeers)
     }
 
-    private func sendQueuedBatch(_ batch: SyncBatch) async -> Bool {
-        let peers = await transport.connectedPeers()
-        guard !peers.isEmpty else {
+    private func sendQueuedBatch(
+        _ batch: SyncBatch,
+        connectedPeers: [MCPeerID]
+    ) async -> Bool {
+        let plannerPeers = connectedPeers.enumerated().map { index, peerID in
+            let identity = MyRAMPeerIdentity(peerID: peerID)
+            return SyncBatchTransportPeer(
+                transportIndex: index,
+                stableDeviceID: identity.deviceID,
+                hasExplicitCurrentSessionV2Support:
+                    peerCapabilityRegistry
+                        .hasExplicitCurrentSessionV2Support(
+                            forPeerDeviceID: identity.deviceID
+                        )
+            )
+        }
+        let routing = SyncBatchTransportAdmissionPlanner.outboundRouting(
+            representation: batch.bodyOperationRepresentation,
+            activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
+            connectedPeers: plannerPeers
+        )
+
+        let recipients: [MCPeerID]
+        switch routing {
+        case .sendToAllConnectedPeers:
+            recipients = connectedPeers
+        case .sendToPeer(let transportIndex):
+            guard connectedPeers.indices.contains(transportIndex) else {
+                return false
+            }
+            recipients = [connectedPeers[transportIndex]]
+        case .withhold:
             return false
         }
 
         do {
             let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
-            try await transport.send(data, toPeers: peers, mode: .reliable)
+            try await transport.send(data, toPeers: recipients, mode: .reliable)
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
             return true
@@ -481,10 +569,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             return
         }
 
-        guard !(await transport.connectedPeers()).isEmpty, !unsentBatches.isEmpty else { return }
+        guard !unsentBatches.isEmpty else { return }
+        let connectedPeers = await transport.connectedPeers()
 
         for batch in unsentBatches.pendingBatches {
-            _ = await sendQueuedBatch(batch)
+            _ = await sendQueuedBatch(batch, connectedPeers: connectedPeers)
         }
     }
 
@@ -633,7 +722,9 @@ extension MyRAMSyncController: PendingSyncQueueAdministrating {
     }
 
     func replaceUnsentBatches(_ batches: [SyncBatch]) async throws {
-        try batches.forEach(SyncBatchAnchoredPayloadPolicy.validateOutbound)
+        for batch in batches {
+            try validateDurableAdmission(batch)
+        }
         try unsentBatches.replacePendingBatches(batches)
         await updatePendingCount()
     }
@@ -654,11 +745,18 @@ extension MyRAMSyncController: SyncConvergenceLocalBatchTransportAdapter {}
 extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         Task { @MainActor in
+            let identity = MyRAMPeerIdentity(peerID: peerID)
             connectedPeers = session.connectedPeers.map { MyRAMPeerIdentity(peerID: $0).displayName }
             lastConnectionEvent = "\(description(for: state)): \(displayName(for: peerID))"
 
             if state == .connected || state == .notConnected {
-                clearConnectingState(for: MyRAMPeerIdentity(peerID: peerID).deviceID)
+                clearConnectingState(for: identity.deviceID)
+            }
+
+            if state == .notConnected {
+                peerCapabilityRegistry.clearEvidence(
+                    forPeerDeviceID: identity.deviceID
+                )
             }
 
             if state == .connected {
@@ -684,6 +782,19 @@ extension MyRAMSyncController: MCSessionDelegate {
                 guard let envelope = try? MultipeerSyncMessageCoding.decodeBatchPayload(
                     message.payload
                 ) else { return }
+                let identity = MyRAMPeerIdentity(peerID: peerID)
+                let admission = SyncBatchTransportAdmissionPlanner.inboundAdmission(
+                    schemaVersion: envelope.schemaVersion,
+                    activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
+                    hasExplicitCurrentSessionV2Support:
+                        peerCapabilityRegistry
+                            .hasExplicitCurrentSessionV2Support(
+                                forPeerDeviceID: identity.deviceID
+                            )
+                )
+                guard admission == .admitV1 || admission == .admitV2 else {
+                    return
+                }
                 guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(envelope.batch)) != nil else {
                     return
                 }
@@ -790,6 +901,11 @@ extension MyRAMSyncController: MCNearbyServiceAdvertiserDelegate {
         invitationHandler: @escaping (Bool, MCSession?) -> Void
     ) {
         Task { @MainActor in
+            let identity = MyRAMPeerIdentity(peerID: peerID)
+            peerCapabilityRegistry.recordInvitationContext(
+                context,
+                forPeerDeviceID: identity.deviceID
+            )
             lastConnectionEvent = "Invitation from \(displayName(for: peerID))"
             rememberTrustedPeer(peerID)
             invitationHandler(true, session)
@@ -811,6 +927,10 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
         Task { @MainActor in
             let identity = MyRAMPeerIdentity(peerID: peerID)
+            peerCapabilityRegistry.recordDiscoveryValue(
+                info?[SyncBatchPeerCapabilityCodec.discoveryInfoKey],
+                forPeerDeviceID: identity.deviceID
+            )
             lastConnectionEvent = "Found \(identity.displayName)"
 
             let discoveredPeer = MyRAMDiscoveredPeer(
@@ -831,6 +951,9 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
         Task { @MainActor in
             let identity = MyRAMPeerIdentity(peerID: peerID)
             lastConnectionEvent = "Lost \(identity.displayName)"
+            peerCapabilityRegistry.clearEvidence(
+                forPeerDeviceID: identity.deviceID
+            )
             availablePeers.removeAll { $0.deviceID == identity.deviceID }
             clearConnectingState(for: identity.deviceID)
         }

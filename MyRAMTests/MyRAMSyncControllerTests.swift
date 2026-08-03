@@ -663,7 +663,11 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
         self.connectedPeers = connectedPeers
     }
 
-    func invite(_ peerID: MCPeerID, timeout: TimeInterval) {}
+    func invite(
+        _ peerID: MCPeerID,
+        context: Data,
+        timeout: TimeInterval
+    ) {}
 
     func connectedPeers() async -> [MCPeerID] {
         connectedPeers
