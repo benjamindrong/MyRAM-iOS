@@ -15,37 +15,19 @@ enum SyncBatchEnvelopeError: Error, Equatable, Sendable {
 }
 
 struct SyncBatchEnvelope: Codable, Equatable, Sendable {
-    /// Retained for source compatibility with legacy V1 tests. Supported wire
-    /// versions are represented by `SyncBatchEnvelopeSchemaVersion`.
-    static let currentSchemaVersion = 1
-
-    let schemaVersion: Int
+    let schemaVersion: SyncBatchEnvelopeSchemaVersion
     let batch: SyncBatch
 
-    /// Production construction derives the wire schema from the batch body
-    /// representation. Callers cannot select a schema through this initializer.
-    init(batch: SyncBatch) {
+    fileprivate init(batch: SyncBatch) throws {
         switch batch.bodyOperationRepresentation {
         case .none, .legacy:
-            schemaVersion = SyncBatchEnvelopeSchemaVersion.v1.rawValue
+            schemaVersion = .v1
         case .anchored:
-            schemaVersion = SyncBatchEnvelopeSchemaVersion.v2.rawValue
+            schemaVersion = .v2
         case .mixed:
-            preconditionFailure("Mixed body-operation representations cannot form an envelope")
+            throw SyncBatchEnvelopeError.mixedBodyOperationRepresentations
         }
         self.batch = batch
-    }
-
-    /// Legacy fixture construction retained while existing compatibility tests are
-    /// migrated. Production callers must use `init(batch:)` or the codec.
-    @available(*, deprecated, message: "Legacy compatibility fixture construction only")
-    init(schemaVersion: Int, batch: SyncBatch) {
-        self.schemaVersion = schemaVersion
-        self.batch = batch
-    }
-
-    var canDecodeWithCurrentSchema: Bool {
-        (try? Self.validateExact(schemaVersion: schemaVersion, batch: batch)) != nil
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -55,40 +37,43 @@ struct SyncBatchEnvelope: Codable, Equatable, Sendable {
 
     func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(schemaVersion, forKey: .schemaVersion)
+        try container.encode(schemaVersion.rawValue, forKey: .schemaVersion)
         try container.encode(batch, forKey: .batch)
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         let rawSchemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
-        guard SyncBatchEnvelopeSchemaVersion(rawValue: rawSchemaVersion) != nil else {
+        guard let decodedSchemaVersion = SyncBatchEnvelopeSchemaVersion(
+            rawValue: rawSchemaVersion
+        ) else {
             throw SyncBatchEnvelopeError.unsupportedSchemaVersion(rawSchemaVersion)
         }
 
-        schemaVersion = rawSchemaVersion
-        batch = try container.decode(SyncBatch.self, forKey: .batch)
+        let decodedBatch = try container.decode(SyncBatch.self, forKey: .batch)
+        try Self.validateExact(
+            schema: decodedSchemaVersion,
+            representation: decodedBatch.bodyOperationRepresentation
+        )
+
+        schemaVersion = decodedSchemaVersion
+        batch = decodedBatch
     }
 
-    fileprivate static func validateExact(
-        schemaVersion rawSchemaVersion: Int,
-        batch: SyncBatch
+    private static func validateExact(
+        schema: SyncBatchEnvelopeSchemaVersion,
+        representation: SyncBatchBodyOperationRepresentation
     ) throws {
-        guard let schemaVersion = SyncBatchEnvelopeSchemaVersion(rawValue: rawSchemaVersion) else {
-            throw SyncBatchEnvelopeError.unsupportedSchemaVersion(rawSchemaVersion)
-        }
-
-        let representation = batch.bodyOperationRepresentation
         if representation == .mixed {
             throw SyncBatchEnvelopeError.mixedBodyOperationRepresentations
         }
 
-        switch (schemaVersion, representation) {
+        switch (schema, representation) {
         case (.v1, .none), (.v1, .legacy), (.v2, .anchored):
             return
         default:
             throw SyncBatchEnvelopeError.representationMismatch(
-                schema: schemaVersion,
+                schema: schema,
                 representation: representation
             )
         }
@@ -97,28 +82,17 @@ struct SyncBatchEnvelope: Codable, Equatable, Sendable {
 
 enum SyncBatchEnvelopeCodec {
     static func encode(batch: SyncBatch) throws -> Data {
-        let envelope: SyncBatchEnvelope
-        switch batch.bodyOperationRepresentation {
-        case .none, .legacy, .anchored:
-            envelope = SyncBatchEnvelope(batch: batch)
-        case .mixed:
-            throw SyncBatchEnvelopeError.mixedBodyOperationRepresentations
-        }
+        let envelope = try SyncBatchEnvelope(batch: batch)
 
         let encoder = JSONEncoder()
-        if envelope.schemaVersion == SyncBatchEnvelopeSchemaVersion.v2.rawValue {
+        if envelope.schemaVersion == .v2 {
             encoder.outputFormatting = [.sortedKeys]
         }
         return try encoder.encode(envelope)
     }
 
     static func decode(_ data: Data) throws -> SyncBatchEnvelope {
-        let envelope = try JSONDecoder().decode(SyncBatchEnvelope.self, from: data)
-        try SyncBatchEnvelope.validateExact(
-            schemaVersion: envelope.schemaVersion,
-            batch: envelope.batch
-        )
-        return envelope
+        try JSONDecoder().decode(SyncBatchEnvelope.self, from: data)
     }
 }
 

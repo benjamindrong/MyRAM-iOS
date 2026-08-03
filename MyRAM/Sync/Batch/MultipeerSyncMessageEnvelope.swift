@@ -37,23 +37,6 @@ enum MultipeerSyncMessageCoding {
         )
     }
 
-    /// Source-compatible bridge for existing hosts and legacy tests. Production
-    /// envelopes are representation-derived and therefore use the exact codec.
-    static func encodeBatchEnvelope(_ envelope: SyncBatchEnvelope) throws -> Data {
-        try SyncBatchAnchoredPayloadPolicy.validateTransportEncode(envelope.batch)
-
-        let payload: Data
-        if envelope.canDecodeWithCurrentSchema {
-            payload = try SyncBatchEnvelopeCodec.encode(batch: envelope.batch)
-        } else {
-            // Retains the pre-MYR-174 compatibility-fixture path until existing
-            // tests migrate to raw fixture bytes. Production never constructs this.
-            payload = try JSONEncoder().encode(envelope)
-        }
-
-        return try encode(kind: .batchSync, payload: payload)
-    }
-
     static func decodeBatchPayload(_ payload: Data) throws -> SyncBatchEnvelope {
         try SyncBatchEnvelopeCodec.decode(payload)
     }

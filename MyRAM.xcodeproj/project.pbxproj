@@ -272,6 +272,8 @@
 		C1700100000000000000000C /* MYR170MacFullBodyPathIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */; };
 		C1700100000000000000000D /* MacStartupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1700200000000000000000A /* MacStartupCoordinatorTests.swift */; };
 		C17101000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */; };
+		C17401000000000000000001 /* SyncBatchEnvelopeV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17402000000000000000001 /* SyncBatchEnvelopeV2Tests.swift */; };
+		C17401000000000000000002 /* SyncBatchEnvelopeV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17402000000000000000002 /* SyncBatchEnvelopeV2Tests.swift */; };
 		C17101000000000000000002 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */; };
 		C17101000000000000000003 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */; };
 		C17101000000000000000004 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */; };
@@ -586,6 +588,8 @@
 		C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadAdapter.swift; sourceTree = "<group>"; };
 		C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadPolicy.swift; sourceTree = "<group>"; };
 		C17102000000000000000003 /* SyncBatchAnchoredPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadTests.swift; sourceTree = "<group>"; };
+		C17402000000000000000001 /* SyncBatchEnvelopeV2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchEnvelopeV2Tests.swift; sourceTree = "<group>"; };
+		C17402000000000000000002 /* SyncBatchEnvelopeV2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchEnvelopeV2Tests.swift; sourceTree = "<group>"; };
 		D19502000000000000000001 /* MarkdownFileIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileIO.swift; sourceTree = "<group>"; };
 		D19502000000000000000002 /* MarkdownFileIOTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileIOTests.swift; sourceTree = "<group>"; };
 		D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditorFileOperationBridge.swift; sourceTree = "<group>"; };
@@ -813,6 +817,7 @@
 				C16802000000000000000003 /* MyRAMSyncOperationIDAllocatorTests.swift */,
 				BCA123020000000000000009 /* SyncBatchPayloadCompatibilityTests.swift */,
 				C17102000000000000000003 /* SyncBatchAnchoredPayloadTests.swift */,
+				C17402000000000000000001 /* SyncBatchEnvelopeV2Tests.swift */,
 				BCA132020000000000000003 /* SyncConvergenceFoundationTests.swift */,
 				BCA132020000000000000012 /* SyncConvergencePlanningTests.swift */,
 				BCA155020000000000000002 /* SyncConvergenceRewriteSafetyPolicyTests.swift */,
@@ -906,6 +911,7 @@
 				E19602000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift */,
 				BCA164020000000000000003 /* MacEditorTextColorPolicyTests.swift */,
 				BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */,
+				C17402000000000000000002 /* SyncBatchEnvelopeV2Tests.swift */,
 				BCA122020000000000000006 /* MacSyncDeviceIdentityTests.swift */,
 				BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */,
 				BCA122020000000000000008 /* MacSyncBatchAccumulatorTests.swift */,
@@ -1603,6 +1609,7 @@
 				C16801000000000000000005 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */,
 				BCA123010000000000000014 /* SyncBatchPayloadCompatibilityTests.swift in Sources */,
 				C17101000000000000000005 /* SyncBatchAnchoredPayloadTests.swift in Sources */,
+				C17401000000000000000001 /* SyncBatchEnvelopeV2Tests.swift in Sources */,
 				BCA132010000000000000005 /* SyncConvergenceFoundationTests.swift in Sources */,
 				BCA132010000000000000014 /* SyncConvergencePlanningTests.swift in Sources */,
 				BCA155010000000000000003 /* SyncConvergenceRewriteSafetyPolicyTests.swift in Sources */,
@@ -1768,6 +1775,7 @@
 				E19601000000000000000005 /* MacMarkdownPreviewDocumentBuilderTests.swift in Sources */,
 				BCA164010000000000000004 /* MacEditorTextColorPolicyTests.swift in Sources */,
 				BCA10A010000000000000002 /* MacSidebarCollapsePolicyTests.swift in Sources */,
+				C17401000000000000000002 /* SyncBatchEnvelopeV2Tests.swift in Sources */,
 				BCA122010000000000000006 /* MacSyncDeviceIdentityTests.swift in Sources */,
 				BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */,
 				BCA122010000000000000008 /* MacSyncBatchAccumulatorTests.swift in Sources */,

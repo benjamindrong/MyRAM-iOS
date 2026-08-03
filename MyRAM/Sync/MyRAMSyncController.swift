@@ -463,7 +463,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
 
         do {
-            let data = try MultipeerSyncMessageCoding.encodeBatchEnvelope(SyncBatchEnvelope(batch: batch))
+            let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
             try await transport.send(data, toPeers: peers, mode: .reliable)
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
@@ -671,7 +671,9 @@ extension MyRAMSyncController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
-                  message.canDecodeWithCurrentSchema else { return }
+                  message.schemaVersion <= MultipeerSyncMessageEnvelope.currentSchemaVersion else {
+                return
+            }
 
             switch message.kind {
             case .legacySyncEnvelope:
@@ -679,8 +681,9 @@ extension MyRAMSyncController: MCSessionDelegate {
                 await receiveLegacyEnvelope(envelope, from: peerID)
 
             case .batchSync:
-                guard let envelope = try? JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload),
-                      envelope.canDecodeWithCurrentSchema else { return }
+                guard let envelope = try? MultipeerSyncMessageCoding.decodeBatchPayload(
+                    message.payload
+                ) else { return }
                 guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(envelope.batch)) != nil else {
                     return
                 }
