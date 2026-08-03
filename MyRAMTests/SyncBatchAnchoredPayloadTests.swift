@@ -483,9 +483,7 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
         assertPolicyError(
             .anchoredPayloadDisabled(boundary: .transportEncode, noteID: noteID)
         ) {
-            _ = try MultipeerSyncMessageCoding.encodeBatchEnvelope(
-                SyncBatchEnvelope(batch: batch)
-            )
+            _ = try MultipeerSyncMessageCoding.encodeBatch(batch)
         }
     }
 

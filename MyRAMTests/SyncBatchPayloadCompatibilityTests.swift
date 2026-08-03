@@ -6,27 +6,25 @@ import NearbySyncCore
 final class SyncBatchPayloadCompatibilityTests: XCTestCase {
     func testBatchMessageEnvelopeRoutesPayloadByKind() throws {
         let batch = makeBatch()
-        let data = try MultipeerSyncMessageCoding.encodeBatchEnvelope(SyncBatchEnvelope(batch: batch))
+        let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
 
         let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
         XCTAssertEqual(message.kind, .batchSync)
 
-        let envelope = try JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload)
-        XCTAssertTrue(envelope.canDecodeWithCurrentSchema)
+        let envelope = try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload)
+        XCTAssertEqual(envelope.schemaVersion, .v1)
         XCTAssertEqual(envelope.batch, batch)
     }
 
-    func testFutureBatchSchemaIsIgnoredByCurrentDecoder() throws {
-        let futureEnvelope = SyncBatchEnvelope(
-            schemaVersion: SyncBatchEnvelope.currentSchemaVersion + 1,
-            batch: makeBatch()
-        )
-        let data = try MultipeerSyncMessageCoding.encodeBatchEnvelope(futureEnvelope)
+    func testFutureBatchSchemaIsRejectedByExactDecoder() {
+        let data = Data(#"{"schemaVersion":3,"batch":{}}"#.utf8)
 
-        let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
-        let envelope = try JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload)
-
-        XCTAssertFalse(envelope.canDecodeWithCurrentSchema)
+        XCTAssertThrowsError(try SyncBatchEnvelopeCodec.decode(data)) {
+            XCTAssertEqual(
+                $0 as? SyncBatchEnvelopeError,
+                .unsupportedSchemaVersion(3)
+            )
+        }
     }
 
     func testOldSchemaVersionOnePayloadDecodesWithNilOptionalFields() throws {
@@ -53,9 +51,9 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         }
         """.data(using: .utf8)!
 
-        let envelope = try JSONDecoder().decode(SyncBatchEnvelope.self, from: json)
+        let envelope = try SyncBatchEnvelopeCodec.decode(json)
 
-        XCTAssertEqual(envelope.schemaVersion, 1)
+        XCTAssertEqual(envelope.schemaVersion, .v1)
         XCTAssertNil(envelope.batch.batchSequence)
         guard case .noteBodyTextInserted(let change) = envelope.batch.changes.first else {
             return XCTFail("Expected inserted body change")
@@ -82,10 +80,10 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
             ]
         )
 
-        let data = try JSONEncoder().encode(SyncBatchEnvelope(batch: batch))
-        let envelope = try JSONDecoder().decode(SyncBatchEnvelope.self, from: data)
+        let data = try SyncBatchEnvelopeCodec.encode(batch: batch)
+        let envelope = try SyncBatchEnvelopeCodec.decode(data)
 
-        XCTAssertEqual(envelope.schemaVersion, 1)
+        XCTAssertEqual(envelope.schemaVersion, .v1)
         XCTAssertEqual(envelope.batch, batch)
     }
 
@@ -116,9 +114,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         assertCurrentSixCaseBatch(fixture.currentBatch)
         assertLegacySixCaseBatch(fixture.legacyBatch)
 
-        let currentData = try JSONEncoder().encode(
-            SyncBatchEnvelope(batch: fixture.currentBatch)
-        )
+        let currentData = try SyncBatchEnvelopeCodec.encode(batch: fixture.currentBatch)
         let legacyData = try JSONEncoder().encode(
             LegacySyncBatchEnvelopeV1(
                 schemaVersion: 1,
@@ -138,8 +134,8 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         assertCurrentSixCaseBatch(fixture.currentBatch)
         assertLegacySixCaseBatch(fixture.legacyBatch)
 
-        let currentData = try MultipeerSyncMessageCoding.encodeBatchEnvelope(
-            SyncBatchEnvelope(batch: fixture.currentBatch)
+        let currentData = try MultipeerSyncMessageCoding.encodeBatch(
+            fixture.currentBatch
         )
         let legacyPayload = try JSONEncoder().encode(
             LegacySyncBatchEnvelopeV1(
@@ -186,10 +182,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
                 )
             )
             XCTAssertNoThrow(
-                try JSONDecoder().decode(
-                    SyncBatchEnvelope.self,
-                    from: legacy.innerEnvelopeData
-                )
+                try SyncBatchEnvelopeCodec.decode(legacy.innerEnvelopeData)
             )
         }
     }
@@ -203,20 +196,16 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
             )
         )
 
-        let decoded = try JSONDecoder().decode(
-            SyncBatchEnvelope.self,
-            from: legacyData
-        )
+        let decoded = try SyncBatchEnvelopeCodec.decode(legacyData)
 
-        XCTAssertEqual(decoded.schemaVersion, 1)
+        XCTAssertEqual(decoded.schemaVersion, .v1)
         assertCurrentSixCaseBatch(decoded.batch)
         XCTAssertFalse(decoded.batch.changes.contains {
             $0.bodyOperationRepresentation == .anchored
         })
 
-        let frozenCurrent = try JSONDecoder().decode(
-            SyncBatchEnvelope.self,
-            from: CompatibilityValues.frozenLegacyEnvelopeJSON
+        let frozenCurrent = try SyncBatchEnvelopeCodec.decode(
+            CompatibilityValues.frozenLegacyEnvelopeJSON
         )
         let frozenLegacy = try JSONDecoder().decode(
             LegacySyncBatchEnvelopeV1.self,
@@ -235,9 +224,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
 
     func testLegacyV1DecoderReadsCurrentCapabilityOffSixCaseFixture() throws {
         let fixture = try makeSixCaseCompatibilityFixture()
-        let currentData = try JSONEncoder().encode(
-            SyncBatchEnvelope(batch: fixture.currentBatch)
-        )
+        let currentData = try SyncBatchEnvelopeCodec.encode(batch: fixture.currentBatch)
 
         let decoded = try JSONDecoder().decode(
             LegacySyncBatchEnvelopeV1.self,
@@ -266,7 +253,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
     }
 
     func testLegacyTransportConstantsRemainV1() {
-        XCTAssertEqual(SyncBatchEnvelope.currentSchemaVersion, 1)
+        XCTAssertEqual(SyncBatchEnvelopeSchemaVersion.v1.rawValue, 1)
         XCTAssertEqual(MultipeerSyncMessageEnvelope.currentSchemaVersion, 1)
         XCTAssertEqual(
             MultipeerSyncMessageKind.batchSync.rawValue,
@@ -697,7 +684,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
     }
 
     func testBatchMessageDoesNotDecodeAsLegacySyncEnvelopeWithoutRouting() throws {
-        let data = try MultipeerSyncMessageCoding.encodeBatchEnvelope(SyncBatchEnvelope(batch: makeBatch()))
+        let data = try MultipeerSyncMessageCoding.encodeBatch(makeBatch())
 
         XCTAssertThrowsError(try JSONDecoder().decode(SyncEnvelope.self, from: data))
     }
@@ -1146,12 +1133,8 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         _ batch: SyncBatch
     ) throws -> StructuralEncodingResult {
         let batchData = try JSONEncoder().encode(batch)
-        let innerData = try JSONEncoder().encode(
-            SyncBatchEnvelope(batch: batch)
-        )
-        let outerData = try MultipeerSyncMessageCoding.encodeBatchEnvelope(
-            SyncBatchEnvelope(batch: batch)
-        )
+        let innerData = try SyncBatchEnvelopeCodec.encode(batch: batch)
+        let outerData = try MultipeerSyncMessageCoding.encodeBatch(batch)
         let batchJSON = try StructuralJSONValue.parse(batchData)
         let innerJSON = try StructuralJSONValue.parse(innerData)
         let outerJSON = try structuralOuterEnvelope(from: outerData)

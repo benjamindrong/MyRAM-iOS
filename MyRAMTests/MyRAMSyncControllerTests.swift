@@ -516,7 +516,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
 
         let data = try MultipeerSyncMessageCoding.encode(
             kind: .batchSync,
-            payload: JSONEncoder().encode(SyncBatchEnvelope(batch: batch))
+            payload: SyncBatchEnvelopeCodec.encode(batch: batch)
         )
         let dummySession = MCSession(peer: MCPeerID(displayName: "local|local-device"))
         controller.session(dummySession, didReceive: data, fromPeer: Self.remotePeerID)
@@ -582,7 +582,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
     }
 
     private func deliverBatchSync(to controller: MyRAMSyncController, _ batch: SyncBatch) async {
-        let data = try! MultipeerSyncMessageCoding.encodeBatchEnvelope(SyncBatchEnvelope(batch: batch))
+        let data = try! MultipeerSyncMessageCoding.encodeBatch(batch)
         let dummySession = MCSession(peer: MCPeerID(displayName: "local|local-device"))
         controller.session(dummySession, didReceive: data, fromPeer: Self.remotePeerID)
         await Task.yield()
@@ -683,7 +683,9 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
             }
             activeLegacySendCount -= 1
         case .batchSync:
-            sentBatchEnvelopes.append(try JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload))
+            sentBatchEnvelopes.append(
+                try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload)
+            )
         case .batchAcknowledgement:
             sentBatchAcknowledgements.append(try JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload))
         }

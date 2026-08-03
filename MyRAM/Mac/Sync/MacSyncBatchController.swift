@@ -196,7 +196,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
 
         do {
-            let data = try MultipeerSyncMessageCoding.encodeBatchEnvelope(SyncBatchEnvelope(batch: batch))
+            let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
             try sendBatchDataOperation(data, peers, .reliable)
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
@@ -322,12 +322,15 @@ extension MacSyncBatchController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
-                  message.canDecodeWithCurrentSchema else { return }
+                  message.schemaVersion <= MultipeerSyncMessageEnvelope.currentSchemaVersion else {
+                return
+            }
 
             switch message.kind {
             case .batchSync:
-                guard let envelope = try? JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload),
-                      envelope.canDecodeWithCurrentSchema else { return }
+                guard let envelope = try? MultipeerSyncMessageCoding.decodeBatchPayload(
+                    message.payload
+                ) else { return }
                 guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(envelope.batch)) != nil else {
                     return
                 }

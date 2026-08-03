@@ -75,7 +75,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         let message = try MultipeerSyncMessageCoding.decodeMessage(from: recordedSend.data)
         XCTAssertEqual(message.kind, .batchSync)
         XCTAssertEqual(
-            try JSONDecoder().decode(SyncBatchEnvelope.self, from: message.payload).batch,
+            try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload).batch,
             batch
         )
         XCTAssertEqual(
@@ -115,9 +115,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             localObligationQueueFileURL: nil
         )
         let batch = makeLegacyBodyBatch(idSuffix: 3)
-        let data = try MultipeerSyncMessageCoding.encodeBatchEnvelope(
-            SyncBatchEnvelope(batch: batch)
-        )
+        let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
         let dummySession = MCSession(
             peer: MCPeerID(displayName: "local|legacy-inbound"),
             securityIdentity: nil,
@@ -226,7 +224,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         let lastConnectionEventBefore = controller.lastConnectionEvent
         let data = try MultipeerSyncMessageCoding.encode(
             kind: .batchSync,
-            payload: JSONEncoder().encode(SyncBatchEnvelope(batch: batch))
+            payload: SyncBatchEnvelopeCodec.encode(batch: batch)
         )
         let dummySession = MCSession(
             peer: MCPeerID(displayName: "local|anchored-inbound"),
