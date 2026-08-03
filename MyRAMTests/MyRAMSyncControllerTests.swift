@@ -475,6 +475,22 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
     }
 
+    func testOuterSchemaZeroRejectsBatchBeforeControllerSideEffects() async throws {
+        try await assertInvalidOuterBatchSchemaRejected(
+            schemaVersion: 0,
+            peerDeviceID: "outer-schema-zero",
+            batchIDSuffix: 210
+        )
+    }
+
+    func testOuterSchemaNegativeOneRejectsBatchBeforeControllerSideEffects() async throws {
+        try await assertInvalidOuterBatchSchemaRejected(
+            schemaVersion: -1,
+            peerDeviceID: "outer-schema-negative-one",
+            batchIDSuffix: 211
+        )
+    }
+
     func testAnchoredLocalBatchRejectsBeforeQueueOrTransportMutation() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let controller = try makeController(
@@ -572,6 +588,106 @@ final class MyRAMSyncControllerTests: XCTestCase {
         )
     }
 
+    private func assertInvalidOuterBatchSchemaRejected(
+        schemaVersion: Int,
+        peerDeviceID: String,
+        batchIDSuffix: Int
+    ) async throws {
+        let trustedPeersKey = "myram.sync.trustedPeers"
+        let defaults = UserDefaults.standard
+        let previousTrustedPeersValue = defaults.object(forKey: trustedPeersKey)
+        let trustedPeersBefore = try propertyListData(
+            forKey: trustedPeersKey,
+            in: defaults
+        )
+        defer {
+            if let previousTrustedPeersValue {
+                defaults.set(previousTrustedPeersValue, forKey: trustedPeersKey)
+            } else {
+                defaults.removeObject(forKey: trustedPeersKey)
+            }
+        }
+
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(),
+            transport: transport
+        )
+        var durableCaptureCount = 0
+        var receiveCount = 0
+        controller.onDurablyCaptureIncomingBatch = { _ in
+            durableCaptureCount += 1
+            return true
+        }
+        controller.onBatchReceived = { _ in
+            receiveCount += 1
+        }
+
+        let beforeQueue = controller.unsentBatchQueueSnapshot()
+        let beforePendingStatus = controller.pendingSyncStatus
+        let beforePendingChangeCount = controller.pendingChangeCount
+        let beforeLastSyncAt = controller.lastSyncAt
+        let beforeLastErrorMessage = controller.lastErrorMessage
+        let beforeLastConnectionEvent = controller.lastConnectionEvent
+        let beforeConnectedPeers = controller.connectedPeers
+        let beforeAvailablePeerIDs = controller.availablePeers.map(\.deviceID)
+        let beforeAvailablePeerTrust = controller.availablePeers.map(\.isTrusted)
+        let batch = makeBatch(idSuffix: batchIDSuffix)
+        let innerPayload = try SyncBatchEnvelopeCodec.encode(batch: batch)
+        let outerEnvelope = MultipeerSyncMessageEnvelope(
+            kind: .batchSync,
+            schemaVersion: schemaVersion,
+            payload: innerPayload
+        )
+        let data = try JSONEncoder().encode(outerEnvelope)
+        let remotePeerID = MCPeerID(
+            displayName: "Remote|\(peerDeviceID)"
+        )
+        let dummySession = MCSession(
+            peer: MCPeerID(displayName: "local|outer-schema"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+
+        controller.session(
+            dummySession,
+            didReceive: data,
+            fromPeer: remotePeerID
+        )
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertEqual(durableCaptureCount, 0)
+        XCTAssertEqual(receiveCount, 0)
+        XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot(), beforeQueue)
+        XCTAssertEqual(controller.pendingSyncStatus, beforePendingStatus)
+        XCTAssertEqual(controller.pendingChangeCount, beforePendingChangeCount)
+        XCTAssertEqual(controller.lastSyncAt, beforeLastSyncAt)
+        XCTAssertEqual(controller.lastErrorMessage, beforeLastErrorMessage)
+        XCTAssertEqual(controller.lastConnectionEvent, beforeLastConnectionEvent)
+        XCTAssertEqual(controller.connectedPeers, beforeConnectedPeers)
+        XCTAssertEqual(controller.availablePeers.map(\.deviceID), beforeAvailablePeerIDs)
+        XCTAssertEqual(controller.availablePeers.map(\.isTrusted), beforeAvailablePeerTrust)
+        XCTAssertEqual(
+            try propertyListData(forKey: trustedPeersKey, in: defaults),
+            trustedPeersBefore
+        )
+    }
+
+    private func propertyListData(
+        forKey key: String,
+        in defaults: UserDefaults
+    ) throws -> Data? {
+        guard let value = defaults.object(forKey: key) else {
+            return nil
+        }
+        return try PropertyListSerialization.data(
+            fromPropertyList: value,
+            format: .binary,
+            options: 0
+        )
+    }
+
     private func deliverLegacyEnvelope(to controller: MyRAMSyncController, _ envelope: SyncEnvelope) async {
         let data = try! MultipeerSyncMessageCoding.encode(kind: .legacySyncEnvelope, payload: JSONEncoder().encode(envelope))
         let dummySession = MCSession(peer: MCPeerID(displayName: "local|local-device"))
@@ -663,7 +779,11 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
         self.connectedPeers = connectedPeers
     }
 
-    func invite(_ peerID: MCPeerID, timeout: TimeInterval) {}
+    func invite(
+        _ peerID: MCPeerID,
+        context: Data,
+        timeout: TimeInterval
+    ) {}
 
     func connectedPeers() async -> [MCPeerID] {
         connectedPeers

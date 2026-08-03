@@ -247,6 +247,22 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(boundaryCalls, 0)
     }
 
+    func testOuterSchemaZeroRejectsBatchBeforeControllerSideEffects() async throws {
+        try await assertInvalidOuterBatchSchemaRejected(
+            schemaVersion: 0,
+            peerDeviceID: "outer-schema-zero",
+            batchIDSuffix: 4
+        )
+    }
+
+    func testOuterSchemaNegativeOneRejectsBatchBeforeControllerSideEffects() async throws {
+        try await assertInvalidOuterBatchSchemaRejected(
+            schemaVersion: -1,
+            peerDeviceID: "outer-schema-negative-one",
+            batchIDSuffix: 5
+        )
+    }
+
     func testFailedDurableUnsentEnqueueThrowsAndLeavesQueueUnchanged() async throws {
         let unsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
         let queue = FileBackedSyncBatchQueue(fileURL: unsentURL)
@@ -384,6 +400,83 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertFalse(macTestSources.contains("SyncBatchAnchoredPayloadTests.swift in Sources"))
         XCTAssertFalse(macAppSources.contains("MacSyncBatchApplier.swift in Sources"))
         XCTAssertFalse(macTestSources.contains("MacSyncBatchApplierTests.swift in Sources"))
+    }
+
+    private func assertInvalidOuterBatchSchemaRejected(
+        schemaVersion: Int,
+        peerDeviceID: String,
+        batchIDSuffix: Int
+    ) async throws {
+        let pendingURL = temporaryQueueFileURL(
+            named: "mac-pending-invalid-outer-schema.json"
+        )
+        let remotePeerID = MCPeerID(
+            displayName: "remote|\(peerDeviceID)"
+        )
+        var recordedSends: [Data] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: nil,
+            sendBatchDataOperation: { data, _, _ in
+                recordedSends.append(data)
+            }
+        )
+        let container = try makeInMemoryContainer()
+        var boundaryCalls = 0
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in
+                    boundaryCalls += 1
+                    return .ready
+                }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil
+        )
+        let batch = makeLegacyBodyBatch(idSuffix: batchIDSuffix)
+        let beforeSnapshot = FileBackedSyncBatchQueue(
+            fileURL: pendingURL
+        ).snapshot()
+        let beforeBytes = try dataIfPresent(at: pendingURL)
+        let beforePendingCount = coordinator.pendingIncomingBatchCount
+        let beforeLastSyncAt = controller.lastSyncAt
+        let beforeLastConnectionEvent = controller.lastConnectionEvent
+        let beforeAvailablePeers = controller.availablePeers
+        let innerPayload = try SyncBatchEnvelopeCodec.encode(batch: batch)
+        let outerEnvelope = MultipeerSyncMessageEnvelope(
+            kind: .batchSync,
+            schemaVersion: schemaVersion,
+            payload: innerPayload
+        )
+        let data = try JSONEncoder().encode(outerEnvelope)
+        let dummySession = MCSession(
+            peer: MCPeerID(displayName: "local|outer-schema"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+
+        controller.session(
+            dummySession,
+            didReceive: data,
+            fromPeer: remotePeerID
+        )
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertTrue(recordedSends.isEmpty)
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: pendingURL).snapshot(),
+            beforeSnapshot
+        )
+        XCTAssertEqual(try dataIfPresent(at: pendingURL), beforeBytes)
+        XCTAssertEqual(coordinator.pendingIncomingBatchCount, beforePendingCount)
+        XCTAssertEqual(boundaryCalls, 0)
+        XCTAssertEqual(controller.lastSyncAt, beforeLastSyncAt)
+        XCTAssertEqual(controller.lastConnectionEvent, beforeLastConnectionEvent)
+        XCTAssertEqual(controller.availablePeers, beforeAvailablePeers)
     }
 
     private func makeController(unsentBatchQueueFileURL: URL?) throws -> MacSyncBatchController {
