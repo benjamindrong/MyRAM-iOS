@@ -1,0 +1,2 @@
+3798:/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift:1364: error: -[MyRAMTests.SwiftDataNoteSequenceStateStoreTests testSemanticRunAndFragmentOrderAreRejectedWithoutNormalization] : failed: caught error: "fragmentOrderNotMatchingOrigins"
+3799:Test Case '-[MyRAMTests.SwiftDataNoteSequenceStateStoreTests testSemanticRunAndFragmentOrderAreRejectedWithoutNormalization]' failed (0.628 seconds).
