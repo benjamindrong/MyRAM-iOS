@@ -19,7 +19,7 @@ struct MyRAMWidgetLayoutPolicy: Equatable, Sendable {
     init(family: MyRAMWidgetFamily, platform: MyRAMWidgetPlatform) {
         switch (family, platform) {
         case (.small, .iOS), (.small, .macOS):
-            contentLineBudget = 6
+            contentLineBudget = 8
         case (.medium, .iOS), (.medium, .macOS):
             contentLineBudget = 10
         }
