@@ -1,0 +1,158 @@
+name: MYR-175 application-suite closure
+
+on:
+  push:
+    branches:
+      - MYR-175-verification-runner-8
+
+permissions:
+  contents: write
+
+jobs:
+  ios-app-tests:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/MyRAM-iOS
+          ref: 3dbfcff9053fc38b980738cad9bcea603e7c99c1
+          path: MyRAM-iOS
+      - uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+      - working-directory: MyRAM-iOS
+        run: |
+          set -e
+          mkdir -p evidence/ios
+          sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+          xcodebuild -version | tee evidence/ios/xcode-version.txt
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > evidence/ios/sibling-before.txt
+          xcrun simctl list devices available -j > evidence/ios/simulators.json
+          IOS_UDID="$(python3 - <<'PY'
+          import json
+          from pathlib import Path
+          data=json.loads(Path('evidence/ios/simulators.json').read_text())
+          candidates=[]
+          for runtime, values in data.get('devices',{}).items():
+              if 'iOS-26-5' not in runtime: continue
+              for value in values:
+                  if value.get('isAvailable') and value.get('name','').startswith('iPhone'):
+                      candidates.append((0 if value['name']=='iPhone 17' else 1,value['name'],value['udid']))
+          if not candidates: raise SystemExit('No iOS 26.5 iPhone simulator')
+          candidates.sort(); _,name,udid=candidates[0]
+          Path('evidence/ios/selected-simulator.txt').write_text(f'{name} | iOS 26.5 | {udid}\n')
+          print(udid)
+          PY
+          )"
+          test -n "$IOS_UDID"
+          set +e
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAM \
+            -destination "platform=iOS Simulator,id=${IOS_UDID}" -destination-timeout 180 \
+            -parallel-testing-enabled NO \
+            -derivedDataPath /tmp/MYR175-AppClosure-iOS-DD \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            test -skip-testing:MyRAMUITests > evidence/ios/full.log 2>&1
+          STATUS=$?
+          set -e
+          echo "$STATUS" > evidence/ios/exit-status.txt
+          grep -E 'Executed [0-9]+ tests|TEST SUCCEEDED|TEST FAILED' evidence/ios/full.log > evidence/ios/test-summary.txt || true
+          grep -nE "Test Case .*failed|error:|XCTAssert|Issue recorded|Assertion failed|encountered an error" evidence/ios/full.log > evidence/ios/failure-lines.txt || true
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > evidence/ios/sibling-after.txt
+          diff -u evidence/ios/sibling-before.txt evidence/ios/sibling-after.txt
+          exit "$STATUS"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-closure-ios
+          path: MyRAM-iOS/evidence/ios
+
+  mac-tests:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/MyRAM-iOS
+          ref: 3dbfcff9053fc38b980738cad9bcea603e7c99c1
+          path: MyRAM-iOS
+      - uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+      - working-directory: MyRAM-iOS
+        run: |
+          set -e
+          mkdir -p evidence/mac
+          sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+          xcodebuild -version | tee evidence/mac/xcode-version.txt
+          sudo scutil --set ComputerName MyRAMCI
+          sudo scutil --set LocalHostName MyRAMCI
+          sudo scutil --set HostName MyRAMCI
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > evidence/mac/sibling-before.txt
+          set +e
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
+            -derivedDataPath /tmp/MYR175-AppClosure-Mac-DD \
+            DEVELOPMENT_TEAM= CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES PROVISIONING_PROFILE= PROVISIONING_PROFILE_SPECIFIER= \
+            test > evidence/mac/full.log 2>&1
+          STATUS=$?
+          set -e
+          echo "$STATUS" > evidence/mac/exit-status.txt
+          grep -E 'Executed [0-9]+ tests|TEST SUCCEEDED|TEST FAILED' evidence/mac/full.log > evidence/mac/test-summary.txt || true
+          grep -nE "Test Case .*failed|error:|XCTAssert|Issue recorded|Assertion failed|encountered an error" evidence/mac/full.log > evidence/mac/failure-lines.txt || true
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > evidence/mac/sibling-after.txt
+          diff -u evidence/mac/sibling-before.txt evidence/mac/sibling-after.txt
+          exit "$STATUS"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-closure-mac
+          path: MyRAM-iOS/evidence/mac
+
+  record:
+    if: always()
+    needs: [ios-app-tests, mac-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+      - run: |
+          RESULT=verification-results/MYR-175-Slice-1-3dbfcff9053fc38b980738cad9bcea603e7c99c1-app-suite-closure
+          mkdir -p "$RESULT"
+          cp -R downloaded/. "$RESULT/"
+          {
+            echo '# MYR-175 Slice 1 Application-Suite Closure'
+            echo
+            echo '- Candidate: `3dbfcff9053fc38b980738cad9bcea603e7c99c1`'
+            echo '- Prior exact-head UI suite: 13/13 passed'
+            echo '```text'
+            echo 'ios_app_tests=${{ needs.ios-app-tests.result }}'
+            echo 'mac_tests=${{ needs.mac-tests.result }}'
+            echo '```'
+            echo '## iOS application tests'
+            echo '```text'
+            cat downloaded/app-closure-ios/test-summary.txt || true
+            cat downloaded/app-closure-ios/failure-lines.txt || true
+            echo '```'
+            echo '## Mac tests'
+            echo '```text'
+            cat downloaded/app-closure-mac/test-summary.txt || true
+            cat downloaded/app-closure-mac/failure-lines.txt || true
+            echo '```'
+          } > "$RESULT/summary.md"
+          rm .github/workflows/myr175-app-suite-closure.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add verification-results
+          git add -u .github
+          git commit -m 'MYR-175 Record application-suite closure'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
