@@ -1,0 +1,160 @@
+{
+  "source": "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/NearbySyncView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Reset Pending Sync?",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 102
+        }
+      },
+      {
+        "comment": "",
+        "key": "Device",
+        "location": {
+          "startingColumn": 36,
+          "startingLine": 22
+        }
+      },
+      {
+        "comment": "",
+        "key": "Status",
+        "location": {
+          "startingColumn": 36,
+          "startingLine": 23
+        }
+      },
+      {
+        "comment": "",
+        "key": "Last Event",
+        "location": {
+          "startingColumn": 36,
+          "startingLine": 24
+        }
+      },
+      {
+        "comment": "",
+        "key": "Last Sync",
+        "location": {
+          "startingColumn": 40,
+          "startingLine": 27
+        }
+      },
+      {
+        "comment": "",
+        "key": "Manual Sync",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 30
+        }
+      },
+      {
+        "comment": "",
+        "key": "Queued Changes",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 135
+        }
+      },
+      {
+        "comment": "",
+        "key": "Legacy changes",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 137
+        }
+      },
+      {
+        "comment": "",
+        "key": "Unsent batches",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 140
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pending local batch",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 143
+        }
+      },
+      {
+        "comment": "",
+        "key": "Replacement changes will drain after a connected peer acknowledges them.",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 56
+        }
+      },
+      {
+        "comment": "",
+        "key": "Reset Pending Sync",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 38
+        }
+      },
+      {
+        "comment": "",
+        "key": "No nearby devices",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 68
+        }
+      },
+      {
+        "comment": "",
+        "key": "Reconnect",
+        "location": {
+          "startingColumn": 53,
+          "startingLine": 84
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pair",
+        "location": {
+          "startingColumn": 67,
+          "startingLine": 84
+        }
+      },
+      {
+        "comment": "",
+        "key": "Trusted",
+        "location": {
+          "startingColumn": 55,
+          "startingLine": 77
+        }
+      },
+      {
+        "comment": "",
+        "key": "New device",
+        "location": {
+          "startingColumn": 67,
+          "startingLine": 77
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 103
+        }
+      },
+      {
+        "comment": "",
+        "key": "Reset and Resync",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 104
+        }
+      }
+    ]
+  },
+  "version": 1
+}

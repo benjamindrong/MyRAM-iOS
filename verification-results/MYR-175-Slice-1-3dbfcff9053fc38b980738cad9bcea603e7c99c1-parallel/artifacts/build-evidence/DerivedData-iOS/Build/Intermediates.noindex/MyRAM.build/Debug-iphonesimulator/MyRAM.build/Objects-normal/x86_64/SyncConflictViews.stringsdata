@@ -1,0 +1,104 @@
+{
+  "source": "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/SyncConflictViews.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "A version is ready for review. Open Sync Conflicts to copy, accept, or discard it within 7 days.",
+        "location": {
+          "startingColumn": 13,
+          "startingLine": 44
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 25
+        }
+      },
+      {
+        "comment": "",
+        "key": "A version is ready for review.",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 16
+        }
+      },
+      {
+        "comment": "",
+        "key": "Open Sync Conflicts to copy, accept, or discard it within 7 days.",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 18
+        }
+      },
+      {
+        "comment": "",
+        "key": "Review version to sync",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 120
+        }
+      },
+      {
+        "comment": "",
+        "key": "Close",
+        "location": {
+          "startingColumn": 15,
+          "startingLine": 223
+        }
+      },
+      {
+        "comment": "",
+        "key": "Close",
+        "location": {
+          "startingColumn": 29,
+          "startingLine": 225
+        }
+      },
+      {
+        "comment": "",
+        "key": "Copy Version to Sync",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 309
+        }
+      },
+      {
+        "comment": "",
+        "key": "Accept Version to Sync",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 316
+        }
+      },
+      {
+        "comment": "",
+        "key": "Keep Local Version",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 323
+        }
+      },
+      {
+        "comment": "",
+        "key": "Save Merged Result",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 330
+        }
+      },
+      {
+        "comment": "",
+        "key": "Merged Result",
+        "location": {
+          "startingColumn": 18,
+          "startingLine": 352
+        }
+      }
+    ]
+  },
+  "version": 1
+}

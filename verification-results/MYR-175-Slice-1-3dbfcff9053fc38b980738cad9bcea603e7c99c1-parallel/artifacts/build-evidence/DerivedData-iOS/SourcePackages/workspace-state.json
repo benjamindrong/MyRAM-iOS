@@ -1,0 +1,41 @@
+{
+  "object" : {
+    "artifacts" : [
+
+    ],
+    "dependencies" : [
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "anchoredsequencecore",
+          "kind" : "fileSystem",
+          "location" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/Packages/AnchoredSequenceCore",
+          "name" : "AnchoredSequenceCore"
+        },
+        "state" : {
+          "name" : "fileSystem",
+          "path" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/Packages/AnchoredSequenceCore"
+        },
+        "subpath" : "anchoredsequencecore"
+      },
+      {
+        "basedOn" : null,
+        "packageRef" : {
+          "identity" : "nearbysynccore",
+          "kind" : "fileSystem",
+          "location" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/NearbySyncCore",
+          "name" : "NearbySyncCore"
+        },
+        "state" : {
+          "name" : "fileSystem",
+          "path" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/NearbySyncCore"
+        },
+        "subpath" : "nearbysynccore"
+      }
+    ],
+    "prebuilts" : [
+
+    ]
+  },
+  "version" : 7
+}

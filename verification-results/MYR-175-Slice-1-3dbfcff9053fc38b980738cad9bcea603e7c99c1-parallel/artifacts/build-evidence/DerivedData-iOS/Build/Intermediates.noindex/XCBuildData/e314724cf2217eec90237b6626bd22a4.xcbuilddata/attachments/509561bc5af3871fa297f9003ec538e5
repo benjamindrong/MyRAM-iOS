@@ -1,0 +1,4 @@
+module NearbySyncCore {
+header "NearbySyncCore-Swift.h"
+export *
+}

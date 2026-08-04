@@ -1,0 +1,68 @@
+{
+  "" : {
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/NearbySyncCore-master.dia",
+    "emit-module-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/NearbySyncCore-master-emit-module.d",
+    "emit-module-diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/NearbySyncCore-master-emit-module.dia",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/NearbySyncCore-master.swiftdeps"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/NearbySyncCore/Sources/NearbySyncCore/DebouncedChangeSender.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/DebouncedChangeSender.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/DebouncedChangeSender.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/DebouncedChangeSender.dia",
+    "index-unit-output-path" : "/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/DebouncedChangeSender.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/DebouncedChangeSender.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/DebouncedChangeSender.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/DebouncedChangeSender.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/DebouncedChangeSender~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/NearbySyncCore/Sources/NearbySyncCore/SyncEngine.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncEngine.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncEngine.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncEngine.dia",
+    "index-unit-output-path" : "/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncEngine.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncEngine.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncEngine.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncEngine.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncEngine~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/NearbySyncCore/Sources/NearbySyncCore/SyncModels.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncModels.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncModels.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncModels.dia",
+    "index-unit-output-path" : "/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncModels.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncModels.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncModels.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncModels.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncModels~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/NearbySyncCore/Sources/NearbySyncCore/SyncQueue.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncQueue.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncQueue.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncQueue.dia",
+    "index-unit-output-path" : "/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncQueue.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncQueue.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncQueue.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncQueue.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncQueue~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/NearbySyncCore/Sources/NearbySyncCore/SyncStore.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncStore.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncStore.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncStore.dia",
+    "index-unit-output-path" : "/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncStore.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncStore.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncStore.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncStore.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/SyncStore~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/NearbySyncCore/Sources/NearbySyncCore/TrustedPeerStore.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/TrustedPeerStore.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/TrustedPeerStore.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/TrustedPeerStore.dia",
+    "index-unit-output-path" : "/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/TrustedPeerStore.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/TrustedPeerStore.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/TrustedPeerStore.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/TrustedPeerStore.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/NearbySyncCore.build/Debug-iphonesimulator/NearbySyncCore.build/Objects-normal/x86_64/TrustedPeerStore~partial.swiftmodule"
+  }
+}

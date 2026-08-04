@@ -1,0 +1,1 @@
+iPhone 16 Pro | com.apple.CoreSimulator.SimRuntime.iOS-18-5 | 9E2C2CF0-7DD4-4B9D-B6CE-63C9E42B95A7

@@ -1,0 +1,16 @@
+{
+  "source": "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/SyncStatusIndicator.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 44
+        }
+      }
+    ]
+  },
+  "version": 1
+}

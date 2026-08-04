@@ -1,0 +1,24 @@
+{
+  "source": "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAMWidget/MyRAMWidget.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Pinned Text",
+        "location": {
+          "startingColumn": 35,
+          "startingLine": 105
+        }
+      },
+      {
+        "comment": "",
+        "key": "Keeps your selected note and its most important text visible.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 106
+        }
+      }
+    ]
+  },
+  "version": 1
+}

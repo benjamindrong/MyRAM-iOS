@@ -1,0 +1,64 @@
+{
+  "buildCommand" : {
+    "command" : "build",
+    "skipDependencies" : false,
+    "style" : "buildOnly"
+  },
+  "configuredTargets" : [
+    {
+      "guid" : "98a9cbde253e8e955bc92731eb2902031821e474cdda1a51a4972ce73b219213"
+    }
+  ],
+  "containerPath" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM.xcodeproj",
+  "continueBuildingAfterErrors" : false,
+  "dependencyScope" : "workspace",
+  "enableIndexBuildArena" : false,
+  "hideShellScriptEnvironment" : false,
+  "parameters" : {
+    "action" : "build",
+    "activeArchitecture" : "undefined_arch",
+    "activeRunDestination" : {
+      "disableOnlyActiveArch" : true,
+      "platform" : "iphonesimulator",
+      "sdk" : "iphonesimulator18.5",
+      "sdkVariant" : "iphonesimulator",
+      "supportedArchitectures" : [
+        "i386",
+        "x86_64"
+      ],
+      "targetArchitecture" : "undefined_arch"
+    },
+    "arenaInfo" : {
+      "buildIntermediatesPath" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex",
+      "buildProductsPath" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Products",
+      "derivedDataPath" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS",
+      "indexDataStoreFolderPath" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Index.noindex/DataStore",
+      "indexEnableDataStore" : true,
+      "indexPCHPath" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Index.noindex/PrecompiledHeaders",
+      "pchPath" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/PrecompiledHeaders"
+    },
+    "configurationName" : "Debug",
+    "overrides" : {
+      "commandLine" : {
+        "table" : {
+          "CODE_SIGN_IDENTITY" : "",
+          "CODE_SIGNING_ALLOWED" : "NO",
+          "CODE_SIGNING_REQUIRED" : "NO"
+        }
+      },
+      "synthesized" : {
+        "table" : {
+          "ACTION" : "build",
+          "ENABLE_PREVIEWS" : "NO",
+          "ENABLE_XOJIT_PREVIEWS" : "YES"
+        }
+      }
+    }
+  },
+  "schemeCommand" : "launch",
+  "showNonLoggedProgress" : true,
+  "useDryRun" : false,
+  "useImplicitDependencies" : true,
+  "useLegacyBuildLocations" : false,
+  "useParallelTargets" : true
+}

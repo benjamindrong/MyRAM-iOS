@@ -1,0 +1,24 @@
+{
+  "source": "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetHost/MyRAMWidgetSelectionButton.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Remove from Widget",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 12
+        }
+      },
+      {
+        "comment": "",
+        "key": "Use in Widget",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 18
+        }
+      }
+    ]
+  },
+  "version": 1
+}

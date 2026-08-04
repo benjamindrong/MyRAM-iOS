@@ -1,0 +1,12 @@
+Target dependency graph (6 targets)
+Target 'MyRAM' in project 'MyRAM'
+➜ Explicit dependency on target 'MyRAMWidgetExtension' in project 'MyRAM'
+➜ Explicit dependency on target 'NearbySyncCore' in project 'NearbySyncCore'
+➜ Explicit dependency on target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore'
+Target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore'
+➜ Explicit dependency on target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore'
+Target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore' (no dependencies)
+Target 'NearbySyncCore' in project 'NearbySyncCore'
+➜ Explicit dependency on target 'NearbySyncCore' in project 'NearbySyncCore'
+Target 'NearbySyncCore' in project 'NearbySyncCore' (no dependencies)
+Target 'MyRAMWidgetExtension' in project 'MyRAM' (no dependencies)

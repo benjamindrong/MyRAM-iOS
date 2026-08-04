@@ -1,0 +1,98 @@
+{
+  "" : {
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetExtension-master.dia",
+    "emit-module-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetExtension-master-emit-module.d",
+    "emit-module-diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetExtension-master-emit-module.dia",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetExtension-master.swiftdeps"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetContentSelectionPolicy.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetContentSelectionPolicy.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetContentSelectionPolicy.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetContentSelectionPolicy.dia",
+    "index-unit-output-path" : "/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetContentSelectionPolicy.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetContentSelectionPolicy.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetContentSelectionPolicy.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetContentSelectionPolicy.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetContentSelectionPolicy~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetDeepLink.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetDeepLink.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetDeepLink.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetDeepLink.dia",
+    "index-unit-output-path" : "/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetDeepLink.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetDeepLink.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetDeepLink.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetDeepLink.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetDeepLink~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetRuntimeConfiguration.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetRuntimeConfiguration.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetRuntimeConfiguration.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetRuntimeConfiguration.dia",
+    "index-unit-output-path" : "/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetRuntimeConfiguration.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetRuntimeConfiguration.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetRuntimeConfiguration.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetRuntimeConfiguration.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetRuntimeConfiguration~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshot.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshot.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshot.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshot.dia",
+    "index-unit-output-path" : "/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshot.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshot.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshot.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshot.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshot~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotCodec.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotCodec.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotCodec.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotCodec.dia",
+    "index-unit-output-path" : "/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotCodec.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotCodec.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotCodec.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotCodec.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotCodec~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotStore.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotStore.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotStore.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotStore.dia",
+    "index-unit-output-path" : "/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotStore.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotStore.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotStore.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotStore.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetSnapshotStore~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAMWidget/MyRAMWidget.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidget.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidget.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidget.dia",
+    "index-unit-output-path" : "/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidget.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidget.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidget.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidget.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidget~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAMWidget/MyRAMWidgetBundle.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetBundle.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetBundle.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetBundle.dia",
+    "index-unit-output-path" : "/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetBundle.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetBundle.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetBundle.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetBundle.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/MyRAMWidgetBundle~partial.swiftmodule"
+  },
+  "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/DerivedSources/GeneratedAssetSymbols.swift" : {
+    "const-values" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftconstvalues",
+    "dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/GeneratedAssetSymbols.d",
+    "diagnostics" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/GeneratedAssetSymbols.dia",
+    "index-unit-output-path" : "/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "llvm-bc" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/GeneratedAssetSymbols.bc",
+    "object" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/GeneratedAssetSymbols.o",
+    "swift-dependencies" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/GeneratedAssetSymbols.swiftdeps",
+    "swiftmodule" : "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/evidence/builds/DerivedData-iOS/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMWidgetExtension.build/Objects-normal/arm64/GeneratedAssetSymbols~partial.swiftmodule"
+  }
+}

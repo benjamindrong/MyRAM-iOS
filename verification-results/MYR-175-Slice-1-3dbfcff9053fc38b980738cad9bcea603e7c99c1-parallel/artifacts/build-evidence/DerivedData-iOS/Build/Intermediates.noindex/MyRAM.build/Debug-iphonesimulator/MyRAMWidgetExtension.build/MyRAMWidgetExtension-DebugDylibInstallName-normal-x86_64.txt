@@ -1,0 +1,1 @@
+@rpath/MyRAMWidgetExtension.debug.dylib

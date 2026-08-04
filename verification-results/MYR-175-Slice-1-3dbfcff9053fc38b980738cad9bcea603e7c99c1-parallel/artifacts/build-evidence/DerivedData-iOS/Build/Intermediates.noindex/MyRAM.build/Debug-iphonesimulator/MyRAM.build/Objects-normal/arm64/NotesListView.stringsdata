@@ -1,0 +1,736 @@
+{
+  "source": "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/NotesListView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Unable to Import Markdown",
+        "location": {
+          "startingColumn": 16,
+          "startingLine": 250
+        }
+      },
+      {
+        "comment": "",
+        "key": "Close and reopen MyRAM before syncing or editing.",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 195
+        }
+      },
+      {
+        "comment": "",
+        "key": "Copy Support Details",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 191
+        }
+      },
+      {
+        "comment": "",
+        "key": "Unable to Export Notes",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 348
+        }
+      },
+      {
+        "comment": "",
+        "key": "Unable to Import Notes",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 356
+        }
+      },
+      {
+        "comment": "",
+        "key": "New Folder",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 364
+        }
+      },
+      {
+        "comment": "",
+        "key": "Rename Folder",
+        "location": {
+          "startingColumn": 17,
+          "startingLine": 377
+        }
+      },
+      {
+        "comment": "",
+        "key": "Rename Main List",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 398
+        }
+      },
+      {
+        "comment": "",
+        "key": "Edit History",
+        "location": {
+          "startingColumn": 33,
+          "startingLine": 417
+        }
+      },
+      {
+        "comment": "",
+        "key": "Delete folder \"%@\"?",
+        "location": {
+          "startingColumn": 17,
+          "startingLine": 429
+        }
+      },
+      {
+        "comment": "",
+        "key": "Clear Demo Notes?",
+        "location": {
+          "startingColumn": 17,
+          "startingLine": 519
+        }
+      },
+      {
+        "comment": "",
+        "key": "OK",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 254
+        }
+      },
+      {
+        "comment": "",
+        "key": "Nearby Sync",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 337
+        }
+      },
+      {
+        "comment": "",
+        "key": "Done",
+        "location": {
+          "startingColumn": 40,
+          "startingLine": 341
+        }
+      },
+      {
+        "comment": "",
+        "key": "OK",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 352
+        }
+      },
+      {
+        "comment": "",
+        "key": "OK",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 360
+        }
+      },
+      {
+        "comment": "",
+        "key": "Folder Name",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 365
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 366
+        }
+      },
+      {
+        "comment": "",
+        "key": "Create",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 369
+        }
+      },
+      {
+        "comment": "",
+        "key": "Enter a name for the new folder.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 374
+        }
+      },
+      {
+        "comment": "",
+        "key": "Folder Name",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 383
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 384
+        }
+      },
+      {
+        "comment": "",
+        "key": "Save",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 388
+        }
+      },
+      {
+        "comment": "",
+        "key": "Update the folder name.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 396
+        }
+      },
+      {
+        "comment": "",
+        "key": "Main List Title",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 399
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 400
+        }
+      },
+      {
+        "comment": "",
+        "key": "Save",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 403
+        }
+      },
+      {
+        "comment": "",
+        "key": "Set the title shown on the top-level notes list.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 415
+        }
+      },
+      {
+        "comment": "",
+        "key": "Undo",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 418
+        }
+      },
+      {
+        "comment": "",
+        "key": "Redo",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 423
+        }
+      },
+      {
+        "comment": "",
+        "key": "Delete Folder and All Contents",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 436
+        }
+      },
+      {
+        "comment": "",
+        "key": "Delete Folder Only and Keep Notes",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 442
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 448
+        }
+      },
+      {
+        "comment": "",
+        "key": "Choose whether to delete the folder contents or move notes to top level before deleting the folder.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 453
+        }
+      },
+      {
+        "comment": "",
+        "key": "Clear Demo Notes",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 523
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 526
+        }
+      },
+      {
+        "comment": "",
+        "key": "Only notes created by the demo data generator will be removed.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 528
+        }
+      },
+      {
+        "comment": "",
+        "key": "Search scope",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 703
+        }
+      },
+      {
+        "comment": "",
+        "key": "Clear search",
+        "location": {
+          "startingColumn": 37,
+          "startingLine": 732
+        }
+      },
+      {
+        "comment": "",
+        "key": "Choose a note from the sidebar or create a new one.",
+        "location": {
+          "startingColumn": 35,
+          "startingLine": 833
+        }
+      },
+      {
+        "comment": "",
+        "key": "Select a Note",
+        "location": {
+          "startingColumn": 17,
+          "startingLine": 831
+        }
+      },
+      {
+        "comment": "",
+        "key": "Finish selecting notes",
+        "location": {
+          "startingColumn": 50,
+          "startingLine": 995
+        }
+      },
+      {
+        "comment": "",
+        "key": "Select notes",
+        "location": {
+          "startingColumn": 77,
+          "startingLine": 995
+        }
+      },
+      {
+        "comment": "",
+        "key": "Appearance",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 891
+        }
+      },
+      {
+        "comment": "",
+        "key": "Nearby Sync",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 871
+        }
+      },
+      {
+        "comment": "",
+        "key": "Import Markdown",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 880
+        }
+      },
+      {
+        "comment": "",
+        "key": "Mode",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 892
+        }
+      },
+      {
+        "comment": "",
+        "key": "Style",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 898
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pinned Color",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 904
+        }
+      },
+      {
+        "comment": "",
+        "key": "Generate Demo Notes",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 917
+        }
+      },
+      {
+        "comment": "",
+        "key": "Clear Demo Notes",
+        "location": {
+          "startingColumn": 31,
+          "startingLine": 925
+        }
+      },
+      {
+        "comment": "",
+        "key": "Export Markdown",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 1004
+        }
+      },
+      {
+        "comment": "",
+        "key": "Export MyRAM Note",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 1010
+        }
+      },
+      {
+        "comment": "",
+        "key": "Photo Library",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 1026
+        }
+      },
+      {
+        "comment": "",
+        "key": "Import Image",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 1032
+        }
+      },
+      {
+        "comment": "",
+        "key": "Edit History",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 1143
+        }
+      },
+      {
+        "comment": "",
+        "key": "New Note",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 1151
+        }
+      },
+      {
+        "comment": "",
+        "key": "New Folder",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 1159
+        }
+      },
+      {
+        "comment": "",
+        "key": "Recently Deleted",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 1166
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 1216
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld notes",
+        "location": {
+          "startingColumn": 41,
+          "startingLine": 1219
+        }
+      },
+      {
+        "comment": "",
+        "key": "Rename",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1232
+        }
+      },
+      {
+        "comment": "",
+        "key": "Delete",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1236
+        }
+      },
+      {
+        "comment": "",
+        "key": "📁 %@",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 1290
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pinned note from %@",
+        "location": {
+          "startingColumn": 45,
+          "startingLine": 1294
+        }
+      },
+      {
+        "comment": "",
+        "key": "Move %lld to Folder",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1363
+        }
+      },
+      {
+        "comment": "",
+        "key": "Export %lld Selected",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1367
+        }
+      },
+      {
+        "comment": "",
+        "key": "Delete %lld Selected",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1371
+        }
+      },
+      {
+        "comment": "",
+        "key": "Unpin",
+        "location": {
+          "startingColumn": 47,
+          "startingLine": 1382
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pin",
+        "location": {
+          "startingColumn": 57,
+          "startingLine": 1382
+        }
+      },
+      {
+        "comment": "",
+        "key": "Move to Folder",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1385
+        }
+      },
+      {
+        "comment": "",
+        "key": "Export",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1388
+        }
+      },
+      {
+        "comment": "",
+        "key": "Delete",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1391
+        }
+      },
+      {
+        "comment": "",
+        "key": "Move %lld to Folder",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1399
+        }
+      },
+      {
+        "comment": "",
+        "key": "Export %lld Selected",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1402
+        }
+      },
+      {
+        "comment": "",
+        "key": "Delete %lld Selected",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 1405
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld Notes Selected",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 2006
+        }
+      },
+      {
+        "comment": "",
+        "key": "Move Note",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 2250
+        }
+      },
+      {
+        "comment": "",
+        "key": "Top Level",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 2216
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 2254
+        }
+      },
+      {
+        "comment": "",
+        "key": "Move Selected Notes",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 2301
+        }
+      },
+      {
+        "comment": "",
+        "key": "Top Level",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 2282
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 2305
+        }
+      },
+      {
+        "comment": "",
+        "key": "Recently Deleted",
+        "location": {
+          "startingColumn": 30,
+          "startingLine": 2376
+        }
+      },
+      {
+        "comment": "",
+        "key": "Deleted notes are kept here for 7 days.",
+        "location": {
+          "startingColumn": 43,
+          "startingLine": 2342
+        }
+      },
+      {
+        "comment": "",
+        "key": "No Recently Deleted Notes",
+        "location": {
+          "startingColumn": 25,
+          "startingLine": 2340
+        }
+      },
+      {
+        "comment": "",
+        "key": "Deleted %@",
+        "location": {
+          "startingColumn": 42,
+          "startingLine": 2355
+        }
+      },
+      {
+        "comment": "",
+        "key": "Restore",
+        "location": {
+          "startingColumn": 40,
+          "startingLine": 2361
+        }
+      },
+      {
+        "comment": "",
+        "key": "Delete",
+        "location": {
+          "startingColumn": 40,
+          "startingLine": 2367
+        }
+      },
+      {
+        "comment": "",
+        "key": "Deleted notes are kept here for 7 days.",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 2383
+        }
+      },
+      {
+        "comment": "",
+        "key": "Done",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 2392
+        }
+      }
+    ]
+  },
+  "version": 1
+}

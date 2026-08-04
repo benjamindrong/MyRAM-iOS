@@ -1,0 +1,32 @@
+{
+  "source": "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Markdown/MarkdownPreview.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "• %@",
+        "location": {
+          "startingColumn": 33,
+          "startingLine": 369
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld.",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 346
+        }
+      },
+      {
+        "comment": "",
+        "key": "•",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 360
+        }
+      }
+    ]
+  },
+  "version": 1
+}

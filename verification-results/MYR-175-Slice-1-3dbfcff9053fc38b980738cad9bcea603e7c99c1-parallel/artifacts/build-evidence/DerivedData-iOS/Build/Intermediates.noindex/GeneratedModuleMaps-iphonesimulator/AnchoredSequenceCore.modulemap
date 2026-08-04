@@ -1,0 +1,4 @@
+module AnchoredSequenceCore {
+header "AnchoredSequenceCore-Swift.h"
+export *
+}

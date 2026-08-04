@@ -1,0 +1,456 @@
+{
+  "source": "/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/NoteEditorView.swift",
+  "tables": {
+    "Localizable": [
+      {
+        "comment": "",
+        "key": "Edit History",
+        "location": {
+          "startingColumn": 33,
+          "startingLine": 137
+        }
+      },
+      {
+        "comment": "",
+        "key": "Unable to Export Note",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 148
+        }
+      },
+      {
+        "comment": "",
+        "key": "New Folder",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 156
+        }
+      },
+      {
+        "comment": "",
+        "key": "Edit Title",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 168
+        }
+      },
+      {
+        "comment": "",
+        "key": "Unable to Export Markdown",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 220
+        }
+      },
+      {
+        "comment": "",
+        "key": "Undo",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 138
+        }
+      },
+      {
+        "comment": "",
+        "key": "Redo",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 143
+        }
+      },
+      {
+        "comment": "",
+        "key": "OK",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 152
+        }
+      },
+      {
+        "comment": "",
+        "key": "Folder Name",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 157
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 158
+        }
+      },
+      {
+        "comment": "",
+        "key": "Create",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 161
+        }
+      },
+      {
+        "comment": "",
+        "key": "Enter a name for the new folder.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 166
+        }
+      },
+      {
+        "comment": "",
+        "key": "Title",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 169
+        }
+      },
+      {
+        "comment": "",
+        "key": "Cancel",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 170
+        }
+      },
+      {
+        "comment": "",
+        "key": "Save",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 171
+        }
+      },
+      {
+        "comment": "",
+        "key": "Update the note title.",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 176
+        }
+      },
+      {
+        "comment": "",
+        "key": "OK",
+        "location": {
+          "startingColumn": 24,
+          "startingLine": 224
+        }
+      },
+      {
+        "comment": "",
+        "key": "Nearby Sync",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 354
+        }
+      },
+      {
+        "comment": "",
+        "key": "Done",
+        "location": {
+          "startingColumn": 32,
+          "startingLine": 358
+        }
+      },
+      {
+        "comment": "",
+        "key": "Editor Mode",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 438
+        }
+      },
+      {
+        "comment": "",
+        "key": "Edit",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 439
+        }
+      },
+      {
+        "comment": "",
+        "key": "Preview",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 441
+        }
+      },
+      {
+        "comment": "",
+        "key": "Search Note",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 560
+        }
+      },
+      {
+        "comment": "",
+        "key": "Previous match",
+        "location": {
+          "startingColumn": 33,
+          "startingLine": 589
+        }
+      },
+      {
+        "comment": "",
+        "key": "Next match",
+        "location": {
+          "startingColumn": 33,
+          "startingLine": 601
+        }
+      },
+      {
+        "comment": "",
+        "key": "Close search",
+        "location": {
+          "startingColumn": 33,
+          "startingLine": 613
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pinned (0)",
+        "location": {
+          "startingColumn": 26,
+          "startingLine": 766
+        }
+      },
+      {
+        "comment": "",
+        "key": "Add",
+        "location": {
+          "startingColumn": 28,
+          "startingLine": 804
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pinned",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 788
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 790
+        }
+      },
+      {
+        "comment": "",
+        "key": "Pinned",
+        "location": {
+          "startingColumn": 27,
+          "startingLine": 891
+        }
+      },
+      {
+        "comment": "",
+        "key": "Unpin",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 935
+        }
+      },
+      {
+        "comment": "",
+        "key": "Delete",
+        "location": {
+          "startingColumn": 20,
+          "startingLine": 939
+        }
+      },
+      {
+        "comment": "",
+        "key": "Text Color",
+        "location": {
+          "startingColumn": 29,
+          "startingLine": 2044
+        }
+      },
+      {
+        "comment": "",
+        "key": "Auto Text Color",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 2014
+        }
+      },
+      {
+        "comment": "",
+        "key": "A",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 2035
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 2101
+        }
+      },
+      {
+        "comment": "",
+        "key": "Auto Text Color",
+        "location": {
+          "startingColumn": 37,
+          "startingLine": 2135
+        }
+      },
+      {
+        "comment": "",
+        "key": "A",
+        "location": {
+          "startingColumn": 34,
+          "startingLine": 2124
+        }
+      },
+      {
+        "comment": "",
+        "key": "Paste",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 2253
+        }
+      },
+      {
+        "comment": "",
+        "key": "Paste and Match Destination Formatting",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 2260
+        }
+      },
+      {
+        "comment": "",
+        "key": "Export Markdown",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 2357
+        }
+      },
+      {
+        "comment": "",
+        "key": "Export Note",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 2366
+        }
+      },
+      {
+        "comment": "",
+        "key": "Attachments",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 2373
+        }
+      },
+      {
+        "comment": "",
+        "key": "New Note",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 2384
+        }
+      },
+      {
+        "comment": "",
+        "key": "New Folder",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 2392
+        }
+      },
+      {
+        "comment": "",
+        "key": "Search Note",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 2399
+        }
+      },
+      {
+        "comment": "",
+        "key": "Delete Note",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 2408
+        }
+      },
+      {
+        "comment": "",
+        "key": "Photo Library",
+        "location": {
+          "startingColumn": 19,
+          "startingLine": 2418
+        }
+      },
+      {
+        "comment": "",
+        "key": "Import Image",
+        "location": {
+          "startingColumn": 19,
+          "startingLine": 2425
+        }
+      },
+      {
+        "comment": "",
+        "key": "Reorder",
+        "location": {
+          "startingColumn": 33,
+          "startingLine": 2696
+        }
+      },
+      {
+        "comment": "",
+        "key": "%lld",
+        "location": {
+          "startingColumn": 22,
+          "startingLine": 2803
+        }
+      },
+      {
+        "comment": "",
+        "key": "Attachments",
+        "location": {
+          "startingColumn": 23,
+          "startingLine": 2800
+        }
+      },
+      {
+        "comment": "",
+        "key": "This attachment could not be loaded.",
+        "location": {
+          "startingColumn": 39,
+          "startingLine": 2864
+        }
+      },
+      {
+        "comment": "",
+        "key": "Photo Unavailable",
+        "location": {
+          "startingColumn": 21,
+          "startingLine": 2862
+        }
+      },
+      {
+        "comment": "",
+        "key": "Close Attachment",
+        "location": {
+          "startingColumn": 33,
+          "startingLine": 2879
+        }
+      }
+    ]
+  },
+  "version": 1
+}
