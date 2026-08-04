@@ -74,6 +74,7 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
         }
     ) {
         let resolvedSelectionStore = selectionStore ?? MyRAMWidgetNoteSelectionStore()
+        _ = container
         self.observedContext = observedContext
         self.platform = platform
         self.selectionStore = resolvedSelectionStore
@@ -147,10 +148,6 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
                 }
             )
 
-            // Read through the app's observed context so an explicit widget
-            // selection immediately sees the same current note state the user
-            // selected, including pending inserts or edits that have not yet
-            // been observed by a newly-created context.
             guard let note = try? observedContext.fetch(descriptor).first else {
                 selectionStore.clear()
                 envelope = MyRAMWidgetSnapshotEnvelope(generatedAt: .now, note: nil)
