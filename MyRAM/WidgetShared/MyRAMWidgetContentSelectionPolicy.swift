@@ -19,13 +19,13 @@ struct MyRAMWidgetLayoutPolicy: Equatable, Sendable {
     init(family: MyRAMWidgetFamily, platform: MyRAMWidgetPlatform) {
         switch (family, platform) {
         case (.small, .iOS), (.small, .macOS):
-            contentLineBudget = 3
+            contentLineBudget = 6
         case (.medium, .iOS), (.medium, .macOS):
-            contentLineBudget = 4
+            contentLineBudget = 10
         }
-        contentMarginMode = .systemAndDefaultCustomPadding
-        rootSpacing = 6
-        pinSpacing = 5
+        contentMarginMode = .systemOnly
+        rootSpacing = 4
+        pinSpacing = 4
     }
 }
 
