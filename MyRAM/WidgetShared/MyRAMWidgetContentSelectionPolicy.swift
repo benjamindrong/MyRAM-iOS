@@ -11,7 +11,7 @@ enum MyRAMWidgetContentMarginMode: Equatable, Sendable {
 }
 
 struct MyRAMWidgetLayoutPolicy: Equatable, Sendable {
-    let contentLineBudget: Int
+    let maximumPinnedTextCount: Int
     let contentMarginMode: MyRAMWidgetContentMarginMode
     let rootSpacing: CGFloat
     let pinSpacing: CGFloat
@@ -19,9 +19,9 @@ struct MyRAMWidgetLayoutPolicy: Equatable, Sendable {
     init(family: MyRAMWidgetFamily, platform: MyRAMWidgetPlatform) {
         switch (family, platform) {
         case (.small, .iOS), (.small, .macOS):
-            contentLineBudget = 8
+            maximumPinnedTextCount = 8
         case (.medium, .iOS), (.medium, .macOS):
-            contentLineBudget = 10
+            maximumPinnedTextCount = 10
         }
         contentMarginMode = .systemOnly
         rootSpacing = 4
@@ -40,7 +40,6 @@ struct MyRAMWidgetRenderModel: Equatable, Sendable {
     let title: String
     let pinnedTexts: [String]
     let bodyText: String?
-    let bodyLineLimit: Int
     let state: MyRAMWidgetRenderState
     let noteURL: URL?
 
@@ -55,15 +54,13 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
         family: MyRAMWidgetFamily,
         platform: MyRAMWidgetPlatform
     ) -> MyRAMWidgetRenderModel {
-        let layoutPolicy = MyRAMWidgetLayoutPolicy(family: family, platform: platform)
         switch readResult {
         case .snapshot(let envelope):
             return renderModel(from: envelope, family: family, platform: platform)
         case .missing, .inaccessible, .unsupportedVersion, .malformed:
             return stableState(
                 .updateRequired,
-                message: MyRAMWidgetRenderModel.updateRequiredMessage,
-                bodyLineLimit: layoutPolicy.contentLineBudget
+                message: MyRAMWidgetRenderModel.updateRequiredMessage
             )
         }
     }
@@ -77,8 +74,7 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
         guard let note = envelope.note else {
             return stableState(
                 .noSelection,
-                message: MyRAMWidgetRenderModel.noSelectionMessage,
-                bodyLineLimit: layoutPolicy.contentLineBudget
+                message: MyRAMWidgetRenderModel.noSelectionMessage
             )
         }
 
@@ -87,18 +83,15 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
             return trimmed.isEmpty ? nil : trimmed
         }
         let body = note.bodyPreviewSource
-        let budget = layoutPolicy.contentLineBudget
-        let fittingPins = Array(pins.prefix(budget))
+        let fittingPins = Array(pins.prefix(layoutPolicy.maximumPinnedTextCount))
         let allPinsFit = fittingPins.count == pins.count
-        let remainingLines = allPinsFit ? max(0, budget - fittingPins.count) : 0
-        let bodyText = allPinsFit && remainingLines > 0 && !body.isEmpty ? body : nil
+        let bodyText = allPinsFit && !body.isEmpty ? body : nil
 
         if fittingPins.isEmpty, bodyText == nil {
             return MyRAMWidgetRenderModel(
                 title: note.title,
                 pinnedTexts: [],
                 bodyText: MyRAMWidgetRenderModel.emptyNoteMessage,
-                bodyLineLimit: budget,
                 state: .emptyNote,
                 noteURL: MyRAMWidgetDeepLink.url(noteID: note.id, platform: platform)
             )
@@ -108,7 +101,6 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
             title: note.title,
             pinnedTexts: fittingPins,
             bodyText: bodyText,
-            bodyLineLimit: bodyText == nil ? 0 : remainingLines,
             state: .content,
             noteURL: MyRAMWidgetDeepLink.url(noteID: note.id, platform: platform)
         )
@@ -116,14 +108,12 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
 
     private func stableState(
         _ state: MyRAMWidgetRenderState,
-        message: String,
-        bodyLineLimit: Int
+        message: String
     ) -> MyRAMWidgetRenderModel {
         MyRAMWidgetRenderModel(
             title: "",
             pinnedTexts: [],
             bodyText: message,
-            bodyLineLimit: bodyLineLimit,
             state: state,
             noteURL: nil
         )
