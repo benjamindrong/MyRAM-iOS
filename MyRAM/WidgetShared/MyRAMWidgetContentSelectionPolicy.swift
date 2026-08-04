@@ -3,12 +3,29 @@ import Foundation
 enum MyRAMWidgetFamily: Sendable {
     case small
     case medium
+}
 
-    var contentLineBudget: Int {
-        switch self {
-        case .small: 3
-        case .medium: 4
+enum MyRAMWidgetContentMarginMode: Equatable, Sendable {
+    case systemAndDefaultCustomPadding
+    case systemOnly
+}
+
+struct MyRAMWidgetLayoutPolicy: Equatable, Sendable {
+    let contentLineBudget: Int
+    let contentMarginMode: MyRAMWidgetContentMarginMode
+    let rootSpacing: CGFloat
+    let pinSpacing: CGFloat
+
+    init(family: MyRAMWidgetFamily, platform: MyRAMWidgetPlatform) {
+        switch (family, platform) {
+        case (.small, .iOS), (.small, .macOS):
+            contentLineBudget = 3
+        case (.medium, .iOS), (.medium, .macOS):
+            contentLineBudget = 4
         }
+        contentMarginMode = .systemAndDefaultCustomPadding
+        rootSpacing = 6
+        pinSpacing = 5
     }
 }
 
@@ -38,6 +55,7 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
         family: MyRAMWidgetFamily,
         platform: MyRAMWidgetPlatform
     ) -> MyRAMWidgetRenderModel {
+        let layoutPolicy = MyRAMWidgetLayoutPolicy(family: family, platform: platform)
         switch readResult {
         case .snapshot(let envelope):
             return renderModel(from: envelope, family: family, platform: platform)
@@ -45,7 +63,7 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
             return stableState(
                 .updateRequired,
                 message: MyRAMWidgetRenderModel.updateRequiredMessage,
-                bodyLineLimit: family.contentLineBudget
+                bodyLineLimit: layoutPolicy.contentLineBudget
             )
         }
     }
@@ -55,11 +73,12 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
         family: MyRAMWidgetFamily,
         platform: MyRAMWidgetPlatform
     ) -> MyRAMWidgetRenderModel {
+        let layoutPolicy = MyRAMWidgetLayoutPolicy(family: family, platform: platform)
         guard let note = envelope.note else {
             return stableState(
                 .noSelection,
                 message: MyRAMWidgetRenderModel.noSelectionMessage,
-                bodyLineLimit: family.contentLineBudget
+                bodyLineLimit: layoutPolicy.contentLineBudget
             )
         }
 
@@ -68,7 +87,7 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
             return trimmed.isEmpty ? nil : trimmed
         }
         let body = note.bodyPreviewSource
-        let budget = family.contentLineBudget
+        let budget = layoutPolicy.contentLineBudget
         let fittingPins = Array(pins.prefix(budget))
         let allPinsFit = fittingPins.count == pins.count
         let remainingLines = allPinsFit ? max(0, budget - fittingPins.count) : 0
