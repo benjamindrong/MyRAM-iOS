@@ -1,9 +1,9 @@
 name: Apply MYR-175 persistence fixture alignment
 
 on:
-  push:
+  pull_request:
     branches:
-      - MYR-175-Slice-1-Sibling-ordering-contract-and-structural-traversal
+      - main
 
 permissions:
   contents: write
@@ -94,4 +94,4 @@ jobs:
           git add docs/MYR-175-structural-insert-alignment.md
           git add -u .github
           git commit -m "MYR-175 Align persistence fixture with sibling materialization"
-          git push origin "HEAD:${GITHUB_REF_NAME}"
+          git push origin "HEAD:MYR-175-Slice-1-Sibling-ordering-contract-and-structural-traversal"
