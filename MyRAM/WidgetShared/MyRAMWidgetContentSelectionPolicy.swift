@@ -11,18 +11,11 @@ enum MyRAMWidgetContentMarginMode: Equatable, Sendable {
 }
 
 struct MyRAMWidgetLayoutPolicy: Equatable, Sendable {
-    let maximumPinnedTextCount: Int
     let contentMarginMode: MyRAMWidgetContentMarginMode
     let rootSpacing: CGFloat
     let pinSpacing: CGFloat
 
-    init(family: MyRAMWidgetFamily, platform: MyRAMWidgetPlatform) {
-        switch (family, platform) {
-        case (.small, .iOS), (.small, .macOS):
-            maximumPinnedTextCount = 8
-        case (.medium, .iOS), (.medium, .macOS):
-            maximumPinnedTextCount = 10
-        }
+    init(family _: MyRAMWidgetFamily, platform _: MyRAMWidgetPlatform) {
         contentMarginMode = .systemOnly
         rootSpacing = 4
         pinSpacing = 4
@@ -67,10 +60,9 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
 
     func renderModel(
         from envelope: MyRAMWidgetSnapshotEnvelope,
-        family: MyRAMWidgetFamily,
+        family _: MyRAMWidgetFamily,
         platform: MyRAMWidgetPlatform
     ) -> MyRAMWidgetRenderModel {
-        let layoutPolicy = MyRAMWidgetLayoutPolicy(family: family, platform: platform)
         guard let note = envelope.note else {
             return stableState(
                 .noSelection,
@@ -83,11 +75,9 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
             return trimmed.isEmpty ? nil : trimmed
         }
         let body = note.bodyPreviewSource
-        let fittingPins = Array(pins.prefix(layoutPolicy.maximumPinnedTextCount))
-        let allPinsFit = fittingPins.count == pins.count
-        let bodyText = allPinsFit && !body.isEmpty ? body : nil
+        let bodyText = body.isEmpty ? nil : body
 
-        if fittingPins.isEmpty, bodyText == nil {
+        if pins.isEmpty, bodyText == nil {
             return MyRAMWidgetRenderModel(
                 title: note.title,
                 pinnedTexts: [],
@@ -99,7 +89,7 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
 
         return MyRAMWidgetRenderModel(
             title: note.title,
-            pinnedTexts: fittingPins,
+            pinnedTexts: pins,
             bodyText: bodyText,
             state: .content,
             noteURL: MyRAMWidgetDeepLink.url(noteID: note.id, platform: platform)
