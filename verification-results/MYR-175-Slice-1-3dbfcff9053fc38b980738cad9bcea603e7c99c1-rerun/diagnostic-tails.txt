@@ -1,0 +1,879 @@
+===== package-focused.log =====
+Building for debugging...
+[0/7] /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/Packages/AnchoredSequenceCore/.build/arm64-apple-macosx/debug/AnchoredSequenceCorePackageTests.derived/runner.swift
+[1/7] Write sources
+[4/7] Write swift-version--79AA4F9932D1E87A.txt
+[6/12] Compiling AnchoredSequenceCore SyncActorSequenceReservation.swift
+[7/12] Compiling AnchoredSequenceCore SyncOperationIDOrder.swift
+[8/12] Emitting module AnchoredSequenceCore
+[9/12] Compiling AnchoredSequenceCore SyncSequenceIdentity.swift
+[10/12] Compiling AnchoredSequenceCore SyncTextLegacyBootstrap.swift
+[11/14] Compiling AnchoredSequenceCore SyncTextOperationPayload.swift
+[12/14] Compiling AnchoredSequenceCore SyncTextSequenceState.swift
+[13/19] Compiling AnchoredSequenceCoreTests SyncActorSequenceReservationTests.swift
+[14/19] Compiling AnchoredSequenceCoreTests SyncSequenceIdentityTests.swift
+[15/19] Emitting module AnchoredSequenceCoreTests
+[16/19] Compiling AnchoredSequenceCoreTests SyncTextLegacyBootstrapTests.swift
+[17/19] Compiling AnchoredSequenceCoreTests SyncTextOperationPayloadTests.swift
+[18/20] Compiling AnchoredSequenceCoreTests SyncTextSequenceStateTests.swift
+[19/22] Compiling AnchoredSequenceCorePackageTests runner.swift
+[20/22] Emitting module AnchoredSequenceCorePackageTests
+[20/22] Write Objects.LinkFileList
+[21/22] Linking AnchoredSequenceCorePackageTests
+Build complete! (24.73s)
+Test Suite 'Selected tests' started at 2026-08-04 14:55:26.249.
+Test Suite 'AnchoredSequenceCorePackageTests.xctest' started at 2026-08-04 14:55:26.250.
+Test Suite 'SyncTextSequenceStateTests' started at 2026-08-04 14:55:26.250.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testBeginningMiddleAndEndOriginsExpandIteratively]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testBeginningMiddleAndEndOriginsExpandIteratively]' passed (0.003 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testCanonicalOrderUsesRawUUIDBytesThenCounter]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testCanonicalOrderUsesRawUUIDBytesThenCounter]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testDeepNestedChainUsesBoundedIterativeTraversalWork]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testDeepNestedChainUsesBoundedIterativeTraversalWork]' passed (0.244 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testEmptyStateHasNoMaterializedContent]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testEmptyStateHasNoMaterializedContent]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentProjectionRejectsSiblingOrderMismatchEvenWithEqualVisibleText]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentProjectionRejectsSiblingOrderMismatchEvenWithEqualVisibleText]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentValidationRejectsUnknownOversizedSurrogateSplitAndMergeable]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentValidationRejectsUnknownOversizedSurrogateSplitAndMergeable]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLargeSameAnchorSiblingSetUsesBoundedIterativeTraversalWork]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLargeSameAnchorSiblingSetUsesBoundedIterativeTraversalWork]' passed (0.153 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLocalInitializersRejectInvalidOriginsRunsAndRanges]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLocalInitializersRejectInvalidOriginsRunsAndRanges]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testNoncanonicalAndDuplicateRunArraysAreRejected]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testNoncanonicalAndDuplicateRunArraysAreRejected]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testPublicValuesConstructAVisibleRootState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testPublicValuesConstructAVisibleRootState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderDiffersFromCanonicalRunStorageWithoutChangingRunValidation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderDiffersFromCanonicalRunStorageWithoutChangingRunValidation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderedProjectionProducesDeterministicState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderedProjectionProducesDeterministicState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderUsesDescendingCounterThenRawUUIDByteTieBreak]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderUsesDescendingCounterThenRawUUIDByteTieBreak]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingOrderingIsIndependentOfInputPermutation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingOrderingIsIndependentOfInputPermutation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingSubtreesRemainContiguous]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingSubtreesRemainContiguous]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSelectedSpansDoNotCoalesceAcrossDescendantsOrVisibilityGaps]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSelectedSpansDoNotCoalesceAcrossDescendantsOrVisibilityGaps]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSurrogateOriginsAcceptBeforeAndAfterButRejectInterior]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSurrogateOriginsAcceptBeforeAndAfterButRejectInterior]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testUnknownSelfCyclicAndUnreachableOriginsAreDistinct]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testUnknownSelfCyclicAndUnreachableOriginsAreDistinct]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testVisibilityMaterializationAnchorsAndRangesAreSurrogateSafe]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testVisibilityMaterializationAnchorsAndRangesAreSurrogateSafe]' passed (0.000 seconds).
+Test Suite 'SyncTextSequenceStateTests' passed at 2026-08-04 14:55:26.653.
+	 Executed 19 tests, with 0 failures (0 unexpected) in 0.402 (0.403) seconds
+Test Suite 'AnchoredSequenceCorePackageTests.xctest' passed at 2026-08-04 14:55:26.653.
+	 Executed 19 tests, with 0 failures (0 unexpected) in 0.402 (0.403) seconds
+Test Suite 'Selected tests' passed at 2026-08-04 14:55:26.653.
+	 Executed 19 tests, with 0 failures (0 unexpected) in 0.402 (0.405) seconds
+◇ Test run started.
+↳ Testing Library Version: 124.4
+↳ Target Platform: arm64e-apple-macos14.0
+✔ Test run with 0 tests passed after 0.001 seconds.
+===== package-complete.log =====
+Test Suite 'SyncSequenceIdentityTests' started at 2026-08-04 14:55:28.637.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityEqualityHashingAndKeyBehavior]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityEqualityHashingAndKeyBehavior]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityRejectsNegativeOffsetsFromConstructionAndDecoding]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityRejectsNegativeOffsetsFromConstructionAndDecoding]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityStableEncodingUsesExactCanonicalBytes]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityStableEncodingUsesExactCanonicalBytes]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testExternallySourcedRunLengthValidatesBoundaries]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testExternallySourcedRunLengthValidatesBoundaries]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityCounterBoundariesRoundTrip]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityCounterBoundariesRoundTrip]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityEncodingCanonicalizesUUIDToLowercase]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityEncodingCanonicalizesUUIDToLowercase]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityEqualityHashingAndKeyBehavior]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityEqualityHashingAndKeyBehavior]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityStableEncodingUsesExactCanonicalBytes]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityStableEncodingUsesExactCanonicalBytes]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRawOperationDecodingLeavesStructuralFailuresAsDecodingErrors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRawOperationDecodingLeavesStructuralFailuresAsDecodingErrors]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRunDerivesOneIdentityPerUTF16CodeUnit]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRunDerivesOneIdentityPerUTF16CodeUnit]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRunUncheckedDerivationMatchesValidatedConstruction]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRunUncheckedDerivationMatchesValidatedConstruction]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStableOperationDecodingMapsStructuralFailuresToMalformedEncoding]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStableOperationDecodingMapsStructuralFailuresToMalformedEncoding]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStableOperationDecodingPreservesDeviceIDValidationErrors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStableOperationDecodingPreservesDeviceIDValidationErrors]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStringFactoryAlwaysProducesNonnegativeRunLengths]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStringFactoryAlwaysProducesNonnegativeRunLengths]' passed (0.000 seconds).
+Test Suite 'SyncSequenceIdentityTests' passed at 2026-08-04 14:55:28.641.
+	 Executed 14 tests, with 0 failures (0 unexpected) in 0.003 (0.004) seconds
+Test Suite 'SyncTextLegacyBootstrapTests' started at 2026-08-04 14:55:28.641.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testCanonicallyEquivalentBodiesWithDifferentUTF16TopologyDoNotAlias]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testCanonicallyEquivalentBodiesWithDifferentUTF16TopologyDoNotAlias]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testDefaultFormatMatchesExplicitV1]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testDefaultFormatMatchesExplicitV1]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testDifferentBodiesUnderSameNoteIDProduceDifferentRunIDs]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testDifferentBodiesUnderSameNoteIDProduceDifferentRunIDs]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testEmptyBodyProducesCanonicalEmptyState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testEmptyBodyProducesCanonicalEmptyState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testIdenticalInputsProduceIdenticalBootstrapState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testIdenticalInputsProduceIdenticalBootstrapState]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testLargeBodyStillUsesOneRunAndOneFragment]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testLargeBodyStillUsesOneRunAndOneFragment]' passed (0.136 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testNonemptyBodyProducesOneRunAndOneVisibleFragment]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testNonemptyBodyProducesOneRunAndOneVisibleFragment]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSameBodyUnderDifferentNoteIDsProducesDifferentRunIDs]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSameBodyUnderDifferentNoteIDsProducesDifferentRunIDs]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSupplementaryScalarRetainsTwoElementOffsets]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSupplementaryScalarRetainsTwoElementOffsets]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSyntheticLegacyRunIDUsesVersion8RFCVariantUUID]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSyntheticLegacyRunIDUsesVersion8RFCVariantUUID]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testV1KnownVectorFreezesDeterministicOperationID]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testV1KnownVectorFreezesDeterministicOperationID]' passed (0.000 seconds).
+Test Suite 'SyncTextLegacyBootstrapTests' passed at 2026-08-04 14:55:28.781.
+	 Executed 11 tests, with 0 failures (0 unexpected) in 0.140 (0.140) seconds
+Test Suite 'SyncTextOperationPayloadTests' started at 2026-08-04 14:55:28.781.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAdjacentAndInterleavedSpansRemainValidAndOrdered]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAdjacentAndInterleavedSpansRemainValidAndOrdered]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorFactoriesEncodeTheFourExactShapes]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorFactoriesEncodeTheFourExactShapes]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorKindRepresentationFailuresHaveExactCasesAndPaths]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorKindRepresentationFailuresHaveExactCasesAndPaths]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorsCrossOperationOwnedRunBoundaries]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorsCrossOperationOwnedRunBoundaries]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnyExplicitNullEndpointIsValueNotFoundAtEndpointPath]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnyExplicitNullEndpointIsValueNotFoundAtEndpointPath]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testBetweenFactoryRejectsIdenticalEndpoints]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testBetweenFactoryRejectsIdenticalEndpoints]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testCompleteArrayDuplicateDetectionPrecedesOrderFailure]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testCompleteArrayDuplicateDetectionPrecedesOrderFailure]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedBetweenAnchorPreservesIdenticalEndpointError]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedBetweenAnchorPreservesIdenticalEndpointError]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedSpanPreservesValidatedInitializerErrors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedSpanPreservesValidatedInitializerErrors]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeleteFactoryPreservesCompactMultiRunStructuralOrder]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeleteFactoryPreservesCompactMultiRunStructuralOrder]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeletePayloadRejectsEmptyDuplicateOverlapAndDecreasingSpans]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeletePayloadRejectsEmptyDuplicateOverlapAndDecreasingSpans]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyAndFullyTombstonedStatesUseDifferentAnchors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyAndFullyTombstonedStatesUseDifferentAnchors]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyDeleteRangeIsRejectedAfterStateValidation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyDeleteRangeIsRejectedAfterStateValidation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEstablishedIdentityCodecsContinueIgnoringUnknownNestedKeys]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEstablishedIdentityCodecsContinueIgnoringUnknownNestedKeys]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactDeleteV1FixturePreservesAdjacentSpans]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactDeleteV1FixturePreservesAdjacentSpans]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactInsertV1FixtureEncodesAndDecodes]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactInsertV1FixtureEncodesAndDecodes]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testInsertAndDeleteVersionMatrices]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testInsertAndDeleteVersionMatrices]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLargeContiguousDeletionProducesOneSpan]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLargeContiguousDeletionProducesOneSpan]' passed (0.127 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLeadingInternalAndTrailingTombstonesUseCanonicalBias]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLeadingInternalAndTrailingTombstonesUseCanonicalBias]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testMalformedPresentEndpointPreservesIdentityError]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testMalformedPresentEndpointPreservesIdentityError]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testRootStateDerivesBeforeBetweenAndAfterAnchorsWithoutMutation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testRootStateDerivesBeforeBetweenAndAfterAnchorsWithoutMutation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testSupplementaryScalarAnchorAndDeletionBoundariesAreSafe]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testSupplementaryScalarAnchorAndDeletionBoundariesAreSafe]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testTombstonedDescendantKeepsAdjacentParentSpansSeparate]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testTombstonedDescendantKeepsAdjacentParentSpansSeparate]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedAnchorAndSpanKeysReportFullNestedPaths]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedAnchorAndSpanKeysReportFullNestedPaths]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedPayloadKeysRejectLexicographicallyFirstKey]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedPayloadKeysRejectLexicographicallyFirstKey]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnknownAndContradictoryAnchorShapesUsePayloadErrors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnknownAndContradictoryAnchorShapesUsePayloadErrors]' passed (0.000 seconds).
+Test Suite 'SyncTextOperationPayloadTests' passed at 2026-08-04 14:55:28.916.
+	 Executed 26 tests, with 0 failures (0 unexpected) in 0.134 (0.135) seconds
+Test Suite 'SyncTextSequenceStateTests' started at 2026-08-04 14:55:28.916.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testBeginningMiddleAndEndOriginsExpandIteratively]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testBeginningMiddleAndEndOriginsExpandIteratively]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testCanonicalOrderUsesRawUUIDBytesThenCounter]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testCanonicalOrderUsesRawUUIDBytesThenCounter]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testDeepNestedChainUsesBoundedIterativeTraversalWork]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testDeepNestedChainUsesBoundedIterativeTraversalWork]' passed (0.238 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testEmptyStateHasNoMaterializedContent]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testEmptyStateHasNoMaterializedContent]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentProjectionRejectsSiblingOrderMismatchEvenWithEqualVisibleText]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentProjectionRejectsSiblingOrderMismatchEvenWithEqualVisibleText]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentValidationRejectsUnknownOversizedSurrogateSplitAndMergeable]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentValidationRejectsUnknownOversizedSurrogateSplitAndMergeable]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLargeSameAnchorSiblingSetUsesBoundedIterativeTraversalWork]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLargeSameAnchorSiblingSetUsesBoundedIterativeTraversalWork]' passed (0.198 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLocalInitializersRejectInvalidOriginsRunsAndRanges]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLocalInitializersRejectInvalidOriginsRunsAndRanges]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testNoncanonicalAndDuplicateRunArraysAreRejected]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testNoncanonicalAndDuplicateRunArraysAreRejected]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testPublicValuesConstructAVisibleRootState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testPublicValuesConstructAVisibleRootState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderDiffersFromCanonicalRunStorageWithoutChangingRunValidation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderDiffersFromCanonicalRunStorageWithoutChangingRunValidation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderedProjectionProducesDeterministicState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderedProjectionProducesDeterministicState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderUsesDescendingCounterThenRawUUIDByteTieBreak]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderUsesDescendingCounterThenRawUUIDByteTieBreak]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingOrderingIsIndependentOfInputPermutation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingOrderingIsIndependentOfInputPermutation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingSubtreesRemainContiguous]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingSubtreesRemainContiguous]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSelectedSpansDoNotCoalesceAcrossDescendantsOrVisibilityGaps]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSelectedSpansDoNotCoalesceAcrossDescendantsOrVisibilityGaps]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSurrogateOriginsAcceptBeforeAndAfterButRejectInterior]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSurrogateOriginsAcceptBeforeAndAfterButRejectInterior]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testUnknownSelfCyclicAndUnreachableOriginsAreDistinct]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testUnknownSelfCyclicAndUnreachableOriginsAreDistinct]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testVisibilityMaterializationAnchorsAndRangesAreSurrogateSafe]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testVisibilityMaterializationAnchorsAndRangesAreSurrogateSafe]' passed (0.001 seconds).
+Test Suite 'SyncTextSequenceStateTests' passed at 2026-08-04 14:55:29.357.
+	 Executed 19 tests, with 0 failures (0 unexpected) in 0.440 (0.441) seconds
+Test Suite 'AnchoredSequenceCorePackageTests.xctest' passed at 2026-08-04 14:55:29.357.
+	 Executed 76 tests, with 0 failures (0 unexpected) in 0.719 (0.721) seconds
+Test Suite 'All tests' passed at 2026-08-04 14:55:29.357.
+	 Executed 76 tests, with 0 failures (0 unexpected) in 0.719 (0.722) seconds
+◇ Test run started.
+↳ Testing Library Version: 124.4
+↳ Target Platform: arm64e-apple-macos14.0
+✔ Test run with 0 tests passed after 0.001 seconds.
+===== ios-tests.log =====
+Copy /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/MyRAM.swiftmodule/arm64-apple-ios-simulator.swiftmodule /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAM.build/Objects-normal/arm64/MyRAM.swiftmodule (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAM.build/Objects-normal/arm64/MyRAM.swiftmodule /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/MyRAM.swiftmodule/arm64-apple-ios-simulator.swiftmodule
+
+Copy /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/MyRAM.swiftmodule/arm64-apple-ios-simulator.swiftdoc /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAM.build/Objects-normal/arm64/MyRAM.swiftdoc (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAM.build/Objects-normal/arm64/MyRAM.swiftdoc /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/MyRAM.swiftmodule/arm64-apple-ios-simulator.swiftdoc
+
+Copy /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/MyRAM.swiftmodule/arm64-apple-ios-simulator.abi.json /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAM.build/Objects-normal/arm64/MyRAM.abi.json (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAM.build/Objects-normal/arm64/MyRAM.abi.json /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/MyRAM.swiftmodule/arm64-apple-ios-simulator.abi.json
+
+Copy /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/MyRAM.swiftmodule/Project/arm64-apple-ios-simulator.swiftsourceinfo /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAM.build/Objects-normal/arm64/MyRAM.swiftsourceinfo (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAM.build/Objects-normal/arm64/MyRAM.swiftsourceinfo /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/MyRAM.swiftmodule/Project/arm64-apple-ios-simulator.swiftsourceinfo
+
+SwiftCompile normal arm64 Compiling\ SyncBatchPayload.swift,\ SyncBatchAnchoredPayloadAdapter.swift,\ SyncBatchAnchoredPayloadPolicy.swift,\ SyncBatchPeerCapability.swift,\ SyncBatchTransportAdmissionPlanner.swift,\ SyncBatchEnvelope.swift,\ MultipeerSyncMessageEnvelope.swift,\ SyncBatchSeenBatchStore.swift,\ SyncBatchUTF16Helpers.swift,\ SyncBatchNoteChangeCapture.swift,\ SyncConvergenceTypes.swift,\ SyncConvergenceModels.swift,\ SyncConvergencePlanningTypes.swift,\ SyncConvergenceRewriteSafetyPolicy.swift,\ ExplicitDeleteProvenanceTypes.swift,\ ExplicitDeleteProvenanceBuilder.swift,\ ExplicitDeleteProvenanceValidator.swift,\ SyncConvergencePlanner.swift,\ IncrementalEditIntegrationTypes.swift,\ RetainedOperationCausalGraph.swift,\ SwiftDataSyncConvergencePersistenceTransaction.swift,\ SyncConvergencePostCommitTypes.swift,\ SyncConvergencePostCommitGating.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchPayload.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchAnchoredPayloadAdapter.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchAnchoredPayloadPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchPeerCapability.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchTransportAdmissionPlanner.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchEnvelope.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/MultipeerSyncMessageEnvelope.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchSeenBatchStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUTF16Helpers.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchNoteChangeCapture.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceModels.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePlanningTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRewriteSafetyPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceBuilder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceValidator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePlanner.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/IncrementalEditIntegrationTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/RetainedOperationCausalGraph.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePersistenceTransaction.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitGating.swift (in target 'MyRAM' from project 'MyRAM')
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchPayload.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchAnchoredPayloadAdapter.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchAnchoredPayloadPolicy.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchPeerCapability.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchTransportAdmissionPlanner.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchEnvelope.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/MultipeerSyncMessageEnvelope.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchSeenBatchStore.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUTF16Helpers.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchNoteChangeCapture.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceTypes.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceModels.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePlanningTypes.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRewriteSafetyPolicy.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceTypes.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceBuilder.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceValidator.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePlanner.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/IncrementalEditIntegrationTypes.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/RetainedOperationCausalGraph.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePersistenceTransaction.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitTypes.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitGating.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftDriver\ Compilation AnchoredSequenceCore normal arm64 com.apple.xcode.tools.swift.compiler (in target 'AnchoredSequenceCore' from project 'AnchoredSequenceCore')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM.xcodeproj
+    builtin-Swift-Compilation -- /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name AnchoredSequenceCore -Onone -enforce-exclusivity\=checked @/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore.SwiftFileList -DSWIFT_PACKAGE -DDEBUG -DXcode -plugin-path /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator18.5.sdk -target arm64-apple-ios17.0-simulator -g -module-cache-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -suppress-warnings -index-store-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Index.noindex/DataStore -swift-version 5 -I /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator -I /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/usr/lib -F /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator -F /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks -F /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator18.5.sdk/Developer/Library/Frameworks -c -j3 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/SDKStatCaches.noindex/iphonesimulator18.5-22F76-96ae0914227b19deccb34b33ba7b5dea.sdkstatcache -output-file-map /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore.swiftmodule -validate-clang-modules-once -clang-build-session-file /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/ModuleCache.noindex/Session.modulevalidation -package-name anchoredsequencecore -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore_const_extract_protocols.json -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/include -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/DerivedSources-normal/arm64 -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/DerivedSources/arm64 -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/DerivedSources -Xcc -DSWIFT_PACKAGE -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore-Swift.h -working-directory /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM.xcodeproj -experimental-emit-module-separately -disable-cmo
+
+SwiftDriverJobDiscovery normal arm64 Compiling SyncBatchPayload.swift, SyncBatchAnchoredPayloadAdapter.swift, SyncBatchAnchoredPayloadPolicy.swift, SyncBatchPeerCapability.swift, SyncBatchTransportAdmissionPlanner.swift, SyncBatchEnvelope.swift, MultipeerSyncMessageEnvelope.swift, SyncBatchSeenBatchStore.swift, SyncBatchUTF16Helpers.swift, SyncBatchNoteChangeCapture.swift, SyncConvergenceTypes.swift, SyncConvergenceModels.swift, SyncConvergencePlanningTypes.swift, SyncConvergenceRewriteSafetyPolicy.swift, ExplicitDeleteProvenanceTypes.swift, ExplicitDeleteProvenanceBuilder.swift, ExplicitDeleteProvenanceValidator.swift, SyncConvergencePlanner.swift, IncrementalEditIntegrationTypes.swift, RetainedOperationCausalGraph.swift, SwiftDataSyncConvergencePersistenceTransaction.swift, SyncConvergencePostCommitTypes.swift, SyncConvergencePostCommitGating.swift (in target 'MyRAM' from project 'MyRAM')
+
+Ld /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/AnchoredSequenceCore.o normal (in target 'AnchoredSequenceCore' from project 'AnchoredSequenceCore')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/Packages/AnchoredSequenceCore
+    /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -Xlinker -reproducible -target arm64-apple-ios17.0-simulator -r -isysroot /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator18.5.sdk -O0 -w -L/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphonesimulator -L/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator -L/Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/usr/lib -F/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/EagerLinkingTBDs/Debug-iphonesimulator -F/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator -iframework /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks -iframework /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator18.5.sdk/Developer/Library/Frameworks -filelist /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore.LinkFileList -nostdlib -Xlinker -object_path_lto -Xlinker /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore_lto.o -rdynamic -Xlinker -no_deduplicate -Xlinker -objc_abi_version -Xlinker 2 -Xlinker -dependency_info -Xlinker /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore_dependency_info.dat -fobjc-link-runtime -L/Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/iphonesimulator -L/usr/lib/swift -Xlinker -add_ast_path -Xlinker /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore.swiftmodule -o /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/AnchoredSequenceCore.o
+
+RegisterExecutionPolicyException /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/NearbySyncCore.o (in target 'NearbySyncCore' from project 'NearbySyncCore')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/NearbySyncCore
+    builtin-RegisterExecutionPolicyException /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/NearbySyncCore.o
+
+ExtractAppIntentsMetadata (in target 'AnchoredSequenceCore' from project 'AnchoredSequenceCore')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/Packages/AnchoredSequenceCore
+    /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --module-name AnchoredSequenceCore --sdk-root /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator18.5.sdk --xcode-version 16F6 --platform-family iOS --deployment-target 17.0 --bundle-identifier anchoredsequencecore.AnchoredSequenceCore --output /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/AnchoredSequenceCore.appintents --target-triple arm64-apple-ios17.0-simulator --binary-file /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/AnchoredSequenceCore.o --dependency-file /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore_dependency_info.dat --stringsdata-file /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore.SwiftFileList --metadata-file-list /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/AnchoredSequenceCore.DependencyMetadataFileList --static-metadata-file-list /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/AnchoredSequenceCore.DependencyStaticMetadataFileList --swift-const-vals-list /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug-iphonesimulator/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore.SwiftConstValuesFileList --force --compile-time-extraction --deployment-aware-processing --validate-assistant-intents --no-app-shortcuts-localization
+2026-08-04 14:56:28.557 appintentsmetadataprocessor[6082:21156] Starting appintentsmetadataprocessor export
+2026-08-04 14:56:28.622 appintentsmetadataprocessor[6082:21156] Extracted no relevant App Intents symbols, skipping writing output
+
+SwiftDriver MyRAMUITests normal arm64 com.apple.xcode.tools.swift.compiler (in target 'MyRAMUITests' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-SwiftDriver -- /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name MyRAMUITests -Onone -enforce-exclusivity\=checked @/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/Objects-normal/arm64/MyRAMUITests.SwiftFileList -DDEBUG -module-alias Testing\=_Testing_Unavailable -plugin-path /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator18.5.sdk -target arm64-apple-ios17.0-simulator -g -module-cache-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Index.noindex/DataStore -swift-version 5 -I /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator -I /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/usr/lib -F /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator -F /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks -F /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator18.5.sdk/Developer/Library/Frameworks -c -j3 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/SDKStatCaches.noindex/iphonesimulator18.5-22F76-96ae0914227b19deccb34b33ba7b5dea.sdkstatcache -output-file-map /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/Objects-normal/arm64/MyRAMUITests-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/Objects-normal/arm64/MyRAMUITests.swiftmodule -validate-clang-modules-once -clang-build-session-file /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/ModuleCache.noindex/Session.modulevalidation -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/Objects-normal/arm64/MyRAMUITests_const_extract_protocols.json -Xcc -iquote -Xcc /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/MyRAMUITests-generated-files.hmap -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/MyRAMUITests-own-target-headers.hmap -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/MyRAMUITests-all-non-framework-target-headers.hmap -Xcc -ivfsoverlay -Xcc /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAM-98a9cbde253e8e955bc92731eb290203-VFS-iphonesimulator/all-product-headers.yaml -Xcc -iquote -Xcc /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/MyRAMUITests-project-headers.hmap -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/include -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/DerivedSources-normal/arm64 -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/DerivedSources/arm64 -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMUITests.build/Objects-normal/arm64/MyRAMUITests-Swift.h -working-directory /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS -experimental-emit-module-separately -disable-cmo
+
+SwiftDriver MyRAMTests normal arm64 com.apple.xcode.tools.swift.compiler (in target 'MyRAMTests' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-SwiftDriver -- /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name MyRAMTests -Onone -enforce-exclusivity\=checked @/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/Objects-normal/arm64/MyRAMTests.SwiftFileList -DDEBUG -plugin-path /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/host/plugins/testing -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator18.5.sdk -target arm64-apple-ios17.0-simulator -g -module-cache-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Index.noindex/DataStore -swift-version 5 -I /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator -I /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/usr/lib -F /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/PackageFrameworks -F /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/PackageFrameworks -F /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/PackageFrameworks -F /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator -F /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/Library/Frameworks -F /Applications/Xcode_16.4.app/Contents/Developer/Platforms/iPhoneSimulator.platform/Developer/SDKs/iPhoneSimulator18.5.sdk/Developer/Library/Frameworks -c -j3 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/SDKStatCaches.noindex/iphonesimulator18.5-22F76-96ae0914227b19deccb34b33ba7b5dea.sdkstatcache -output-file-map /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/Objects-normal/arm64/MyRAMTests-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/Objects-normal/arm64/MyRAMTests.swiftmodule -validate-clang-modules-once -clang-build-session-file /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/ModuleCache.noindex/Session.modulevalidation -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/Objects-normal/arm64/MyRAMTests_const_extract_protocols.json -Xcc -iquote -Xcc /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/MyRAMTests-generated-files.hmap -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/MyRAMTests-own-target-headers.hmap -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/MyRAMTests-all-non-framework-target-headers.hmap -Xcc -ivfsoverlay -Xcc /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAM-98a9cbde253e8e955bc92731eb290203-VFS-iphonesimulator/all-product-headers.yaml -Xcc -iquote -Xcc /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/MyRAMTests-project-headers.hmap -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Products/Debug-iphonesimulator/include -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/DerivedSources-normal/arm64 -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/DerivedSources/arm64 -Xcc -I/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-iOS-Tests/Build/Intermediates.noindex/MyRAM.build/Debug-iphonesimulator/MyRAMTests.build/Objects-normal/arm64/MyRAMTests-Swift.h -working-directory /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS -experimental-emit-module-separately -disable-cmo
+
+SwiftEmitModule normal arm64 Emitting\ module\ for\ MyRAMUITests (in target 'MyRAMUITests' from project 'MyRAM')
+
+EmitSwiftModule normal arm64 (in target 'MyRAMUITests' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+
+Test session results, code coverage, and logs:
+	/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/MYR175-iOS-Tests.xcresult
+
+Testing failed:
+	The compiler is unable to type-check this expression in reasonable time; try breaking up the expression into distinct sub-expressions
+	Testing cancelled because the build failed.
+
+** TEST FAILED **
+
+
+The following build commands failed:
+	SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift (in target 'MyRAM' from project 'MyRAM')
+	SwiftCompile normal arm64 Compiling\ SwiftDataSyncConvergencePostCommitStore.swift,\ SyncConvergencePostCommitExecutor.swift,\ SyncConvergenceLocalObligation.swift,\ FileBackedSyncConvergenceLocalObligationQueue.swift,\ SyncConvergenceDrainPassScheduler.swift,\ SyncConvergenceRuntime.swift,\ SyncBatchUnsentQueue.swift,\ FileBackedSyncBatchQueue.swift,\ NotesViewModel.swift,\ MyRAMSyncModels.swift,\ MyRAMApp.swift,\ MyRAMSchema.swift,\ Note.swift,\ MyRAMSyncChangeApplier.swift,\ MyRAMLegacySyncChangeValidator.swift,\ MyRAMSyncConflictService.swift,\ SyncConflictStore.swift,\ Folder.swift,\ MyRAMDeviceIdentity.swift,\ MyRAMLegacySyncPayloadBuilder.swift,\ PendingSyncStatus.swift,\ PendingSyncRecoveryCoordinator.swift,\ MyRAMWidgetContentSelectionPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePostCommitStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitExecutor.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceLocalObligation.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/FileBackedSyncConvergenceLocalObligationQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceDrainPassScheduler.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUnsentQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/FileBackedSyncBatchQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/ViewModels/NotesViewModel.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncModels.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/MyRAMApp.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/MyRAMSchema.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Note.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncChangeApplier.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Legacy/MyRAMLegacySyncChangeValidator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncConflictService.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/SyncConflictStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Folder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMDeviceIdentity.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMLegacySyncPayloadBuilder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/PendingSyncStatus.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Recovery/PendingSyncRecoveryCoordinator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetContentSelectionPolicy.swift (in target 'MyRAM' from project 'MyRAM')
+	Testing project MyRAM with scheme MyRAM
+(3 failures)
+===== mac-tests.log =====
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePostCommitStore.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitExecutor.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceLocalObligation.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/FileBackedSyncConvergenceLocalObligationQueue.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceDrainPassScheduler.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUnsentQueue.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/FileBackedSyncBatchQueue.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncModels.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/SyncConflictStore.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetContentSelectionPolicy.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotStore.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshot.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftDriverJobDiscovery normal arm64 Compiling SyncTextOperationPayload.swift, SyncTextSequenceState.swift (in target 'AnchoredSequenceCore' from project 'AnchoredSequenceCore')
+
+SwiftCompile normal arm64 Compiling\ MyRAMWidgetDeepLink.swift,\ MyRAMWidgetRuntimeConfiguration.swift,\ MyRAMWidgetSnapshotCodec.swift,\ MyRAMSyncChangeApplier.swift,\ MyRAMLegacySyncChangeValidator.swift,\ AppliedEditorMutation.swift,\ ActiveEditorApplicationPolicy.swift,\ ActiveEditorSyncUpdateHandler.swift,\ EditorSelectionMapper.swift,\ EditorRemoteApplyResult.swift,\ MacSyncModels.swift,\ MacSyncDeviceIdentity.swift,\ MacSyncSeenBatchStore.swift,\ MacSyncBatchAccumulator.swift,\ MacAppliedSyncBatch.swift,\ MacSyncBatchController.swift,\ MacSyncConvergenceCoordinator.swift,\ MacSyncConvergencePresentationAdapter.swift,\ MacLegacySyncReceiver.swift,\ GeneratedAssetSymbols.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetDeepLink.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetRuntimeConfiguration.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotCodec.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncChangeApplier.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Legacy/MyRAMLegacySyncChangeValidator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/AppliedEditorMutation.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/ActiveEditorApplicationPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/ActiveEditorSyncUpdateHandler.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/EditorSelectionMapper.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/EditorRemoteApplyResult.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncModels.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncDeviceIdentity.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncSeenBatchStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncBatchAccumulator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacAppliedSyncBatch.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncBatchController.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncConvergencePresentationAdapter.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacLegacySyncReceiver.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/DerivedSources/GeneratedAssetSymbols.swift (in target 'MyRAMMac' from project 'MyRAM')
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetDeepLink.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetRuntimeConfiguration.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotCodec.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncChangeApplier.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Legacy/MyRAMLegacySyncChangeValidator.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/AppliedEditorMutation.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/ActiveEditorApplicationPolicy.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/ActiveEditorSyncUpdateHandler.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/EditorSelectionMapper.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/EditorRemoteApplyResult.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncModels.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncDeviceIdentity.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncSeenBatchStore.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncBatchAccumulator.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacAppliedSyncBatch.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncBatchController.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncConvergencePresentationAdapter.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacLegacySyncReceiver.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/DerivedSources/GeneratedAssetSymbols.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+LinkAssetCatalog /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Assets.xcassets (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-linkAssetCatalog --thinned /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/assetcatalog_output/thinned --thinned-dependencies /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/assetcatalog_dependencies_thinned --thinned-info-plist-content /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/assetcatalog_generated_info.plist_thinned --unthinned /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/assetcatalog_output/unthinned --unthinned-dependencies /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/assetcatalog_dependencies_unthinned --unthinned-info-plist-content /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/assetcatalog_generated_info.plist_unthinned --output /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Products/Debug/MyRAMMac.app/Contents/Resources --plist-output /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/assetcatalog_generated_info.plist
+note: Emplaced /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Products/Debug/MyRAMMac.app/Contents/Resources/AppIcon.icns (in target 'MyRAMMac' from project 'MyRAM')
+note: Emplaced /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Tests/Build/Products/Debug/MyRAMMac.app/Contents/Resources/Assets.car (in target 'MyRAMMac' from project 'MyRAM')
+
+
+Test session results, code coverage, and logs:
+	/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/MYR175-Mac-Tests.xcresult
+
+Testing failed:
+	Unknown attribute 'MainActor'
+	Testing cancelled because the build failed.
+
+** TEST FAILED **
+
+
+The following build commands failed:
+	EmitSwiftModule normal arm64 (in target 'MyRAMMac' from project 'MyRAM')
+	SwiftEmitModule normal arm64 Emitting\ module\ for\ MyRAMMac (in target 'MyRAMMac' from project 'MyRAM')
+	Testing project MyRAM with scheme MyRAMMac
+(3 failures)
+===== ios-build.log =====
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Markdown/MarkdownPreviewUIKitAcceptedRestoreSupersession.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/NoteEditorFileOperationBridge.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/NoteSequenceStateRecord.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/NoteSequenceStateBootstrapAdapter.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/NoteSequenceStateFullBodyIntegration.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/NoteSequenceStateBootstrapMigrator.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/SwiftDataNoteSequenceStateStore.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/MyRAMSyncOperationIDAllocator.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/FileBackedSyncOperationIDReservationStore.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Item.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Persistence/RTFCoding.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Persistence/AttributedTextStorageKeys.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftDriverJobDiscovery normal x86_64 Compiling EditorSelectionRangeResolver.swift, EditorFocusSelectionPolicy.swift, EditorFormattingCommandResolver.swift, EditorFormattingMutationApplier.swift, EditorFormattingStateResolver.swift, NoteIntelligence.swift, NoteEditorView.swift, EditorTextViewFactory.swift, EditorProfilingFixtures.swift, BareTextViewProfilingView.swift, EditorChecklistRendering.swift, EditorPolicies.swift, AppliedEditorMutation.swift, ActiveEditorApplicationPolicy.swift, ActiveEditorSyncUpdateHandler.swift, EditorSelectionMapper.swift, EditorRemoteApplyResult.swift, UIKitEditorSyncBridge.swift, MyRAMSyncController.swift, NotesListView.swift, PersistenceManager.swift, GeneratedAssetSymbols.swift (in target 'MyRAM' from project 'MyRAM')
+
+SwiftCompile normal x86_64 Compiling\ SwiftDataSyncConvergencePostCommitStore.swift,\ SyncConvergencePostCommitExecutor.swift,\ SyncConvergenceLocalObligation.swift,\ FileBackedSyncConvergenceLocalObligationQueue.swift,\ SyncConvergenceDrainPassScheduler.swift,\ SyncConvergenceRuntime.swift,\ SyncBatchUnsentQueue.swift,\ FileBackedSyncBatchQueue.swift,\ NotesViewModel.swift,\ MyRAMSyncModels.swift,\ MyRAMApp.swift,\ MyRAMSchema.swift,\ Note.swift,\ MyRAMSyncChangeApplier.swift,\ MyRAMLegacySyncChangeValidator.swift,\ MyRAMSyncConflictService.swift,\ SyncConflictStore.swift,\ Folder.swift,\ MyRAMDeviceIdentity.swift,\ MyRAMLegacySyncPayloadBuilder.swift,\ PendingSyncStatus.swift,\ PendingSyncRecoveryCoordinator.swift,\ MyRAMWidgetContentSelectionPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePostCommitStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitExecutor.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceLocalObligation.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/FileBackedSyncConvergenceLocalObligationQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceDrainPassScheduler.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUnsentQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/FileBackedSyncBatchQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/ViewModels/NotesViewModel.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncModels.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/MyRAMApp.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/MyRAMSchema.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Note.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncChangeApplier.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Legacy/MyRAMLegacySyncChangeValidator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncConflictService.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/SyncConflictStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Folder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMDeviceIdentity.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMLegacySyncPayloadBuilder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/PendingSyncStatus.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Recovery/PendingSyncRecoveryCoordinator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetContentSelectionPolicy.swift (in target 'MyRAM' from project 'MyRAM')
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePostCommitStore.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitExecutor.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceLocalObligation.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/FileBackedSyncConvergenceLocalObligationQueue.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceDrainPassScheduler.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUnsentQueue.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/FileBackedSyncBatchQueue.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/ViewModels/NotesViewModel.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncModels.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/MyRAMApp.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/MyRAMSchema.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Note.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncChangeApplier.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Legacy/MyRAMLegacySyncChangeValidator.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncConflictService.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/SyncConflictStore.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Folder.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMDeviceIdentity.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMLegacySyncPayloadBuilder.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/PendingSyncStatus.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Recovery/PendingSyncRecoveryCoordinator.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetContentSelectionPolicy.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftDriverJobDiscovery normal x86_64 Compiling MyRAMExternalOpenDispatcher.swift, MyRAMWidgetHostCoordinator.swift, MyRAMWidgetNoteRouting.swift, MyRAMWidgetSelectionButton.swift, MarkdownFileIO.swift, MarkdownPreview.swift, MarkdownPreviewModePolicy.swift, MarkdownPreviewUIKitSyncExecutor.swift, MarkdownPreviewUIKitDeferredScheduler.swift, MarkdownPreviewUIKitEditorResignation.swift, MarkdownPreviewUIKitPostResignationReconciliation.swift, MarkdownPreviewUIKitAcceptedRestoreSupersession.swift, NoteEditorFileOperationBridge.swift, NoteSequenceStateRecord.swift, NoteSequenceStateBootstrapAdapter.swift, NoteSequenceStateFullBodyIntegration.swift, NoteSequenceStateBootstrapMigrator.swift, SwiftDataNoteSequenceStateStore.swift, MyRAMSyncOperationIDAllocator.swift, FileBackedSyncOperationIDReservationStore.swift, Item.swift, RTFCoding.swift, AttributedTextStorageKeys.swift (in target 'MyRAM' from project 'MyRAM')
+
+SwiftCompile normal x86_64 Compiling\ SyncBatchPayload.swift,\ SyncBatchAnchoredPayloadAdapter.swift,\ SyncBatchAnchoredPayloadPolicy.swift,\ SyncBatchPeerCapability.swift,\ SyncBatchTransportAdmissionPlanner.swift,\ SyncBatchEnvelope.swift,\ MultipeerSyncMessageEnvelope.swift,\ SyncBatchSeenBatchStore.swift,\ SyncBatchUTF16Helpers.swift,\ SyncBatchNoteChangeCapture.swift,\ SyncConvergenceTypes.swift,\ SyncConvergenceModels.swift,\ SyncConvergencePlanningTypes.swift,\ SyncConvergenceRewriteSafetyPolicy.swift,\ ExplicitDeleteProvenanceTypes.swift,\ ExplicitDeleteProvenanceBuilder.swift,\ ExplicitDeleteProvenanceValidator.swift,\ SyncConvergencePlanner.swift,\ IncrementalEditIntegrationTypes.swift,\ RetainedOperationCausalGraph.swift,\ SwiftDataSyncConvergencePersistenceTransaction.swift,\ SyncConvergencePostCommitTypes.swift,\ SyncConvergencePostCommitGating.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchPayload.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchAnchoredPayloadAdapter.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchAnchoredPayloadPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchPeerCapability.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchTransportAdmissionPlanner.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchEnvelope.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/MultipeerSyncMessageEnvelope.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchSeenBatchStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUTF16Helpers.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchNoteChangeCapture.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceModels.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePlanningTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRewriteSafetyPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceBuilder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceValidator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePlanner.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/IncrementalEditIntegrationTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/RetainedOperationCausalGraph.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePersistenceTransaction.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitGating.swift (in target 'MyRAM' from project 'MyRAM')
+Command SwiftCompile failed with a nonzero exit code
+
+** BUILD FAILED **
+
+
+The following build commands failed:
+	SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift (in target 'MyRAM' from project 'MyRAM')
+	SwiftCompile normal arm64 Compiling\ SwiftDataSyncConvergencePostCommitStore.swift,\ SyncConvergencePostCommitExecutor.swift,\ SyncConvergenceLocalObligation.swift,\ FileBackedSyncConvergenceLocalObligationQueue.swift,\ SyncConvergenceDrainPassScheduler.swift,\ SyncConvergenceRuntime.swift,\ SyncBatchUnsentQueue.swift,\ FileBackedSyncBatchQueue.swift,\ NotesViewModel.swift,\ MyRAMSyncModels.swift,\ MyRAMApp.swift,\ MyRAMSchema.swift,\ Note.swift,\ MyRAMSyncChangeApplier.swift,\ MyRAMLegacySyncChangeValidator.swift,\ MyRAMSyncConflictService.swift,\ SyncConflictStore.swift,\ Folder.swift,\ MyRAMDeviceIdentity.swift,\ MyRAMLegacySyncPayloadBuilder.swift,\ PendingSyncStatus.swift,\ PendingSyncRecoveryCoordinator.swift,\ MyRAMWidgetContentSelectionPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePostCommitStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitExecutor.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceLocalObligation.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/FileBackedSyncConvergenceLocalObligationQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceDrainPassScheduler.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUnsentQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/FileBackedSyncBatchQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/ViewModels/NotesViewModel.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncModels.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/MyRAMApp.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/MyRAMSchema.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Note.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncChangeApplier.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Legacy/MyRAMLegacySyncChangeValidator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncConflictService.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/SyncConflictStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Folder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMDeviceIdentity.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMLegacySyncPayloadBuilder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/PendingSyncStatus.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Recovery/PendingSyncRecoveryCoordinator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetContentSelectionPolicy.swift (in target 'MyRAM' from project 'MyRAM')
+	SwiftCompile normal x86_64 Compiling\ SyncBatchPayload.swift,\ SyncBatchAnchoredPayloadAdapter.swift,\ SyncBatchAnchoredPayloadPolicy.swift,\ SyncBatchPeerCapability.swift,\ SyncBatchTransportAdmissionPlanner.swift,\ SyncBatchEnvelope.swift,\ MultipeerSyncMessageEnvelope.swift,\ SyncBatchSeenBatchStore.swift,\ SyncBatchUTF16Helpers.swift,\ SyncBatchNoteChangeCapture.swift,\ SyncConvergenceTypes.swift,\ SyncConvergenceModels.swift,\ SyncConvergencePlanningTypes.swift,\ SyncConvergenceRewriteSafetyPolicy.swift,\ ExplicitDeleteProvenanceTypes.swift,\ ExplicitDeleteProvenanceBuilder.swift,\ ExplicitDeleteProvenanceValidator.swift,\ SyncConvergencePlanner.swift,\ IncrementalEditIntegrationTypes.swift,\ RetainedOperationCausalGraph.swift,\ SwiftDataSyncConvergencePersistenceTransaction.swift,\ SyncConvergencePostCommitTypes.swift,\ SyncConvergencePostCommitGating.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchPayload.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchAnchoredPayloadAdapter.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchAnchoredPayloadPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchPeerCapability.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchTransportAdmissionPlanner.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchEnvelope.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/MultipeerSyncMessageEnvelope.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchSeenBatchStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUTF16Helpers.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchNoteChangeCapture.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceModels.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePlanningTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRewriteSafetyPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceBuilder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceValidator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePlanner.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/IncrementalEditIntegrationTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/RetainedOperationCausalGraph.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePersistenceTransaction.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitTypes.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitGating.swift (in target 'MyRAM' from project 'MyRAM')
+	Building project MyRAM with scheme MyRAM
+(4 failures)
+===== mac-build.log =====
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePersistenceTransaction.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitTypes.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitGating.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePostCommitStore.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitExecutor.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceLocalObligation.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/FileBackedSyncConvergenceLocalObligationQueue.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceDrainPassScheduler.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUnsentQueue.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/FileBackedSyncBatchQueue.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncModels.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/SyncConflictStore.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetContentSelectionPolicy.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotStore.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshot.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftDriverJobDiscovery normal arm64 Compiling SyncTextOperationPayload.swift, SyncTextSequenceState.swift (in target 'AnchoredSequenceCore' from project 'AnchoredSequenceCore')
+
+SwiftCompile normal arm64 Compiling\ NoteSequenceStateBootstrapMigrator.swift,\ SwiftDataNoteSequenceStateStore.swift,\ MyRAMSyncOperationIDAllocator.swift,\ FileBackedSyncOperationIDReservationStore.swift,\ MyRAMMacApp.swift,\ MyRAMMacRootView.swift,\ MacStartupCoordinator.swift,\ MacNoteEditorView.swift,\ MacTextViewRepresentable.swift,\ MacEditorSampleDocument.swift,\ MacRemoteInsertionAttributePolicy.swift,\ MacIncomingSyncApplicationPolicy.swift,\ MacEditorSyncBridge.swift,\ MacNSRangeClamp.swift,\ MyRAMPlatform.swift,\ RTFCoding.swift,\ AttributedTextStorageKeys.swift,\ MacNotePersistenceAdapter.swift,\ MacEditorTextColorPolicy.swift,\ Note.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/NoteSequenceStateBootstrapMigrator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/SwiftDataNoteSequenceStateStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/MyRAMSyncOperationIDAllocator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/FileBackedSyncOperationIDReservationStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MyRAMMacApp.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MyRAMMacRootView.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacStartupCoordinator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNoteEditorView.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacTextViewRepresentable.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorSampleDocument.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacRemoteInsertionAttributePolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacIncomingSyncApplicationPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorSyncBridge.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNSRangeClamp.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Platform/MyRAMPlatform.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Persistence/RTFCoding.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Persistence/AttributedTextStorageKeys.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNotePersistenceAdapter.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorTextColorPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Note.swift (in target 'MyRAMMac' from project 'MyRAM')
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/NoteSequenceStateBootstrapMigrator.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/SwiftDataNoteSequenceStateStore.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/MyRAMSyncOperationIDAllocator.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/FileBackedSyncOperationIDReservationStore.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MyRAMMacApp.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MyRAMMacRootView.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacStartupCoordinator.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNoteEditorView.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacTextViewRepresentable.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorSampleDocument.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacRemoteInsertionAttributePolicy.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacIncomingSyncApplicationPolicy.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorSyncBridge.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNSRangeClamp.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Platform/MyRAMPlatform.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Persistence/RTFCoding.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Persistence/AttributedTextStorageKeys.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNotePersistenceAdapter.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorTextColorPolicy.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Note.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 Compiling\ MyRAMWidgetDeepLink.swift,\ MyRAMWidgetRuntimeConfiguration.swift,\ MyRAMWidgetSnapshotCodec.swift,\ MyRAMSyncChangeApplier.swift,\ MyRAMLegacySyncChangeValidator.swift,\ AppliedEditorMutation.swift,\ ActiveEditorApplicationPolicy.swift,\ ActiveEditorSyncUpdateHandler.swift,\ EditorSelectionMapper.swift,\ EditorRemoteApplyResult.swift,\ MacSyncModels.swift,\ MacSyncDeviceIdentity.swift,\ MacSyncSeenBatchStore.swift,\ MacSyncBatchAccumulator.swift,\ MacAppliedSyncBatch.swift,\ MacSyncBatchController.swift,\ MacSyncConvergenceCoordinator.swift,\ MacSyncConvergencePresentationAdapter.swift,\ MacLegacySyncReceiver.swift,\ GeneratedAssetSymbols.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetDeepLink.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetRuntimeConfiguration.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotCodec.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncChangeApplier.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Legacy/MyRAMLegacySyncChangeValidator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/AppliedEditorMutation.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/ActiveEditorApplicationPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/ActiveEditorSyncUpdateHandler.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/EditorSelectionMapper.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/EditorRemoteApplyResult.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncModels.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncDeviceIdentity.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncSeenBatchStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncBatchAccumulator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacAppliedSyncBatch.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncBatchController.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncConvergencePresentationAdapter.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacLegacySyncReceiver.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Build/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/DerivedSources/GeneratedAssetSymbols.swift (in target 'MyRAMMac' from project 'MyRAM')
+Command SwiftCompile failed with a nonzero exit code
+
+** BUILD FAILED **
+
+
+The following build commands failed:
+	EmitSwiftModule normal arm64 (in target 'MyRAMMac' from project 'MyRAM')
+	SwiftEmitModule normal arm64 Emitting\ module\ for\ MyRAMMac (in target 'MyRAMMac' from project 'MyRAM')
+	SwiftCompile normal arm64 Compiling\ MyRAMWidgetDeepLink.swift,\ MyRAMWidgetRuntimeConfiguration.swift,\ MyRAMWidgetSnapshotCodec.swift,\ MyRAMSyncChangeApplier.swift,\ MyRAMLegacySyncChangeValidator.swift,\ AppliedEditorMutation.swift,\ ActiveEditorApplicationPolicy.swift,\ ActiveEditorSyncUpdateHandler.swift,\ EditorSelectionMapper.swift,\ EditorRemoteApplyResult.swift,\ MacSyncModels.swift,\ MacSyncDeviceIdentity.swift,\ MacSyncSeenBatchStore.swift,\ MacSyncBatchAccumulator.swift,\ MacAppliedSyncBatch.swift,\ MacSyncBatchController.swift,\ MacSyncConvergenceCoordinator.swift,\ MacSyncConvergencePresentationAdapter.swift,\ MacLegacySyncReceiver.swift,\ GeneratedAssetSymbols.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetDeepLink.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetRuntimeConfiguration.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotCodec.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncChangeApplier.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Legacy/MyRAMLegacySyncChangeValidator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/AppliedEditorMutation.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/ActiveEditorApplicationPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/ActiveEditorSyncUpdateHandler.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/EditorSelectionMapper.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/EditorApplication/EditorRemoteApplyResult.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncModels.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncDeviceIdentity.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncSeenBatchStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncBatchAccumulator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacAppliedSyncBatch.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncBatchController.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacSyncConvergencePresentationAdapter.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Sync/MacLegacySyncReceiver.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification-rerun/DerivedData-Mac-Build/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/DerivedSources/GeneratedAssetSymbols.swift (in target 'MyRAMMac' from project 'MyRAM')
+	Building project MyRAM with scheme MyRAMMac
+(4 failures)
