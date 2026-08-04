@@ -1,0 +1,97 @@
+name: Apply MYR-175 persistence fixture alignment
+
+on:
+  push:
+    branches:
+      - MYR-175-Slice-1-Sibling-ordering-contract-and-structural-traversal
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-verify:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Checkout feature branch
+        uses: actions/checkout@v4
+        with:
+          ref: MYR-175-Slice-1-Sibling-ordering-contract-and-structural-traversal
+          fetch-depth: 0
+          path: MyRAM-iOS
+
+      - name: Checkout preserved sibling dependency
+        uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+
+      - name: Apply exact fixture patch
+        working-directory: MyRAM-iOS
+        run: |
+          git apply --check .github/MYR-175-persistence-fixture.patch
+          git apply .github/MYR-175-persistence-fixture.patch
+
+      - name: Select Xcode and simulator
+        working-directory: MyRAM-iOS
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+          xcodebuild -version
+          xcrun simctl list devices available -j > /tmp/myr175-simulators.json
+          IOS_UDID="$(python3 - <<'PY'
+          import json
+          data=json.load(open('/tmp/myr175-simulators.json'))
+          candidates=[]
+          for runtime, values in data.get('devices',{}).items():
+              if 'iOS-26-5' not in runtime: continue
+              for value in values:
+                  if value.get('isAvailable') and value.get('name','').startswith('iPhone'):
+                      candidates.append((0 if value['name']=='iPhone 17' else 1,value['udid']))
+          if not candidates: raise SystemExit('No iOS 26.5 iPhone simulator')
+          candidates.sort(); print(candidates[0][1])
+          PY
+          )"
+          test -n "$IOS_UDID"
+          echo "IOS_UDID=$IOS_UDID" >> "$GITHUB_ENV"
+
+      - name: Complete package tests
+        working-directory: MyRAM-iOS
+        run: swift test --package-path Packages/AnchoredSequenceCore
+
+      - name: Focused iOS persistence regression
+        working-directory: MyRAM-iOS
+        run: |
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAM \
+            -destination "platform=iOS Simulator,id=${IOS_UDID}" -destination-timeout 180 \
+            -parallel-testing-enabled NO \
+            -derivedDataPath /tmp/MYR175-Fixture-iOS-DD \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            test -only-testing:MyRAMTests/SwiftDataNoteSequenceStateStoreTests/testSemanticRunAndFragmentOrderAreRejectedWithoutNormalization
+
+      - name: Focused native Mac persistence regression
+        working-directory: MyRAM-iOS
+        run: |
+          sudo scutil --set ComputerName MyRAMCI
+          sudo scutil --set LocalHostName MyRAMCI
+          sudo scutil --set HostName MyRAMCI
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
+            -derivedDataPath /tmp/MYR175-Fixture-Mac-DD \
+            DEVELOPMENT_TEAM= CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES PROVISIONING_PROFILE= PROVISIONING_PROFILE_SPECIFIER= \
+            test -only-testing:MyRAMMacTests/SwiftDataNoteSequenceStateStoreTests/testSemanticRunAndFragmentOrderAreRejectedWithoutNormalization
+
+      - name: Audit and publish fixture correction
+        working-directory: MyRAM-iOS
+        run: |
+          git diff --check
+          rm .github/MYR-175-persistence-fixture.patch
+          rm .github/workflows/myr175-apply-persistence-fixture.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift
+          git add docs/MYR-175-structural-insert-alignment.md
+          git add -u .github
+          git commit -m "MYR-175 Align persistence fixture with sibling materialization"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
