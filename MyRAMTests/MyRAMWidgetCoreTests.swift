@@ -108,32 +108,30 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         ))
     }
 
-    func testLayoutPolicyUsesSystemMarginsAndExpandedCapacityAcrossFamiliesAndPlatforms() {
+    func testLayoutPolicyUsesSystemMarginsAndPinnedTextCapsAcrossFamiliesAndPlatforms() {
         for platform in [MyRAMWidgetPlatform.iOS, .macOS] {
             let small = MyRAMWidgetLayoutPolicy(family: .small, platform: platform)
-            XCTAssertEqual(small.contentLineBudget, 8)
+            XCTAssertEqual(small.maximumPinnedTextCount, 8)
             XCTAssertEqual(small.contentMarginMode, .systemOnly)
             XCTAssertEqual(small.rootSpacing, 4)
             XCTAssertEqual(small.pinSpacing, 4)
 
             let medium = MyRAMWidgetLayoutPolicy(family: .medium, platform: platform)
-            XCTAssertEqual(medium.contentLineBudget, 10)
+            XCTAssertEqual(medium.maximumPinnedTextCount, 10)
             XCTAssertEqual(medium.contentMarginMode, .systemOnly)
             XCTAssertEqual(medium.rootSpacing, 4)
             XCTAssertEqual(medium.pinSpacing, 4)
         }
     }
 
-    func testContentPolicyUsesPinPriorityAndExactBudgets() {
+    func testContentPolicyPreservesPinPriorityWithoutCappingBodyLines() {
         let zeroPins = render(pins: [], body: "Body", family: .small)
         XCTAssertTrue(zeroPins.pinnedTexts.isEmpty)
         XCTAssertEqual(zeroPins.bodyText, "Body")
-        XCTAssertEqual(zeroPins.bodyLineLimit, 8)
 
         let onePin = render(pins: ["Pin"], body: "Body", family: .medium)
         XCTAssertEqual(onePin.pinnedTexts, ["Pin"])
         XCTAssertEqual(onePin.bodyText, "Body")
-        XCTAssertEqual(onePin.bodyLineLimit, 9)
 
         let exhausted = render(
             pins: ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
@@ -142,7 +140,6 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         )
         XCTAssertEqual(exhausted.pinnedTexts, ["1", "2", "3", "4", "5", "6", "7", "8"])
         XCTAssertNil(exhausted.bodyText)
-        XCTAssertEqual(exhausted.bodyLineLimit, 0)
     }
 
     func testStableStatesRemainDistinct() {
