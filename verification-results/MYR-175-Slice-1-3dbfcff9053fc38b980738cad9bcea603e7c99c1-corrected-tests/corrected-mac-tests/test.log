@@ -1,0 +1,300 @@
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testConcurrentDeleteRebasesLaterInsertOffsetBackward]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testConcurrentDeleteRebasesLaterInsertOffsetBackward]' passed (0.006 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testConcurrentEditsConvergeToIdenticalBodyRegardlessOfWhichSideIsLocal]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testConcurrentEditsConvergeToIdenticalBodyRegardlessOfWhichSideIsLocal]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testConcurrentInsertsRebaseOffsetsInsteadOfCorruptingLaterText]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testConcurrentInsertsRebaseOffsetsInsteadOfCorruptingLaterText]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testConcurrentSameBaseOperationsConvergeInsteadOfCorruptingHistory]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testConcurrentSameBaseOperationsConvergeInsteadOfCorruptingHistory]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testContradictoryDuplicateBatchIdentityFailsBeforeCommit]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testContradictoryDuplicateBatchIdentityFailsBeforeCommit]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testContradictoryFullRecordAndTombstoneFailsBeforeCommit]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testContradictoryFullRecordAndTombstoneFailsBeforeCommit]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testContradictoryOperationIdentityFailsBeforeCommit]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testContradictoryOperationIdentityFailsBeforeCommit]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testContradictoryTitleWinnerAuthorityFailsBeforeCommit]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testContradictoryTitleWinnerAuthorityFailsBeforeCommit]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testCorruptRetainedOperationResultFailsBeforeCommit]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testCorruptRetainedOperationResultFailsBeforeCommit]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testCreationPlanningDoesNotRequireExistingProjectedNote]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testCreationPlanningDoesNotRequireExistingProjectedNote]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testCycleAndDuplicateResultOperationsDoNotReExploreBodies]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testCycleAndDuplicateResultOperationsDoNotReExploreBodies]' passed (0.011 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testDisjointNoteSelectionIsIndependentOfQueueEnumerationOrder]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testDisjointNoteSelectionIsIndependentOfQueueEnumerationOrder]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testEarlierMultiNoteEvidenceBatchBlocksItsOtherNotes]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testEarlierMultiNoteEvidenceBatchBlocksItsOtherNotes]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testEarlierMultiNoteQueuedBatchIsNotPartiallyConsumedAsUnionEvidence]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testEarlierMultiNoteQueuedBatchIsNotPartiallyConsumedAsUnionEvidence]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testExplicitCandidateQueuePositionLimitsEvidenceToEarlierBatches]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testExplicitCandidateQueuePositionLimitsEvidenceToEarlierBatches]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testHistoryHardOverflowDefersBeforePlan]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testHistoryHardOverflowDefersBeforePlan]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testIdenticalPreviouslyIncorporatedBatchReturnsCleanupPlan]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testIdenticalPreviouslyIncorporatedBatchReturnsCleanupPlan]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testLaterQueuedSameNoteSuccessorIsBlockedFromEvidenceSelection]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testLaterQueuedSameNoteSuccessorIsBlockedFromEvidenceSelection]' passed (0.005 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testLegacyPositionalEffectPreservesExpectedTextNoop]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testLegacyPositionalEffectPreservesExpectedTextNoop]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testLifecycleDivergencePreservesLiveNoteWithoutBlockingPlan]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testLifecycleDivergencePreservesLiveNoteWithoutBlockingPlan]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testLifecycleForMissingNoteIsConsumedWithoutBlockingPlan]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testLifecycleForMissingNoteIsConsumedWithoutBlockingPlan]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testMalformedRetainedReplayKeyFailsAsCorruptHistoryWithoutFallbackOrdering]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testMalformedRetainedReplayKeyFailsAsCorruptHistoryWithoutFallbackOrdering]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testMissingHistoricalBaseDefersAsUnreconstructableBase]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testMissingHistoricalBaseDefersAsUnreconstructableBase]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testMixedRetainedAndExecutableBodyOperationsRouteIncrementalWithOnlyNewWork]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testMixedRetainedAndExecutableBodyOperationsRouteIncrementalWithOnlyNewWork]' passed (0.008 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testNilBaseRetainedOperationWithoutEvidenceIsNeverGuessedIntoChain]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testNilBaseRetainedOperationWithoutEvidenceIsNeverGuessedIntoChain]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testNilBaseRetainedOperationWithResultHashReconstructsChain]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testNilBaseRetainedOperationWithResultHashReconstructsChain]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testPlanningSuccessReturnsPlannedOutcome]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testPlanningSuccessReturnsPlannedOutcome]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testProjectedNoteEffectKindMembershipRejectsInvalidSets]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testProjectedNoteEffectKindMembershipRejectsInvalidSets]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testProjectedNoteEffectV1GoldenVectorPreservesMainContract]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testProjectedNoteEffectV1GoldenVectorPreservesMainContract]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testProjectedNoteEffectV1IsKindPermutationIndependent]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testProjectedNoteEffectV1IsKindPermutationIndependent]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testProjectedNoteEffectV1MultiEffectPermutationIndependence]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testProjectedNoteEffectV1MultiEffectPermutationIndependence]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testQueuedSameNoteEvidenceParticipatesInConflictUnion]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testQueuedSameNoteEvidenceParticipatesInConflictUnion]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testReconstructedConflictDroppingUnprovenTextReturnsUnprovenTextLoss]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testReconstructedConflictDroppingUnprovenTextReturnsUnprovenTextLoss]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testReconstructedConflictUsesDeleteEvidenceForWholeNoteRouting]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testReconstructedConflictUsesDeleteEvidenceForWholeNoteRouting]' passed (0.014 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testReconstructionFromRetainedOperationDoesNotReplayConsumedHistoryTwice]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testReconstructionFromRetainedOperationDoesNotReplayConsumedHistoryTwice]' passed (0.007 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testReconstructionStressWithHundredsOfNilBaseCandidatesCompletesBounded]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testReconstructionStressWithHundredsOfNilBaseCandidatesCompletesBounded]' passed (11.571 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testRetainedChainInvalidRangeFailsAsCorruptHistory]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testRetainedChainInvalidRangeFailsAsCorruptHistory]' passed (0.007 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testRetainedIdentityContradictionFailsClosed]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testRetainedIdentityContradictionFailsClosed]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testRetainedIdentityIdempotencyPreventsDoubleApplication]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testRetainedIdentityIdempotencyPreventsDoubleApplication]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testSameBatchChainedOperationsSurviveReconstructedConflict]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testSameBatchChainedOperationsSurviveReconstructedConflict]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testSoftHistoryPressureDefersNewEvidenceGrowth]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testSoftHistoryPressureDefersNewEvidenceGrowth]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testTitleHigherCanonicalKeyWinsAndLowerKeyIsIgnored]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testTitleHigherCanonicalKeyWinsAndLowerKeyIsIgnored]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testTwoBodyOperationsInOneBatchProduceOneCompleteEffectAndOneBodyEvidence]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testTwoBodyOperationsInOneBatchProduceOneCompleteEffectAndOneBodyEvidence]' passed (0.006 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testTwoRetainedConcurrentCandidatesDoNotCorruptMergedReplay]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testTwoRetainedConcurrentCandidatesDoNotCorruptMergedReplay]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnencodablePlannedOperationAccountingFailsClosed]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnencodablePlannedOperationAccountingFailsClosed]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnknownHashedBodyDefersWithRealDeclaredHash]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnknownHashedBodyDefersWithRealDeclaredHash]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnknownTitleAndLegacyBodyProduceCompatibilityNoops]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnknownTitleAndLegacyBodyProduceCompatibilityNoops]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnrelatedNilBaseRetainedBranchDoesNotBlockValidReconstruction]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnrelatedNilBaseRetainedBranchDoesNotBlockValidReconstruction]' passed (0.009 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnsupportedReconciliationDefersBatch]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnsupportedReconciliationDefersBatch]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnsupportedStoredDigestFormatFailsBeforeCommit]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testUnsupportedStoredDigestFormatFailsBeforeCommit]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testValidatorRejectsMissingSourceOperationBlockedSuccessorRoutingAndHistoryMismatch]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePlanningTests testValidatorRejectsMissingSourceOperationBlockedSuccessorRoutingAndHistoryMismatch]' passed (0.003 seconds).
+Test Suite 'SyncConvergencePlanningTests' passed at 2026-08-04 15:16:05.420.
+	 Executed 61 tests, with 0 failures (0 unexpected) in 11.796 (11.836) seconds
+Test Suite 'SyncConvergencePostCommitTests' started at 2026-08-04 15:16:05.423.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testBodyHashCapabilityRemainsDisabled]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testBodyHashCapabilityRemainsDisabled]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testCallerPlansCannotSuppressPersistedQueueOrPresentationWork]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testCallerPlansCannotSuppressPersistedQueueOrPresentationWork]' passed (0.070 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testCompletedPostCommitStateDoesNotCallAdaptersOrWrite]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testCompletedPostCommitStateDoesNotCallAdaptersOrWrite]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testEightPendingStateMatrixWithLegacyAdapterPinsSingleCASEffects]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testEightPendingStateMatrixWithLegacyAdapterPinsSingleCASEffects]' passed (0.005 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testEightPendingStateMatrixWithoutLegacyAdapterLeavesLegacyPending]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testEightPendingStateMatrixWithoutLegacyAdapterLeavesLegacyPending]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testFakeStoreCASPreservesImmutableWorkPayloadAfterPartialClear]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testFakeStoreCASPreservesImmutableWorkPayloadAfterPartialClear]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testLegacyTrueWithoutAdapterRemainsPending]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testLegacyTrueWithoutAdapterRemainsPending]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR135OperationHashChainValidationMatrix]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR135OperationHashChainValidationMatrix]' passed (0.007 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR135PersistedIdentityRowCorruptionFailsBeforeAdapters]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR135PersistedIdentityRowCorruptionFailsBeforeAdapters]' passed (0.481 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR135PostCommitPayloadIdentityValidationMatrix]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR135PostCommitPayloadIdentityValidationMatrix]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR135ValidPersistedIdentityRowLoadsAndReachesPresentation]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR135ValidPersistedIdentityRowLoadsAndReachesPresentation]' passed (0.046 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR136DerivedCommittedAtOrderingPayloadMismatchRejectsCASWithoutMutation]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR136DerivedCommittedAtOrderingPayloadMismatchRejectsCASWithoutMutation]' passed (0.026 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR136MatchingRootAndPriorStateCASChangesOnlyMutableState]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR136MatchingRootAndPriorStateCASChangesOnlyMutableState]' passed (0.047 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR136PersistedImmutableRootFieldMatrixRejectsStaleCASWithoutMutation]' passed (0.618 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR136StaleExpectedStatePayloadRejectsCASWithoutMutation]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR136StaleExpectedStatePayloadRejectsCASWithoutMutation]' passed (0.022 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137FakeFullRootMissingDecodedWorkFailsBeforeAdaptersOrCAS]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137FakeFullRootMissingDecodedWorkFailsBeforeAdaptersOrCAS]' passed (0.103 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137FakeStoreLoadOutcomeAndFailureMatrixStopsBeforeAdaptersOrCAS]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137FakeStoreLoadOutcomeAndFailureMatrixStopsBeforeAdaptersOrCAS]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137FinalCASFailureModesPreserveAuthoritativeStoreStateAndImmutableWork]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137FinalCASFailureModesPreserveAuthoritativeStoreStateAndImmutableWork]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137LegacyFailureModesClearOtherDomainsAndRetryOnlyLegacy]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137LegacyFailureModesClearOtherDomainsAndRetryOnlyLegacy]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137MixedFailureMatrixPreservesExactPendingSetIncludingZeroCompletionBranch]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137MixedFailureMatrixPreservesExactPendingSetIncludingZeroCompletionBranch]' passed (0.007 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137PartialCompletionSurvivesFreshSwiftDataContextAndRetryRunsOnlyRemainingDomain]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137PartialCompletionSurvivesFreshSwiftDataContextAndRetryRunsOnlyRemainingDomain]' passed (0.076 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137PersistedLoadFailureMatrixFailsClosedWithoutMutation]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137PersistedLoadFailureMatrixFailsClosedWithoutMutation]' passed (0.163 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137PresentationMissingNoteIsTreatedAsSatisfiedAndDrainsOtherDomains]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137PresentationMissingNoteIsTreatedAsSatisfiedAndDrainsOtherDomains]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137PresentationPreActionLoadFailuresClearEarlierDomainsWithoutCallingAdapter]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137PresentationPreActionLoadFailuresClearEarlierDomainsWithoutCallingAdapter]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137PresentationScriptedFailureReplaysDomainIdempotently]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137PresentationScriptedFailureReplaysDomainIdempotently]' passed (0.005 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137QueueFailureModesClearSuccessfulLaterDomainsAndRetryOnlyQueue]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137QueueFailureModesClearSuccessfulLaterDomainsAndRetryOnlyQueue]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137TombstoneQueueFailureRetriesWithoutCASAndDistinguishesMismatchLayers]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR137TombstoneQueueFailureRetriesWithoutCASAndDistinguishesMismatchLayers]' passed (0.038 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR138CommittedFinalStateSurvivesLostCASResponseAndRelaunchesComplete]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR138CommittedFinalStateSurvivesLostCASResponseAndRelaunchesComplete]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR138FailedFinalCASFreshRelaunchDecodesBytesAndAvoidsDuplicateEffects]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR138FailedFinalCASFreshRelaunchDecodesBytesAndAvoidsDuplicateEffects]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR138FailedFinalCASSameContextRetryReinvokesAdaptersWithoutDuplicatingEffects]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR138FailedFinalCASSameContextRetryReinvokesAdaptersWithoutDuplicatingEffects]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR138RelaunchFromEachPreCASCrashBoundaryReplaysAdaptersIdempotently]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR138RelaunchFromEachPreCASCrashBoundaryReplaysAdaptersIdempotently]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR138TombstoneRelaunchAfterQueueEffectReverifiesIdempotentlyWithoutCAS]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR138TombstoneRelaunchAfterQueueEffectReverifiesIdempotentlyWithoutCAS]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158BackfillSaveFailureRollsBackAssignedIndexes]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158BackfillSaveFailureRollsBackAssignedIndexes]' passed (0.021 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158CASGuardPrecedenceIgnoresLaterIndexContradictions]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158CASGuardPrecedenceIgnoresLaterIndexContradictions]' passed (0.100 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158CASPostSaveContradictionReturnsTypedFailure]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158CASPostSaveContradictionReturnsTypedFailure]' passed (0.041 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158CASPostSaveUnexpectedSelfConsistentStateReturnsPersistence]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158CASPostSaveUnexpectedSelfConsistentStateReturnsPersistence]' passed (0.026 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158CASSaveFailureRollsBackStateAndIndex]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158CASSaveFailureRollsBackStateAndIndex]' passed (0.037 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158CompletedLegacyBackfillDoesNotValidateImmutableWorkPayload]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158CompletedLegacyBackfillDoesNotValidateImmutableWorkPayload]' passed (0.021 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158ContradictoryIndexesFailClosed]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158ContradictoryIndexesFailClosed]' passed (0.018 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158ContradictoryPendingWorkPhaseOneDoesNotPersistBackfill]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158ContradictoryPendingWorkPhaseOneDoesNotPersistBackfill]' passed (0.016 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158DirectNilReadsRemainNonmutatingUntilGlobalLoadBackfills]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158DirectNilReadsRemainNonmutatingUntilGlobalLoadBackfills]' passed (0.025 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158DirtySharedContextBackfillsWithoutSavingOrRollingBackCallerChanges]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158DirtySharedContextBackfillsWithoutSavingOrRollingBackCallerChanges]' passed (0.018 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158IndexedPendingSelectionSkipsCompletedHistory]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158IndexedPendingSelectionSkipsCompletedHistory]' passed (0.125 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158LegacyNilSuccessfulCASWritesDerivedIndex]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158LegacyNilSuccessfulCASWritesDerivedIndex]' passed (0.036 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158LegacyRowsBackfillOnceAndThenStayBounded]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158LegacyRowsBackfillOnceAndThenStayBounded]' passed (0.296 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158MalformedPendingWorkPhaseOneDoesNotPersistBackfill]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158MalformedPendingWorkPhaseOneDoesNotPersistBackfill]' passed (0.016 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158PhaseOneFailureDoesNotPersistPartialBackfill]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158PhaseOneFailureDoesNotPersistPartialBackfill]' passed (0.021 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158RuntimeCompletedOnlyLegacyBackfillPreservesDirtyCallerState]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158RuntimeCompletedOnlyLegacyBackfillPreservesDirtyCallerState]' passed (0.022 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158RuntimePendingLegacyRecoveryIsNotCorruptHistory]' started.
+2026-08-04 15:16:08.071581+0000 MyRAMMac[3902:17958] [ModelContext] SwiftData.ModelContext: Unbinding from the main queue. This context was instantiated on the main queue but is being used off it. ModelContexts are not Sendable, consider using a ModelActor.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158RuntimePendingLegacyRecoveryIsNotCorruptHistory]' passed (0.019 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158UnindexedPendingRowIsIncludedByNullPredicateAndBackfilled]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR158UnindexedPendingRowIsIncludedByNullPredicateAndBackfilled]' passed (0.026 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR162PresentationSupersededByLaterPendingRequestIsTreatedAsSatisfied]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR162PresentationSupersededByLaterPendingRequestIsTreatedAsSatisfied]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR165IdempotentRedeliveryRetriesScopedPostCommitWithoutBlockingOtherWork]' started.
+2026-08-04 15:16:08.126168+0000 MyRAMMac[3902:17958] [ModelContext] SwiftData.ModelContext: Unbinding from the main queue. This context was instantiated on the main queue but is being used off it. ModelContexts are not Sendable, consider using a ModelActor.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR165IdempotentRedeliveryRetriesScopedPostCommitWithoutBlockingOtherWork]' passed (0.067 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR165PresentationNotSupersededByLaterMetadataOnlyRequest]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR165PresentationNotSupersededByLaterMetadataOnlyRequest]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR165PresentationPendingBacklogDefersOnlyItsNoteAndCompletesOtherWork]' started.
+2026-08-04 15:16:08.190821+0000 MyRAMMac[3902:17958] [ModelContext] SwiftData.ModelContext: Unbinding from the main queue. This context was instantiated on the main queue but is being used off it. ModelContexts are not Sendable, consider using a ModelActor.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR165PresentationPendingBacklogDefersOnlyItsNoteAndCompletesOtherWork]' passed (0.021 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR165RealStoreThreadsPresentationRoutingThroughPendingRequests]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR165RealStoreThreadsPresentationRoutingThroughPendingRequests]' passed (0.015 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR165RuntimeScopesOnlyPresentationPendingWork]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testMYR165RuntimeScopesOnlyPresentationPendingWork]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testNonthrowingQueueRemovalPreservesPriorInMemoryFailureSemantics]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testNonthrowingQueueRemovalPreservesPriorInMemoryFailureSemantics]' passed (0.005 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadAllowsMissingExpectedPreHashAndMissingFirstBaseHash]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadAllowsMissingExpectedPreHashAndMissingFirstBaseHash]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadRejectsMalformedOperationIdentity]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadRejectsMalformedOperationIdentity]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadRejectsMissingFirstBaseHashWhenExpectedPreHashExists]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadRejectsMissingFirstBaseHashWhenExpectedPreHashExists]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadRejectsMissingIntermediateBaseHash]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadRejectsMissingIntermediateBaseHash]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadRejectsOperationHashChainMismatch]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadRejectsOperationHashChainMismatch]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadValidationMatrixRejectsContradictoryPresentationEntries]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPostCommitPayloadValidationMatrixRejectsContradictoryPresentationEntries]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPrePayloadPendingRootFailsClosedBeforeAdapters]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPrePayloadPendingRootFailsClosedBeforeAdapters]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPresentationRequestsUseAuthoritativeCommittedStateInDeterministicOrder]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testPresentationRequestsUseAuthoritativeCommittedStateInDeterministicOrder]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testQueueFailureDoesNotBlockPresentationProgress]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testQueueFailureDoesNotBlockPresentationProgress]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testRepresentativeWorkPayloadGoldenDigestPinsStableEncoding]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testRepresentativeWorkPayloadGoldenDigestPinsStableEncoding]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testRuntimeRejectsAnchoredRemoteAndLocalSubmissionBeforePersistence]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testRuntimeRejectsAnchoredRemoteAndLocalSubmissionBeforePersistence]' passed (0.112 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testSameExecutorInstanceSerializesOverlappingRuns]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testSameExecutorInstanceSerializesOverlappingRuns]' passed (0.054 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testSwiftDataStoreReloadsAfterPartialAndFullClearWithRetainedWorkPayload]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testSwiftDataStoreReloadsAfterPartialAndFullClearWithRetainedWorkPayload]' passed (0.039 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testThrowingQueueRemovalRemovesExactlyRequestedIDsAndPreservesOrder]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testThrowingQueueRemovalRemovesExactlyRequestedIDsAndPreservesOrder]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testThrowingQueueRemovalRestoresExactQueueOnPersistenceFailure]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testThrowingQueueRemovalRestoresExactQueueOnPersistenceFailure]' passed (0.004 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testTombstoneCleanupRemovesOnlyVerifiedSourceBatchID]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testTombstoneCleanupRemovesOnlyVerifiedSourceBatchID]' passed (0.103 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testWorkPayloadAllowsClearedFlagsWithRetainedEvidence]' started.
+Test Case '-[MyRAMMacTests.SyncConvergencePostCommitTests testWorkPayloadAllowsClearedFlagsWithRetainedEvidence]' passed (0.001 seconds).
+Test Suite 'SyncConvergencePostCommitTests' passed at 2026-08-04 15:16:08.563.
+	 Executed 74 tests, with 0 failures (0 unexpected) in 3.097 (3.140) seconds
+Test Suite 'SyncConvergenceRewriteSafetyPolicyTests' started at 2026-08-04 15:16:08.563.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testDuplicateDeleteIdentityIsRejected]' started.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testDuplicateDeleteIdentityIsRejected]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testEmptyEvidenceAndMismatchedExpectedTextCannotProveLoss]' started.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testEmptyEvidenceAndMismatchedExpectedTextCannotProveLoss]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testIdenticalNonEmptyBodyConsumesNoEvidence]' started.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testIdenticalNonEmptyBodyConsumesNoEvidence]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testMultiCharacterEvidenceCoversOnlyItsExactMultiset]' started.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testMultiCharacterEvidenceCoversOnlyItsExactMultiset]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testOffsetDriftDoesNotInvalidateExpectedTextProof]' started.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testOffsetDriftDoesNotInvalidateExpectedTextProof]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testOneProofCoversOnlyOneDuplicateOccurrence]' started.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testOneProofCoversOnlyOneDuplicateOccurrence]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testPreservationInsertionAndReorderAreSafe]' started.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testPreservationInsertionAndReorderAreSafe]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testReorderPlusExplicitDeleteIsSafe]' started.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testReorderPlusExplicitDeleteIsSafe]' passed (0.001 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testUnprovenDuplicateDropIsUnsafe]' started.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testUnprovenDuplicateDropIsUnsafe]' passed (0.002 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testWhitespaceAndUnicodeRequireExactUTF16Evidence]' started.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testWhitespaceAndUnicodeRequireExactUTF16Evidence]' passed (0.003 seconds).
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testWhitespaceOmissionRequiresExplicitEvidence]' started.
+Test Case '-[MyRAMMacTests.SyncConvergenceRewriteSafetyPolicyTests testWhitespaceOmissionRequiresExplicitEvidence]' passed (0.001 seconds).
+Test Suite 'SyncConvergenceRewriteSafetyPolicyTests' passed at 2026-08-04 15:16:08.591.
+	 Executed 11 tests, with 0 failures (0 unexpected) in 0.020 (0.029) seconds
+Test Suite 'MyRAMMacTests.xctest' failed at 2026-08-04 15:16:08.592.
+	 Executed 649 tests, with 1 failure (1 unexpected) in 31.126 (31.784) seconds
+Test Suite 'All tests' failed at 2026-08-04 15:16:08.592.
+	 Executed 649 tests, with 1 failure (1 unexpected) in 31.126 (31.787) seconds
+2026-08-04 15:16:13.183 xcodebuild[1488:7581] [MT] IDETestOperationsObserverDebug: 42.567 elapsed -- Testing started completed.
+2026-08-04 15:16:13.183 xcodebuild[1488:7581] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-08-04 15:16:13.183 xcodebuild[1488:7581] [MT] IDETestOperationsObserverDebug: 42.567 sec, +42.567 sec -- end
+
+Test session results, code coverage, and logs:
+	/tmp/MYR175-Corrected-Mac.xcresult
+
+Failing tests:
+	SwiftDataNoteSequenceStateStoreTests.testSemanticRunAndFragmentOrderAreRejectedWithoutNormalization()
+
+** TEST FAILED **
+
+Testing started
