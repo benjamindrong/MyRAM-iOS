@@ -1382,13 +1382,13 @@ final class SwiftDataNoteSequenceStateStoreTests: XCTestCase {
             ],
             fragments: [
                 SyncTextSequenceFragment(
-                    operationID: first,
+                    operationID: second,
                     startOffset: 0,
                     utf16Length: 1,
                     visibility: .visible
                 ),
                 SyncTextSequenceFragment(
-                    operationID: second,
+                    operationID: first,
                     startOffset: 0,
                     utf16Length: 1,
                     visibility: .visible

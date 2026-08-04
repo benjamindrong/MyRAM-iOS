@@ -44,6 +44,12 @@ Evidence:
 
 The persistence store's generic capability is dormant for this state shape. No migration or compatibility decoder is required for Slice 1.
 
+### Persistence regression fixture alignment
+
+The shared iOS and native Mac persistence regression `testSemanticRunAndFragmentOrderAreRejectedWithoutNormalization` retains its original corruption checks. Its valid seed state now keeps canonical run storage as `[first, second]` while materializing the same-anchor fragments as `[second, first]`. Reversing either persisted array remains rejected without normalization. This test-only scope addition was required after exact-head application suites exposed the stale pre-MYR-175 fixture.
+
+No persistence source, payload codec, schema, migration, or production writer changed.
+
 ## Superseded materialization invariant
 
 The MYR-172 statement that sibling placement follows canonical operation ordering is superseded for same-anchor materialization by MYR-175. Canonical operation ordering remains the run-array storage contract.
