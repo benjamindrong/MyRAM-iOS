@@ -1,0 +1,241 @@
+name: Rerun MYR-175 Slice 1 exact head
+
+on:
+  push:
+    branches:
+      - MYR-175-verification-runner
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - name: Checkout verification branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Checkout exact MYR-175 head
+        uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/MyRAM-iOS
+          ref: 3dbfcff9053fc38b980738cad9bcea603e7c99c1
+          path: MyRAM-iOS
+
+      - name: Checkout sibling dependency
+        uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+
+      - name: Resolve environment and simulator
+        id: environment
+        continue-on-error: true
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          mkdir -p verification-rerun
+          xcodebuild -version | tee verification-rerun/xcode-version.txt
+          swift --version | tee verification-rerun/swift-version.txt
+          ls -d /Applications/Xcode*.app 2>/dev/null | tee verification-rerun/available-xcodes.txt
+          git rev-parse HEAD | tee verification-rerun/verified-head.txt
+          test "$(git rev-parse HEAD)" = "3dbfcff9053fc38b980738cad9bcea603e7c99c1"
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > verification-rerun/sibling-before.txt
+          xcrun simctl list devices available -j > verification-rerun/simulators.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data = json.loads(Path('verification-rerun/simulators.json').read_text())
+          candidates = []
+          for runtime, devices in data.get('devices', {}).items():
+              if 'iOS' not in runtime:
+                  continue
+              for device in devices:
+                  if not device.get('isAvailable') or not device.get('name', '').startswith('iPhone'):
+                      continue
+                  name = device['name']
+                  rank = 0 if name == 'iPhone 16 Pro' else 1
+                  candidates.append((rank, runtime, name, device['udid']))
+          if not candidates:
+              raise SystemExit('No available iPhone simulator')
+          candidates.sort()
+          rank, runtime, name, udid = candidates[0]
+          Path('verification-rerun/selected-simulator.txt').write_text(f'{name} | {runtime} | {udid}\n')
+          with open(os.environ['GITHUB_ENV'], 'a') as stream:
+              stream.write(f'IOS_SIMULATOR_UDID={udid}\n')
+          PY
+          cat verification-rerun/selected-simulator.txt
+          xcrun simctl boot "$IOS_SIMULATOR_UDID" || true
+          xcrun simctl bootstatus "$IOS_SIMULATOR_UDID" -b
+
+      - name: Focused package tests
+        id: package_focused
+        continue-on-error: true
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/AnchoredSequenceCore --filter SyncTextSequenceStateTests 2>&1 | tee verification-rerun/package-focused.log
+
+      - name: Complete package tests
+        id: package_complete
+        continue-on-error: true
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/AnchoredSequenceCore 2>&1 | tee verification-rerun/package-complete.log
+
+      - name: Complete iOS tests without signing
+        id: ios_tests
+        continue-on-error: true
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAM \
+            -destination "platform=iOS Simulator,id=${IOS_SIMULATOR_UDID}" \
+            -destination-timeout 120 \
+            -derivedDataPath verification-rerun/DerivedData-iOS-Tests \
+            -resultBundlePath verification-rerun/MYR175-iOS-Tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            test 2>&1 | tee verification-rerun/ios-tests.log
+
+      - name: Complete native Mac tests without signing
+        id: mac_tests
+        continue-on-error: true
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac \
+            -destination 'platform=macOS' \
+            -derivedDataPath verification-rerun/DerivedData-Mac-Tests \
+            -resultBundlePath verification-rerun/MYR175-Mac-Tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            test 2>&1 | tee verification-rerun/mac-tests.log
+
+      - name: iOS application build without signing
+        id: ios_build
+        continue-on-error: true
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAM \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath verification-rerun/DerivedData-iOS-Build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            build 2>&1 | tee verification-rerun/ios-build.log
+
+      - name: Native Mac application build without signing
+        id: mac_build
+        continue-on-error: true
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac \
+            -destination 'platform=macOS' \
+            -derivedDataPath verification-rerun/DerivedData-Mac-Build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            build 2>&1 | tee verification-rerun/mac-build.log
+
+      - name: Static, scope, and preservation audits
+        id: audits
+        continue-on-error: true
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          git diff --check e51ccca9ff6a77c8648e365b6569313c55c1e9d4...HEAD 2>&1 | tee verification-rerun/diff-check.log
+          git diff --name-only e51ccca9ff6a77c8648e365b6569313c55c1e9d4...HEAD | tee verification-rerun/changed-files.txt
+          diff -u <(printf '%s\n' \
+            'Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncOperationIDOrder.swift' \
+            'Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextSequenceState.swift' \
+            'Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceStateTests.swift' \
+            'docs/MYR-175-structural-insert-alignment.md') verification-rerun/changed-files.txt
+          test "$(git hash-object Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextSequenceState.swift)" = "395c8f317febe44bcb08a7e4dbe9caeeae97b971"
+          test "$(git hash-object Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncOperationIDOrder.swift)" = "cecabadc0600f180a6d140e4ed35bd1e91a8354e"
+          test "$(git hash-object Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceStateTests.swift)" = "ad7ff30fecf629ac9bb5837f0c486f8b9d14c163"
+          test "$(git -C ../NearbySyncCore rev-parse HEAD)" = "4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2"
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > verification-rerun/sibling-after.txt
+          diff -u verification-rerun/sibling-before.txt verification-rerun/sibling-after.txt
+
+      - name: Write outcomes
+        if: always()
+        working-directory: MyRAM-iOS
+        run: |
+          cat > verification-rerun/matrix-outcomes.txt <<EOF
+          environment=${{ steps.environment.outcome }}
+          package_focused=${{ steps.package_focused.outcome }}
+          package_complete=${{ steps.package_complete.outcome }}
+          ios_tests=${{ steps.ios_tests.outcome }}
+          mac_tests=${{ steps.mac_tests.outcome }}
+          ios_build=${{ steps.ios_build.outcome }}
+          mac_build=${{ steps.mac_build.outcome }}
+          audits=${{ steps.audits.outcome }}
+          EOF
+
+      - name: Build committed result
+        if: always()
+        working-directory: MyRAM-iOS
+        run: |
+          RESULT_DIR="../verification-results/MYR-175-Slice-1-3dbfcff9053fc38b980738cad9bcea603e7c99c1-rerun"
+          mkdir -p "$RESULT_DIR"
+          cp verification-rerun/matrix-outcomes.txt "$RESULT_DIR/"
+          for file in xcode-version.txt swift-version.txt available-xcodes.txt verified-head.txt selected-simulator.txt changed-files.txt diff-check.log sibling-before.txt sibling-after.txt; do
+            test ! -f "verification-rerun/$file" || cp "verification-rerun/$file" "$RESULT_DIR/"
+          done
+          {
+            echo '# MYR-175 Slice 1 Exact-Head Verification Rerun'
+            echo
+            echo '- Candidate head: `3dbfcff9053fc38b980738cad9bcea603e7c99c1`'
+            echo '- Baseline: `e51ccca9ff6a77c8648e365b6569313c55c1e9d4`'
+            echo '- Signing: disabled for hosted-runner builds and tests'
+            echo
+            echo '## Outcomes'
+            echo '```text'
+            cat verification-rerun/matrix-outcomes.txt
+            echo '```'
+            echo
+            echo '## Observed summaries'
+            echo '```text'
+            grep -hE 'Executed [0-9]+ tests|Test Suite .* passed|TEST SUCCEEDED|TEST FAILED|BUILD SUCCEEDED|BUILD FAILED' verification-rerun/*.log 2>/dev/null || true
+            echo '```'
+          } > "$RESULT_DIR/summary.md"
+          {
+            for file in package-focused.log package-complete.log ios-tests.log mac-tests.log ios-build.log mac-build.log; do
+              echo "===== $file ====="
+              test ! -f "verification-rerun/$file" || tail -n 160 "verification-rerun/$file"
+            done
+          } > "$RESULT_DIR/diagnostic-tails.txt"
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: myr175-slice1-exact-head-verification-rerun
+          path: MyRAM-iOS/verification-rerun
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Commit result and retire rerun
+        if: always()
+        run: |
+          rm .github/workflows/myr175-exact-head-verification-rerun.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add verification-results
+          git add -u .github
+          git commit -m "MYR-175 Record exact-head verification rerun"
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+
+      - name: Enforce complete matrix
+        if: always()
+        run: |
+          test "${{ steps.environment.outcome }}" = success
+          test "${{ steps.package_focused.outcome }}" = success
+          test "${{ steps.package_complete.outcome }}" = success
+          test "${{ steps.ios_tests.outcome }}" = success
+          test "${{ steps.mac_tests.outcome }}" = success
+          test "${{ steps.ios_build.outcome }}" = success
+          test "${{ steps.mac_build.outcome }}" = success
+          test "${{ steps.audits.outcome }}" = success
