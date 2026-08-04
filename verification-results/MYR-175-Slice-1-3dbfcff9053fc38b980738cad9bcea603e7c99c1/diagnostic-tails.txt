@@ -1,0 +1,577 @@
+===== package-focused.log =====
+Building for debugging...
+[0/7] Write sources
+[0/7] /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/Packages/AnchoredSequenceCore/.build/arm64-apple-macosx/debug/AnchoredSequenceCorePackageTests.derived/runner.swift
+[0/7] Write sources
+[4/7] Write swift-version--79AA4F9932D1E87A.txt
+[6/12] Emitting module AnchoredSequenceCore
+[7/12] Compiling AnchoredSequenceCore SyncSequenceIdentity.swift
+[8/12] Compiling AnchoredSequenceCore SyncTextLegacyBootstrap.swift
+[9/12] Compiling AnchoredSequenceCore SyncActorSequenceReservation.swift
+[10/12] Compiling AnchoredSequenceCore SyncOperationIDOrder.swift
+[11/14] Compiling AnchoredSequenceCore SyncTextOperationPayload.swift
+[12/14] Compiling AnchoredSequenceCore SyncTextSequenceState.swift
+[13/19] Compiling AnchoredSequenceCoreTests SyncActorSequenceReservationTests.swift
+[14/19] Compiling AnchoredSequenceCoreTests SyncSequenceIdentityTests.swift
+[15/19] Compiling AnchoredSequenceCoreTests SyncTextLegacyBootstrapTests.swift
+[16/19] Compiling AnchoredSequenceCoreTests SyncTextOperationPayloadTests.swift
+[17/19] Emitting module AnchoredSequenceCoreTests
+[18/20] Compiling AnchoredSequenceCoreTests SyncTextSequenceStateTests.swift
+[19/22] Emitting module AnchoredSequenceCorePackageTests
+[20/22] Compiling AnchoredSequenceCorePackageTests runner.swift
+[20/22] Write Objects.LinkFileList
+[21/22] Linking AnchoredSequenceCorePackageTests
+Build complete! (31.43s)
+Test Suite 'Selected tests' started at 2026-08-04 14:49:25.509.
+Test Suite 'AnchoredSequenceCorePackageTests.xctest' started at 2026-08-04 14:49:25.510.
+Test Suite 'SyncTextSequenceStateTests' started at 2026-08-04 14:49:25.510.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testBeginningMiddleAndEndOriginsExpandIteratively]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testBeginningMiddleAndEndOriginsExpandIteratively]' passed (0.005 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testCanonicalOrderUsesRawUUIDBytesThenCounter]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testCanonicalOrderUsesRawUUIDBytesThenCounter]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testDeepNestedChainUsesBoundedIterativeTraversalWork]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testDeepNestedChainUsesBoundedIterativeTraversalWork]' passed (0.200 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testEmptyStateHasNoMaterializedContent]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testEmptyStateHasNoMaterializedContent]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentProjectionRejectsSiblingOrderMismatchEvenWithEqualVisibleText]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentProjectionRejectsSiblingOrderMismatchEvenWithEqualVisibleText]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentValidationRejectsUnknownOversizedSurrogateSplitAndMergeable]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentValidationRejectsUnknownOversizedSurrogateSplitAndMergeable]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLargeSameAnchorSiblingSetUsesBoundedIterativeTraversalWork]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLargeSameAnchorSiblingSetUsesBoundedIterativeTraversalWork]' passed (0.151 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLocalInitializersRejectInvalidOriginsRunsAndRanges]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLocalInitializersRejectInvalidOriginsRunsAndRanges]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testNoncanonicalAndDuplicateRunArraysAreRejected]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testNoncanonicalAndDuplicateRunArraysAreRejected]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testPublicValuesConstructAVisibleRootState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testPublicValuesConstructAVisibleRootState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderDiffersFromCanonicalRunStorageWithoutChangingRunValidation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderDiffersFromCanonicalRunStorageWithoutChangingRunValidation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderedProjectionProducesDeterministicState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderedProjectionProducesDeterministicState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderUsesDescendingCounterThenRawUUIDByteTieBreak]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderUsesDescendingCounterThenRawUUIDByteTieBreak]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingOrderingIsIndependentOfInputPermutation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingOrderingIsIndependentOfInputPermutation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingSubtreesRemainContiguous]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingSubtreesRemainContiguous]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSelectedSpansDoNotCoalesceAcrossDescendantsOrVisibilityGaps]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSelectedSpansDoNotCoalesceAcrossDescendantsOrVisibilityGaps]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSurrogateOriginsAcceptBeforeAndAfterButRejectInterior]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSurrogateOriginsAcceptBeforeAndAfterButRejectInterior]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testUnknownSelfCyclicAndUnreachableOriginsAreDistinct]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testUnknownSelfCyclicAndUnreachableOriginsAreDistinct]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testVisibilityMaterializationAnchorsAndRangesAreSurrogateSafe]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testVisibilityMaterializationAnchorsAndRangesAreSurrogateSafe]' passed (0.000 seconds).
+Test Suite 'SyncTextSequenceStateTests' passed at 2026-08-04 14:49:25.871.
+	 Executed 19 tests, with 0 failures (0 unexpected) in 0.361 (0.361) seconds
+Test Suite 'AnchoredSequenceCorePackageTests.xctest' passed at 2026-08-04 14:49:25.871.
+	 Executed 19 tests, with 0 failures (0 unexpected) in 0.361 (0.362) seconds
+Test Suite 'Selected tests' passed at 2026-08-04 14:49:25.871.
+	 Executed 19 tests, with 0 failures (0 unexpected) in 0.361 (0.363) seconds
+◇ Test run started.
+↳ Testing Library Version: 124.4
+↳ Target Platform: arm64e-apple-macos14.0
+✔ Test run with 0 tests passed after 0.001 seconds.
+===== package-complete.log =====
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testIdenticalInputsProduceIdenticalBootstrapState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testIdenticalInputsProduceIdenticalBootstrapState]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testLargeBodyStillUsesOneRunAndOneFragment]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testLargeBodyStillUsesOneRunAndOneFragment]' passed (0.200 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testNonemptyBodyProducesOneRunAndOneVisibleFragment]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testNonemptyBodyProducesOneRunAndOneVisibleFragment]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSameBodyUnderDifferentNoteIDsProducesDifferentRunIDs]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSameBodyUnderDifferentNoteIDsProducesDifferentRunIDs]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSupplementaryScalarRetainsTwoElementOffsets]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSupplementaryScalarRetainsTwoElementOffsets]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSyntheticLegacyRunIDUsesVersion8RFCVariantUUID]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSyntheticLegacyRunIDUsesVersion8RFCVariantUUID]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testV1KnownVectorFreezesDeterministicOperationID]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testV1KnownVectorFreezesDeterministicOperationID]' passed (0.000 seconds).
+Test Suite 'SyncTextLegacyBootstrapTests' passed at 2026-08-04 14:49:28.387.
+	 Executed 11 tests, with 0 failures (0 unexpected) in 0.204 (0.205) seconds
+Test Suite 'SyncTextOperationPayloadTests' started at 2026-08-04 14:49:28.387.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAdjacentAndInterleavedSpansRemainValidAndOrdered]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAdjacentAndInterleavedSpansRemainValidAndOrdered]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorFactoriesEncodeTheFourExactShapes]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorFactoriesEncodeTheFourExactShapes]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorKindRepresentationFailuresHaveExactCasesAndPaths]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorKindRepresentationFailuresHaveExactCasesAndPaths]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorsCrossOperationOwnedRunBoundaries]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorsCrossOperationOwnedRunBoundaries]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnyExplicitNullEndpointIsValueNotFoundAtEndpointPath]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnyExplicitNullEndpointIsValueNotFoundAtEndpointPath]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testBetweenFactoryRejectsIdenticalEndpoints]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testBetweenFactoryRejectsIdenticalEndpoints]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testCompleteArrayDuplicateDetectionPrecedesOrderFailure]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testCompleteArrayDuplicateDetectionPrecedesOrderFailure]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedBetweenAnchorPreservesIdenticalEndpointError]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedBetweenAnchorPreservesIdenticalEndpointError]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedSpanPreservesValidatedInitializerErrors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedSpanPreservesValidatedInitializerErrors]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeleteFactoryPreservesCompactMultiRunStructuralOrder]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeleteFactoryPreservesCompactMultiRunStructuralOrder]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeletePayloadRejectsEmptyDuplicateOverlapAndDecreasingSpans]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeletePayloadRejectsEmptyDuplicateOverlapAndDecreasingSpans]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyAndFullyTombstonedStatesUseDifferentAnchors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyAndFullyTombstonedStatesUseDifferentAnchors]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyDeleteRangeIsRejectedAfterStateValidation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyDeleteRangeIsRejectedAfterStateValidation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEstablishedIdentityCodecsContinueIgnoringUnknownNestedKeys]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEstablishedIdentityCodecsContinueIgnoringUnknownNestedKeys]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactDeleteV1FixturePreservesAdjacentSpans]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactDeleteV1FixturePreservesAdjacentSpans]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactInsertV1FixtureEncodesAndDecodes]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactInsertV1FixtureEncodesAndDecodes]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testInsertAndDeleteVersionMatrices]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testInsertAndDeleteVersionMatrices]' passed (0.002 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLargeContiguousDeletionProducesOneSpan]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLargeContiguousDeletionProducesOneSpan]' passed (0.146 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLeadingInternalAndTrailingTombstonesUseCanonicalBias]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLeadingInternalAndTrailingTombstonesUseCanonicalBias]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testMalformedPresentEndpointPreservesIdentityError]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testMalformedPresentEndpointPreservesIdentityError]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testRootStateDerivesBeforeBetweenAndAfterAnchorsWithoutMutation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testRootStateDerivesBeforeBetweenAndAfterAnchorsWithoutMutation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testSupplementaryScalarAnchorAndDeletionBoundariesAreSafe]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testSupplementaryScalarAnchorAndDeletionBoundariesAreSafe]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testTombstonedDescendantKeepsAdjacentParentSpansSeparate]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testTombstonedDescendantKeepsAdjacentParentSpansSeparate]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedAnchorAndSpanKeysReportFullNestedPaths]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedAnchorAndSpanKeysReportFullNestedPaths]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedPayloadKeysRejectLexicographicallyFirstKey]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedPayloadKeysRejectLexicographicallyFirstKey]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnknownAndContradictoryAnchorShapesUsePayloadErrors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnknownAndContradictoryAnchorShapesUsePayloadErrors]' passed (0.000 seconds).
+Test Suite 'SyncTextOperationPayloadTests' passed at 2026-08-04 14:49:28.548.
+	 Executed 26 tests, with 0 failures (0 unexpected) in 0.159 (0.161) seconds
+Test Suite 'SyncTextSequenceStateTests' started at 2026-08-04 14:49:28.548.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testBeginningMiddleAndEndOriginsExpandIteratively]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testBeginningMiddleAndEndOriginsExpandIteratively]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testCanonicalOrderUsesRawUUIDBytesThenCounter]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testCanonicalOrderUsesRawUUIDBytesThenCounter]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testDeepNestedChainUsesBoundedIterativeTraversalWork]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testDeepNestedChainUsesBoundedIterativeTraversalWork]' passed (0.272 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testEmptyStateHasNoMaterializedContent]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testEmptyStateHasNoMaterializedContent]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentProjectionRejectsSiblingOrderMismatchEvenWithEqualVisibleText]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentProjectionRejectsSiblingOrderMismatchEvenWithEqualVisibleText]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentValidationRejectsUnknownOversizedSurrogateSplitAndMergeable]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentValidationRejectsUnknownOversizedSurrogateSplitAndMergeable]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLargeSameAnchorSiblingSetUsesBoundedIterativeTraversalWork]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLargeSameAnchorSiblingSetUsesBoundedIterativeTraversalWork]' passed (0.203 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLocalInitializersRejectInvalidOriginsRunsAndRanges]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLocalInitializersRejectInvalidOriginsRunsAndRanges]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testNoncanonicalAndDuplicateRunArraysAreRejected]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testNoncanonicalAndDuplicateRunArraysAreRejected]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testPublicValuesConstructAVisibleRootState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testPublicValuesConstructAVisibleRootState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderDiffersFromCanonicalRunStorageWithoutChangingRunValidation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderDiffersFromCanonicalRunStorageWithoutChangingRunValidation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderedProjectionProducesDeterministicState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderedProjectionProducesDeterministicState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderUsesDescendingCounterThenRawUUIDByteTieBreak]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderUsesDescendingCounterThenRawUUIDByteTieBreak]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingOrderingIsIndependentOfInputPermutation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingOrderingIsIndependentOfInputPermutation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingSubtreesRemainContiguous]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingSubtreesRemainContiguous]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSelectedSpansDoNotCoalesceAcrossDescendantsOrVisibilityGaps]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSelectedSpansDoNotCoalesceAcrossDescendantsOrVisibilityGaps]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSurrogateOriginsAcceptBeforeAndAfterButRejectInterior]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSurrogateOriginsAcceptBeforeAndAfterButRejectInterior]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testUnknownSelfCyclicAndUnreachableOriginsAreDistinct]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testUnknownSelfCyclicAndUnreachableOriginsAreDistinct]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testVisibilityMaterializationAnchorsAndRangesAreSurrogateSafe]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testVisibilityMaterializationAnchorsAndRangesAreSurrogateSafe]' passed (0.000 seconds).
+Test Suite 'SyncTextSequenceStateTests' passed at 2026-08-04 14:49:29.027.
+	 Executed 19 tests, with 0 failures (0 unexpected) in 0.479 (0.479) seconds
+Test Suite 'AnchoredSequenceCorePackageTests.xctest' passed at 2026-08-04 14:49:29.027.
+	 Executed 76 tests, with 0 failures (0 unexpected) in 0.848 (0.852) seconds
+Test Suite 'All tests' passed at 2026-08-04 14:49:29.027.
+	 Executed 76 tests, with 0 failures (0 unexpected) in 0.848 (0.854) seconds
+◇ Test run started.
+↳ Testing Library Version: 124.4
+↳ Target Platform: arm64e-apple-macos14.0
+✔ Test run with 0 tests passed after 0.001 seconds.
+===== ios-tests.log =====
+       xcodebuild -exportNotarizedApp -archivePath <xcarchivepath> -exportPath <destinationpath>
+       xcodebuild -exportLocalizations -localizationPath <path> -project <projectname> [-defaultLanguage <language>] [-exportLanguage <targetlanguage>... [-includeScreenshots]]
+       xcodebuild -importLocalizations -localizationPath <path> -project <projectname> [-mergeImport]
+       xcodebuild -resolvePackageDependencies [-project <projectname>|-workspace <workspacename>] -clonedSourcePackagesDirPath <path>
+       xcodebuild -create-xcframework [-help] [-framework <path>] [-library <path> [-headers <path>]] -output <path>
+       xcodebuild -downloadPlatform <iOS|watchOS|tvOS|visionOS>  [-exportPath <destinationpath> -buildVersion <version>]
+       xcodebuild -downloadAllPlatforms [-exportPath <destinationpath>]
+       xcodebuild -importPlatform <simruntimedmgpath>
+
+Options:
+    -usage                                                   print brief usage
+    -help                                                    print complete usage
+    -verbose                                                 provide additional status output
+    -license                                                 show the Xcode and SDK license agreements
+    -checkFirstLaunchStatus                                  Check if any First Launch tasks need to be performed
+    -runFirstLaunch                                          install packages and agree to the license. Add an `-checkForNewerComponents` flag to check for any additional Xcode Device support components.
+    -downloadAllPlatforms                                    downloads a matching simulator runtime for every platform in this Xcode
+    -prepareDeviceSupport                                    prepares the Device Support symbols folder for the device
+    -downloadPlatform NAME                                   download the platform NAME
+    -importPlatform DMG_Path                                 import the platform NAME
+    -downloadAllPreviouslySelectedPlatforms                  download all previously selected platforms
+    -project NAME                                            build the project NAME
+    -target NAME                                             build the target NAME
+    -alltargets                                              build all targets
+    -workspace NAME                                          build the workspace NAME
+    -scheme NAME                                             build the scheme NAME
+    -configuration NAME                                      use the build configuration NAME for building each target
+    -xcconfig PATH                                           apply the build settings defined in the file at PATH as overrides
+    -arch ARCH                                               build each target for the architecture ARCH; this will override architectures defined in the project
+    -sdk SDK                                                 use SDK as the name or path of the base SDK when building the project
+    -toolchain NAME                                          use the toolchain with identifier or name NAME
+    -destination DESTINATIONSPECIFIER                        use the destination described by DESTINATIONSPECIFIER (a comma-separated set of key=value pairs describing the destination to use)
+    -destination-timeout TIMEOUT                             wait for TIMEOUT seconds while searching for the destination device
+    -parallelizeTargets                                      build independent targets in parallel
+    -jobs NUMBER                                             specify the maximum number of concurrent build operations
+    -maximum-concurrent-test-device-destinations NUMBER      the maximum number of device destinations to test on concurrently
+    -maximum-concurrent-test-simulator-destinations NUMBER   the maximum number of simulator destinations to test on concurrently
+    -parallel-testing-enabled YES|NO                         overrides the per-target setting in the scheme
+    -parallel-testing-worker-count NUMBER                    the exact number of test runners that will be spawned during parallel testing
+    -maximum-parallel-testing-workers NUMBER                 the maximum number of test runners that will be spawned during parallel testing
+    -dry-run                                                 do everything except actually running the commands
+    -quiet                                                   do not print any output except for warnings and errors
+    -hideShellScriptEnvironment                              don't show shell script environment variables in build log
+    -showsdks                                                display a compact list of the installed SDKs
+    -showdestinations                                        display a list of destinations
+    -showTestPlans                                           display a list of test plans
+    -showBuildSettings                                       display a list of build settings and values
+    -showBuildSettingsForIndex                               display build settings for the index service
+    -list                                                    lists the targets and configurations in a project, or the schemes in a workspace
+    -find-executable NAME                                    display the full path to executable NAME in the provided SDK and toolchain
+    -find-library NAME                                       display the full path to library NAME in the provided SDK and toolchain
+    -version                                                 display the version of Xcode; with -sdk will display info about one or all installed SDKs
+    -enableAddressSanitizer YES|NO                           turn the address sanitizer on or off
+    -enableThreadSanitizer YES|NO                            turn the thread sanitizer on or off
+    -enableUndefinedBehaviorSanitizer YES|NO                 turn the undefined behavior sanitizer on or off
+    -resultBundlePath PATH                                   specifies the directory where a result bundle describing what occurred will be placed
+    -resultStreamPath PATH                                   specifies the file where a result stream will be written to (the file must already exist)
+    -resultBundleVersion 3 [default]                         specifies which result bundle version should be used
+    -clonedSourcePackagesDirPath PATH                        specifies the directory to which remote source packages are fetch or expected to be found
+    -derivedDataPath PATH                                    specifies the directory where build products and other derived data will go
+    -archivePath PATH                                        specifies the directory where any created archives will be placed, or the archive that should be exported
+    -exportArchive                                           specifies that an archive should be exported
+    -exportNotarizedApp                                      export an archive that has been notarized by Apple
+    -exportOptionsPlist PATH                                 specifies a path to a plist file that configures archive exporting
+    -enableCodeCoverage YES|NO                               turn code coverage on or off when testing
+    -exportPath PATH                                         specifies the destination for the product exported from an archive
+    -importPath PATH                                         specifies the source location for the product that will be imported
+    -skipUnavailableActions                                  specifies that scheme actions that cannot be performed should be skipped instead of causing a failure
+    -exportLocalizations                                     exports completed and outstanding project localizations
+    -importLocalizations                                     imports localizations for a project, assuming any necessary localized resources have been created in Xcode
+    -localizationPath                                        specifies a path to XLIFF localization files
+    -exportLanguage                                          specifies multiple optional ISO 639-1 languages included in a localization export
+    -defaultLanguage                                         specifies the default ISO 639-1 language to be used as the source language on export
+    -xctestrun                                               specifies a path to a test run specification
+    -testProductsPath                                        specifies a path for the test products
+    -enablePerformanceTestsDiagnostics YES|NO                enables performance trace and memgraph collection for performance XCTests
+    -testPlan                                                specifies the name of the test plan associated with the scheme to use for testing
+    -only-testing                                            constrains testing by specifying tests to include, and excluding other tests
+    -only-testing:TEST-IDENTIFIER                            constrains testing by specifying tests to include, and excluding other tests
+    -skip-testing                                            constrains testing by specifying tests to exclude, but including other tests
+    -skip-testing:TEST-IDENTIFIER                            constrains testing by specifying tests to exclude, but including other tests
+    -test-timeouts-enabled YES|NO                            enable or disable test timeout behavior
+    -default-test-execution-time-allowance SECONDS           the default execution time an individual test is given to execute, if test timeouts are enabled
+    -maximum-test-execution-time-allowance SECONDS           the maximum execution time an individual test is given to execute, regardless of the test's preferred allowance
+    -test-iterations <number>                                If specified, tests will run <number> times. May be used in conjunction with either -retry-tests-on-failure or -run-tests-until-failure, in which case this will become the maximum number of iterations.
+    -retry-tests-on-failure                                  If specified, tests will retry on failure. May be used in conjunction with -test-iterations <number>, in which case <number> will be the maximum number of iterations. Otherwise, a maximum of 3 is assumed. May not be used with -run-tests-until-failure.
+    -run-tests-until-failure                                 If specified, tests will run until they fail. May be used in conjunction with -test-iterations <number>, in which case <number> will be the maximum number of iterations. Otherwise, a maximum of 100 is assumed. May not be used with -retry-tests-on-failure.
+    -test-repetition-relaunch-enabled YES|NO                 Enable or disable, tests repeating in a new process for each repetition.  Must be used in conjunction with -test-iterations, -retry-tests-on-failure, or -run-tests-until-failure. If not specified, tests will repeat in the same process.
+    -only-test-configuration                                 constrains testing by specifying test configurations to include, and excluding other test configurations
+    -skip-test-configuration                                 constrains testing by specifying test configurations to exclude, but including other test configurations
+    -collect-test-diagnostics on-failure|never               Whether or not testing collects verbose diagnostics (like a sysdiagnose) when encountering a failure
+    -testLanguage                                            constrains testing by specifying ISO 639-1 language in which to run the tests
+    -testRegion                                              constrains testing by specifying ISO 3166-1 region in which to run the tests
+    -enumerate-tests                                         Enumerate the tests that would be executed by this command without actually executing them
+    -test-enumeration-style                                  The style in which to enumerate the tests. Valid styles: flat, hierarchical
+    -test-enumeration-format                                 The output format of the enumerated tests. Valid formats: text, json
+    -test-enumeration-output-path                            The path (relative or absolute) where the results of test enumeration should be written. If '-' is supplied, writes to standard out.
+    -resolvePackageDependencies                              resolves any Swift package dependencies referenced by the project or workspace
+    -disableAutomaticPackageResolution                       prevents packages from automatically being resolved to versions other than those recorded in the `Package.resolved` file
+    -onlyUsePackageVersionsFromResolvedFile                  prevents packages from automatically being resolved to versions other than those recorded in the `Package.resolved` file
+    -skipPackageUpdates                                      Skip updating package dependencies from their remote
+    -disablePackageRepositoryCache                           disable use of a local cache of remote package repositories
+    -skipPackagePluginValidation                             Skip validation of package plugins (this can be a security risk if they are not from trusted sources)
+    -skipMacroValidation                                     Skip validation of macros (this can be a security risk if they are not from trusted sources)
+    -packageCachePath                                        path of caches used for package support
+    -packageAuthorizationProvider keychain|netrc             Specify the credential store to be used when resolving packages
+    -defaultPackageRegistryURL                               URL of the default package registry
+    -packageDependencySCMToRegistryTransformation            specifies the transformation to apply to SCM-based package dependencies (none, useRegistryIdentity, or useRegistryIdentityAndSources)
+    -skipPackageSignatureValidation                          Skip validation of package signatures (this can be a security risk if they are not from trusted sources)
+    -packageFingerprintPolicy                                Package fingerprint checking policy (`warn` or `strict`)
+    -packageSigningEntityPolicy                              Package signing entity checking policy (`warn` or `strict`)
+    -json                                                    output as JSON (note: -json implies -quiet)
+    -allowProvisioningUpdates                                Allow xcodebuild to communicate with the Apple Developer website. For automatically signed targets, xcodebuild will create and update profiles, app IDs, and certificates. For manually signed targets, xcodebuild will download missing or updated provisioning profiles. Requires a developer account to have been added in Xcode's Accounts settings or an App Store Connect authentication key to be specified via the -authenticationKeyPath, -authenticationKeyID, and -authenticationKeyIssuerID parameters.
+    -allowProvisioningDeviceRegistration                     Allow xcodebuild to register your destination device on the developer portal if necessary. This flag only takes effect if -allowProvisioningUpdates is also passed.
+    -authenticationKeyPath                                   specifies the path to an authentication key issued by App Store Connect. If specified, xcodebuild will authenticate with the Apple Developer website using this credential. The -authenticationKeyID and -authenticationKeyIssuerID parameters are required.
+    -authenticationKeyID                                     specifies the key identifier associated with the App Store Conect authentication key at -authenticationKeyPath. This string can be located in the users and access details for your provider at "https://appstoreconnect.apple.com".
+    -authenticationKeyIssuerID                               specifies the App Store Connect issuer identifier associated with the authentication key at -authenticationKeyPath. This string can be located in the users and access details for your provider at "https://appstoreconnect.apple.com".
+    -scmProvider                                             which implementation to use for Git operations (system/xcode)
+    -showBuildTimingSummary                                  display a report of the timings of all the commands invoked during the build
+    -create-xcframework                                      create an xcframework from prebuilt libraries; -help for more information.
+===== mac-tests.log =====
+Command line invocation:
+    /Applications/Xcode_16.4.app/Contents/Developer/usr/bin/xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination platform=macOS -derivedDataPath verification/DerivedData-Mac-Tests -resultBundlePath verification/MYR175-Mac-Tests.xcresult test
+
+Resolve Package Graph
+
+
+Resolved source packages:
+  NearbySyncCore: /Users/runner/work/MyRAM-iOS/MyRAM-iOS/NearbySyncCore @ local
+  AnchoredSequenceCore: /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/Packages/AnchoredSequenceCore @ local
+
+Writing result bundle at path:
+	/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification/MYR175-Mac-Tests.xcresult
+
+--- xcodebuild: WARNING: Using the first of multiple matching destinations:
+{ platform:macOS, arch:arm64, id:815d306da163506c3eb9156ccc9f87683602b9dc, name:My Mac }
+{ platform:macOS, arch:x86_64, id:815d306da163506c3eb9156ccc9f87683602b9dc, name:My Mac }
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (7 targets)
+    Target 'MyRAMMacTests' in project 'MyRAM'
+        ➜ Explicit dependency on target 'MyRAMMac' in project 'MyRAM'
+        ➜ Explicit dependency on target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore'
+    Target 'MyRAMMac' in project 'MyRAM'
+        ➜ Explicit dependency on target 'MyRAMMacWidgetExtension' in project 'MyRAM'
+        ➜ Explicit dependency on target 'NearbySyncCore' in project 'NearbySyncCore'
+        ➜ Explicit dependency on target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore'
+    Target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore'
+        ➜ Explicit dependency on target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore'
+    Target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore' (no dependencies)
+    Target 'NearbySyncCore' in project 'NearbySyncCore'
+        ➜ Explicit dependency on target 'NearbySyncCore' in project 'NearbySyncCore'
+    Target 'NearbySyncCore' in project 'NearbySyncCore' (no dependencies)
+    Target 'MyRAMMacWidgetExtension' in project 'MyRAM' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ExecuteExternalTool /Applications/Xcode_16.4.app/Contents/Developer/usr/bin/actool --version --output-format xml1
+
+ExecuteExternalTool /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc --version
+
+ExecuteExternalTool /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld -version_details
+
+ExecuteExternalTool /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -isysroot /Applications/Xcode_16.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -x c -c /dev/null
+
+Build description signature: 4462619b440b9b14f349c2d0f1bc79f9
+Build description path: /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification/DerivedData-Mac-Tests/Build/Intermediates.noindex/XCBuildData/4462619b440b9b14f349c2d0f1bc79f9.xcbuilddata
+/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM.xcodeproj: error: No signing certificate "Mac Development" found: No "Mac Development" signing certificate matching team ID "5FF5MBB334" with a private key was found. (in target 'MyRAMMacTests' from project 'MyRAM')
+/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM.xcodeproj: error: No profiles for 'com.northsignalstudio.myram.mac.dev' were found: Xcode couldn't find any Mac App Development provisioning profiles matching 'com.northsignalstudio.myram.mac.dev'. Automatic signing is disabled and unable to generate a profile. To enable automatic signing, pass -allowProvisioningUpdates to xcodebuild. (in target 'MyRAMMac' from project 'MyRAM')
+/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM.xcodeproj: error: No profiles for 'com.northsignalstudio.myram.mac.dev.widget' were found: Xcode couldn't find any Mac App Development provisioning profiles matching 'com.northsignalstudio.myram.mac.dev.widget'. Automatic signing is disabled and unable to generate a profile. To enable automatic signing, pass -allowProvisioningUpdates to xcodebuild. (in target 'MyRAMMacWidgetExtension' from project 'MyRAM')
+
+Test session results, code coverage, and logs:
+	/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification/MYR175-Mac-Tests.xcresult
+
+Testing failed:
+	No signing certificate "Mac Development" found: No "Mac Development" signing certificate matching team ID "5FF5MBB334" with a private key was found.
+	No profiles for 'com.northsignalstudio.myram.mac.dev' were found: Xcode couldn't find any Mac App Development provisioning profiles matching 'com.northsignalstudio.myram.mac.dev'. Automatic signing is disabled and unable to generate a profile. To enable automatic signing, pass -allowProvisioningUpdates to xcodebuild.
+	No profiles for 'com.northsignalstudio.myram.mac.dev.widget' were found: Xcode couldn't find any Mac App Development provisioning profiles matching 'com.northsignalstudio.myram.mac.dev.widget'. Automatic signing is disabled and unable to generate a profile. To enable automatic signing, pass -allowProvisioningUpdates to xcodebuild.
+	Testing cancelled because the build failed.
+
+** TEST FAILED **
+
+
+The following build commands failed:
+	Testing project MyRAM with scheme MyRAMMac
+(1 failure)
+===== ios-build.log =====
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMLegacySyncPayloadBuilder.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/PendingSyncStatus.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Recovery/PendingSyncRecoveryCoordinator.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetContentSelectionPolicy.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 Compiling\ MyRAMWidgetSnapshotStore.swift,\ MyRAMWidgetSnapshot.swift,\ MyRAMWidgetDeepLink.swift,\ MyRAMWidgetRuntimeConfiguration.swift,\ MyRAMWidgetSnapshotCodec.swift,\ PendingSyncRecoveryJournal.swift,\ SyncRecoveryStateBuilder.swift,\ EditorTextPlacementResolver.swift,\ NearbySyncView.swift,\ SyncConflictViews.swift,\ IPhoneSyncBatchAccumulator.swift,\ IPhoneSyncBatchCaptureHook.swift,\ IPhoneSyncBatchApplier.swift,\ DebugDemoDataGenerator.swift,\ EditorPasteFormatter.swift,\ EditorTimingPolicy.swift,\ SyncStatusIndicator.swift,\ MyRAMPlatform.swift,\ EditorSelectionProfiling.swift,\ EditorSearchHighlighting.swift,\ EditorSearchMatchResolver.swift,\ EditorSearchSession.swift,\ EditorRichTextContentCodec.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshot.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetDeepLink.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetRuntimeConfiguration.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotCodec.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Recovery/PendingSyncRecoveryJournal.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Recovery/SyncRecoveryStateBuilder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorTextPlacementResolver.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/NearbySyncView.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/SyncConflictViews.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/iOS/Sync/Batch/IPhoneSyncBatchAccumulator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/iOS/Sync/Batch/IPhoneSyncBatchCaptureHook.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/iOS/Sync/Batch/IPhoneSyncBatchApplier.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/DebugDemoDataGenerator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorPasteFormatter.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorTimingPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/SyncStatusIndicator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Platform/MyRAMPlatform.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorSelectionProfiling.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorSearchHighlighting.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorSearchMatchResolver.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorSearchSession.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorRichTextContentCodec.swift (in target 'MyRAM' from project 'MyRAM')
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotStore.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshot.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetDeepLink.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetRuntimeConfiguration.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetSnapshotCodec.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Recovery/PendingSyncRecoveryJournal.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Recovery/SyncRecoveryStateBuilder.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorTextPlacementResolver.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/NearbySyncView.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/SyncConflictViews.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/iOS/Sync/Batch/IPhoneSyncBatchAccumulator.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/iOS/Sync/Batch/IPhoneSyncBatchCaptureHook.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/iOS/Sync/Batch/IPhoneSyncBatchApplier.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/DebugDemoDataGenerator.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorPasteFormatter.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorTimingPolicy.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/SyncStatusIndicator.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Platform/MyRAMPlatform.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorSelectionProfiling.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorSearchHighlighting.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorSearchMatchResolver.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorSearchSession.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Views/Editor/EditorRichTextContentCodec.swift (in target 'MyRAM' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftDriverJobDiscovery normal x86_64 Compiling SyncBatchPayload.swift, SyncBatchAnchoredPayloadAdapter.swift, SyncBatchAnchoredPayloadPolicy.swift, SyncBatchPeerCapability.swift, SyncBatchTransportAdmissionPlanner.swift, SyncBatchEnvelope.swift, MultipeerSyncMessageEnvelope.swift, SyncBatchSeenBatchStore.swift, SyncBatchUTF16Helpers.swift, SyncBatchNoteChangeCapture.swift, SyncConvergenceTypes.swift, SyncConvergenceModels.swift, SyncConvergencePlanningTypes.swift, SyncConvergenceRewriteSafetyPolicy.swift, ExplicitDeleteProvenanceTypes.swift, ExplicitDeleteProvenanceBuilder.swift, ExplicitDeleteProvenanceValidator.swift, SyncConvergencePlanner.swift, IncrementalEditIntegrationTypes.swift, RetainedOperationCausalGraph.swift, SwiftDataSyncConvergencePersistenceTransaction.swift, SyncConvergencePostCommitTypes.swift, SyncConvergencePostCommitGating.swift (in target 'MyRAM' from project 'MyRAM')
+
+** BUILD FAILED **
+
+
+The following build commands failed:
+	SwiftCompile normal x86_64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift (in target 'MyRAM' from project 'MyRAM')
+	SwiftCompile normal x86_64 Compiling\ SwiftDataSyncConvergencePostCommitStore.swift,\ SyncConvergencePostCommitExecutor.swift,\ SyncConvergenceLocalObligation.swift,\ FileBackedSyncConvergenceLocalObligationQueue.swift,\ SyncConvergenceDrainPassScheduler.swift,\ SyncConvergenceRuntime.swift,\ SyncBatchUnsentQueue.swift,\ FileBackedSyncBatchQueue.swift,\ NotesViewModel.swift,\ MyRAMSyncModels.swift,\ MyRAMApp.swift,\ MyRAMSchema.swift,\ Note.swift,\ MyRAMSyncChangeApplier.swift,\ MyRAMLegacySyncChangeValidator.swift,\ MyRAMSyncConflictService.swift,\ SyncConflictStore.swift,\ Folder.swift,\ MyRAMDeviceIdentity.swift,\ MyRAMLegacySyncPayloadBuilder.swift,\ PendingSyncStatus.swift,\ PendingSyncRecoveryCoordinator.swift,\ MyRAMWidgetContentSelectionPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SwiftDataSyncConvergencePostCommitStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePostCommitExecutor.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceLocalObligation.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/FileBackedSyncConvergenceLocalObligationQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceDrainPassScheduler.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUnsentQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/FileBackedSyncBatchQueue.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/ViewModels/NotesViewModel.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncModels.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/MyRAMApp.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/MyRAMSchema.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Note.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncChangeApplier.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Legacy/MyRAMLegacySyncChangeValidator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMSyncConflictService.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/SyncConflictStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Folder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMDeviceIdentity.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/MyRAMLegacySyncPayloadBuilder.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/PendingSyncStatus.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Recovery/PendingSyncRecoveryCoordinator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/WidgetShared/MyRAMWidgetContentSelectionPolicy.swift (in target 'MyRAM' from project 'MyRAM')
+	Building project MyRAM with scheme MyRAM
+(3 failures)
+===== mac-build.log =====
+Command line invocation:
+    /Applications/Xcode_16.4.app/Contents/Developer/usr/bin/xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination platform=macOS -derivedDataPath verification/DerivedData-Mac-Build build
+
+Resolve Package Graph
+
+
+Resolved source packages:
+  NearbySyncCore: /Users/runner/work/MyRAM-iOS/MyRAM-iOS/NearbySyncCore @ local
+  AnchoredSequenceCore: /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/Packages/AnchoredSequenceCore @ local
+
+--- xcodebuild: WARNING: Using the first of multiple matching destinations:
+{ platform:macOS, arch:arm64, id:815d306da163506c3eb9156ccc9f87683602b9dc, name:My Mac }
+{ platform:macOS, arch:x86_64, id:815d306da163506c3eb9156ccc9f87683602b9dc, name:My Mac }
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (6 targets)
+    Target 'MyRAMMac' in project 'MyRAM'
+        ➜ Explicit dependency on target 'MyRAMMacWidgetExtension' in project 'MyRAM'
+        ➜ Explicit dependency on target 'NearbySyncCore' in project 'NearbySyncCore'
+        ➜ Explicit dependency on target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore'
+    Target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore'
+        ➜ Explicit dependency on target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore'
+    Target 'AnchoredSequenceCore' in project 'AnchoredSequenceCore' (no dependencies)
+    Target 'NearbySyncCore' in project 'NearbySyncCore'
+        ➜ Explicit dependency on target 'NearbySyncCore' in project 'NearbySyncCore'
+    Target 'NearbySyncCore' in project 'NearbySyncCore' (no dependencies)
+    Target 'MyRAMMacWidgetExtension' in project 'MyRAM' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ExecuteExternalTool /Applications/Xcode_16.4.app/Contents/Developer/usr/bin/actool --version --output-format xml1
+
+ExecuteExternalTool /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc --version
+
+ExecuteExternalTool /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -isysroot /Applications/Xcode_16.4.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode_16.4.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld -version_details
+
+Build description signature: 7c13632f73476311bd7453717644b5a9
+Build description path: /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/verification/DerivedData-Mac-Build/Build/Intermediates.noindex/XCBuildData/7c13632f73476311bd7453717644b5a9.xcbuilddata
+/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM.xcodeproj: error: No profiles for 'com.northsignalstudio.myram.mac.dev.widget' were found: Xcode couldn't find any Mac App Development provisioning profiles matching 'com.northsignalstudio.myram.mac.dev.widget'. Automatic signing is disabled and unable to generate a profile. To enable automatic signing, pass -allowProvisioningUpdates to xcodebuild. (in target 'MyRAMMacWidgetExtension' from project 'MyRAM')
+/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM.xcodeproj: error: No profiles for 'com.northsignalstudio.myram.mac.dev' were found: Xcode couldn't find any Mac App Development provisioning profiles matching 'com.northsignalstudio.myram.mac.dev'. Automatic signing is disabled and unable to generate a profile. To enable automatic signing, pass -allowProvisioningUpdates to xcodebuild. (in target 'MyRAMMac' from project 'MyRAM')
+** BUILD FAILED **
+
+
+The following build commands failed:
+	Building project MyRAM with scheme MyRAMMac
+(1 failure)

@@ -1,0 +1,8 @@
+environment=failure
+package_focused=success
+package_complete=success
+ios_tests=failure
+mac_tests=failure
+ios_build=failure
+mac_build=failure
+audits=failure
