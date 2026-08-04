@@ -1,6 +1,33 @@
 import SwiftUI
 import WidgetKit
 
+private extension MyRAMWidgetFamily {
+    init(widgetFamily: WidgetFamily) {
+        switch widgetFamily {
+        case .systemMedium:
+            self = .medium
+        case .systemSmall:
+            self = .small
+        default:
+            self = .small
+        }
+    }
+}
+
+private struct MyRAMWidgetContentMarginModifier: ViewModifier {
+    let mode: MyRAMWidgetContentMarginMode
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        switch mode {
+        case .systemAndDefaultCustomPadding:
+            content.padding()
+        case .systemOnly:
+            content
+        }
+    }
+}
+
 private struct MyRAMWidgetEntry: TimelineEntry {
     let date: Date
     let model: MyRAMWidgetRenderModel
@@ -8,13 +35,15 @@ private struct MyRAMWidgetEntry: TimelineEntry {
 
 private struct MyRAMWidgetProvider: TimelineProvider {
     func placeholder(in context: Context) -> MyRAMWidgetEntry {
-        MyRAMWidgetEntry(
+        let family = MyRAMWidgetFamily(widgetFamily: context.family)
+        let layoutPolicy = MyRAMWidgetLayoutPolicy(family: family, platform: .iOS)
+        return MyRAMWidgetEntry(
             date: .now,
             model: MyRAMWidgetRenderModel(
                 title: "Pinned Text",
                 pinnedTexts: ["Your most important text"],
                 bodyText: "Additional note text appears when space remains.",
-                bodyLineLimit: context.family == .systemMedium ? 3 : 2,
+                bodyLineLimit: max(0, layoutPolicy.contentLineBudget - 1),
                 state: .content,
                 noteURL: nil
             )
@@ -47,7 +76,7 @@ private struct MyRAMWidgetProvider: TimelineProvider {
 
         let model = MyRAMWidgetContentSelectionPolicy().renderModel(
             from: readResult,
-            family: family == .systemMedium ? .medium : .small,
+            family: MyRAMWidgetFamily(widgetFamily: family),
             platform: .iOS
         )
         return MyRAMWidgetEntry(date: .now, model: model)
@@ -56,9 +85,17 @@ private struct MyRAMWidgetProvider: TimelineProvider {
 
 private struct MyRAMWidgetEntryView: View {
     let entry: MyRAMWidgetEntry
+    @Environment(\.widgetFamily) private var widgetFamily
+
+    private var layoutPolicy: MyRAMWidgetLayoutPolicy {
+        MyRAMWidgetLayoutPolicy(
+            family: MyRAMWidgetFamily(widgetFamily: widgetFamily),
+            platform: .iOS
+        )
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: layoutPolicy.rootSpacing) {
             if !entry.model.title.isEmpty {
                 Text(entry.model.title)
                     .font(.headline)
@@ -67,7 +104,7 @@ private struct MyRAMWidgetEntryView: View {
             }
 
             ForEach(Array(entry.model.pinnedTexts.enumerated()), id: \.offset) { _, text in
-                HStack(spacing: 5) {
+                HStack(spacing: layoutPolicy.pinSpacing) {
                     Image(systemName: "pin.fill")
                         .font(.caption2)
                         .foregroundStyle(.tint)
@@ -88,7 +125,7 @@ private struct MyRAMWidgetEntryView: View {
 
             Spacer(minLength: 0)
         }
-        .padding()
+        .modifier(MyRAMWidgetContentMarginModifier(mode: layoutPolicy.contentMarginMode))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .widgetURL(entry.model.noteURL)
         .containerBackground(.background, for: .widget)
