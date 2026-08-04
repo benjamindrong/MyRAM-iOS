@@ -1,0 +1,168 @@
+name: MYR-175 final exact-head verification
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  package-and-audits:
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/MyRAM-iOS
+          ref: 42368ff5a4ec3291a95a2733f82d78c9f91c2a9d
+          fetch-depth: 0
+      - name: Select Xcode 26.5
+        run: |
+          sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+          xcodebuild -version
+          swift --version
+          test "$(git rev-parse HEAD)" = "42368ff5a4ec3291a95a2733f82d78c9f91c2a9d"
+      - name: Complete package suite
+        run: |
+          set -o pipefail
+          swift test --package-path Packages/AnchoredSequenceCore 2>&1 | tee /tmp/myr175-package.log
+      - name: Exact scope and static audits
+        run: |
+          git diff --check e51ccca9ff6a77c8648e365b6569313c55c1e9d4...HEAD
+          git diff --name-only e51ccca9ff6a77c8648e365b6569313c55c1e9d4...HEAD > /tmp/myr175-changed-files.txt
+          diff -u <(printf '%s\n' \
+            'MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift' \
+            'Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncOperationIDOrder.swift' \
+            'Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextSequenceState.swift' \
+            'Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceStateTests.swift' \
+            'docs/MYR-175-structural-insert-alignment.md') /tmp/myr175-changed-files.txt
+          test -z "$(git status --porcelain=v1 -uall)"
+
+  ios-tests:
+    runs-on: macos-26
+    timeout-minutes: 150
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/MyRAM-iOS
+          ref: 42368ff5a4ec3291a95a2733f82d78c9f91c2a9d
+          path: MyRAM-iOS
+      - name: Checkout preserved sibling dependency
+        uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+      - name: Run complete iOS suite
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+          xcodebuild -version
+          test "$(git rev-parse HEAD)" = "42368ff5a4ec3291a95a2733f82d78c9f91c2a9d"
+          test "$(git -C ../NearbySyncCore rev-parse HEAD)" = "4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2"
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > /tmp/myr175-ios-sibling-before.txt
+          xcrun simctl list devices available -j > /tmp/myr175-simulators.json
+          IOS_UDID="$(python3 - <<'PY'
+          import json
+          data=json.load(open('/tmp/myr175-simulators.json'))
+          candidates=[]
+          for runtime, values in data.get('devices',{}).items():
+              if 'iOS-26-5' not in runtime: continue
+              for value in values:
+                  if value.get('isAvailable') and value.get('name','').startswith('iPhone'):
+                      candidates.append((0 if value['name']=='iPhone 17' else 1,value['name'],value['udid']))
+          if not candidates: raise SystemExit('No iOS 26.5 iPhone simulator')
+          candidates.sort(); print(candidates[0][2])
+          PY
+          )"
+          test -n "$IOS_UDID"
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAM \
+            -destination "platform=iOS Simulator,id=${IOS_UDID}" -destination-timeout 180 \
+            -parallel-testing-enabled NO \
+            -derivedDataPath /tmp/MYR175-FinalHead-iOS-DD \
+            -resultBundlePath /tmp/MYR175-FinalHead-iOS.xcresult \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            test 2>&1 | tee /tmp/myr175-ios-tests.log
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > /tmp/myr175-ios-sibling-after.txt
+          diff -u /tmp/myr175-ios-sibling-before.txt /tmp/myr175-ios-sibling-after.txt
+
+  mac-tests:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/MyRAM-iOS
+          ref: 42368ff5a4ec3291a95a2733f82d78c9f91c2a9d
+          path: MyRAM-iOS
+      - name: Checkout preserved sibling dependency
+        uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+      - name: Run complete native Mac suite
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+          xcodebuild -version
+          test "$(git rev-parse HEAD)" = "42368ff5a4ec3291a95a2733f82d78c9f91c2a9d"
+          test "$(git -C ../NearbySyncCore rev-parse HEAD)" = "4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2"
+          sudo scutil --set ComputerName MyRAMCI
+          sudo scutil --set LocalHostName MyRAMCI
+          sudo scutil --set HostName MyRAMCI
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > /tmp/myr175-mac-sibling-before.txt
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
+            -derivedDataPath /tmp/MYR175-FinalHead-Mac-DD \
+            -resultBundlePath /tmp/MYR175-FinalHead-Mac.xcresult \
+            DEVELOPMENT_TEAM= CODE_SIGN_STYLE=Manual CODE_SIGN_IDENTITY=- \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES PROVISIONING_PROFILE= PROVISIONING_PROFILE_SPECIFIER= \
+            test 2>&1 | tee /tmp/myr175-mac-tests.log
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > /tmp/myr175-mac-sibling-after.txt
+          diff -u /tmp/myr175-mac-sibling-before.txt /tmp/myr175-mac-sibling-after.txt
+
+  application-builds:
+    runs-on: macos-26
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact candidate
+        uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/MyRAM-iOS
+          ref: 42368ff5a4ec3291a95a2733f82d78c9f91c2a9d
+          path: MyRAM-iOS
+      - name: Checkout preserved sibling dependency
+        uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+      - name: Build iOS Simulator and native Mac applications
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer
+          xcodebuild -version
+          test "$(git rev-parse HEAD)" = "42368ff5a4ec3291a95a2733f82d78c9f91c2a9d"
+          test "$(git -C ../NearbySyncCore rev-parse HEAD)" = "4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2"
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > /tmp/myr175-build-sibling-before.txt
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAM \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath /tmp/MYR175-FinalHead-iOS-Build-DD \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            build 2>&1 | tee /tmp/myr175-ios-build.log
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac \
+            -destination 'platform=macOS' \
+            -derivedDataPath /tmp/MYR175-FinalHead-Mac-Build-DD \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            build 2>&1 | tee /tmp/myr175-mac-build.log
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > /tmp/myr175-build-sibling-after.txt
+          diff -u /tmp/myr175-build-sibling-before.txt /tmp/myr175-build-sibling-after.txt
