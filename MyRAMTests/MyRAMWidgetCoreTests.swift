@@ -108,19 +108,19 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         ))
     }
 
-    func testLayoutPolicyPreservesCurrentMetricsAcrossFamiliesAndPlatforms() {
+    func testLayoutPolicyUsesSystemMarginsAndExpandedCapacityAcrossFamiliesAndPlatforms() {
         for platform in [MyRAMWidgetPlatform.iOS, .macOS] {
             let small = MyRAMWidgetLayoutPolicy(family: .small, platform: platform)
-            XCTAssertEqual(small.contentLineBudget, 3)
-            XCTAssertEqual(small.contentMarginMode, .systemAndDefaultCustomPadding)
-            XCTAssertEqual(small.rootSpacing, 6)
-            XCTAssertEqual(small.pinSpacing, 5)
+            XCTAssertEqual(small.contentLineBudget, 6)
+            XCTAssertEqual(small.contentMarginMode, .systemOnly)
+            XCTAssertEqual(small.rootSpacing, 4)
+            XCTAssertEqual(small.pinSpacing, 4)
 
             let medium = MyRAMWidgetLayoutPolicy(family: .medium, platform: platform)
-            XCTAssertEqual(medium.contentLineBudget, 4)
-            XCTAssertEqual(medium.contentMarginMode, .systemAndDefaultCustomPadding)
-            XCTAssertEqual(medium.rootSpacing, 6)
-            XCTAssertEqual(medium.pinSpacing, 5)
+            XCTAssertEqual(medium.contentLineBudget, 10)
+            XCTAssertEqual(medium.contentMarginMode, .systemOnly)
+            XCTAssertEqual(medium.rootSpacing, 4)
+            XCTAssertEqual(medium.pinSpacing, 4)
         }
     }
 
@@ -128,19 +128,19 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         let zeroPins = render(pins: [], body: "Body", family: .small)
         XCTAssertTrue(zeroPins.pinnedTexts.isEmpty)
         XCTAssertEqual(zeroPins.bodyText, "Body")
-        XCTAssertEqual(zeroPins.bodyLineLimit, 3)
+        XCTAssertEqual(zeroPins.bodyLineLimit, 6)
 
         let onePin = render(pins: ["Pin"], body: "Body", family: .medium)
         XCTAssertEqual(onePin.pinnedTexts, ["Pin"])
         XCTAssertEqual(onePin.bodyText, "Body")
-        XCTAssertEqual(onePin.bodyLineLimit, 3)
+        XCTAssertEqual(onePin.bodyLineLimit, 9)
 
         let exhausted = render(
-            pins: ["1", "2", "3", "4"],
+            pins: ["1", "2", "3", "4", "5", "6", "7"],
             body: "Body",
             family: .small
         )
-        XCTAssertEqual(exhausted.pinnedTexts, ["1", "2", "3"])
+        XCTAssertEqual(exhausted.pinnedTexts, ["1", "2", "3", "4", "5", "6"])
         XCTAssertNil(exhausted.bodyText)
         XCTAssertEqual(exhausted.bodyLineLimit, 0)
     }
