@@ -143,16 +143,17 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
 
         let envelope: MyRAMWidgetSnapshotEnvelope
         if let selectedNoteID = selectionStore.selectedNoteID {
-            let readContext = ModelContext(container)
-            readContext.autosaveEnabled = false
-
             let descriptor = FetchDescriptor<Note>(
                 predicate: #Predicate { note in
                     note.id == selectedNoteID && note.deletedAt == nil
                 }
             )
 
-            guard let note = try? readContext.fetch(descriptor).first else {
+            // Read through the app's observed context so an explicit widget
+            // selection immediately sees the same current note state the user
+            // selected, including pending inserts or edits that have not yet
+            // been observed by a newly-created context.
+            guard let note = try? observedContext.fetch(descriptor).first else {
                 selectionStore.clear()
                 envelope = MyRAMWidgetSnapshotEnvelope(generatedAt: .now, note: nil)
                 return publish(envelope, through: snapshotStore)
