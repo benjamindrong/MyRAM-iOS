@@ -1,0 +1,3 @@
+audit=success
+ios_tests=failure
+mac_tests=failure

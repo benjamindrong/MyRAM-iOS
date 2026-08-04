@@ -1,0 +1,240 @@
+	128 SwiftUI                             0x00000001b8a7947c $s7SwiftUI6runAppys5NeverOSo21NSApplicationDelegate_So11NSResponderCXcFTf4e_nAA07TestingdG0C_Tg5Tm + 140
+	129 SwiftUI                             0x00000001b8e2f4a4 $s7SwiftUI6runAppys5NeverOxAA0D0RzlF + 104
+	130 SwiftUI                             0x00000001b90fb344 $s7SwiftUI3AppPAAE4mainyyFZ + 224
+	131 MyRAMMac.debug.dylib                0x0000000104080170 $s8MyRAMMac0aB3AppV5$mainyyFZ + 40
+	132 MyRAMMac.debug.dylib                0x0000000104082c7c __debug_main_executable_dylib_entry_point + 12
+	133 dyld                                0x0000000183853e00 start + 6992
+)
+2026-08-04 15:10:49.721052+0000 MyRAMMac[4652:17404] [HIExceptions] FAULT: NSInvalidArgumentException: Invalid displayName passed to MCPeerID; (user info absent)
+2026-08-04 15:10:49.746928+0000 MyRAMMac[4652:17404] [General] An uncaught exception was raised
+2026-08-04 15:10:49.746991+0000 MyRAMMac[4652:17404] [General] Invalid displayName passed to MCPeerID
+2026-08-04 15:10:49.778798+0000 MyRAMMac[4652:17404] [General] (
+	0   CoreFoundation                      0x0000000183d3d1c0 __exceptionPreprocess + 176
+	1   libobjc.A.dylib                     0x00000001837c691c objc_exception_throw + 88
+	2   CoreFoundation                      0x0000000183d3d0b0 +[NSException exceptionWithName:reason:userInfo:] + 0
+	3   MultipeerConnectivity               0x000000022e805dec -[MCPeerID initWithDisplayName:] + 176
+	4   MyRAMMac.debug.dylib                0x00000001044a4490 $sSo8MCPeerIDC11displayNameABSS_tcfcTO + 44
+	5   MyRAMMac.debug.dylib                0x0000000104498b5c $sSo8MCPeerIDC11displayNameABSS_tcfC + 52
+	6   MyRAMMac.debug.dylib                0x00000001044979c0 $s8MyRAMMac22MacSyncBatchControllerC7context06unsentE12QueueFileURL0heI016startsNetworking14legacyReceiver25startAdvertisingOperation0p8BrowsingR022connectedPeersProvider04sende4DataR0010invitePeerR0AC05SwiftX012ModelContextC_10Foundation0K0VSgAA0j6BackeddeI0CSgSbAA0c6LegacydO0CSgyycSgA_SaySo8MCPeerIDCGycSgyAQ0X0V_A2_So013MCSessionSendX4ModeVtKcSgyA1__A5_SdtcSgtcfc + 2384
+	7   MyRAMMac.debug.dylib                0x0000000104497060 $s8MyRAMMac22MacSyncBatchControllerC7context06unsentE12QueueFileURL0heI016startsNetworking14legacyReceiver25startAdvertisingOperation0p8BrowsingR022connectedPeersProvider04sende4DataR0010invitePeerR0AC05SwiftX012ModelContextC_10Foundation0K0VSgAA0j6BackeddeI0CSgSbAA0c6LegacydO0CSgyycSgA_SaySo8MCPeerIDCGycSgyAQ0X0V_A2_So013MCSessionSendX4ModeVtKcSgyA1__A5_SdtcSgtcfC + 216
+	8   MyRAMMac.debug.dylib                0x000000010408405c $s8MyRAMMac0aB8RootViewV15_syncController33_4A83A7103C26DEBEBF4B85EF217797A0LL7SwiftUI11StateObjectVyAA012MacSyncBatchF0CGvpfiAJycfu_AJycfu0_ + 236
+	9   SwiftUICore                         0x00000002313cf484 $s7SwiftUI11StateObjectV3Box33_BDD24532CFCFEBA7264ABA5DE20A4002LLV6update8property5phaseSbACyxGz_AA12_GraphInputsV5PhaseVtF + 468
+	10  SwiftUICore                         0x0000000230d28720 $s7SwiftUI9BoxVTable33_F3A89CF4357225EF49A7DD673FDFEE02LLC6update3elt8property5phaseSbAA34_UnsafeHeterogeneousBuffer_ElementV_SvAA12_GraphInputsV5PhaseVtFZ + 384
+	11  SwiftUICore                         0x0000000230d278c4 $s7SwiftUI22_DynamicPropertyBufferV6update9container5phaseSbSv_AA12_GraphInputsV5PhaseVtF + 144
+	12  SwiftUICore                         0x0000000230dd8db4 $s7SwiftUI11DynamicBody33_A4C1D658B3717A3062FEFC91A812D6EBLLV11updateValueyyFyyXEfU_ySpy9ContainerQzGXEfU_ + 304
+	13  SwiftUICore                         0x0000000230ddade0 $s7SwiftUI11DynamicBody33_A4C1D658B3717A3062FEFC91A812D6EBLLV11updateValueyyFyyXEfU_ySpy9ContainerQzGXEfU_TA + 32
+	14  SwiftUICore                         0x00000002311f3ff0 $ss24withUnsafeMutablePointer2to_q0_xz_q0_SpyxGq_YKXEtq_YKs5ErrorR_Ri_zRi_0_r1_lF + 160
+	15  SwiftUICore                         0x0000000230dd877c $s7SwiftUI11DynamicBody33_A4C1D658B3717A3062FEFC91A812D6EBLLV11updateValueyyFyyXEfU_ + 204
+	16  SwiftUICore                         0x0000000230dd82a0 $s7SwiftUI11DynamicBody33_A4C1D658B3717A3062FEFC91A812D6EBLLV11updateValueyyF + 1220
+	17  SwiftUICore                         0x0000000230ae2ad8 $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA12StatefulRuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_TA + 32
+	18  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	19  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	20  AttributeGraph                      0x00000001ba0cd86c _ZN2AG5Graph20input_value_ref_slowENS_4data3ptrINS_4NodeEEENS_11AttributeIDEjjPK15AGSwiftMetadataRhl + 680
+	21  AttributeGraph                      0x00000001ba0e5c94 AGGraphGetValue + 232
+	22  SwiftUICore                         0x0000000230dd80f0 $s7SwiftUI11DynamicBody33_A4C1D658B3717A3062FEFC91A812D6EBLLV11updateValueyyF + 788
+	23  SwiftUICore                         0x0000000230ae2ad8 $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA12StatefulRuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_TA + 32
+	24  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	25  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	26  AttributeGraph                      0x00000001ba0cd86c _ZN2AG5Graph20input_value_ref_slowENS_4data3ptrINS_4NodeEEENS_11AttributeIDEjjPK15AGSwiftMetadataRhl + 680
+	27  AttributeGraph                      0x00000001ba0e5c94 AGGraphGetValue + 232
+	28  SwiftUICore                         0x000000023132a200 $s7SwiftUI15DynamicViewList031_3FB6ABB0477B815AB3C89DD5EDC9F0M0LLV11updateValueyyF + 576
+	29  SwiftUICore                         0x0000000230ae2ad8 $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA12StatefulRuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_TA + 32
+	30  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	31  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	32  AttributeGraph                      0x00000001ba0cd86c _ZN2AG5Graph20input_value_ref_slowENS_4data3ptrINS_4NodeEEENS_11AttributeIDEjjPK15AGSwiftMetadataRhl + 680
+	33  AttributeGraph                      0x00000001ba0e5c94 AGGraphGetValue + 232
+	34  SwiftUICore                         0x00000002311743b0 $s7SwiftUI20DynamicContainerInfoV11updateItems33_E7D4CD2D59FB8C77D6C7E9C534464C17LL18disableTransitionsSb7changed_Sb8hasDepthtSb_tFAA0C17LayoutViewAdaptorV_Tg5 + 96
+	35  SwiftUICore                         0x000000023117320c $s7SwiftUI20DynamicContainerInfoV11updateValueyyFAA0C17LayoutViewAdaptorV_Tg5 + 452
+	36  SwiftUICore                         0x00000002311a2d3c $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA12StatefulRuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_7SwiftUI16DynamicContainerV4InfoV_AK0ijK0VyAK0I17LayoutViewAdaptorVGTt1g5 + 24
+	37  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	38  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	39  AttributeGraph                      0x00000001ba0cd86c _ZN2AG5Graph20input_value_ref_slowENS_4data3ptrINS_4NodeEEENS_11AttributeIDEjjPK15AGSwiftMetadataRhl + 680
+	40  AttributeGraph                      0x00000001ba0e5c94 AGGraphGetValue + 232
+	41  SwiftUICore                         0x0000000230e73d88 $s7SwiftUI25DynamicPreferenceCombiner33_E7D4CD2D59FB8C77D6C7E9C534464C17LLV4infoAA0C9ContainerV4InfoVSgvg + 92
+	42  SwiftUICore                         0x0000000230e73ed0 $s7SwiftUI25DynamicPreferenceCombiner33_E7D4CD2D59FB8C77D6C7E9C534464C17LLV5value5ValueQzvg + 220
+	43  SwiftUICore                         0x0000000230e83798 $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA4RuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_ + 324
+	44  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	45  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	46  AttributeGraph                      0x00000001ba0cd86c _ZN2AG5Graph20input_value_ref_slowENS_4data3ptrINS_4NodeEEENS_11AttributeIDEjjPK15AGSwiftMetadataRhl + 680
+	47  AttributeGraph                      0x00000001ba0e5c94 AGGraphGetValue + 232
+	48  SwiftUICore                         0x0000000230f98b60 $s7SwiftUI24HostPreferencesTransform33_D3405DB583003A73D556A7797845B7F4LLV11updateValueyyF + 136
+	49  SwiftUICore                         0x0000000230ae2ad8 $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA12StatefulRuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_TA + 32
+	50  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	51  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	52  AttributeGraph                      0x00000001ba0cd86c _ZN2AG5Graph20input_value_ref_slowENS_4data3ptrINS_4NodeEEENS_11AttributeIDEjjPK15AGSwiftMetadataRhl + 680
+	53  AttributeGraph                      0x00000001ba0e5c94 AGGraphGetValue + 232
+	54  SwiftUICore                         0x0000000230f98b60 $s7SwiftUI24HostPreferencesTransform33_D3405DB583003A73D556A7797845B7F4LLV11updateValueyyF + 136
+	55  SwiftUICore                         0x0000000230ae2ad8 $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA12StatefulRuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_TA + 32
+	56  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	57  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	58  AttributeGraph                      0x00000001ba0cd86c _ZN2AG5Graph20input_value_ref_slowENS_4data3ptrINS_4NodeEEENS_11AttributeIDEjjPK15AGSwiftMetadataRhl + 680
+	59  AttributeGraph                      0x00000001ba0e5c94 AGGraphGetValue + 232
+	60  SwiftUICore                         0x0000000230f98b60 $s7SwiftUI24HostPreferencesTransform33_D3405DB583003A73D556A7797845B7F4LLV11updateValueyyF + 136
+	61  SwiftUICore                         0x0000000230ae2ad8 $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA12StatefulRuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_TA + 32
+	62  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	63  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	64  AttributeGraph                      0x00000001ba0cd86c _ZN2AG5Graph20input_value_ref_slowENS_4data3ptrINS_4NodeEEENS_11AttributeIDEjjPK15AGSwiftMetadataRhl + 680
+	65  AttributeGraph                      0x00000001ba0e5c94 AGGraphGetValue + 232
+	66  SwiftUICore                         0x0000000230f98b60 $s7SwiftUI24HostPreferencesTransform33_D3405DB583003A73D556A7797845B7F4LLV11updateValueyyF + 136
+	67  SwiftUICore                         0x0000000230ae2ad8 $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA12StatefulRuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_TA + 32
+	68  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	69  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	70  AttributeGraph                      0x00000001ba0cd86c _ZN2AG5Graph20input_value_ref_slowENS_4data3ptrINS_4NodeEEENS_11AttributeIDEjjPK15AGSwiftMetadataRhl + 680
+	71  AttributeGraph                      0x00000001ba0e5c94 AGGraphGetValue + 232
+	72  SwiftUICore                         0x0000000230a99a1c $s7SwiftUI22PairPreferenceCombiner33_EAF68AEE5E08E2F44FEB886FE6A27001LLV5value5ValueQzvgAGyXEfU_ + 84
+	73  SwiftUICore                         0x0000000231503fc4 $s7SwiftUI18HostPreferencesKeyVAA010PreferenceE0A2aDP6reduce5value9nextValuey0J0Qzz_AJyXEtFZTW + 40
+	74  SwiftUICore                         0x0000000230a999b0 $s7SwiftUI22PairPreferenceCombiner33_EAF68AEE5E08E2F44FEB886FE6A27001LLV5value5ValueQzvg + 208
+	75  SwiftUICore                         0x0000000230e83798 $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA4RuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_ + 324
+	76  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	77  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	78  AttributeGraph                      0x00000001ba0ccf08 _ZN2AG5Graph9value_refENS_11AttributeIDEjPK15AGSwiftMetadataRh + 296
+	79  AttributeGraph                      0x00000001ba0e6000 AGGraphGetWeakValue + 372
+	80  SwiftUICore                         0x0000000231061f20 $s7SwiftUI9GraphHostC16preferenceValuesAA010PreferenceF0VyF + 68
+	81  SwiftUI                             0x00000001b932e9f0 $s7SwiftUI22AppKitWindowControllerC11hostingView_9didMoveToyAA09NSHostingH0CyxG_So8NSWindowCSgtAA0H0RzlFyyXEfU_ + 1204
+	82  SwiftUI                             0x00000001b9344fd0 $s7SwiftUI22AppKitWindowControllerC11hostingView_9didMoveToyAA09NSHostingH0CyxG_So8NSWindowCSgtAA0H0RzlFyyXEfU_TA + 24
+	83  SwiftUICore                         0x0000000230ddd108 $s7SwiftUI6UpdateO6ensureyxxyKXEKlFZxyKXEfU_ + 56
+	84  SwiftUICore                         0x0000000230ddb9f0 $s7SwiftUI6UpdateO6ensureyxxyKXEKlFZ + 100
+	85  SwiftUI                             0x00000001b932de74 $s7SwiftUI22AppKitWindowControllerC11hostingView_9didMoveToyAA09NSHostingH0CyxG_So8NSWindowCSgtAA0H0RzlF + 860
+	86  SwiftUI                             0x00000001b91e62cc $s7SwiftUI13NSHostingViewC19viewDidMoveToWindowyyF + 728
+	87  SwiftUI                             0x00000001b91e6968 $s7SwiftUI13NSHostingViewC19viewDidMoveToWindowyyFTo + 28
+	88  AppKit                              0x00000001881106d0 -[NSView _setWindow:] + 1876
+	89  AppKit                              0x0000000188117344 -[NSView addSubview:] + 196
+	90  AppKit                              0x000000018811cfd4 -[NSFrameView addSubview:] + 52
+	91  AppKit                              0x000000018811cf88 -[NSThemeFrame addSubview:] + 364
+	92  AppKit                              0x00000001883408b8 -[NSThemeFrame _addKnownSubview:] + 44
+	93  AppKit                              0x00000001881363d0 -[NSThemeFrame _setContentView:] + 136
+	94  AppKit                              0x00000001881360d8 -[NSWindow setContentView:] + 292
+	95  AppKit                              0x00000001882c19a0 -[NSWindow _contentViewControllerChanged] + 368
+	96  AppKit                              0x000000018813d2d8 NSPerformVisuallyAtomicChange + 128
+	97  AppKit                              0x00000001882c17bc -[NSWindow setContentViewController:] + 132
+	98  SwiftUI                             0x00000001b9326ca0 $s7SwiftUI12AppKitWindowC21contentViewController9styleMaskACSo06NSViewH0C_So013NSWindowStyleJ0Vtcfc + 344
+	99  SwiftUI                             0x00000001b8da182c $s7SwiftUI19_TestAppWindowStyleVAA0eF0A2aDP04makeE0ySo8NSWindowCSo16NSViewControllerCFTWTm + 52
+	100 SwiftUI                             0x00000001b8f4ae70 $s7SwiftUI21AnyWindowStyleStorageC04makeD0ySo8NSWindowCSo16NSViewControllerCF + 104
+	101 SwiftUI                             0x00000001b931f744 $s7SwiftUI20AppWindowsControllerC010makeWindowE0_13restorationID11environment20presentingSceneValueAA0c3KitgE0CAC0G4InfoV_SSSgAA17EnvironmentValuesVSgs11AnyHashableVSgtF + 12484
+	102 SwiftUI                             0x00000001b9317050 $s7SwiftUI20AppWindowsControllerC14makeMainWindow9namespace4info20presentingSceneValueSo8NSWindowCAA0L4ListV9NamespaceO_AC0H4InfoVs11AnyHashableVSgtF + 372
+	103 SwiftUI                             0x00000001b9315254 $s7SwiftUI20AppWindowsControllerC011showInitialD0yyFyyXEfU_ + 1816
+	104 SwiftUI                             0x00000001b9a687a4 $s7SwiftUI20AppWindowsControllerC011showInitialD0yyFyyXEfU_TA + 20
+	105 SwiftUICore                         0x0000000230ddd108 $s7SwiftUI6UpdateO6ensureyxxyKXEKlFZxyKXEfU_ + 56
+	106 SwiftUICore                         0x0000000230ddb9f0 $s7SwiftUI6UpdateO6ensureyxxyKXEKlFZ + 100
+	107 SwiftUI                             0x00000001b9a68618 $s7SwiftUI11AppDelegateC27applicationOpenUntitledFileySbSo13NSApplicationCFTf4dn_n + 164
+	108 SwiftUI                             0x00000001b9a64ba4 $s7SwiftUI11AppDelegateC27applicationOpenUntitledFileySbSo13NSApplicationCFTo + 52
+	109 AppKit                              0x000000018826abcc -[NSApplication _doOpenUntitled] + 324
+	110 AppKit                              0x0000000188219aa8 __58-[NSApplication(NSAppleEventHandling) _handleAEOpenEvent:]_block_invoke + 248
+	111 AppKit                              0x00000001881029bc -[NSApplication(NSAppleEventHandling) _handleAEOpenEvent:] + 480
+	112 AppKit                              0x00000001881025d8 -[NSApplication(NSAppleEventHandling) _handleCoreEvent:withReplyEvent:] + 488
+	113 Foundation                          0x00000001854effbc -[NSAppleEventManager dispatchRawAppleEvent:withRawReply:handlerRefCon:] + 316
+	114 Foundation                          0x00000001854efdb4 _NSAppleEventManagerGenericHandler + 80
+	115 Foundation                          0x0000000185efa9a4 _NSAppleEventManagerPreDispatchHandler + 412
+	116 AE                                  0x000000018befff34 _AppleEventsCheckInAppWithBlock + 13900
+	117 AE                                  0x000000018beff88c _AppleEventsCheckInAppWithBlock + 12196
+	118 AE                                  0x000000018bef8fb8 aeProcessAppleEvent + 484
+	119 HIToolbox                           0x0000000190a0c344 AEProcessAppleEvent + 68
+	120 AppKit                              0x00000001880fc348 _DPSNextEvent + 1284
+	121 AppKit                              0x0000000188c918b0 -[NSApplication(NSEventRouting) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 688
+	122 AppKit                              0x0000000188c915bc -[NSApplication(NSEventRouting) nextEventMatchingMask:untilDate:inMode:dequeue:] + 72
+	123 AppKit                              0x00000001880ef13c -[NSApplication run] + 368
+	124 AppKit                              0x00000001880c77b0 NSApplicationMain + 880
+	125 SwiftUI                             0x00000001b8a7947c $s7SwiftUI6runAppys5NeverOSo21NSApplicationDelegate_So11NSResponderCXcFTf4e_nAA07TestingdG0C_Tg5Tm + 140
+	126 SwiftUI                             0x00000001b8e2f4a4 $s7SwiftUI6runAppys5NeverOxAA0D0RzlF + 104
+	127 SwiftUI                             0x00000001b90fb344 $s7SwiftUI3AppPAAE4mainyyFZ + 224
+	128 MyRAMMac.debug.dylib                0x0000000104080170 $s8MyRAMMac0aB3AppV5$mainyyFZ + 40
+	129 MyRAMMac.debug.dylib                0x0000000104082c7c __debug_main_executable_dylib_entry_point + 12
+	130 dyld                                0x0000000183853e00 start + 6992
+)
+2026-08-04 15:10:49.807855+0000 MyRAMMac[4652:17404] [General] Invalid displayName passed to MCPeerID
+2026-08-04 15:10:49.847408+0000 MyRAMMac[4652:17404] [General] (
+	0   CoreFoundation                      0x0000000183d3d1c0 __exceptionPreprocess + 176
+	1   libobjc.A.dylib                     0x00000001837c691c objc_exception_throw + 88
+	2   CoreFoundation                      0x0000000183d3d0b0 +[NSException exceptionWithName:reason:userInfo:] + 0
+	3   MultipeerConnectivity               0x000000022e805dec -[MCPeerID initWithDisplayName:] + 176
+	4   MyRAMMac.debug.dylib                0x00000001044a4490 $sSo8MCPeerIDC11displayNameABSS_tcfcTO + 44
+	5   MyRAMMac.debug.dylib                0x0000000104498b5c $sSo8MCPeerIDC11displayNameABSS_tcfC + 52
+	6   MyRAMMac.debug.dylib                0x00000001044979c0 $s8MyRAMMac22MacSyncBatchControllerC7context06unsentE12QueueFileURL0heI016startsNetworking14legacyReceiver25startAdvertisingOperation0p8BrowsingR022connectedPeersProvider04sende4DataR0010invitePeerR0AC05SwiftX012ModelContextC_10Foundation0K0VSgAA0j6BackeddeI0CSgSbAA0c6LegacydO0CSgyycSgA_SaySo8MCPeerIDCGycSgyAQ0X0V_A2_So013MCSessionSendX4ModeVtKcSgyA1__A5_SdtcSgtcfc + 2384
+	7   MyRAMMac.debug.dylib                0x0000000104497060 $s8MyRAMMac22MacSyncBatchControllerC7context06unsentE12QueueFileURL0heI016startsNetworking14legacyReceiver25startAdvertisingOperation0p8BrowsingR022connectedPeersProvider04sende4DataR0010invitePeerR0AC05SwiftX012ModelContextC_10Foundation0K0VSgAA0j6BackeddeI0CSgSbAA0c6LegacydO0CSgyycSgA_SaySo8MCPeerIDCGycSgyAQ0X0V_A2_So013MCSessionSendX4ModeVtKcSgyA1__A5_SdtcSgtcfC + 216
+	8   MyRAMMac.debug.dylib                0x000000010408405c $s8MyRAMMac0aB8RootViewV15_syncController33_4A83A7103C26DEBEBF4B85EF217797A0LL7SwiftUI11StateObjectVyAA012MacSyncBatchF0CGvpfiAJycfu_AJycfu0_ + 236
+	9   SwiftUICore                         0x00000002313cf484 $s7SwiftUI11StateObjectV3Box33_BDD24532CFCFEBA7264ABA5DE20A4002LLV6update8property5phaseSbACyxGz_AA12_GraphInputsV5PhaseVtF + 468
+	10  SwiftUICore                         0x0000000230d28720 $s7SwiftUI9BoxVTable33_F3A89CF4357225EF49A7DD673FDFEE02LLC6update3elt8property5phaseSbAA34_UnsafeHeterogeneousBuffer_ElementV_SvAA12_GraphInputsV5PhaseVtFZ + 384
+	11  SwiftUICore                         0x0000000230d278c4 $s7SwiftUI22_DynamicPropertyBufferV6update9container5phaseSbSv_AA12_GraphInputsV5PhaseVtF + 144
+	12  SwiftUICore                         0x0000000230dd8db4 $s7SwiftUI11DynamicBody33_A4C1D658B3717A3062FEFC91A812D6EBLLV11updateValueyyFyyXEfU_ySpy9ContainerQzGXEfU_ + 304
+	13  SwiftUICore                         0x0000000230ddade0 $s7SwiftUI11DynamicBody33_A4C1D658B3717A3062FEFC91A812D6EBLLV11updateValueyyFyyXEfU_ySpy9ContainerQzGXEfU_TA + 32
+	14  SwiftUICore                         0x00000002311f3ff0 $ss24withUnsafeMutablePointer2to_q0_xz_q0_SpyxGq_YKXEtq_YKs5ErrorR_Ri_zRi_0_r1_lF + 160
+	15  SwiftUICore                         0x0000000230dd877c $s7SwiftUI11DynamicBody33_A4C1D658B3717A3062FEFC91A812D6EBLLV11updateValueyyFyyXEfU_ + 204
+	16  SwiftUICore                         0x0000000230dd82a0 $s7SwiftUI11DynamicBody33_A4C1D658B3717A3062FEFC91A812D6EBLLV11updateValueyyF + 1220
+	17  SwiftUICore                         0x0000000230ae2ad8 $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA12StatefulRuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_TA + 32
+	18  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	19  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	20  AttributeGraph                      0x00000001ba0cd86c _ZN2AG5Graph20input_value_ref_slowENS_4data3ptrINS_4NodeEEENS_11AttributeIDEjjPK15AGSwiftMetadataRhl + 680
+	21  AttributeGraph                      0x00000001ba0e5c94 AGGraphGetValue + 232
+	22  SwiftUICore                         0x0000000231176d68 $s7SwiftUI19UnaryLayoutComputer33_1C3B77B617AD058A6802F719E38F5D79LLV11updateValueyyFAA010_FlexFrameD0V_Tg5 + 84
+	23  SwiftUICore                         0x00000002311a2bd4 $s14AttributeGraph0A0VyACyxGqd__c5ValueQyd__RszAA12StatefulRuleRd__lufcADSPyqd__GXEfU_ySv_So11AGAttributeatcyXEfU_ySv_AJtcfu_7SwiftUI14LayoutComputerV_AK05UnaryiJ033_1C3B77B617AD058A6802F719E38F5D79LLVyAK010_FlexFrameI0VGTt1g5 + 24
+	24  AttributeGraph                      0x00000001ba0c5384 _ZN2AG5Graph11UpdateStack6updateEv + 496
+	25  AttributeGraph                      0x00000001ba0c5aec _ZN2AG5Graph16update_attributeENS_4data3ptrINS_4NodeEEEj + 352
+	26  AttributeGraph                      0x00000001ba0cd6b4 _ZN2AG5Graph20input_value_ref_slowENS_4data3ptrINS_4NodeEEENS_11AttributeIDEjjPK15AGSwiftMetadataRhl + 240
+	27  AttributeGraph                      0x00000001ba0e5a54 AGGraphGetInputValue + 252
+	28  SwiftUICore                         0x0000000230c5654c $s7SwiftUI11LayoutProxyV4size2inSo6CGSizeVAA13_ProposedSizeV_tF + 120
+	29  SwiftUICore                         0x00000002310e1a34 $s7SwiftUI16_FlexFrameLayoutV12sizeThatFits2in7context5childSo6CGSizeVAA13_ProposedSizeV_AA0N17AndSpacingContextVAA0E5ProxyVtF + 356
+	30  SwiftUICore                         0x00000002310e2570 $s7SwiftUI16_FlexFrameLayoutVAA05UnaryE0A2aDP12sizeThatFits2in7context5childSo6CGSizeVAA13_ProposedSizeV_AA0O17AndSpacingContextVAA0E5ProxyVtFTW + 60
+	31  SwiftUICore                         0x0000000230e83074 $s7SwiftUI17UnaryLayoutEngine33_1C3B77B617AD058A6802F719E38F5D79LLV12sizeThatFitsySo6CGSizeVAA13_ProposedSizeVFTm + 1120
+	32  SwiftUICore                         0x00000002308ac840 $s7SwiftUI5ColorVAA12SerializableA2aDP11deserialize4fromxs7Decoder_p_tKFZTW + 3688
+	33  SwiftUICore                         0x00000002313233e8 $s7SwiftUI15LayoutEngineBox33_91FCB5522C30220AE13689E45789FEF2LLC12sizeThatFitsySo6CGSizeVAA13_ProposedSizeVF + 144
+	34  SwiftUICore                         0x00000002315ece0c $s7SwiftUI9ViewGraphC12sizeThatFits_14layoutComputer6insetsSo6CGSizeVAA13_ProposedSizeV_AA06LayoutI0VSgAA10EdgeInsetsVtFZTf4nnnd_n + 252
+	35  SwiftUICore                         0x00000002315cde54 $s7SwiftUI9ViewGraphC12sizeThatFitsySo6CGSizeVAA13_ProposedSizeVF + 160
+	36  SwiftUICore                         0x00000002315cb370 $s7SwiftUI25ViewGraphRootValueUpdaterPAAE13_sizeThatFitsySo6CGSizeVAA08ProposedC4SizeVFAfA0cD0CXEfU_TA + 72
+	37  SwiftUICore                         0x00000002315c7ac8 $s7SwiftUI25ViewGraphRootValueUpdaterPAAE07_updatecD04bodyqd__Sgqd__AA0cD0CXE_tlF + 232
+	38  SwiftUICore                         0x00000002315c5c04 $s7SwiftUI25ViewGraphRootValueUpdaterPAAE13_sizeThatFitsySo6CGSizeVAA08ProposedC4SizeVF + 100
+	39  SwiftUI                             0x00000001b91d0ea8 $s7SwiftUI13NSHostingViewC7minSize33_32B6F54841135BB466A5C1362EB89D05LLSo6CGSizeVyFTm + 284
+	40  SwiftUI                             0x00000001b91d0f8c $s7SwiftUI13NSHostingViewC37minSizeRoundedRespectingSizingOptions33_32B6F54841135BB466A5C1362EB89D05LLSo6CGSizeVyF + 96
+	41  SwiftUI                             0x00000001b91d16c4 $s7SwiftUI13NSHostingViewC41updateWindowContentSizeExtremaIfNecessary33_32B6F54841135BB466A5C1362EB89D05LLyyF + 984
+	42  SwiftUI                             0x00000001b91e3368 $s7SwiftUI13NSHostingViewC17updateConstraintsyyF + 136
+	43  SwiftUI                             0x00000001b91e34a4 $s7SwiftUI13NSHostingViewC17updateConstraintsyyFTo + 28
+	44  AppKit                              0x0000000188627498 __getCGDisplayListGetHashSymbolLoc_block_invoke + 1516
+	45  AppKit                              0x00000001886274c0 __getCGDisplayListGetHashSymbolLoc_block_invoke + 1556
+	46  AppKit                              0x00000001885eec0c block_destroy_helper + 18868
+	47  AppKit                              0x00000001885ef25c block_destroy_helper + 20484
+	48  AppKit                              0x000000018817f07c -[NSView _updateConstraintsForSubtreeIfNeededCollectingViewsWithInvalidBaselines:] + 596
+	49  AppKit                              0x000000018817ef9c -[NSView _updateConstraintsForSubtreeIfNeededCollectingViewsWithInvalidBaselines:] + 372
+	50  AppKit                              0x0000000188e2568c __45-[NSView updateConstraintsForSubtreeIfNeeded]_block_invoke_2 + 52
+	51  AppKit                              0x000000018817ec8c __45-[NSView updateConstraintsForSubtreeIfNeeded]_block_invoke + 224
+	52  AppKit                              0x000000018813d2d8 NSPerformVisuallyAtomicChange + 128
+	53  AppKit                              0x000000018817eba0 -[NSView updateConstraintsForSubtreeIfNeeded] + 96
+	54  AppKit                              0x00000001891049fc -[NSWindow(NSConstraintBasedLayoutInternal) updateConstraintsIfNeeded] + 172
+	55  AppKit                              0x000000018819f504 __NSWindowGetDisplayCycleObserverForUpdateConstraints_block_invoke + 364
+	56  AppKit                              0x000000018819f364 NSDisplayCycleObserverInvoke + 168
+	57  AppKit                              0x000000018819efe0 NSDisplayCycleFlush + 656
+	58  QuartzCore                          0x000000018dcffda8 _ZN2CA11Transaction19run_commit_handlersE18CATransactionPhase + 120
+	59  QuartzCore                          0x000000018dcfe3d0 _ZN2CA11Transaction6commitEv + 316
+	60  QuartzCore                          0x000000018defc598 _ZN2CA11Transaction25flush_as_runloop_observerEb + 140
+	61  AppKit                              0x0000000188a36054 stepTransactionFlush + 220
+	62  UpdateCycle                         0x000000027af8a2f4 _ZN2UC10DriverCore18continueProcessingEv + 84
+	63  CoreFoundation                      0x0000000183cce314 __CFRUNLOOP_IS_CALLING_OUT_TO_AN_OBSERVER_CALLBACK_FUNCTION__ + 36
+	64  CoreFoundation                      0x0000000183cce210 __CFRunLoopDoObservers + 648
+	65  CoreFoundation                      0x0000000183da0194 _CFRunLoopRunSpecificWithOptions + 484
+	66  HIToolbox                           0x0000000190ab3560 RunCurrentEventLoopInMode + 320
+	67  HIToolbox                           0x0000000190ab68bc ReceiveNextEventCommon + 488
+	68  HIToolbox                           0x0000000190c4014c _BlockUntilNextEventMatchingListInMode + 48
+	69  AppKit                              0x00000001887a835c _DPSBlockUntilNextEventMatchingListInMode + 228
+	70  AppKit                              0x00000001880fc084 _DPSNextEvent + 576
+	71  AppKit                              0x0000000188c918b0 -[NSApplication(NSEventRouting) _nextEventMatchingEventMask:untilDate:inMode:dequeue:] + 688
+	72  AppKit                              0x0000000188c915bc -[NSApplication(NSEventRouting) nextEventMatchingMask:untilDate:inMode:dequeue:] + 72
+	73  AppKit                              0x00000001880ef13c -[NSApplication run] + 368
+	74  AppKit                              0x00000001880c77b0 NSApplicationMain + 880
+	75  SwiftUI                             0x00000001b8a7947c $s7SwiftUI6runAppys5NeverOSo21NSApplicationDelegate_So11NSResponderCXcFTf4e_nAA07TestingdG0C_Tg5Tm + 140
+	76  SwiftUI                             0x00000001b8e2f4a4 $s7SwiftUI6runAppys5NeverOxAA0D0RzlF + 104
+	77  SwiftUI                             0x00000001b90fb344 $s7SwiftUI3AppPAAE4mainyyFZ + 224
+	78  MyRAMMac.debug.dylib                0x0000000104080170 $s8MyRAMMac0aB3AppV5$mainyyFZ + 40
+	79  MyRAMMac.debug.dylib                0x0000000104082c7c __debug_main_executable_dylib_entry_point + 12
+	80  dyld                                0x0000000183853e00 start + 6992
+)
+2026-08-04 15:11:16.204 xcodebuild[1466:7641] [MT] IDETestOperationsObserverDebug: 31.489 elapsed -- Testing started completed.
+2026-08-04 15:11:16.205 xcodebuild[1466:7641] [MT] IDETestOperationsObserverDebug: 0.000 sec, +0.000 sec -- start
+2026-08-04 15:11:16.205 xcodebuild[1466:7641] [MT] IDETestOperationsObserverDebug: 31.489 sec, +31.489 sec -- end
+
+Test session results, code coverage, and logs:
+	/tmp/MYR175-Final-Mac.xcresult
+
+Testing failed:
+	MyRAMMac (4652) encountered an error (Early unexpected exit, operation never finished bootstrapping - no restart will be attempted. (Underlying Error: Test crashed with signal trap before establishing connection.))
+
+** TEST FAILED **
+
+Testing started

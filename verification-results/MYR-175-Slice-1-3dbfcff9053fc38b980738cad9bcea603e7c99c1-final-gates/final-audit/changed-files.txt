@@ -1,0 +1,4 @@
+Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncOperationIDOrder.swift
+Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextSequenceState.swift
+Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceStateTests.swift
+docs/MYR-175-structural-insert-alignment.md
