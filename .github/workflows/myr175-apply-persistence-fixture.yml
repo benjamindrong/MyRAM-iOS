@@ -27,11 +27,67 @@ jobs:
           ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
           path: NearbySyncCore
 
-      - name: Apply exact fixture patch
+      - name: Apply exact fixture alignment
         working-directory: MyRAM-iOS
         run: |
-          git apply --check .github/MYR-175-persistence-fixture.patch
-          git apply .github/MYR-175-persistence-fixture.patch
+          python3 - <<'PY'
+          from pathlib import Path
+
+          test_path = Path("MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift")
+          test_text = test_path.read_text()
+          old_fixture = '''            fragments: [
+                          SyncTextSequenceFragment(
+                              operationID: first,
+                              startOffset: 0,
+                              utf16Length: 1,
+                              visibility: .visible
+                          ),
+                          SyncTextSequenceFragment(
+                              operationID: second,
+                              startOffset: 0,
+                              utf16Length: 1,
+                              visibility: .visible
+                          )
+                      ]'''
+          new_fixture = '''            fragments: [
+                          SyncTextSequenceFragment(
+                              operationID: second,
+                              startOffset: 0,
+                              utf16Length: 1,
+                              visibility: .visible
+                          ),
+                          SyncTextSequenceFragment(
+                              operationID: first,
+                              startOffset: 0,
+                              utf16Length: 1,
+                              visibility: .visible
+                          )
+                      ]'''
+          if test_text.count(old_fixture) != 1:
+              raise SystemExit(
+                  f"Expected exactly one stale sibling fixture, found {test_text.count(old_fixture)}"
+              )
+          test_path.write_text(test_text.replace(old_fixture, new_fixture))
+
+          doc_path = Path("docs/MYR-175-structural-insert-alignment.md")
+          doc_text = doc_path.read_text()
+          marker = (
+              "The persistence store's generic capability is dormant for this state shape. "
+              "No migration or compatibility decoder is required for Slice 1.\n\n"
+          )
+          addition = marker + '''### Persistence regression fixture alignment
+
+          The shared iOS and native Mac persistence regression `testSemanticRunAndFragmentOrderAreRejectedWithoutNormalization` retains its original corruption checks. Its valid seed state now keeps canonical run storage as `[first, second]` while materializing the same-anchor fragments as `[second, first]`. Reversing either persisted array remains rejected without normalization. This test-only scope addition was required after exact-head application suites exposed the stale pre-MYR-175 fixture.
+
+          No persistence source, payload codec, schema, migration, or production writer changed.
+
+          '''
+          if doc_text.count(marker) != 1:
+              raise SystemExit(
+                  f"Expected exactly one persistence-audit marker, found {doc_text.count(marker)}"
+              )
+          doc_path.write_text(doc_text.replace(marker, addition))
+          PY
 
       - name: Select Xcode and simulator
         working-directory: MyRAM-iOS
