@@ -114,6 +114,150 @@ final class SyncTextSequenceStateTests: XCTestCase {
         ))
     }
 
+    func testSameAnchorOrderUsesDescendingCounterThenRawUUIDByteTieBreak() {
+        let earlyFirstByte = operation(
+            5,
+            deviceID: "01000000-0000-0000-0000-0000000000ff"
+        )
+        let lateFirstByte = operation(
+            5,
+            deviceID: "02000000-0000-0000-0000-000000000000"
+        )
+        let earlyLastByte = operation(
+            5,
+            deviceID: "01000000-0000-0000-0000-000000000001"
+        )
+        let lateLastByte = operation(
+            5,
+            deviceID: "01000000-0000-0000-0000-0000000000fe"
+        )
+        let higherCounterLaterDevice = operation(
+            6,
+            deviceID: "ff000000-0000-0000-0000-000000000000"
+        )
+        let lowerCounterEarlierDevice = operation(
+            4,
+            deviceID: "00000000-0000-0000-0000-000000000000"
+        )
+        let identicalLHS = operation(7)
+        let identicalRHS = operation(7)
+
+        XCTAssertTrue(SyncOperationIDSameAnchorSiblingOrder.isOrderedBefore(
+            higherCounterLaterDevice,
+            lowerCounterEarlierDevice
+        ))
+        XCTAssertFalse(SyncOperationIDSameAnchorSiblingOrder.isOrderedBefore(
+            lowerCounterEarlierDevice,
+            higherCounterLaterDevice
+        ))
+        XCTAssertTrue(SyncOperationIDSameAnchorSiblingOrder.isOrderedBefore(
+            earlyFirstByte,
+            lateFirstByte
+        ))
+        XCTAssertTrue(SyncOperationIDSameAnchorSiblingOrder.isOrderedBefore(
+            earlyLastByte,
+            lateLastByte
+        ))
+        XCTAssertFalse(SyncOperationIDSameAnchorSiblingOrder.isOrderedBefore(
+            identicalLHS,
+            identicalRHS
+        ))
+        XCTAssertFalse(SyncOperationIDSameAnchorSiblingOrder.isOrderedBefore(
+            identicalRHS,
+            identicalLHS
+        ))
+    }
+
+    func testSameAnchorSiblingOrderingIsIndependentOfInputPermutation() throws {
+        let deviceA = "01000000-0000-0000-0000-000000000000"
+        let deviceB = "02000000-0000-0000-0000-000000000000"
+        let a1 = operation(1, deviceID: deviceA)
+        let a3 = operation(3, deviceID: deviceA)
+        let b2 = operation(2, deviceID: deviceB)
+        let runs = try [
+            run(a1, text: "1"),
+            run(a3, text: "3"),
+            run(b2, text: "2")
+        ]
+        let expected = [a3, b2, a1]
+
+        for permutation in permutations([0, 1, 2]) {
+            let ordered = SyncOperationIDSameAnchorSiblingOrder.orderedRunIndices(
+                permutation,
+                runs: runs
+            )
+            XCTAssertEqual(ordered.map { runs[$0].operationID }, expected)
+        }
+    }
+
+    func testSameAnchorOrderDiffersFromCanonicalRunStorageWithoutChangingRunValidation() throws {
+        let deviceA = "01000000-0000-0000-0000-000000000000"
+        let deviceB = "02000000-0000-0000-0000-000000000000"
+        let a1 = operation(1, deviceID: deviceA)
+        let a3 = operation(3, deviceID: deviceA)
+        let b2 = operation(2, deviceID: deviceB)
+        let runs = try [
+            run(a1, text: "1"),
+            run(a3, text: "3"),
+            run(b2, text: "2")
+        ]
+        let fragments = try [a3, b2, a1].map { try fragment($0) }
+        let state = try SyncTextSequenceState(runs: runs, fragments: fragments)
+
+        XCTAssertEqual(state.runs.map(\.operationID), [a1, a3, b2])
+        XCTAssertEqual(state.fragments.map(\.operationID), [a3, b2, a1])
+        XCTAssertEqual(state.visibleText, "321")
+
+        assertStateError(.fragmentOrderNotMatchingOrigins) {
+            _ = try SyncTextSequenceState(
+                runs: runs,
+                fragments: [fragment(a1), fragment(a3), fragment(b2)]
+            )
+        }
+
+        assertStateError(.noncanonicalRunOrder(previous: a3, current: a1)) {
+            _ = try SyncTextSequenceState(
+                runs: [runs[1], runs[0], runs[2]],
+                fragments: fragments
+            )
+        }
+    }
+
+    func testSameAnchorOrderedProjectionProducesDeterministicState() throws {
+        let deviceA = "01000000-0000-0000-0000-000000000000"
+        let deviceB = "02000000-0000-0000-0000-000000000000"
+        let a1 = operation(1, deviceID: deviceA)
+        let a3 = operation(3, deviceID: deviceA)
+        let b2 = operation(2, deviceID: deviceB)
+        let runs = try [
+            run(a1, text: "1"),
+            run(a3, text: "3"),
+            run(b2, text: "2")
+        ]
+        let expectedOperationIDs = [a3, b2, a1]
+        let orderedIndices = SyncOperationIDSameAnchorSiblingOrder.orderedRunIndices(
+            [2, 0, 1],
+            runs: runs
+        )
+        XCTAssertEqual(orderedIndices.map { runs[$0].operationID }, expectedOperationIDs)
+
+        let expectedFragments = [
+            try fragment(a3),
+            try fragment(b2, visibility: .tombstone),
+            try fragment(a1)
+        ]
+        let state = try SyncTextSequenceState(
+            runs: runs,
+            fragments: expectedFragments
+        )
+
+        XCTAssertEqual(state.runs, runs)
+        XCTAssertEqual(state.fragments, expectedFragments)
+        XCTAssertEqual(state.visibleText, "31")
+        XCTAssertEqual(state.visibleUTF16Count, 2)
+        XCTAssertEqual(state.tombstonedUTF16Count, 1)
+    }
+
     func testNoncanonicalAndDuplicateRunArraysAreRejected() throws {
         let first = try run(operation(0), text: "a")
         let second = try run(operation(1), text: "b")
@@ -167,11 +311,12 @@ final class SyncTextSequenceStateTests: XCTestCase {
         XCTAssertEqual(state.visibleText, "BaMbE")
     }
 
-    func testSiblingSubtreesUseCanonicalOrderAndRemainContiguous() throws {
+    func testSameAnchorSiblingSubtreesRemainContiguous() throws {
         let parentID = operation(0)
         let siblingAID = operation(1)
         let siblingBID = operation(2)
-        let descendantID = operation(3)
+        let descendantAID = operation(3)
+        let descendantBID = operation(4)
         let parent = try run(parentID, text: "ab")
         let siblingA = try run(
             siblingAID,
@@ -185,27 +330,36 @@ final class SyncTextSequenceStateTests: XCTestCase {
             right: element(parentID, 1),
             text: "B"
         )
-        let descendant = try run(
-            descendantID,
+        let descendantA = try run(
+            descendantAID,
             left: element(siblingAID, 0),
             right: element(parentID, 1),
             text: "d"
         )
+        let descendantB = try run(
+            descendantBID,
+            left: element(siblingBID, 0),
+            right: element(parentID, 1),
+            text: "e"
+        )
+        let expectedFragments = [
+            try fragment(parentID, start: 0),
+            try fragment(siblingBID),
+            try fragment(descendantBID),
+            try fragment(siblingAID),
+            try fragment(descendantAID),
+            try fragment(parentID, start: 1)
+        ]
         let state = try SyncTextSequenceState(
-            runs: [parent, siblingA, siblingB, descendant],
-            fragments: [
-                fragment(parentID, start: 0),
-                fragment(siblingAID),
-                fragment(descendantID),
-                fragment(siblingBID),
-                fragment(parentID, start: 1)
-            ]
+            runs: [parent, siblingA, siblingB, descendantA, descendantB],
+            fragments: expectedFragments
         )
 
-        XCTAssertEqual(state.visibleText, "aAdBb")
+        XCTAssertEqual(state.fragments, expectedFragments)
+        XCTAssertEqual(state.visibleText, "aBeAdb")
     }
 
-    func testFragmentProjectionRejectsSiblingInterleavingAndEqualVisibleText() throws {
+    func testFragmentProjectionRejectsSiblingOrderMismatchEvenWithEqualVisibleText() throws {
         let firstID = operation(0)
         let secondID = operation(1)
         let first = try run(firstID, text: "x")
@@ -214,7 +368,7 @@ final class SyncTextSequenceStateTests: XCTestCase {
         assertStateError(.fragmentOrderNotMatchingOrigins) {
             _ = try SyncTextSequenceState(
                 runs: [first, second],
-                fragments: [fragment(secondID), fragment(firstID)]
+                fragments: [fragment(firstID), fragment(secondID)]
             )
         }
     }
@@ -416,6 +570,28 @@ final class SyncTextSequenceStateTests: XCTestCase {
         )
     }
 
+    func testLargeSameAnchorSiblingSetUsesBoundedIterativeTraversalWork() throws {
+        let runCount = 12_000
+        var runs: [SyncTextSequenceRun] = []
+        runs.reserveCapacity(runCount)
+        for counter in 0..<runCount {
+            runs.append(try run(operation(UInt64(counter)), text: "x"))
+        }
+        let fragments = try runs.reversed().map {
+            try fragment($0.operationID)
+        }
+
+        let state = try SyncTextSequenceState(runs: runs, fragments: fragments)
+
+        XCTAssertEqual(state.fragments.first?.operationID, operation(UInt64(runCount - 1)))
+        XCTAssertEqual(state.fragments.last?.operationID, operation(0))
+        XCTAssertEqual(state.visibleUTF16Count, runCount)
+        XCTAssertEqual(state.visibleText.utf16.count, runCount)
+        XCTAssertLessThanOrEqual(state.validationMetrics.processedFrames, runCount * 4 + 1)
+        XCTAssertLessThanOrEqual(state.validationMetrics.gapIndexLookups, runCount * 2 + 1)
+        XCTAssertLessThanOrEqual(state.validationMetrics.comparedSpans, runCount * 2)
+    }
+
     func testDeepNestedChainUsesBoundedIterativeTraversalWork() throws {
         let runCount = 12_000
         var runs: [SyncTextSequenceRun] = []
@@ -437,6 +613,17 @@ final class SyncTextSequenceStateTests: XCTestCase {
         XCTAssertLessThanOrEqual(state.validationMetrics.processedFrames, runCount * 4 + 1)
         XCTAssertLessThanOrEqual(state.validationMetrics.gapIndexLookups, runCount * 2 + 1)
         XCTAssertLessThanOrEqual(state.validationMetrics.comparedSpans, runCount * 2)
+    }
+
+    private func permutations<Element>(_ values: [Element]) -> [[Element]] {
+        guard let first = values.first else { return [[]] }
+        return permutations(Array(values.dropFirst())).flatMap { permutation in
+            (0...permutation.count).map { index in
+                var result = permutation
+                result.insert(first, at: index)
+                return result
+            }
+        }
     }
 
     private func operation(
