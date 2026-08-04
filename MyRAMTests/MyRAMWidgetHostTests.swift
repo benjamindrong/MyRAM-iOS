@@ -237,6 +237,35 @@ final class MyRAMWidgetHostTests: XCTestCase {
         XCTAssertEqual(reloadedKinds.count, 1)
     }
 
+    func testSelectionPublishesPendingCurrentContextNoteImmediately() throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let note = Note(title: "Newly Selected", content: "Pending Body")
+        context.insert(note)
+
+        let root = temporaryDirectory()
+        let snapshotStore = MyRAMWidgetSnapshotStore(containerURLProvider: { root })
+        let selectionStore = MyRAMWidgetNoteSelectionStore(defaults: try makeDefaults())
+        var reloadedKinds: [String] = []
+        let coordinator = MyRAMWidgetHostCoordinator(
+            container: container,
+            observedContext: context,
+            platform: .iOS,
+            selectionStore: selectionStore,
+            snapshotStore: snapshotStore,
+            reloadTimelines: { reloadedKinds.append($0) }
+        )
+
+        coordinator.select(noteID: note.id)
+
+        let snapshot = try XCTUnwrap(snapshotStore.read().snapshot)
+        XCTAssertEqual(snapshot.note?.id, note.id)
+        XCTAssertEqual(snapshot.note?.title, "Newly Selected")
+        XCTAssertEqual(snapshot.note?.bodyPreviewSource, "Pending Body")
+        XCTAssertEqual(selectionStore.selectedNoteID, note.id)
+        XCTAssertEqual(reloadedKinds, ["com.northsignalstudio.myram.priority-widget"])
+    }
+
     func testSuccessfulSaveTriggersRefreshAndInvalidSelectionClears() async throws {
         let container = try makeContainer()
         let context = container.mainContext
