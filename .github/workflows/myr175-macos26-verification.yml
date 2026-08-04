@@ -1,0 +1,216 @@
+name: MYR-175 Slice 1 macOS 26 verification
+
+on:
+  push:
+    branches:
+      - MYR-175-verification-runner-3
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/MyRAM-iOS
+          ref: 3dbfcff9053fc38b980738cad9bcea603e7c99c1
+      - name: Select Xcode and verify package
+        run: |
+          set -o pipefail
+          mkdir -p evidence/package
+          if test -d /Applications/Xcode_26.5.app; then sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer; fi
+          xcodebuild -version | tee evidence/package/xcode-version.txt
+          swift --version | tee evidence/package/swift-version.txt
+          swift test --package-path Packages/AnchoredSequenceCore --filter SyncTextSequenceStateTests 2>&1 | tee evidence/package/focused.log
+          swift test --package-path Packages/AnchoredSequenceCore 2>&1 | tee evidence/package/complete.log
+          git diff --check e51ccca9ff6a77c8648e365b6569313c55c1e9d4...HEAD
+          git diff --name-only e51ccca9ff6a77c8648e365b6569313c55c1e9d4...HEAD | tee evidence/package/changed-files.txt
+          diff -u <(printf '%s\n' \
+            'Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncOperationIDOrder.swift' \
+            'Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextSequenceState.swift' \
+            'Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceStateTests.swift' \
+            'docs/MYR-175-structural-insert-alignment.md') evidence/package/changed-files.txt
+          test "$(git hash-object Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextSequenceState.swift)" = 395c8f317febe44bcb08a7e4dbe9caeeae97b971
+          test "$(git hash-object Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncOperationIDOrder.swift)" = cecabadc0600f180a6d140e4ed35bd1e91a8354e
+          test "$(git hash-object Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceStateTests.swift)" = ad7ff30fecf629ac9bb5837f0c486f8b9d14c163
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos26-package
+          path: evidence/package
+
+  ios-tests:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/MyRAM-iOS
+          ref: 3dbfcff9053fc38b980738cad9bcea603e7c99c1
+          path: MyRAM-iOS
+      - uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+      - name: Run complete iOS suite
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          mkdir -p evidence/ios-tests
+          if test -d /Applications/Xcode_26.5.app; then sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer; fi
+          xcodebuild -version | tee evidence/ios-tests/xcode-version.txt
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > evidence/ios-tests/sibling-before.txt
+          xcrun simctl list devices available -j > evidence/ios-tests/simulators.json
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          data=json.loads(Path('evidence/ios-tests/simulators.json').read_text())
+          devices=[]
+          for runtime, values in data.get('devices',{}).items():
+              if 'iOS-26-5' not in runtime and 'iOS-26' not in runtime: continue
+              for value in values:
+                  if value.get('isAvailable') and value.get('name','').startswith('iPhone'):
+                      devices.append((0 if value['name']=='iPhone 16 Pro' else 1,0 if 'iOS-26-5' in runtime else 1,runtime,value['name'],value['udid']))
+          if not devices: raise SystemExit('No iOS 26 iPhone simulator')
+          devices.sort(); _,_,runtime,name,udid=devices[0]
+          Path('evidence/ios-tests/selected-simulator.txt').write_text(f'{name} | {runtime} | {udid}\n')
+          with open(os.environ['GITHUB_ENV'],'a') as f: f.write(f'IOS_UDID={udid}\n')
+          PY
+          cat evidence/ios-tests/selected-simulator.txt
+          xcrun simctl boot "$IOS_UDID" || true
+          xcrun simctl bootstatus "$IOS_UDID" -b
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAM \
+            -destination "platform=iOS Simulator,id=${IOS_UDID}" -destination-timeout 120 \
+            -derivedDataPath /tmp/MYR175-iOS-Tests-DD \
+            -resultBundlePath /tmp/MYR175-iOS-Tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            test 2>&1 | tee evidence/ios-tests/test.log
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > evidence/ios-tests/sibling-after.txt
+          diff -u evidence/ios-tests/sibling-before.txt evidence/ios-tests/sibling-after.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos26-ios-tests
+          path: MyRAM-iOS/evidence/ios-tests
+
+  mac-tests:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/MyRAM-iOS
+          ref: 3dbfcff9053fc38b980738cad9bcea603e7c99c1
+          path: MyRAM-iOS
+      - uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+      - name: Run complete native Mac suite
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          mkdir -p evidence/mac-tests
+          if test -d /Applications/Xcode_26.5.app; then sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer; fi
+          xcodebuild -version | tee evidence/mac-tests/xcode-version.txt
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > evidence/mac-tests/sibling-before.txt
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' \
+            -derivedDataPath /tmp/MYR175-Mac-Tests-DD \
+            -resultBundlePath /tmp/MYR175-Mac-Tests.xcresult \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            test 2>&1 | tee evidence/mac-tests/test.log
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > evidence/mac-tests/sibling-after.txt
+          diff -u evidence/mac-tests/sibling-before.txt evidence/mac-tests/sibling-after.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos26-mac-tests
+          path: MyRAM-iOS/evidence/mac-tests
+
+  builds:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/MyRAM-iOS
+          ref: 3dbfcff9053fc38b980738cad9bcea603e7c99c1
+          path: MyRAM-iOS
+      - uses: actions/checkout@v4
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+      - name: Build both applications
+        working-directory: MyRAM-iOS
+        run: |
+          set -o pipefail
+          mkdir -p evidence/builds
+          if test -d /Applications/Xcode_26.5.app; then sudo xcode-select -s /Applications/Xcode_26.5.app/Contents/Developer; fi
+          xcodebuild -version | tee evidence/builds/xcode-version.txt
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > evidence/builds/sibling-before.txt
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath /tmp/MYR175-iOS-Build-DD \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            build 2>&1 | tee evidence/builds/ios.log
+          xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' \
+            -derivedDataPath /tmp/MYR175-Mac-Build-DD \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY= \
+            build 2>&1 | tee evidence/builds/mac.log
+          git -C ../NearbySyncCore status --porcelain=v1 -uall > evidence/builds/sibling-after.txt
+          diff -u evidence/builds/sibling-before.txt evidence/builds/sibling-after.txt
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos26-builds
+          path: MyRAM-iOS/evidence/builds
+
+  record:
+    if: always()
+    needs: [package, ios-tests, mac-tests, builds]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+      - name: Record outcomes
+        run: |
+          RESULT=verification-results/MYR-175-Slice-1-3dbfcff9053fc38b980738cad9bcea603e7c99c1-macos26
+          mkdir -p "$RESULT"
+          cat > "$RESULT/outcomes.txt" <<EOF
+          package=${{ needs.package.result }}
+          ios_tests=${{ needs.ios-tests.result }}
+          mac_tests=${{ needs.mac-tests.result }}
+          builds=${{ needs.builds.result }}
+          EOF
+          {
+            echo '# MYR-175 Slice 1 Exact-Head Verification on macOS 26'
+            echo
+            echo '- Candidate: `3dbfcff9053fc38b980738cad9bcea603e7c99c1`'
+            echo '- Sibling dependency: `4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2`'
+            echo '```text'
+            cat "$RESULT/outcomes.txt"
+            echo '```'
+            echo '```text'
+            find downloaded -type f \( -name '*.log' -o -name 'test.log' \) | while read file; do grep -E 'Executed [0-9]+ tests|TEST SUCCEEDED|TEST FAILED|BUILD SUCCEEDED|BUILD FAILED' "$file" || true; done
+            echo '```'
+          } > "$RESULT/summary.md"
+          find downloaded -type f \( -name '*.log' -o -name 'test.log' -o -name 'xcode-version.txt' -o -name 'swift-version.txt' -o -name 'selected-simulator.txt' -o -name 'changed-files.txt' -o -name 'sibling-before.txt' -o -name 'sibling-after.txt' \) -maxdepth 4 | while read file; do
+            dest="$RESULT/${file#downloaded/}"
+            mkdir -p "$(dirname "$dest")"
+            if [[ "$file" == *.log ]]; then tail -n 200 "$file" > "$dest"; else cp "$file" "$dest"; fi
+          done
+          rm .github/workflows/myr175-macos26-verification.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add verification-results
+          git add -u .github
+          git commit -m 'MYR-175 Record macOS 26 exact-head verification'
+          git push origin "HEAD:${GITHUB_REF_NAME}"
