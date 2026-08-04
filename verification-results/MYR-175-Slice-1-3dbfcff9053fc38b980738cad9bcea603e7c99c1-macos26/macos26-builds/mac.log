@@ -1,0 +1,200 @@
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchUTF16Helpers.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Batch/SyncBatchNoteChangeCapture.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceTypes.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceModels.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergencePlanningTypes.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/SyncConvergenceRewriteSafetyPolicy.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceTypes.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/Convergence/ExplicitDeleteProvenanceBuilder.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftMergeGeneratedHeaders /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/DerivedSources/MyRAMMac-Swift.h /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac-Swift.h (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-swiftHeaderTool -arch arm64 /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac-Swift.h -o /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/DerivedSources/MyRAMMac-Swift.h
+
+SwiftDriverJobDiscovery normal arm64 Compiling MyRAMExternalOpenDispatcher.swift, MyRAMWidgetHostCoordinator.swift, MyRAMWidgetNoteRouting.swift, MyRAMWidgetSelectionButton.swift, MarkdownFileIO.swift, MarkdownPreview.swift, MarkdownPreviewModePolicy.swift, MarkdownPreviewUIKitSyncExecutor.swift, MarkdownPreviewUIKitDeferredScheduler.swift, MarkdownPreviewUIKitEditorResignation.swift, MarkdownPreviewUIKitPostResignationReconciliation.swift, MarkdownPreviewUIKitAcceptedRestoreSupersession.swift, MacMarkdownPreviewFocusResignation.swift, MacNoteViewZoom.swift, MacMarkdownPreviewDocumentBuilder.swift, MacMarkdownPreviewTextView.swift, MacMarkdownFileCommands.swift, MacMarkdownFileOperationCoordinator.swift, NoteSequenceStateRecord.swift, NoteSequenceStateBootstrapAdapter.swift, NoteSequenceStateFullBodyIntegration.swift (in target 'MyRAMMac' from project 'MyRAM')
+
+Copy /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.swiftmodule/arm64-apple-macos.swiftmodule /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.swiftmodule (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.swiftmodule /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.swiftmodule/arm64-apple-macos.swiftmodule
+
+Copy /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.swiftmodule/arm64-apple-macos.swiftdoc /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.swiftdoc (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.swiftdoc /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.swiftmodule/arm64-apple-macos.swiftdoc
+
+Copy /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.swiftmodule/arm64-apple-macos.abi.json /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.abi.json (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.abi.json /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.swiftmodule/arm64-apple-macos.abi.json
+
+Copy /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.swiftsourceinfo (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -resolve-src-symlinks -rename /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.swiftsourceinfo /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.swiftmodule/Project/arm64-apple-macos.swiftsourceinfo
+
+SwiftCompile normal arm64 Compiling\ NoteSequenceStateBootstrapMigrator.swift,\ SwiftDataNoteSequenceStateStore.swift,\ MyRAMSyncOperationIDAllocator.swift,\ FileBackedSyncOperationIDReservationStore.swift,\ MyRAMMacApp.swift,\ MyRAMMacRootView.swift,\ MacStartupCoordinator.swift,\ MacNoteEditorView.swift,\ MacTextViewRepresentable.swift,\ MacEditorSampleDocument.swift,\ MacRemoteInsertionAttributePolicy.swift,\ MacIncomingSyncApplicationPolicy.swift,\ MacEditorSyncBridge.swift,\ MacNSRangeClamp.swift,\ MyRAMPlatform.swift,\ RTFCoding.swift,\ AttributedTextStorageKeys.swift,\ MacNotePersistenceAdapter.swift,\ MacEditorTextColorPolicy.swift,\ Note.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/NoteSequenceStateBootstrapMigrator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/SwiftDataNoteSequenceStateStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/MyRAMSyncOperationIDAllocator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/FileBackedSyncOperationIDReservationStore.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MyRAMMacApp.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MyRAMMacRootView.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacStartupCoordinator.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNoteEditorView.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacTextViewRepresentable.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorSampleDocument.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacRemoteInsertionAttributePolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacIncomingSyncApplicationPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorSyncBridge.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNSRangeClamp.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Platform/MyRAMPlatform.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Persistence/RTFCoding.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Persistence/AttributedTextStorageKeys.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNotePersistenceAdapter.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorTextColorPolicy.swift /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Note.swift (in target 'MyRAMMac' from project 'MyRAM')
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/NoteSequenceStateBootstrapMigrator.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/SwiftDataNoteSequenceStateStore.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/MyRAMSyncOperationIDAllocator.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Sync/AnchoredSequence/FileBackedSyncOperationIDReservationStore.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MyRAMMacApp.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MyRAMMacRootView.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacStartupCoordinator.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNoteEditorView.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacTextViewRepresentable.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorSampleDocument.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacRemoteInsertionAttributePolicy.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacIncomingSyncApplicationPolicy.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorSyncBridge.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNSRangeClamp.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Platform/MyRAMPlatform.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Persistence/RTFCoding.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Persistence/AttributedTextStorageKeys.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacNotePersistenceAdapter.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/MacEditorTextColorPolicy.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftCompile normal arm64 /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Models/Note.swift (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    
+
+SwiftDriverJobDiscovery normal arm64 Compiling ExplicitDeleteProvenanceValidator.swift, SyncConvergencePlanner.swift, IncrementalEditIntegrationTypes.swift, RetainedOperationCausalGraph.swift, SwiftDataSyncConvergencePersistenceTransaction.swift, SyncConvergencePostCommitTypes.swift, SyncConvergencePostCommitGating.swift, SwiftDataSyncConvergencePostCommitStore.swift, SyncConvergencePostCommitExecutor.swift, SyncConvergenceLocalObligation.swift, FileBackedSyncConvergenceLocalObligationQueue.swift, SyncConvergenceDrainPassScheduler.swift, SyncConvergenceRuntime.swift, SyncBatchUnsentQueue.swift, FileBackedSyncBatchQueue.swift, MyRAMSyncModels.swift, SyncConflictStore.swift, MyRAMWidgetContentSelectionPolicy.swift, MyRAMWidgetSnapshotStore.swift, MyRAMWidgetSnapshot.swift (in target 'MyRAMMac' from project 'MyRAM')
+
+SwiftDriverJobDiscovery normal arm64 Compiling NoteSequenceStateBootstrapMigrator.swift, SwiftDataNoteSequenceStateStore.swift, MyRAMSyncOperationIDAllocator.swift, FileBackedSyncOperationIDReservationStore.swift, MyRAMMacApp.swift, MyRAMMacRootView.swift, MacStartupCoordinator.swift, MacNoteEditorView.swift, MacTextViewRepresentable.swift, MacEditorSampleDocument.swift, MacRemoteInsertionAttributePolicy.swift, MacIncomingSyncApplicationPolicy.swift, MacEditorSyncBridge.swift, MacNSRangeClamp.swift, MyRAMPlatform.swift, RTFCoding.swift, AttributedTextStorageKeys.swift, MacNotePersistenceAdapter.swift, MacEditorTextColorPolicy.swift, Note.swift (in target 'MyRAMMac' from project 'MyRAM')
+
+SwiftDriverJobDiscovery normal arm64 Compiling Folder.swift, MyRAMSchema.swift, PersistenceManager.swift, MacSidebarCollapsePolicy.swift, SyncBatchPayload.swift, SyncBatchAnchoredPayloadAdapter.swift, SyncBatchAnchoredPayloadPolicy.swift, SyncBatchPeerCapability.swift, SyncBatchTransportAdmissionPlanner.swift, SyncBatchEnvelope.swift, MultipeerSyncMessageEnvelope.swift, SyncBatchSeenBatchStore.swift, SyncBatchUTF16Helpers.swift, SyncBatchNoteChangeCapture.swift, SyncConvergenceTypes.swift, SyncConvergenceModels.swift, SyncConvergencePlanningTypes.swift, SyncConvergenceRewriteSafetyPolicy.swift, ExplicitDeleteProvenanceTypes.swift, ExplicitDeleteProvenanceBuilder.swift (in target 'MyRAMMac' from project 'MyRAM')
+
+SwiftDriver\ Compilation MyRAMMac normal arm64 com.apple.xcode.tools.swift.compiler (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-Swift-Compilation -- /Applications/Xcode_26.5.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc -module-name MyRAMMac -Onone @/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.SwiftFileList -DDEBUG -enable-bare-slash-regex -enable-experimental-feature DebugDescriptionMacro -sdk /Applications/Xcode_26.5.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk -target arm64-apple-macos14.0 -g -module-cache-path /tmp/MYR175-Mac-Build-DD/ModuleCache.noindex -Xfrontend -serialize-debugging-options -enable-testing -index-store-path /tmp/MYR175-Mac-Build-DD/Index.noindex/DataStore -Xcc -D_LIBCPP_HARDENING_MODE\=_LIBCPP_HARDENING_MODE_DEBUG -swift-version 5 -I /tmp/MYR175-Mac-Build-DD/Build/Products/Debug -F /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/PackageFrameworks -F /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/PackageFrameworks -F /tmp/MYR175-Mac-Build-DD/Build/Products/Debug -emit-localized-strings -emit-localized-strings-path /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64 -c -j3 -enable-batch-mode -incremental -Xcc -ivfsstatcache -Xcc /tmp/MYR175-Mac-Build-DD/SDKStatCaches.noindex/macosx26.5-25F70-688ef53f1462e2c8f657fdc38a81448f3599ee76dc2a8020dfcb4b41ead48a8c.sdkstatcache -output-file-map /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac-OutputFileMap.json -use-frontend-parseable-output -save-temps -no-color-diagnostics -explicit-module-build -module-cache-path /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/SwiftExplicitPrecompiledModules -clang-scanner-module-cache-path /tmp/MYR175-Mac-Build-DD/ModuleCache.noindex -sdk-module-cache-path /tmp/MYR175-Mac-Build-DD/ModuleCache.noindex -serialize-diagnostics -emit-dependencies -emit-module -emit-module-path /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.swiftmodule -validate-clang-modules-once -clang-build-session-file /tmp/MYR175-Mac-Build-DD/ModuleCache.noindex/Session.modulevalidation -Xcc -I/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/swift-overrides.hmap -emit-const-values -Xfrontend -const-gather-protocols-file -Xfrontend /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac_const_extract_protocols.json -Xcc -iquote -Xcc /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/MyRAMMac-generated-files.hmap -Xcc -I/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/MyRAMMac-own-target-headers.hmap -Xcc -I/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/MyRAMMac-all-non-framework-target-headers.hmap -Xcc -ivfsoverlay -Xcc /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAM-98a9cbde253e8e955bc92731eb290203-VFS/all-product-headers.yaml -Xcc -iquote -Xcc /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/MyRAMMac-project-headers.hmap -Xcc -I/tmp/MYR175-Mac-Build-DD/Build/Products/Debug/include -Xcc -I/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/DerivedSources-normal/arm64 -Xcc -I/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/DerivedSources/arm64 -Xcc -I/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/DerivedSources -Xcc -DDEBUG\=1 -emit-objc-header -emit-objc-header-path /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac-Swift.h -working-directory /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS -experimental-emit-module-separately -disable-cmo
+
+Ld /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/MacOS/MyRAMMac.debug.dylib normal (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    /Applications/Xcode_26.5.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -Xlinker -reproducible -target arm64-apple-macos14.0 -dynamiclib -isysroot /Applications/Xcode_26.5.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk -O0 -L/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/EagerLinkingTBDs/Debug -L/tmp/MYR175-Mac-Build-DD/Build/Products/Debug -F/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/EagerLinkingTBDs/Debug -F/tmp/MYR175-Mac-Build-DD/Build/Products/Debug/PackageFrameworks -F/tmp/MYR175-Mac-Build-DD/Build/Products/Debug/PackageFrameworks -F/tmp/MYR175-Mac-Build-DD/Build/Products/Debug -filelist /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.LinkFileList -install_name @rpath/MyRAMMac.debug.dylib -Xlinker -rpath -Xlinker /usr/lib/swift -Xlinker -rpath -Xlinker /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/PackageFrameworks -Xlinker -rpath -Xlinker @executable_path/../Frameworks -Xlinker -object_path_lto -Xlinker /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac_lto.o -rdynamic -Xlinker -no_deduplicate -Xlinker -dependency_info -Xlinker /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac_dependency_info.dat -fobjc-link-runtime -L/Applications/Xcode_26.5.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/swift/macosx -L/usr/lib/swift -Xlinker -add_ast_path -Xlinker /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.swiftmodule @/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac-linker-args.resp -Wl,-no_warn_duplicate_libraries -Wl,-no_warn_duplicate_libraries -Xlinker -alias -Xlinker _main -Xlinker ___debug_main_executable_dylib_entry_point -o /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/MacOS/MyRAMMac.debug.dylib -Xlinker -add_ast_path -Xlinker /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/NearbySyncCore.build/Debug/NearbySyncCore.build/Objects-normal/arm64/NearbySyncCore.swiftmodule @/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/NearbySyncCore.build/Debug/NearbySyncCore.build/Objects-normal/arm64/NearbySyncCore-linker-args.resp -Xlinker -add_ast_path -Xlinker /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore.swiftmodule @/tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/AnchoredSequenceCore.build/Debug/AnchoredSequenceCore.build/Objects-normal/arm64/AnchoredSequenceCore-linker-args.resp
+
+ConstructStubExecutorLinkFileList /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/MyRAMMac-ExecutorLinkFileList-normal-arm64.txt (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    construct-stub-executor-link-file-list /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/MacOS/MyRAMMac.debug.dylib /Applications/Xcode_26.5.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/libPreviewsJITStubExecutor_no_swift_entry_point.a /Applications/Xcode_26.5.app/Contents/Developer/Platforms/MacOSX.platform/Developer/usr/lib/libPreviewsJITStubExecutor.a --output /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/MyRAMMac-ExecutorLinkFileList-normal-arm64.txt
+note: Using stub executor library with Swift entry point. (in target 'MyRAMMac' from project 'MyRAM')
+
+Ld /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/MacOS/MyRAMMac normal (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    /Applications/Xcode_26.5.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -Xlinker -reproducible -target arm64-apple-macos14.0 -isysroot /Applications/Xcode_26.5.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk -O0 -L/tmp/MYR175-Mac-Build-DD/Build/Products/Debug -F/tmp/MYR175-Mac-Build-DD/Build/Products/Debug/PackageFrameworks -F/tmp/MYR175-Mac-Build-DD/Build/Products/Debug/PackageFrameworks -F/tmp/MYR175-Mac-Build-DD/Build/Products/Debug -Xlinker -rpath -Xlinker @executable_path -Xlinker -rpath -Xlinker /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/PackageFrameworks -Xlinker -rpath -Xlinker @executable_path/../Frameworks -rdynamic -Xlinker -no_deduplicate -e ___debug_blank_executor_main -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __debug_dylib -Xlinker /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/MyRAMMac-DebugDylibPath-normal-arm64.txt -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __debug_instlnm -Xlinker /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/MyRAMMac-DebugDylibInstallName-normal-arm64.txt -Xlinker -filelist -Xlinker /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/MyRAMMac-ExecutorLinkFileList-normal-arm64.txt /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/MacOS/MyRAMMac.debug.dylib -o /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/MacOS/MyRAMMac
+
+Copy /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/PlugIns/MyRAMMacWidgetExtension.appex /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMacWidgetExtension.appex (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-copy -exclude .DS_Store -exclude CVS -exclude .svn -exclude .git -exclude .hg -exclude Headers -exclude PrivateHeaders -exclude Modules -exclude \*.tbd -resolve-src-symlinks -remove-static-executable /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMacWidgetExtension.appex /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/PlugIns
+
+ProcessInfoPlistFile /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/Info.plist /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Info.plist (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-infoPlistUtility /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAM/Mac/Info.plist -producttype com.apple.product-type.application -genpkginfo /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/PkgInfo -expandbuildsettings -platform macosx -additionalcontentfile /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/assetcatalog_generated_info.plist -scanforprivacyfile /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/PlugIns/MyRAMMacWidgetExtension.appex -o /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/Info.plist
+
+ExtractAppIntentsMetadata (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    /Applications/Xcode_26.5.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/appintentsmetadataprocessor --toolchain-dir /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.42.0.ZlJcZL/Metal.xctoolchain --module-name MyRAMMac --sdk-root /Applications/Xcode_26.5.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.5.sdk --xcode-version 17F42 --platform-family macOS --deployment-target 14.0 --bundle-identifier com.northsignalstudio.myram.mac.dev --output /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/Resources --target-triple arm64-apple-macos14.0 --binary-file /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/MacOS/MyRAMMac --dependency-file /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac_dependency_info.dat --stringsdata-file /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/ExtractedAppShortcutsMetadata.stringsdata --source-file-list /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.SwiftFileList --metadata-file-list /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/MyRAMMac.DependencyMetadataFileList --static-metadata-file-list /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/MyRAMMac.DependencyStaticMetadataFileList --swift-const-vals-list /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/Objects-normal/arm64/MyRAMMac.SwiftConstValuesFileList --compile-time-extraction --deployment-aware-processing --validate-assistant-intents --no-app-shortcuts-localization
+2026-08-04 15:05:23.634 appintentsmetadataprocessor[7879:26113] Starting appintentsmetadataprocessor export
+2026-08-04 15:05:23.657 appintentsmetadataprocessor[7879:26113] Extracted no relevant App Intents symbols, skipping writing output
+
+CopySwiftLibs /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-swiftStdLibTool --copy --verbose --scan-executable /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/MacOS/MyRAMMac.debug.dylib --scan-folder /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/Frameworks --scan-folder /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/PlugIns --scan-folder /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/Library/SystemExtensions --scan-folder /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/Extensions --platform macosx --toolchain /var/run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v17.6.42.0.ZlJcZL/Metal.xctoolchain --toolchain /Applications/Xcode_26.5.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain --destination /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/Frameworks --strip-bitcode --strip-bitcode-tool /Applications/Xcode_26.5.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/bitcode_strip --emit-dependency-info /tmp/MYR175-Mac-Build-DD/Build/Intermediates.noindex/MyRAM.build/Debug/MyRAMMac.build/SwiftStdLibToolInputDependencies.dep --filter-for-swift-os --back-deploy-swift-span
+Ignoring --strip-bitcode because --sign was not passed
+
+ValidateEmbeddedBinary /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/PlugIns/MyRAMMacWidgetExtension.appex (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    /Applications/Xcode_26.5.app/Contents/Developer/usr/bin/embeddedBinaryValidationUtility /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/PlugIns/MyRAMMacWidgetExtension.appex -info-plist-path /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app/Contents/Info.plist
+
+RegisterExecutionPolicyException /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-RegisterExecutionPolicyException /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app
+
+Validate /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    builtin-validationUtility /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app -no-validate-extension -infoplist-subpath Contents/Info.plist
+
+RegisterWithLaunchServices /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    /System/Library/Frameworks/CoreServices.framework/Versions/Current/Frameworks/LaunchServices.framework/Versions/Current/Support/lsregister -f -R -trusted /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app
+
+Touch /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app (in target 'MyRAMMac' from project 'MyRAM')
+    cd /Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS
+    /usr/bin/touch -c /tmp/MYR175-Mac-Build-DD/Build/Products/Debug/MyRAMMac.app
+
+** BUILD SUCCEEDED **
+

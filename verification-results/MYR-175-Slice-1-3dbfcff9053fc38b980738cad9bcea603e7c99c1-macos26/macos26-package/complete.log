@@ -1,0 +1,181 @@
+[0/1] Planning build
+Building for debugging...
+[0/2] Write swift-version-5975E236E64FF690.txt
+Build complete! (0.27s)
+Test Suite 'All tests' started at 2026-08-04 15:03:54.148.
+Test Suite 'AnchoredSequenceCorePackageTests.xctest' started at 2026-08-04 15:03:54.149.
+Test Suite 'SyncActorSequenceReservationTests' started at 2026-08-04 15:03:54.149.
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testFirstReservationUsesCounterZero]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testFirstReservationUsesCounterZero]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testMaximumCounterThrowsExhaustionWithoutAdvancedState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testMaximumCounterThrowsExhaustionWithoutAdvancedState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testMaximumMinusOneReservesMaximumCounter]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testMaximumMinusOneReservesMaximumCounter]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testRepeatedTransitionsProduceMonotonicCounters]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testRepeatedTransitionsProduceMonotonicCounters]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testReservationUsesExistingOperationIdentityType]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testReservationUsesExistingOperationIdentityType]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testTransitionLeavesOriginalStateUnchanged]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncActorSequenceReservationTests testTransitionLeavesOriginalStateUnchanged]' passed (0.000 seconds).
+Test Suite 'SyncActorSequenceReservationTests' passed at 2026-08-04 15:03:54.152.
+	 Executed 6 tests, with 0 failures (0 unexpected) in 0.002 (0.003) seconds
+Test Suite 'SyncSequenceIdentityTests' started at 2026-08-04 15:03:54.152.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityEqualityHashingAndKeyBehavior]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityEqualityHashingAndKeyBehavior]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityRejectsNegativeOffsetsFromConstructionAndDecoding]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityRejectsNegativeOffsetsFromConstructionAndDecoding]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityStableEncodingUsesExactCanonicalBytes]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testElementIdentityStableEncodingUsesExactCanonicalBytes]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testExternallySourcedRunLengthValidatesBoundaries]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testExternallySourcedRunLengthValidatesBoundaries]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityCounterBoundariesRoundTrip]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityCounterBoundariesRoundTrip]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityEncodingCanonicalizesUUIDToLowercase]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityEncodingCanonicalizesUUIDToLowercase]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityEqualityHashingAndKeyBehavior]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityEqualityHashingAndKeyBehavior]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityStableEncodingUsesExactCanonicalBytes]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testOperationIdentityStableEncodingUsesExactCanonicalBytes]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRawOperationDecodingLeavesStructuralFailuresAsDecodingErrors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRawOperationDecodingLeavesStructuralFailuresAsDecodingErrors]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRunDerivesOneIdentityPerUTF16CodeUnit]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRunDerivesOneIdentityPerUTF16CodeUnit]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRunUncheckedDerivationMatchesValidatedConstruction]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testRunUncheckedDerivationMatchesValidatedConstruction]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStableOperationDecodingMapsStructuralFailuresToMalformedEncoding]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStableOperationDecodingMapsStructuralFailuresToMalformedEncoding]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStableOperationDecodingPreservesDeviceIDValidationErrors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStableOperationDecodingPreservesDeviceIDValidationErrors]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStringFactoryAlwaysProducesNonnegativeRunLengths]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncSequenceIdentityTests testStringFactoryAlwaysProducesNonnegativeRunLengths]' passed (0.000 seconds).
+Test Suite 'SyncSequenceIdentityTests' passed at 2026-08-04 15:03:54.158.
+	 Executed 14 tests, with 0 failures (0 unexpected) in 0.004 (0.006) seconds
+Test Suite 'SyncTextLegacyBootstrapTests' started at 2026-08-04 15:03:54.158.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testCanonicallyEquivalentBodiesWithDifferentUTF16TopologyDoNotAlias]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testCanonicallyEquivalentBodiesWithDifferentUTF16TopologyDoNotAlias]' passed (0.002 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testDefaultFormatMatchesExplicitV1]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testDefaultFormatMatchesExplicitV1]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testDifferentBodiesUnderSameNoteIDProduceDifferentRunIDs]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testDifferentBodiesUnderSameNoteIDProduceDifferentRunIDs]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testEmptyBodyProducesCanonicalEmptyState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testEmptyBodyProducesCanonicalEmptyState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testIdenticalInputsProduceIdenticalBootstrapState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testIdenticalInputsProduceIdenticalBootstrapState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testLargeBodyStillUsesOneRunAndOneFragment]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testLargeBodyStillUsesOneRunAndOneFragment]' passed (0.129 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testNonemptyBodyProducesOneRunAndOneVisibleFragment]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testNonemptyBodyProducesOneRunAndOneVisibleFragment]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSameBodyUnderDifferentNoteIDsProducesDifferentRunIDs]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSameBodyUnderDifferentNoteIDsProducesDifferentRunIDs]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSupplementaryScalarRetainsTwoElementOffsets]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSupplementaryScalarRetainsTwoElementOffsets]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSyntheticLegacyRunIDUsesVersion8RFCVariantUUID]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testSyntheticLegacyRunIDUsesVersion8RFCVariantUUID]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testV1KnownVectorFreezesDeterministicOperationID]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextLegacyBootstrapTests testV1KnownVectorFreezesDeterministicOperationID]' passed (0.000 seconds).
+Test Suite 'SyncTextLegacyBootstrapTests' passed at 2026-08-04 15:03:54.293.
+	 Executed 11 tests, with 0 failures (0 unexpected) in 0.134 (0.135) seconds
+Test Suite 'SyncTextOperationPayloadTests' started at 2026-08-04 15:03:54.293.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAdjacentAndInterleavedSpansRemainValidAndOrdered]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAdjacentAndInterleavedSpansRemainValidAndOrdered]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorFactoriesEncodeTheFourExactShapes]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorFactoriesEncodeTheFourExactShapes]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorKindRepresentationFailuresHaveExactCasesAndPaths]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorKindRepresentationFailuresHaveExactCasesAndPaths]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorsCrossOperationOwnedRunBoundaries]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnchorsCrossOperationOwnedRunBoundaries]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnyExplicitNullEndpointIsValueNotFoundAtEndpointPath]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testAnyExplicitNullEndpointIsValueNotFoundAtEndpointPath]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testBetweenFactoryRejectsIdenticalEndpoints]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testBetweenFactoryRejectsIdenticalEndpoints]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testCompleteArrayDuplicateDetectionPrecedesOrderFailure]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testCompleteArrayDuplicateDetectionPrecedesOrderFailure]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedBetweenAnchorPreservesIdenticalEndpointError]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedBetweenAnchorPreservesIdenticalEndpointError]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedSpanPreservesValidatedInitializerErrors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDecodedSpanPreservesValidatedInitializerErrors]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeleteFactoryPreservesCompactMultiRunStructuralOrder]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeleteFactoryPreservesCompactMultiRunStructuralOrder]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeletePayloadRejectsEmptyDuplicateOverlapAndDecreasingSpans]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testDeletePayloadRejectsEmptyDuplicateOverlapAndDecreasingSpans]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyAndFullyTombstonedStatesUseDifferentAnchors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyAndFullyTombstonedStatesUseDifferentAnchors]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyDeleteRangeIsRejectedAfterStateValidation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEmptyDeleteRangeIsRejectedAfterStateValidation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEstablishedIdentityCodecsContinueIgnoringUnknownNestedKeys]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testEstablishedIdentityCodecsContinueIgnoringUnknownNestedKeys]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactDeleteV1FixturePreservesAdjacentSpans]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactDeleteV1FixturePreservesAdjacentSpans]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactInsertV1FixtureEncodesAndDecodes]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testExactInsertV1FixtureEncodesAndDecodes]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testInsertAndDeleteVersionMatrices]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testInsertAndDeleteVersionMatrices]' passed (0.002 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLargeContiguousDeletionProducesOneSpan]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLargeContiguousDeletionProducesOneSpan]' passed (0.124 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLeadingInternalAndTrailingTombstonesUseCanonicalBias]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testLeadingInternalAndTrailingTombstonesUseCanonicalBias]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testMalformedPresentEndpointPreservesIdentityError]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testMalformedPresentEndpointPreservesIdentityError]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testRootStateDerivesBeforeBetweenAndAfterAnchorsWithoutMutation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testRootStateDerivesBeforeBetweenAndAfterAnchorsWithoutMutation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testSupplementaryScalarAnchorAndDeletionBoundariesAreSafe]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testSupplementaryScalarAnchorAndDeletionBoundariesAreSafe]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testTombstonedDescendantKeepsAdjacentParentSpansSeparate]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testTombstonedDescendantKeepsAdjacentParentSpansSeparate]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedAnchorAndSpanKeysReportFullNestedPaths]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedAnchorAndSpanKeysReportFullNestedPaths]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedPayloadKeysRejectLexicographicallyFirstKey]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnexpectedPayloadKeysRejectLexicographicallyFirstKey]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnknownAndContradictoryAnchorShapesUsePayloadErrors]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextOperationPayloadTests testUnknownAndContradictoryAnchorShapesUsePayloadErrors]' passed (0.000 seconds).
+Test Suite 'SyncTextOperationPayloadTests' passed at 2026-08-04 15:03:54.432.
+	 Executed 26 tests, with 0 failures (0 unexpected) in 0.135 (0.139) seconds
+Test Suite 'SyncTextSequenceStateTests' started at 2026-08-04 15:03:54.432.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testBeginningMiddleAndEndOriginsExpandIteratively]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testBeginningMiddleAndEndOriginsExpandIteratively]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testCanonicalOrderUsesRawUUIDBytesThenCounter]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testCanonicalOrderUsesRawUUIDBytesThenCounter]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testDeepNestedChainUsesBoundedIterativeTraversalWork]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testDeepNestedChainUsesBoundedIterativeTraversalWork]' passed (0.232 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testEmptyStateHasNoMaterializedContent]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testEmptyStateHasNoMaterializedContent]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentProjectionRejectsSiblingOrderMismatchEvenWithEqualVisibleText]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentProjectionRejectsSiblingOrderMismatchEvenWithEqualVisibleText]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentValidationRejectsUnknownOversizedSurrogateSplitAndMergeable]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testFragmentValidationRejectsUnknownOversizedSurrogateSplitAndMergeable]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLargeSameAnchorSiblingSetUsesBoundedIterativeTraversalWork]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLargeSameAnchorSiblingSetUsesBoundedIterativeTraversalWork]' passed (0.180 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLocalInitializersRejectInvalidOriginsRunsAndRanges]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testLocalInitializersRejectInvalidOriginsRunsAndRanges]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testNoncanonicalAndDuplicateRunArraysAreRejected]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testNoncanonicalAndDuplicateRunArraysAreRejected]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testPublicValuesConstructAVisibleRootState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testPublicValuesConstructAVisibleRootState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderDiffersFromCanonicalRunStorageWithoutChangingRunValidation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderDiffersFromCanonicalRunStorageWithoutChangingRunValidation]' passed (0.001 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderedProjectionProducesDeterministicState]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderedProjectionProducesDeterministicState]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderUsesDescendingCounterThenRawUUIDByteTieBreak]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorOrderUsesDescendingCounterThenRawUUIDByteTieBreak]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingOrderingIsIndependentOfInputPermutation]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingOrderingIsIndependentOfInputPermutation]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingSubtreesRemainContiguous]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSameAnchorSiblingSubtreesRemainContiguous]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSelectedSpansDoNotCoalesceAcrossDescendantsOrVisibilityGaps]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSelectedSpansDoNotCoalesceAcrossDescendantsOrVisibilityGaps]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSurrogateOriginsAcceptBeforeAndAfterButRejectInterior]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testSurrogateOriginsAcceptBeforeAndAfterButRejectInterior]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testUnknownSelfCyclicAndUnreachableOriginsAreDistinct]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testUnknownSelfCyclicAndUnreachableOriginsAreDistinct]' passed (0.000 seconds).
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testVisibilityMaterializationAnchorsAndRangesAreSurrogateSafe]' started.
+Test Case '-[AnchoredSequenceCoreTests.SyncTextSequenceStateTests testVisibilityMaterializationAnchorsAndRangesAreSurrogateSafe]' passed (0.000 seconds).
+Test Suite 'SyncTextSequenceStateTests' passed at 2026-08-04 15:03:54.854.
+	 Executed 19 tests, with 0 failures (0 unexpected) in 0.419 (0.422) seconds
+Test Suite 'AnchoredSequenceCorePackageTests.xctest' passed at 2026-08-04 15:03:54.854.
+	 Executed 76 tests, with 0 failures (0 unexpected) in 0.694 (0.705) seconds
+Test Suite 'All tests' passed at 2026-08-04 15:03:54.854.
+	 Executed 76 tests, with 0 failures (0 unexpected) in 0.694 (0.706) seconds
+◇ Test run started.
+↳ Testing Library Version: 1902
+↳ Target Platform: arm64e-apple-macos14.0
+✔ Test run with 0 tests in 0 suites passed after 0.001 seconds.

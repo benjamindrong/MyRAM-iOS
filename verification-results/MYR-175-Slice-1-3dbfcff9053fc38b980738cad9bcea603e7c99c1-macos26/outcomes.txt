@@ -1,0 +1,4 @@
+package=failure
+ios_tests=failure
+mac_tests=failure
+builds=success
