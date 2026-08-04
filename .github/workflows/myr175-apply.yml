@@ -10,7 +10,6 @@ permissions:
 
 jobs:
   apply:
-    if: ${{ hashFiles('.github/MYR-175-Slice-1.patch') != '' }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
