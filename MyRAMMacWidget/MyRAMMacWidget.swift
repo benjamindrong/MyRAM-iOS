@@ -35,15 +35,12 @@ private struct MyRAMMacWidgetEntry: TimelineEntry {
 
 private struct MyRAMMacWidgetProvider: TimelineProvider {
     func placeholder(in context: Context) -> MyRAMMacWidgetEntry {
-        let family = MyRAMWidgetFamily(widgetFamily: context.family)
-        let layoutPolicy = MyRAMWidgetLayoutPolicy(family: family, platform: .macOS)
-        return MyRAMMacWidgetEntry(
+        MyRAMMacWidgetEntry(
             date: .now,
             model: MyRAMWidgetRenderModel(
                 title: "Pinned Text",
                 pinnedTexts: ["Your most important text"],
                 bodyText: "Additional note text appears when space remains.",
-                bodyLineLimit: max(0, layoutPolicy.contentLineBudget - 1),
                 state: .content,
                 noteURL: nil
             )
@@ -115,15 +112,17 @@ private struct MyRAMMacWidgetEntryView: View {
                 }
             }
 
-            if let bodyText = entry.model.bodyText, entry.model.bodyLineLimit > 0 {
+            if let bodyText = entry.model.bodyText {
                 Text(bodyText)
                     .font(.footnote)
                     .foregroundStyle(entry.model.state == .content ? .secondary : .primary)
-                    .lineLimit(entry.model.bodyLineLimit)
                     .truncationMode(.tail)
+                    .frame(
+                        maxWidth: .infinity,
+                        maxHeight: .infinity,
+                        alignment: .topLeading
+                    )
             }
-
-            Spacer(minLength: 0)
         }
         .modifier(MyRAMWidgetContentMarginModifier(mode: layoutPolicy.contentMarginMode))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
