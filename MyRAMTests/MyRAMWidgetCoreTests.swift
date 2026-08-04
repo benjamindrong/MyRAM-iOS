@@ -108,6 +108,22 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         ))
     }
 
+    func testLayoutPolicyPreservesCurrentMetricsAcrossFamiliesAndPlatforms() {
+        for platform in [MyRAMWidgetPlatform.iOS, .macOS] {
+            let small = MyRAMWidgetLayoutPolicy(family: .small, platform: platform)
+            XCTAssertEqual(small.contentLineBudget, 3)
+            XCTAssertEqual(small.contentMarginMode, .systemAndDefaultCustomPadding)
+            XCTAssertEqual(small.rootSpacing, 6)
+            XCTAssertEqual(small.pinSpacing, 5)
+
+            let medium = MyRAMWidgetLayoutPolicy(family: .medium, platform: platform)
+            XCTAssertEqual(medium.contentLineBudget, 4)
+            XCTAssertEqual(medium.contentMarginMode, .systemAndDefaultCustomPadding)
+            XCTAssertEqual(medium.rootSpacing, 6)
+            XCTAssertEqual(medium.pinSpacing, 5)
+        }
+    }
+
     func testContentPolicyUsesPinPriorityAndExactBudgets() {
         let zeroPins = render(pins: [], body: "Body", family: .small)
         XCTAssertTrue(zeroPins.pinnedTexts.isEmpty)
