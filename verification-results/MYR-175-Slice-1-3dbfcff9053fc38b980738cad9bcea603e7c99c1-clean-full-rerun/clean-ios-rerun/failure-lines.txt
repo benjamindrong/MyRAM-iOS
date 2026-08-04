@@ -1,0 +1,4 @@
+3795:/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift:1364: error: -[MyRAMTests.SwiftDataNoteSequenceStateStoreTests testSemanticRunAndFragmentOrderAreRejectedWithoutNormalization] : failed: caught error: "fragmentOrderNotMatchingOrigins"
+3796:Test Case '-[MyRAMTests.SwiftDataNoteSequenceStateStoreTests testSemanticRunAndFragmentOrderAreRejectedWithoutNormalization]' failed (0.911 seconds).
+4723:/Users/runner/work/MyRAM-iOS/MyRAM-iOS/MyRAM-iOS/MyRAMUITests/MarkdownPreviewUITests.swift:81: error: -[MyRAMUITests.MarkdownPreviewUITests testEditorDismissesKeyboardAndDoesNotRegainFocusInPreview] : XCTAssertTrue failed - The shared iPhone Preview container must expose markdown-preview-reminder
+4725:Test Case '-[MyRAMUITests.MarkdownPreviewUITests testEditorDismissesKeyboardAndDoesNotRegainFocusInPreview]' failed (63.151 seconds).
