@@ -35,15 +35,12 @@ private struct MyRAMWidgetEntry: TimelineEntry {
 
 private struct MyRAMWidgetProvider: TimelineProvider {
     func placeholder(in context: Context) -> MyRAMWidgetEntry {
-        let family = MyRAMWidgetFamily(widgetFamily: context.family)
-        let layoutPolicy = MyRAMWidgetLayoutPolicy(family: family, platform: .iOS)
-        return MyRAMWidgetEntry(
+        MyRAMWidgetEntry(
             date: .now,
             model: MyRAMWidgetRenderModel(
                 title: "Pinned Text",
                 pinnedTexts: ["Your most important text"],
                 bodyText: "Additional note text appears when space remains.",
-                bodyLineLimit: max(0, layoutPolicy.contentLineBudget - 1),
                 state: .content,
                 noteURL: nil
             )
@@ -115,15 +112,17 @@ private struct MyRAMWidgetEntryView: View {
                 }
             }
 
-            if let bodyText = entry.model.bodyText, entry.model.bodyLineLimit > 0 {
+            if let bodyText = entry.model.bodyText {
                 Text(bodyText)
                     .font(.footnote)
                     .foregroundStyle(entry.model.state == .content ? .secondary : .primary)
-                    .lineLimit(entry.model.bodyLineLimit)
                     .truncationMode(.tail)
+                    .frame(
+                        maxWidth: .infinity,
+                        maxHeight: .infinity,
+                        alignment: .topLeading
+                    )
             }
-
-            Spacer(minLength: 0)
         }
         .modifier(MyRAMWidgetContentMarginModifier(mode: layoutPolicy.contentMarginMode))
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -154,7 +153,6 @@ struct MyRAMWidget: Widget {
             title: "Project Notes",
             pinnedTexts: ["Review the release checklist"],
             bodyText: "Confirm the remaining verification items before publishing.",
-            bodyLineLimit: 2,
             state: .content,
             noteURL: nil
         )
