@@ -49,7 +49,6 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
 
     let selectionStore: MyRAMWidgetNoteSelectionStore
 
-    private let container: ModelContainer
     private let observedContext: ModelContext
     private let snapshotStore: MyRAMWidgetSnapshotStore?
     private let platform: Platform
@@ -75,7 +74,6 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
         }
     ) {
         let resolvedSelectionStore = selectionStore ?? MyRAMWidgetNoteSelectionStore()
-        self.container = container
         self.observedContext = observedContext
         self.platform = platform
         self.selectionStore = resolvedSelectionStore
