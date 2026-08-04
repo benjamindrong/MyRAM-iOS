@@ -32,19 +32,13 @@ public enum SyncOperationIDCanonicalOrder {
         _ lhs: SyncOperationID,
         _ rhs: SyncOperationID
     ) -> Bool {
-        let lhsBytes = rawBytes(of: lhs.deviceID)
-        let rhsBytes = rawBytes(of: rhs.deviceID)
+        let lhsBytes = SyncOperationIDRawUUIDBytes.bytes(of: lhs.deviceID)
+        let rhsBytes = SyncOperationIDRawUUIDBytes.bytes(of: rhs.deviceID)
 
         if lhsBytes != rhsBytes {
             return lhsBytes.lexicographicallyPrecedes(rhsBytes)
         }
         return lhs.localCounter < rhs.localCounter
-    }
-
-    /// UUID tuple storage exposes the RFC 4122 bytes without string formatting semantics.
-    private static func rawBytes(of uuid: UUID) -> [UInt8] {
-        var value = uuid.uuid
-        return withUnsafeBytes(of: &value) { Array($0) }
     }
 }
 
@@ -474,7 +468,7 @@ private enum SyncTextSequenceStateValidator {
         )
         try validateAcyclicOrigins(runs, runIndex: runIndex)
 
-        let gapIndex = try makeGapIndex(runs)
+        let gapIndex = makeGapIndex(runs)
         var metrics = SyncTextSequenceTraversalMetrics()
         let structuralSpans = try deriveStructuralSpans(
             runs: runs,
@@ -599,25 +593,18 @@ private enum SyncTextSequenceStateValidator {
 
     private static func makeGapIndex(
         _ runs: [SyncTextSequenceRun]
-    ) throws -> [SyncTextSequenceGap: [Int]] {
+    ) -> [SyncTextSequenceGap: [Int]] {
         var result: [SyncTextSequenceGap: [Int]] = [:]
         for (index, run) in runs.enumerated() {
             let gap = SyncTextSequenceGap(
                 left: run.origin.leftElementID,
                 right: run.origin.rightElementID
             )
-            if let previousIndex = result[gap]?.last {
-                let previous = runs[previousIndex].operationID
-                guard SyncOperationIDCanonicalOrder.isOrderedBefore(previous, run.operationID) else {
-                    throw SyncTextSequenceStateError.noncanonicalSiblingOrder(
-                        previous: previous,
-                        current: run.operationID
-                    )
-                }
-            }
             result[gap, default: []].append(index)
         }
-        return result
+        return result.mapValues {
+            SyncOperationIDSameAnchorSiblingOrder.orderedRunIndices($0, runs: runs)
+        }
     }
 
     private static func deriveStructuralSpans(
@@ -637,6 +624,7 @@ private enum SyncTextSequenceStateValidator {
             switch command {
             case .expandGap(let gap):
                 metrics.gapIndexLookups += 1
+                // Reverse-push ordered roots so LIFO traversal expands each subtree contiguously.
                 for runIndex in (gapIndex[gap] ?? []).reversed() {
                     commands.append(.expandRun(runIndex))
                 }
