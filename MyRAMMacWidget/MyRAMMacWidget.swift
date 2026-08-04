@@ -110,6 +110,7 @@ private struct MyRAMMacWidgetEntryView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
+                .layoutPriority(1)
             }
 
             if let bodyText = entry.model.bodyText {
@@ -122,6 +123,7 @@ private struct MyRAMMacWidgetEntryView: View {
                         maxHeight: .infinity,
                         alignment: .topLeading
                     )
+                    .layoutPriority(0)
             }
         }
         .modifier(MyRAMWidgetContentMarginModifier(mode: layoutPolicy.contentMarginMode))
