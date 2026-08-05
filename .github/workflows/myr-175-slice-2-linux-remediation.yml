@@ -23,7 +23,7 @@ jobs:
           ref: MYR-175-Slice-2-Structural-insert-incorporation-and-anchor-resolution
           fetch-depth: 0
 
-      - name: Confirm workflow-only starting delta
+      - name: Confirm staged-remediation scope
         shell: bash
         run: |
           set -euo pipefail
@@ -31,37 +31,27 @@ jobs:
           git merge-base --is-ancestor "$BASE" HEAD
           actual="$(git diff --name-only "$BASE"...HEAD | sort)"
           expected="$(printf '%s\n' \
+            .github/myr175-remediation/patch.b64.00 \
+            .github/myr175-remediation/patch.b64.01 \
+            .github/myr175-remediation/patch.b64.02 \
+            .github/myr175-remediation/patch.b64.03 \
+            .github/myr175-remediation/patch.b64.04 \
+            .github/myr175-remediation/patch.b64.05 \
             .github/workflows/myr-175-slice-2-linux-remediation.yml \
             .github/workflows/myr-175-slice-2-review-remediation.yml | sort)"
-          test "$actual" = "$expected"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Unexpected staged-remediation scope:" >&2
+            printf '%s\n' "$actual" >&2
+            exit 1
+          fi
           echo "STARTING_HEAD=$(git rev-parse HEAD)"
 
-      - name: Apply reviewed patch definition
+      - name: Reconstruct and apply reviewed patch
         shell: bash
         run: |
           set -euo pipefail
-          awk '
-            /^          python3 - <<'\''PY'\''$/ { capture = 1; next }
-            capture && /^          PY$/ { exit }
-            capture { sub(/^          /, ""); print }
-          ' .github/workflows/myr-175-slice-2-review-remediation.yml > /tmp/myr175-remediate-raw.py
-          test -s /tmp/myr175-remediate-raw.py
-          python3 - <<'PY'
-          from pathlib import Path
-
-          source = Path('/tmp/myr175-remediate-raw.py').read_text().splitlines()
-          output = []
-          inside_triple_string = False
-          for line in source:
-              if inside_triple_string and "'''" not in line:
-                  line = '    ' + line
-              output.append(line)
-              if line.count("'''") % 2 == 1:
-                  inside_triple_string = not inside_triple_string
-          if inside_triple_string:
-              raise SystemExit('Unclosed triple-quoted string in extracted patch definition')
-          Path('/tmp/myr175-remediate.py').write_text('\n'.join(output) + '\n')
-          PY
+          cat .github/myr175-remediation/patch.b64.* \
+            | base64 --decode > /tmp/myr175-remediate.py
           python3 -m py_compile /tmp/myr175-remediate.py
           python3 /tmp/myr175-remediate.py
 
@@ -69,18 +59,35 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm \
+          rm -rf \
+            .github/myr175-remediation \
             .github/workflows/myr-175-slice-2-linux-remediation.yml \
             .github/workflows/myr-175-slice-2-review-remediation.yml
+
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
+          git add -A
+          git diff --cached --check
+
+          actual="$(git diff --cached --name-only | sort)"
+          expected="$(printf '%s\n' \
+            .github/myr175-remediation/patch.b64.00 \
+            .github/myr175-remediation/patch.b64.01 \
+            .github/myr175-remediation/patch.b64.02 \
+            .github/myr175-remediation/patch.b64.03 \
+            .github/myr175-remediation/patch.b64.04 \
+            .github/myr175-remediation/patch.b64.05 \
+            .github/workflows/myr-175-slice-2-linux-remediation.yml \
+            .github/workflows/myr-175-slice-2-review-remediation.yml \
             Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextSequenceState.swift \
             Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceInsertionTests.swift \
-            docs/MYR-175-structural-insert-alignment.md \
-            .github/workflows/myr-175-slice-2-linux-remediation.yml \
-            .github/workflows/myr-175-slice-2-review-remediation.yml
-          git diff --cached --check
+            docs/MYR-175-structural-insert-alignment.md | sort)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Unexpected remediation commit scope:" >&2
+            printf '%s\n' "$actual" >&2
+            exit 1
+          fi
+
           git commit -m "MYR-175 Cache anchor capture index and close coverage gaps"
           test -z "$(git status --short)"
           echo "CANDIDATE_HEAD=$(git rev-parse HEAD)"
@@ -105,10 +112,23 @@ jobs:
             --configuration release \
             --parallel
 
-      - name: Publish tested remediation
+      - name: Confirm final PR scope and publish tested remediation
         shell: bash
         run: |
           set -euo pipefail
+          BASE=19ae86b1552246092a5435636779a2f7a6ba6181
+          actual="$(git diff --name-only "$BASE"...HEAD | sort)"
+          expected="$(printf '%s\n' \
+            Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextSequenceState.swift \
+            Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextOperationPayloadTests.swift \
+            Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceInsertionTests.swift \
+            docs/MYR-175-structural-insert-alignment.md | sort)"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "Unexpected final PR scope:" >&2
+            printf '%s\n' "$actual" >&2
+            exit 1
+          fi
+          git diff --check "$BASE"...HEAD
           test -z "$(git status --short)"
           echo "TESTED_HEAD=$(git rev-parse HEAD)"
           git push origin HEAD:MYR-175-Slice-2-Structural-insert-incorporation-and-anchor-resolution
