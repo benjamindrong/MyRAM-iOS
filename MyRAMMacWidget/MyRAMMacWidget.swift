@@ -14,20 +14,6 @@ private extension MyRAMWidgetFamily {
     }
 }
 
-private struct MyRAMWidgetContentMarginModifier: ViewModifier {
-    let mode: MyRAMWidgetContentMarginMode
-
-    @ViewBuilder
-    func body(content: Content) -> some View {
-        switch mode {
-        case .systemAndDefaultCustomPadding:
-            content.padding()
-        case .systemOnly:
-            content
-        }
-    }
-}
-
 private struct MyRAMMacWidgetEntry: TimelineEntry {
     let date: Date
     let model: MyRAMWidgetRenderModel
@@ -126,7 +112,7 @@ private struct MyRAMMacWidgetEntryView: View {
                     .layoutPriority(0)
             }
         }
-        .modifier(MyRAMWidgetContentMarginModifier(mode: layoutPolicy.contentMarginMode))
+        .padding(layoutPolicy.contentPadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .widgetURL(entry.model.noteURL)
         .containerBackground(.background, for: .widget)
@@ -143,5 +129,6 @@ struct MyRAMMacWidget: Widget {
         .configurationDisplayName("Pinned Text")
         .description("Keeps your selected note and its most important text visible.")
         .supportedFamilies([.systemSmall, .systemMedium])
+        .contentMarginsDisabled()
     }
 }
