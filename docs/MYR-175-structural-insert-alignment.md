@@ -114,3 +114,64 @@ Deferred:
 - application-owned dark replay seam and cross-host tests: Slice 3;
 - dependency persistence, retry, and eventual convergence: MYR-177;
 - production activation: MYR-179.
+
+## Slice 2 baseline
+
+- Slice: structural insert incorporation and anchor resolution.
+- MyRAM baseline: `19ae86b1552246092a5435636779a2f7a6ba6181`.
+- Blacksmith instruction revision: `a6efd7024966027e9caffc9ba9281eb8eede0814`.
+- Review date: 2026-08-04.
+- Production activation remains deferred to MYR-179.
+
+## Slice 2 completion matrix
+
+| Behavior | MyRAM requirement | Adopted mechanism or divergence | Compatibility/convergence impact | Production location | Proving tests |
+|---|---|---|---|---|---|
+| Missing dependency behavior | Only an absent referenced operation is eligible for later deferral. | Resolve endpoints before replacement construction and return `missingAnchorDependency`; never guess a visible offset or invoke fallback. | MYR-177 can defer one exact error without reinterpreting malformed references. | `SyncTextSequenceState.incorporating` endpoint preflight | `testIncorporatingChildBeforeParentReturnsMissingDependencyWithoutMutation`, `testIncorporatingDistinguishesMissingOperationFromOutOfBoundsElement` |
+| Durable root-gap semantics for `.empty` | `.empty` names `(nil, nil)` even after root siblings occupy it. | Deliberate MyRAM divergence from a one-time empty-state assertion; always include the root gap in the valid-gap set. | Concurrent insertions captured from the same empty state converge through the existing sibling order. | `SyncTextSequenceState.incorporating` valid-gap construction | `testIncorporatingEmptyRootGapInsertionsConvergesAcrossAllPermutations` |
+| Self-referential anchor rejection | Any endpoint owned by the incoming operation is impossible and has global precedence across the complete anchor. | Scan both endpoints after empty-text and duplicate checks but before any dependency lookup. | Missing external endpoints cannot hide a nondeferrable self-reference. | `SyncTextSequenceState.incorporating` preflight | `testIncorporatingRejectsSelfReferentialAnchorWithoutMutation` |
+| Impossible reference classification | Missing operations, out-of-bounds elements, reversed endpoints, nonadjacent endpoints, and invalid head/tail claims remain distinct. | Preserve existing errors and add one public case per insertion classification; do not use `unknownOrigin` for insertion dependency or bounds failures. | MYR-177 can defer only `missingAnchorDependency`; all other structural failures remain nondeferrable. | `SyncTextSequenceStateError`, `SyncTextSequenceState.incorporating` | `testIncorporatingDistinguishesMissingOperationFromOutOfBoundsElement`, `testIncorporatingDistinguishesReversedAndNonadjacentBetweenEndpoints`, `testIncorporatingRejectsInvalidBeforeAndAfterClaims`, `testIncorporatingMissingAndImpossibleEndpointsNeverUseUnknownOrigin` |
+| Role-specific scalar-boundary validation | Left endpoints name the boundary after an element; right endpoints name the boundary before an element. | Validate `elementOffset + 1` for left roles and `elementOffset` for right roles against Unicode-scalar boundaries. | Durable UTF-16 identity remains usable without permitting origins inside surrogate pairs. | `SyncTextSequenceState.incorporating` endpoint resolution | `testIncorporatingUsesRoleSpecificSurrogatePairBoundaries` |
+| Mid-run and cross-run anchors | Placement derives from exact durable endpoints, not visible cursor state. | Validate the exact declared gap and preserve both `.between` endpoints in the new run origin. | Placement is independent of compatibility offset, current text hash, and arrival order among supported siblings. | `SyncTextSequenceState.incorporating` | `testIncorporatingSupportsLeadingMidRunAndTrailingInsertion`, `testIncorporatingCrossRunInsertionPreservesBothEndpoints` |
+| Tombstoned anchors | Tombstoned elements remain invisible but continue to participate in placement. | Derive gaps from immutable runs and remap prior visibility by element identity rather than visible text. | Insertions can target retained structure without revealing tombstones. | `SyncTextSequenceState.incorporating`, `remapVisibility` | `testIncorporatingUsesTombstonedAnchorsAndPreservesVisibilityByIdentity` |
+| Duplicate operations and empty text | Invalid insertion identity or content fails before replacement construction. | Reject empty text first and duplicate operation identity second, matching the locked preflight order. | Retries cannot duplicate content; no partial state is produced. | `SyncTextSequenceState.incorporating` preflight | `testIncorporatingRejectsDuplicateOperationAndEmptyInsertedText` |
+| Declared origin gaps | An exact historical gap remains admissible after siblings occupy it. | Include every existing run's exact declared origin in the valid-gap set. | Later same-anchor siblings remain admissible without flattening or endpoint rewriting. | `SyncTextSequenceState.incorporating` valid-gap construction | `testIncorporatingSameAnchorInsertionsConvergesAcrossAllPermutations` |
+| Intrinsic structural gaps | Every legal scalar boundary within and around each run is addressable. | Add gaps before the first scalar, between adjacent scalars, and after the final scalar for every run. | Leading, mid-run, trailing, descendant, and cross-run placement share one structural model. | `SyncTextSequenceState.incorporating` valid-gap construction | `testIncorporatingSupportsLeadingMidRunAndTrailingInsertion`, `testIncorporatingDescendantAfterDependenciesPreservesSubtreeContiguity` |
+| Occupied root and same-anchor gaps | Occupancy does not invalidate the structural gap. | Validate membership in the durable gap set and delegate materialization to the Slice 1 same-anchor comparator. | All six supported delivery permutations produce exactly equal runs, fragments, visible text, and counts. | `SyncTextSequenceState.incorporating`, `SyncTextSequenceStateValidator.projectStructuralSpans` | `testIncorporatingEmptyRootGapInsertionsConvergesAcrossAllPermutations`, `testIncorporatingSameAnchorInsertionsConvergesAcrossAllPermutations` |
+| Identity-based visibility preservation | Existing element visibility must survive structural splitting; all inserted elements are visible. | Reuse the iterative structural projection, stream existing visibility across projected spans, and coalesce only structurally adjacent equal-visibility ranges. | Structural insertion cannot resurrect tombstones or hide new content. | `remapVisibility` | `testIncorporatingUsesTombstonedAnchorsAndPreservesVisibilityByIdentity`, `testIncorporatingSupportsLeadingMidRunAndTrailingInsertion` |
+| Immutable replacement-state construction | Success and failure leave the input unchanged and success returns a fully validated state. | Insert the new run in canonical storage order, reuse the existing iterative projector, and call the public validated initializer. | Canonical storage remains separate from sibling materialization; no unchecked state or persistence change is introduced. | `SyncTextSequenceState.incorporating`, `SyncTextSequenceStateValidator.projectStructuralSpans` | `testIncorporatingInsertIntoEmptyStateCreatesVisibleRootWithoutMutatingInput`, `testLargeSameAnchorIncorporationUsesIterativeProjection`, `testDeepChainIncorporationUsesIterativeProjection` |
+
+## Slice 2 deliberate divergences
+
+### Durable `.empty` root gap
+
+- MyRAM requirement: operations captured concurrently from an empty state must remain admissible after the first root insertion arrives.
+- Reason for divergence: treating `.empty` as a one-time assertion would create a root-only special case and reject valid same-anchor siblings.
+- Compatibility and convergence: no serialization, persistence, or comparator change; peers using the Slice 2 contract derive one deterministic root projection.
+- Production location: `SyncTextSequenceState.incorporating` root-gap validation.
+- Adversarial test: `testIncorporatingEmptyRootGapInsertionsConvergesAcrossAllPermutations`.
+
+### Compact identity-based visibility remapping
+
+- MyRAM requirement: preserve the existing compact run/fragment representation while insertion splits structural ranges.
+- Reason for divergence: adopting a per-element replacement representation would expand scope and create unnecessary schema and persistence debt.
+- Compatibility and convergence: existing runs remain immutable, existing visibility is preserved by identity, and final fragments continue using the validated compact format.
+- Production location: `SyncTextSequenceState.remapVisibility`.
+- Adversarial tests: `testIncorporatingUsesTombstonedAnchorsAndPreservesVisibilityByIdentity`, `testLargeSameAnchorIncorporationUsesIterativeProjection`, and `testDeepChainIncorporationUsesIterativeProjection`.
+
+## Slice 2 boundary
+
+Implemented in Slice 2:
+
+- immutable structural insert incorporation;
+- durable root, declared-origin, and intrinsic-gap resolution;
+- exact dependency, bounds, topology, self-reference, and scalar-boundary classifications;
+- canonical run insertion and same-anchor materialization reuse;
+- identity-based visibility preservation and inserted-element visibility;
+- supported same-anchor, descendant, and root-gap convergence coverage.
+
+Deferred:
+
+- application-owned dark replay seam and cross-host tests: Slice 3;
+- dependency persistence, retry, and eventual convergence: MYR-177;
+- production capture, queue admission, convergence, persistence, editor apply, and capability activation: MYR-179.
