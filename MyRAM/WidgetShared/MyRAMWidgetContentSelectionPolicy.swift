@@ -6,12 +6,12 @@ enum MyRAMWidgetFamily: Sendable {
 }
 
 struct MyRAMWidgetLayoutPolicy: Equatable, Sendable {
-    let contentPadding: CGFloat
+    let contentMarginScale: CGFloat
     let rootSpacing: CGFloat
     let pinSpacing: CGFloat
 
     init(family _: MyRAMWidgetFamily, platform _: MyRAMWidgetPlatform) {
-        contentPadding = 8
+        contentMarginScale = 0.5
         rootSpacing = 4
         pinSpacing = 4
     }
