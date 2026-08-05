@@ -1,6 +1,19 @@
 import SwiftUI
 import WidgetKit
 
+private extension MyRAMWidgetFamily {
+    init(widgetFamily: WidgetFamily) {
+        switch widgetFamily {
+        case .systemMedium:
+            self = .medium
+        case .systemSmall:
+            self = .small
+        default:
+            self = .small
+        }
+    }
+}
+
 private struct MyRAMMacWidgetEntry: TimelineEntry {
     let date: Date
     let model: MyRAMWidgetRenderModel
@@ -14,7 +27,6 @@ private struct MyRAMMacWidgetProvider: TimelineProvider {
                 title: "Pinned Text",
                 pinnedTexts: ["Your most important text"],
                 bodyText: "Additional note text appears when space remains.",
-                bodyLineLimit: context.family == .systemMedium ? 3 : 2,
                 state: .content,
                 noteURL: nil
             )
@@ -47,7 +59,7 @@ private struct MyRAMMacWidgetProvider: TimelineProvider {
 
         let model = MyRAMWidgetContentSelectionPolicy().renderModel(
             from: readResult,
-            family: family == .systemMedium ? .medium : .small,
+            family: MyRAMWidgetFamily(widgetFamily: family),
             platform: .macOS
         )
         return MyRAMMacWidgetEntry(date: .now, model: model)
@@ -56,9 +68,28 @@ private struct MyRAMMacWidgetProvider: TimelineProvider {
 
 private struct MyRAMMacWidgetEntryView: View {
     let entry: MyRAMMacWidgetEntry
+    @Environment(\.widgetFamily) private var widgetFamily
+    @Environment(\.widgetContentMargins) private var widgetContentMargins
+
+    private var layoutPolicy: MyRAMWidgetLayoutPolicy {
+        MyRAMWidgetLayoutPolicy(
+            family: MyRAMWidgetFamily(widgetFamily: widgetFamily),
+            platform: .macOS
+        )
+    }
+
+    private var contentInsets: EdgeInsets {
+        let scale = layoutPolicy.contentMarginScale
+        return EdgeInsets(
+            top: widgetContentMargins.top * scale,
+            leading: widgetContentMargins.leading * scale,
+            bottom: widgetContentMargins.bottom * scale,
+            trailing: widgetContentMargins.trailing * scale
+        )
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: layoutPolicy.rootSpacing) {
             if !entry.model.title.isEmpty {
                 Text(entry.model.title)
                     .font(.headline)
@@ -67,7 +98,7 @@ private struct MyRAMMacWidgetEntryView: View {
             }
 
             ForEach(Array(entry.model.pinnedTexts.enumerated()), id: \.offset) { _, text in
-                HStack(spacing: 5) {
+                HStack(spacing: layoutPolicy.pinSpacing) {
                     Image(systemName: "pin.fill")
                         .font(.caption2)
                         .foregroundStyle(.tint)
@@ -76,19 +107,23 @@ private struct MyRAMMacWidgetEntryView: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
+                .layoutPriority(1)
             }
 
-            if let bodyText = entry.model.bodyText, entry.model.bodyLineLimit > 0 {
+            if let bodyText = entry.model.bodyText {
                 Text(bodyText)
                     .font(.footnote)
                     .foregroundStyle(entry.model.state == .content ? .secondary : .primary)
-                    .lineLimit(entry.model.bodyLineLimit)
                     .truncationMode(.tail)
+                    .frame(
+                        maxWidth: .infinity,
+                        maxHeight: .infinity,
+                        alignment: .topLeading
+                    )
+                    .layoutPriority(0)
             }
-
-            Spacer(minLength: 0)
         }
-        .padding()
+        .padding(contentInsets)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .widgetURL(entry.model.noteURL)
         .containerBackground(.background, for: .widget)
@@ -105,5 +140,6 @@ struct MyRAMMacWidget: Widget {
         .configurationDisplayName("Pinned Text")
         .description("Keeps your selected note and its most important text visible.")
         .supportedFamilies([.systemSmall, .systemMedium])
+        .contentMarginsDisabled()
     }
 }

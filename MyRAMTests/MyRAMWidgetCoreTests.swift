@@ -108,25 +108,36 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         ))
     }
 
-    func testContentPolicyUsesPinPriorityAndExactBudgets() {
+    func testLayoutPolicyUsesHalfSystemMarginsAndCompactSpacingAcrossFamiliesAndPlatforms() {
+        for platform in [MyRAMWidgetPlatform.iOS, .macOS] {
+            let small = MyRAMWidgetLayoutPolicy(family: .small, platform: platform)
+            XCTAssertEqual(small.contentMarginScale, 0.5)
+            XCTAssertEqual(small.rootSpacing, 4)
+            XCTAssertEqual(small.pinSpacing, 4)
+
+            let medium = MyRAMWidgetLayoutPolicy(family: .medium, platform: platform)
+            XCTAssertEqual(medium.contentMarginScale, 0.5)
+            XCTAssertEqual(medium.rootSpacing, 4)
+            XCTAssertEqual(medium.pinSpacing, 4)
+        }
+    }
+
+    func testContentPolicyPreservesAllPinsAndDoesNotCapBodyLines() {
         let zeroPins = render(pins: [], body: "Body", family: .small)
         XCTAssertTrue(zeroPins.pinnedTexts.isEmpty)
         XCTAssertEqual(zeroPins.bodyText, "Body")
-        XCTAssertEqual(zeroPins.bodyLineLimit, 3)
 
         let onePin = render(pins: ["Pin"], body: "Body", family: .medium)
         XCTAssertEqual(onePin.pinnedTexts, ["Pin"])
         XCTAssertEqual(onePin.bodyText, "Body")
-        XCTAssertEqual(onePin.bodyLineLimit, 3)
 
-        let exhausted = render(
-            pins: ["1", "2", "3", "4"],
+        let manyPins = render(
+            pins: ["1", "2", "3", "4", "5", "6", "7", "8", "9"],
             body: "Body",
             family: .small
         )
-        XCTAssertEqual(exhausted.pinnedTexts, ["1", "2", "3"])
-        XCTAssertNil(exhausted.bodyText)
-        XCTAssertEqual(exhausted.bodyLineLimit, 0)
+        XCTAssertEqual(manyPins.pinnedTexts, ["1", "2", "3", "4", "5", "6", "7", "8", "9"])
+        XCTAssertEqual(manyPins.bodyText, "Body")
     }
 
     func testStableStatesRemainDistinct() {

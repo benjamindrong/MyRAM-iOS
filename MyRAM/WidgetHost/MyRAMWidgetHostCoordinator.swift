@@ -49,7 +49,6 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
 
     let selectionStore: MyRAMWidgetNoteSelectionStore
 
-    private let container: ModelContainer
     private let observedContext: ModelContext
     private let snapshotStore: MyRAMWidgetSnapshotStore?
     private let platform: Platform
@@ -75,7 +74,7 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
         }
     ) {
         let resolvedSelectionStore = selectionStore ?? MyRAMWidgetNoteSelectionStore()
-        self.container = container
+        _ = container
         self.observedContext = observedContext
         self.platform = platform
         self.selectionStore = resolvedSelectionStore
@@ -143,16 +142,13 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
 
         let envelope: MyRAMWidgetSnapshotEnvelope
         if let selectedNoteID = selectionStore.selectedNoteID {
-            let readContext = ModelContext(container)
-            readContext.autosaveEnabled = false
-
             let descriptor = FetchDescriptor<Note>(
                 predicate: #Predicate { note in
                     note.id == selectedNoteID && note.deletedAt == nil
                 }
             )
 
-            guard let note = try? readContext.fetch(descriptor).first else {
+            guard let note = try? observedContext.fetch(descriptor).first else {
                 selectionStore.clear()
                 envelope = MyRAMWidgetSnapshotEnvelope(generatedAt: .now, note: nil)
                 return publish(envelope, through: snapshotStore)

@@ -3,12 +3,17 @@ import Foundation
 enum MyRAMWidgetFamily: Sendable {
     case small
     case medium
+}
 
-    var contentLineBudget: Int {
-        switch self {
-        case .small: 3
-        case .medium: 4
-        }
+struct MyRAMWidgetLayoutPolicy: Equatable, Sendable {
+    let contentMarginScale: CGFloat
+    let rootSpacing: CGFloat
+    let pinSpacing: CGFloat
+
+    init(family _: MyRAMWidgetFamily, platform _: MyRAMWidgetPlatform) {
+        contentMarginScale = 0.5
+        rootSpacing = 4
+        pinSpacing = 4
     }
 }
 
@@ -23,7 +28,6 @@ struct MyRAMWidgetRenderModel: Equatable, Sendable {
     let title: String
     let pinnedTexts: [String]
     let bodyText: String?
-    let bodyLineLimit: Int
     let state: MyRAMWidgetRenderState
     let noteURL: URL?
 
@@ -44,22 +48,20 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
         case .missing, .inaccessible, .unsupportedVersion, .malformed:
             return stableState(
                 .updateRequired,
-                message: MyRAMWidgetRenderModel.updateRequiredMessage,
-                bodyLineLimit: family.contentLineBudget
+                message: MyRAMWidgetRenderModel.updateRequiredMessage
             )
         }
     }
 
     func renderModel(
         from envelope: MyRAMWidgetSnapshotEnvelope,
-        family: MyRAMWidgetFamily,
+        family _: MyRAMWidgetFamily,
         platform: MyRAMWidgetPlatform
     ) -> MyRAMWidgetRenderModel {
         guard let note = envelope.note else {
             return stableState(
                 .noSelection,
-                message: MyRAMWidgetRenderModel.noSelectionMessage,
-                bodyLineLimit: family.contentLineBudget
+                message: MyRAMWidgetRenderModel.noSelectionMessage
             )
         }
 
@@ -68,18 +70,13 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
             return trimmed.isEmpty ? nil : trimmed
         }
         let body = note.bodyPreviewSource
-        let budget = family.contentLineBudget
-        let fittingPins = Array(pins.prefix(budget))
-        let allPinsFit = fittingPins.count == pins.count
-        let remainingLines = allPinsFit ? max(0, budget - fittingPins.count) : 0
-        let bodyText = allPinsFit && remainingLines > 0 && !body.isEmpty ? body : nil
+        let bodyText = body.isEmpty ? nil : body
 
-        if fittingPins.isEmpty, bodyText == nil {
+        if pins.isEmpty, bodyText == nil {
             return MyRAMWidgetRenderModel(
                 title: note.title,
                 pinnedTexts: [],
                 bodyText: MyRAMWidgetRenderModel.emptyNoteMessage,
-                bodyLineLimit: budget,
                 state: .emptyNote,
                 noteURL: MyRAMWidgetDeepLink.url(noteID: note.id, platform: platform)
             )
@@ -87,9 +84,8 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
 
         return MyRAMWidgetRenderModel(
             title: note.title,
-            pinnedTexts: fittingPins,
+            pinnedTexts: pins,
             bodyText: bodyText,
-            bodyLineLimit: bodyText == nil ? 0 : remainingLines,
             state: .content,
             noteURL: MyRAMWidgetDeepLink.url(noteID: note.id, platform: platform)
         )
@@ -97,14 +93,12 @@ struct MyRAMWidgetContentSelectionPolicy: Sendable {
 
     private func stableState(
         _ state: MyRAMWidgetRenderState,
-        message: String,
-        bodyLineLimit: Int
+        message: String
     ) -> MyRAMWidgetRenderModel {
         MyRAMWidgetRenderModel(
             title: "",
             pinnedTexts: [],
             bodyText: message,
-            bodyLineLimit: bodyLineLimit,
             state: state,
             noteURL: nil
         )
