@@ -5,18 +5,13 @@ enum MyRAMWidgetFamily: Sendable {
     case medium
 }
 
-enum MyRAMWidgetContentMarginMode: Equatable, Sendable {
-    case systemAndDefaultCustomPadding
-    case systemOnly
-}
-
 struct MyRAMWidgetLayoutPolicy: Equatable, Sendable {
-    let contentMarginMode: MyRAMWidgetContentMarginMode
+    let contentPadding: CGFloat
     let rootSpacing: CGFloat
     let pinSpacing: CGFloat
 
     init(family _: MyRAMWidgetFamily, platform _: MyRAMWidgetPlatform) {
-        contentMarginMode = .systemOnly
+        contentPadding = 8
         rootSpacing = 4
         pinSpacing = 4
     }
