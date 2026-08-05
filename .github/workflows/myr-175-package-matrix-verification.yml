@@ -1,0 +1,51 @@
+name: MYR-175 Package Matrix Verification
+
+on:
+  push:
+    branches:
+      - MYR-175-Slice-2-Package-matrix-verification
+
+permissions:
+  contents: read
+
+jobs:
+  anchored-sequence-core:
+    name: AnchoredSequenceCore (${{ matrix.configuration }})
+    runs-on: macos-15
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration:
+          - debug
+          - release
+
+    steps:
+      - name: Check out exact PR head
+        uses: actions/checkout@v4
+        with:
+          ref: 0a65817fa835398d95927e167ada3233ec4ef5ca
+
+      - name: Confirm tested source
+        shell: bash
+        run: |
+          set -euo pipefail
+          actual="$(git rev-parse HEAD)"
+          expected="0a65817fa835398d95927e167ada3233ec4ef5ca"
+          test "$actual" = "$expected"
+          echo "TESTED_SOURCE_SHA=$actual"
+
+      - name: Report Swift toolchain
+        run: xcrun swift --version
+
+      - name: Run complete package suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun swift package \
+            --package-path Packages/AnchoredSequenceCore \
+            clean
+          xcrun swift test \
+            --package-path Packages/AnchoredSequenceCore \
+            --configuration "${{ matrix.configuration }}" \
+            --parallel
