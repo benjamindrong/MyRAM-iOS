@@ -1,0 +1,682 @@
+name: MYR-175 Slice 2 Review Remediation
+
+on:
+  push:
+    branches:
+      - MYR-175-Slice-2-Structural-insert-incorporation-and-anchor-resolution
+
+permissions:
+  contents: write
+
+concurrency:
+  group: myr-175-slice-2-review-remediation
+  cancel-in-progress: false
+
+jobs:
+  remediate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: macos-15-arm64
+    steps:
+      - name: Check out existing PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: MYR-175-Slice-2-Structural-insert-incorporation-and-anchor-resolution
+          fetch-depth: 0
+
+      - name: Confirm starting head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "0a65817fa835398d95927e167ada3233ec4ef5ca"
+          echo "STARTING_HEAD=$(git rev-parse HEAD)"
+
+      - name: Apply narrow review remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source_path = Path("Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextSequenceState.swift")
+          tests_path = Path("Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceInsertionTests.swift")
+          doc_path = Path("docs/MYR-175-structural-insert-alignment.md")
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected one match in {path}, found {count}: {old[:80]!r}")
+              path.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              source_path,
+              '''    private let materializedVisibleText: String
+              private let materializedVisibleUTF16Count: Int
+              private let materializedTombstonedUTF16Count: Int
+          ''',
+              '''    private let materializedVisibleText: String
+              private let materializedVisibleUTF16Count: Int
+              private let materializedTombstonedUTF16Count: Int
+              private let anchorResolutionIndex: SyncTextSequenceAnchorResolutionIndex
+          '''
+          )
+
+          replace_once(
+              source_path,
+              '''        let validation = try SyncTextSequenceStateValidator.validate(
+                  runs: runs,
+                  fragments: fragments
+              )
+              self.runs = runs
+              self.fragments = fragments
+              self.materializedVisibleText = validation.visibleText
+              self.materializedVisibleUTF16Count = validation.visibleUTF16Count
+              self.materializedTombstonedUTF16Count = validation.tombstonedUTF16Count
+              self.validationMetrics = validation.metrics
+          ''',
+              '''        let validation = try SyncTextSequenceStateValidator.validate(
+                  runs: runs,
+                  fragments: fragments
+              )
+              let anchorResolutionIndex = try SyncTextSequenceAnchorResolutionIndex(
+                  runs: runs,
+                  fragments: fragments
+              )
+              self.runs = runs
+              self.fragments = fragments
+              self.materializedVisibleText = validation.visibleText
+              self.materializedVisibleUTF16Count = validation.visibleUTF16Count
+              self.materializedTombstonedUTF16Count = validation.tombstonedUTF16Count
+              self.anchorResolutionIndex = anchorResolutionIndex
+              self.validationMetrics = validation.metrics
+          '''
+          )
+
+          replace_once(
+              source_path,
+              '''        let durableGaps = SyncTextSequenceDurableGapIndex(runs: runs)
+              var metrics = SyncTextSequenceAnchorResolutionMetrics(
+                  indexedRuns: runs.count,
+                  declaredOrigins: durableGaps.declaredOriginCount
+              )
+              guard !fragments.isEmpty else {
+                  return (.empty, metrics)
+              }
+
+              var visibleCursor = 0
+              var leftElementID: SyncTextElementID?
+              for fragment in fragments {
+                  metrics.visitedFragments += 1
+                  if fragment.visibility == .visible {
+                      let nextVisibleCursor = visibleCursor + fragment.utf16Length
+                      if offset < nextVisibleCursor {
+                          let offsetInFragment = offset - visibleCursor
+                          let rightElementID = try SyncTextElementID(
+                              operationID: fragment.operationID,
+                              elementOffset: fragment.startOffset + offsetInFragment
+                          )
+                          if offsetInFragment > 0 {
+                              leftElementID = try SyncTextElementID(
+                                  operationID: fragment.operationID,
+                                  elementOffset: fragment.startOffset + offsetInFragment - 1
+                              )
+                          }
+                          let anchor = try canonicalOperationAnchor(
+                              leftElementID: leftElementID,
+                              rightElementID: rightElementID,
+                              durableGaps: durableGaps,
+                              metrics: &metrics
+                          )
+                          return (anchor, metrics)
+                      }
+                      visibleCursor = nextVisibleCursor
+                  }
+
+                  leftElementID = try SyncTextElementID(
+                      operationID: fragment.operationID,
+                      elementOffset: fragment.startOffset + fragment.utf16Length - 1
+                  )
+              }
+
+              guard let leftElementID else {
+                  preconditionFailure("A structurally nonempty state must have a final element")
+              }
+              let anchor = try canonicalOperationAnchor(
+                  leftElementID: leftElementID,
+                  rightElementID: nil,
+                  durableGaps: durableGaps,
+                  metrics: &metrics
+              )
+              return (anchor, metrics)
+          ''',
+              '''        var metrics = SyncTextSequenceAnchorResolutionMetrics()
+              let durableGaps = anchorResolutionIndex.durableGaps
+              guard !fragments.isEmpty else {
+                  return (.empty, metrics)
+              }
+
+              if let entry = anchorResolutionIndex.visibleFragment(
+                  containingVisibleUTF16Offset: offset,
+                  metrics: &metrics
+              ) {
+                  let offsetInFragment = offset - entry.visibleStartOffset
+                  var leftElementID = entry.structuralLeftElementID
+                  let rightElementID = try SyncTextElementID(
+                      operationID: entry.fragment.operationID,
+                      elementOffset: entry.fragment.startOffset + offsetInFragment
+                  )
+                  if offsetInFragment > 0 {
+                      leftElementID = try SyncTextElementID(
+                          operationID: entry.fragment.operationID,
+                          elementOffset: entry.fragment.startOffset + offsetInFragment - 1
+                      )
+                  }
+                  let anchor = try canonicalOperationAnchor(
+                      leftElementID: leftElementID,
+                      rightElementID: rightElementID,
+                      durableGaps: durableGaps,
+                      metrics: &metrics
+                  )
+                  return (anchor, metrics)
+              }
+
+              guard let leftElementID = anchorResolutionIndex.finalStructuralElementID else {
+                  preconditionFailure("A structurally nonempty state must have a final element")
+              }
+              let anchor = try canonicalOperationAnchor(
+                  leftElementID: leftElementID,
+                  rightElementID: nil,
+                  durableGaps: durableGaps,
+                  metrics: &metrics
+              )
+              return (anchor, metrics)
+          '''
+          )
+
+          replace_once(
+              source_path,
+              '''        let durableGaps = SyncTextSequenceDurableGapIndex(runs: runs)
+
+              func resolveEndpoint(
+          ''',
+              '''        let durableGaps = anchorResolutionIndex.durableGaps
+
+              func resolveEndpoint(
+          '''
+          )
+
+          replace_once(
+              source_path,
+              '''private struct SyncTextSequenceGap: Equatable, Hashable {
+          ''',
+              '''private struct SyncTextSequenceVisibleFragmentAnchorEntry: Sendable {
+              let fragment: SyncTextSequenceFragment
+              let visibleStartOffset: Int
+              let visibleEndOffset: Int
+              let structuralLeftElementID: SyncTextElementID?
+          }
+
+          private struct SyncTextSequenceAnchorResolutionIndex: Sendable {
+              let durableGaps: SyncTextSequenceDurableGapIndex
+              let visibleFragments: [SyncTextSequenceVisibleFragmentAnchorEntry]
+              let finalStructuralElementID: SyncTextElementID?
+
+              init(
+                  runs: [SyncTextSequenceRun],
+                  fragments: [SyncTextSequenceFragment]
+              ) throws {
+                  self.durableGaps = SyncTextSequenceDurableGapIndex(runs: runs)
+
+                  var visibleFragments: [SyncTextSequenceVisibleFragmentAnchorEntry] = []
+                  visibleFragments.reserveCapacity(fragments.count)
+                  var visibleCursor = 0
+                  var structuralLeftElementID: SyncTextElementID?
+
+                  for fragment in fragments {
+                      if fragment.visibility == .visible {
+                          let (visibleEndOffset, overflow) = visibleCursor.addingReportingOverflow(
+                              fragment.utf16Length
+                          )
+                          guard !overflow else {
+                              throw SyncTextSequenceStateError.countOverflow
+                          }
+                          visibleFragments.append(
+                              SyncTextSequenceVisibleFragmentAnchorEntry(
+                                  fragment: fragment,
+                                  visibleStartOffset: visibleCursor,
+                                  visibleEndOffset: visibleEndOffset,
+                                  structuralLeftElementID: structuralLeftElementID
+                              )
+                          )
+                          visibleCursor = visibleEndOffset
+                      }
+
+                      structuralLeftElementID = try SyncTextElementID(
+                          operationID: fragment.operationID,
+                          elementOffset: fragment.startOffset + fragment.utf16Length - 1
+                      )
+                  }
+
+                  self.visibleFragments = visibleFragments
+                  self.finalStructuralElementID = structuralLeftElementID
+              }
+
+              func visibleFragment(
+                  containingVisibleUTF16Offset offset: Int,
+                  metrics: inout SyncTextSequenceAnchorResolutionMetrics
+              ) -> SyncTextSequenceVisibleFragmentAnchorEntry? {
+                  var lowerBound = 0
+                  var upperBound = visibleFragments.count
+
+                  while lowerBound < upperBound {
+                      metrics.visitedFragments += 1
+                      let middle = lowerBound + (upperBound - lowerBound) / 2
+                      if offset < visibleFragments[middle].visibleEndOffset {
+                          upperBound = middle
+                      } else {
+                          lowerBound = middle + 1
+                      }
+                  }
+
+                  guard lowerBound < visibleFragments.count else { return nil }
+                  let entry = visibleFragments[lowerBound]
+                  guard entry.visibleStartOffset <= offset else {
+                      preconditionFailure(
+                          "A validated visible offset must resolve inside the indexed fragment"
+                      )
+                  }
+                  return entry
+              }
+          }
+
+          private struct SyncTextSequenceGap: Equatable, Hashable, Sendable {
+          '''
+          )
+
+          replace_once(
+              source_path,
+              '''private struct SyncTextSequenceDurableGapIndex {
+          ''',
+              '''private struct SyncTextSequenceDurableGapIndex: Sendable {
+          '''
+          )
+
+          replace_once(
+              tests_path,
+              '''        let left = try element(baseOperation, 0)
+              let right = try element(baseOperation, 1)
+              let sharedAnchor = try SyncOperationAnchor.between(left: left, right: right)
+              let parentElement = try element(parentOperation, 0)
+          ''',
+              '''        let left = try element(baseOperation, 0)
+              let right = try element(baseOperation, 1)
+              let parentElement = try element(parentOperation, 0)
+          '''
+          )
+
+          replace_once(
+              tests_path,
+              '''    func testIncorporatingEmptyRootGapInsertionsConvergesAcrossAllPermutations() throws {
+          ''',
+              '''    func testIncorporatingOccupiedBeforeAndAfterOriginsRemainAdmissibleAcrossPermutations() throws {
+                  let baseOperation = operation(0)
+                  let operations = [operation(1), operation(2), operation(3)]
+                  let first = try element(baseOperation, 0)
+                  let final = try element(baseOperation, 2)
+                  let cases: [(SyncOperationAnchor, String, [SyncOperationID])] = [
+                      (
+                          .before(first),
+                          "321ABC",
+                          [operation(3), operation(2), operation(1), baseOperation]
+                      ),
+                      (
+                          .after(final),
+                          "ABC321",
+                          [baseOperation, operation(3), operation(2), operation(1)]
+                      )
+                  ]
+
+                  for (anchor, expectedText, expectedFragmentOperations) in cases {
+                      var completedStates: [SyncTextSequenceState] = []
+                      for permutation in permutations(operations) {
+                          var state = try rootState(operationID: baseOperation, text: "ABC")
+                          for operationID in permutation {
+                              state = try state.incorporating(
+                                  insert: insertPayload(operationID, anchor: anchor),
+                                  insertedText: String(operationID.localCounter)
+                              )
+                          }
+
+                          XCTAssertEqual(state.visibleText, expectedText)
+                          XCTAssertEqual(
+                              state.fragments.map(\\.operationID),
+                              expectedFragmentOperations
+                          )
+                          XCTAssertEqual(state.visibleUTF16Count, 6)
+                          XCTAssertEqual(state.tombstonedUTF16Count, 0)
+                          for operationID in operations {
+                              let insertedRun = try XCTUnwrap(
+                                  state.runs.first(where: { $0.operationID == operationID })
+                              )
+                              XCTAssertEqual(
+                                  insertedRun.origin.leftElementID,
+                                  anchor.leftElementID
+                              )
+                              XCTAssertEqual(
+                                  insertedRun.origin.rightElementID,
+                                  anchor.rightElementID
+                              )
+                          }
+                          completedStates.append(state)
+                      }
+
+                      for state in completedStates.dropFirst() {
+                          XCTAssertEqual(state, completedStates[0])
+                      }
+                  }
+              }
+
+              func testIncorporatingEmptyRootGapInsertionsConvergesAcrossAllPermutations() throws {
+          '''
+          )
+
+          replace_once(
+              tests_path,
+              '''    func testLargeSameAnchorIncorporationUsesIterativeProjection() throws {
+          ''',
+              '''    func testEveryLegalCursorProducesIncorporablePayloadAcrossRepresentativeStates() throws {
+                  let siblingBaseOperation = operation(0)
+                  let siblingLeft = try element(siblingBaseOperation, 0)
+                  let siblingRight = try element(siblingBaseOperation, 1)
+                  let siblingAnchor = try SyncOperationAnchor.between(
+                      left: siblingLeft,
+                      right: siblingRight
+                  )
+                  var siblingState = try rootState(
+                      operationID: siblingBaseOperation,
+                      text: "AB"
+                  )
+                  for sibling in [operation(1), operation(2)] {
+                      siblingState = try siblingState.incorporating(
+                          insert: insertPayload(sibling, anchor: siblingAnchor),
+                          insertedText: String(sibling.localCounter)
+                      )
+                  }
+
+                  let descendantBaseOperation = operation(10)
+                  let descendantLeft = try element(descendantBaseOperation, 0)
+                  let descendantRight = try element(descendantBaseOperation, 1)
+                  var descendantState = try rootState(
+                      operationID: descendantBaseOperation,
+                      text: "AB"
+                  )
+                  descendantState = try descendantState.incorporating(
+                      insert: insertPayload(
+                          operation(11),
+                          anchor: try .between(
+                              left: descendantLeft,
+                              right: descendantRight
+                          )
+                      ),
+                      insertedText: "P"
+                  )
+                  descendantState = try descendantState.incorporating(
+                      insert: insertPayload(
+                          operation(12),
+                          anchor: try .between(
+                              left: element(operation(11), 0),
+                              right: descendantRight
+                          )
+                      ),
+                      insertedText: "C"
+                  )
+
+                  let tombstonedOperation = operation(20)
+                  let tombstonedState = try SyncTextSequenceState(
+                      runs: [try run(tombstonedOperation, text: "ABC")],
+                      fragments: [
+                          try fragment(tombstonedOperation, start: 0, length: 1),
+                          try fragment(
+                              tombstonedOperation,
+                              start: 1,
+                              length: 1,
+                              visibility: .tombstone
+                          ),
+                          try fragment(tombstonedOperation, start: 2, length: 1)
+                      ]
+                  )
+                  let unicodeState = try rootState(
+                      operationID: operation(30),
+                      text: "a😀b"
+                  )
+
+                  for (index, state) in [
+                      siblingState,
+                      descendantState,
+                      tombstonedState,
+                      unicodeState
+                  ].enumerated() {
+                      try assertEveryLegalCursorProducesIncorporablePayload(
+                          state,
+                          startingCounter: UInt64(1_000 + index * 100)
+                      )
+                  }
+              }
+
+              func testLargeSameAnchorIncorporationUsesIterativeProjection() throws {
+          '''
+          )
+
+          replace_once(
+              tests_path,
+              '''    func testLargeCanonicalAnchorResolutionUsesBoundedLinearWork() throws {
+                  let runCount = 12_000
+                  var runs: [SyncTextSequenceRun] = []
+                  runs.reserveCapacity(runCount)
+                  for counter in 0..<runCount {
+                      runs.append(try run(operation(UInt64(counter)), text: "x"))
+                  }
+                  let fragments = try runs.reversed().map {
+                      try fragment($0.operationID, length: 1)
+                  }
+                  let state = try SyncTextSequenceState(runs: runs, fragments: fragments)
+
+                  let result = try state.operationAnchorWithMetrics(
+                      atVisibleUTF16Offset: runCount / 2
+                  )
+
+                  XCTAssertNotEqual(result.anchor, .empty)
+                  XCTAssertEqual(result.metrics.indexedRuns, runCount)
+                  XCTAssertLessThanOrEqual(result.metrics.declaredOrigins, runCount)
+                  XCTAssertLessThanOrEqual(result.metrics.visitedFragments, runCount)
+                  XCTAssertLessThanOrEqual(result.metrics.durableGapChecks, 2)
+              }
+          ''',
+              '''    func testRepeatedCanonicalAnchorResolutionUsesPrebuiltIndexAndBoundedSearchWork() throws {
+                  let runCount = 12_000
+                  var runs: [SyncTextSequenceRun] = []
+                  runs.reserveCapacity(runCount)
+                  for counter in 0..<runCount {
+                      runs.append(try run(operation(UInt64(counter)), text: "x"))
+                  }
+                  let fragments = try runs.reversed().map {
+                      try fragment($0.operationID, length: 1)
+                  }
+                  let state = try SyncTextSequenceState(runs: runs, fragments: fragments)
+                  var aggregate = SyncTextSequenceAnchorResolutionMetrics()
+
+                  for offset in 0...runCount {
+                      let result = try state.operationAnchorWithMetrics(
+                          atVisibleUTF16Offset: offset
+                      )
+                      XCTAssertNotEqual(result.anchor, .empty)
+                      aggregate.indexedRuns += result.metrics.indexedRuns
+                      aggregate.declaredOrigins += result.metrics.declaredOrigins
+                      aggregate.visitedFragments += result.metrics.visitedFragments
+                      aggregate.durableGapChecks += result.metrics.durableGapChecks
+                  }
+
+                  var maximumSearchSteps = 1
+                  var indexedCapacity = 1
+                  while indexedCapacity < runCount {
+                      indexedCapacity *= 2
+                      maximumSearchSteps += 1
+                  }
+                  let captureCount = runCount + 1
+
+                  XCTAssertEqual(aggregate.indexedRuns, 0)
+                  XCTAssertEqual(aggregate.declaredOrigins, 0)
+                  XCTAssertLessThanOrEqual(
+                      aggregate.visitedFragments,
+                      captureCount * maximumSearchSteps
+                  )
+                  XCTAssertLessThanOrEqual(
+                      aggregate.durableGapChecks,
+                      captureCount * 2
+                  )
+              }
+          '''
+          )
+
+          replace_once(
+              tests_path,
+              '''    private func assertStateError(
+          ''',
+              '''    private func assertEveryLegalCursorProducesIncorporablePayload(
+                  _ state: SyncTextSequenceState,
+                  startingCounter: UInt64,
+                  file: StaticString = #filePath,
+                  line: UInt = #line
+              ) throws {
+                  let original = state
+                  var nextCounter = startingCounter
+
+                  for offset in 0...state.visibleUTF16Count {
+                      let utf16Index = state.visibleText.utf16.index(
+                          state.visibleText.utf16.startIndex,
+                          offsetBy: offset
+                      )
+                      guard String.Index(utf16Index, within: state.visibleText) != nil else {
+                          continue
+                      }
+
+                      let incomingOperation = operation(nextCounter)
+                      nextCounter += 1
+                      let payload = try state.insertOperationPayload(
+                          operationID: incomingOperation,
+                          atVisibleUTF16Offset: offset
+                      )
+                      let replacement = try state.incorporating(
+                          insert: payload,
+                          insertedText: "X"
+                      )
+                      let insertedRun = try XCTUnwrap(
+                          replacement.runs.first(where: {
+                              $0.operationID == incomingOperation
+                          }),
+                          file: file,
+                          line: line
+                      )
+
+                      XCTAssertEqual(
+                          insertedRun.origin.leftElementID,
+                          payload.anchor.leftElementID,
+                          file: file,
+                          line: line
+                      )
+                      XCTAssertEqual(
+                          insertedRun.origin.rightElementID,
+                          payload.anchor.rightElementID,
+                          file: file,
+                          line: line
+                      )
+                      XCTAssertEqual(
+                          replacement.visibleUTF16Count,
+                          state.visibleUTF16Count + 1,
+                          file: file,
+                          line: line
+                      )
+                      XCTAssertEqual(
+                          replacement.tombstonedUTF16Count,
+                          state.tombstonedUTF16Count,
+                          file: file,
+                          line: line
+                      )
+                  }
+
+                  assertUnchanged(original, from: state, file: file, line: line)
+              }
+
+              private func assertStateError(
+          '''
+          )
+
+          root_row = '''| Durable root-gap semantics | `.empty` names `(nil, nil)` even after root siblings occupy it. | Treat the root as an always-reachable durable gap rather than an empty-state assertion. | Concurrent root insertions remain admissible and converge through the Slice 1 sibling order. | `SyncTextSequenceDurableGapIndex.contains` | `testIncorporatingEmptyRootGapInsertionsConvergesAcrossAllPermutations` |'''
+          occupied_row = '''| Occupied durable origins | Occupancy must not invalidate `.before`, `.between`, or `.after` origins. | Validate the exact historical origin rather than current projected adjacency; repeated insertion at the same one-sided or two-sided origin remains admissible. | Peers preserve the same causal origin after siblings or descendants occupy it. | `SyncTextSequenceDurableGapIndex.contains`, `SyncTextSequenceState.incorporating` | `testIncorporatingOccupiedBeforeAndAfterOriginsRemainAdmissibleAcrossPermutations`, `testIncorporatingSameAnchorInsertionsConvergesAcrossAllPermutations` |'''
+          replace_once(doc_path, root_row, root_row + "\n" + occupied_row)
+
+          replace_once(
+              doc_path,
+              '''| Targeted durable-gap validation | Exact incoming anchors must identify independently reachable structural gaps without allocating every scalar gap. | Index runs and declared origins once, then recognize root, run-entry, intrinsic same-run, and run-exit gaps from endpoint owners. | Validation is bounded by run count and does not change serialization or traversal. | `SyncTextSequenceDurableGapIndex` | `testLargeCanonicalAnchorResolutionUsesBoundedLinearWork`, focused incorporation error tests |''',
+              '''| Targeted durable-gap validation | Exact incoming anchors must identify independently reachable structural gaps without allocating every scalar gap. | Build one immutable per-state index of runs, declared origins, visible-fragment bounds, and structural-left boundaries, then reuse it for binary-search capture and exact incoming validation without allocating scalar-gap tables. | Index construction is linear at validated-state creation; repeated capture performs logarithmic fragment-boundary search plus at most two durable-gap checks. | `SyncTextSequenceAnchorResolutionIndex`, `SyncTextSequenceDurableGapIndex` | `testRepeatedCanonicalAnchorResolutionUsesPrebuiltIndexAndBoundedSearchWork`, focused incorporation error tests |'''
+          )
+
+          replace_once(
+              doc_path,
+              '''| Canonical local capture | Every supported visible cursor must produce an incorporable payload. | Preserve the immediate pair when durable; otherwise canonicalize a sibling-subtree boundary to the completed left subtree's durable exit gap. | Capture and replay use one stable causal origin rather than a projected-only sibling pair. | `operationAnchorWithMetrics`, `canonicalOperationAnchor` | `testSiblingBoundaryCaptureCanonicalizesToDurableExitAndPayloadPreservesIt`, `testPackageGeneratedSiblingBoundaryPayloadRoundTripsWithoutRewriting` |''',
+              '''| Canonical local capture | Every supported visible cursor must produce an incorporable payload. | Binary-search the prebuilt visible-fragment boundary index, preserve the immediate pair when durable, and otherwise canonicalize a sibling-subtree boundary to the completed left subtree's durable exit gap. | Capture and replay use one stable causal origin rather than a projected-only sibling pair. | `SyncTextSequenceAnchorResolutionIndex`, `operationAnchorWithMetrics`, `canonicalOperationAnchor` | `testEveryLegalCursorProducesIncorporablePayloadAcrossRepresentativeStates`, `testSiblingBoundaryCaptureCanonicalizesToDurableExitAndPayloadPreservesIt`, `testPackageGeneratedSiblingBoundaryPayloadRoundTripsWithoutRewriting` |'''
+          )
+
+          text = doc_path.read_text()
+          old = "- same-anchor, descendant, tombstoned, root-gap, permutation, peer-replay, and non-timing complexity coverage."
+          new = "- same-anchor, occupied one-sided, descendant, tombstoned, root-gap, exhaustive legal-cursor, permutation, peer-replay, and prebuilt-index repeated-capture complexity coverage."
+          count = text.count(old)
+          if count < 1:
+              raise SystemExit(f"Expected at least one completion-summary match, found {count}")
+          doc_path.write_text(text.replace(old, new))
+          PY
+
+      - name: Remove temporary workflow and commit remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/myr-175-slice-2-review-remediation.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextSequenceState.swift \
+            Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceInsertionTests.swift \
+            docs/MYR-175-structural-insert-alignment.md \
+            .github/workflows/myr-175-slice-2-review-remediation.yml
+          git diff --cached --check
+          git commit -m "MYR-175 Cache anchor capture index and close coverage gaps"
+          test -z "$(git status --short)"
+          echo "CANDIDATE_HEAD=$(git rev-parse HEAD)"
+
+      - name: Run complete package Debug suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun swift package --package-path Packages/AnchoredSequenceCore clean
+          xcrun swift test \
+            --package-path Packages/AnchoredSequenceCore \
+            --configuration debug \
+            --parallel
+
+      - name: Run complete package Release suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          xcrun swift package --package-path Packages/AnchoredSequenceCore clean
+          xcrun swift test \
+            --package-path Packages/AnchoredSequenceCore \
+            --configuration release \
+            --parallel
+
+      - name: Publish tested remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --short)"
+          echo "TESTED_HEAD=$(git rev-parse HEAD)"
+          git push origin HEAD:MYR-175-Slice-2-Structural-insert-incorporation-and-anchor-resolution
