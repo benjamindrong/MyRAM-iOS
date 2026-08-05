@@ -69,11 +69,22 @@ private struct MyRAMMacWidgetProvider: TimelineProvider {
 private struct MyRAMMacWidgetEntryView: View {
     let entry: MyRAMMacWidgetEntry
     @Environment(\.widgetFamily) private var widgetFamily
+    @Environment(\.widgetContentMargins) private var widgetContentMargins
 
     private var layoutPolicy: MyRAMWidgetLayoutPolicy {
         MyRAMWidgetLayoutPolicy(
             family: MyRAMWidgetFamily(widgetFamily: widgetFamily),
             platform: .macOS
+        )
+    }
+
+    private var contentInsets: EdgeInsets {
+        let scale = layoutPolicy.contentMarginScale
+        return EdgeInsets(
+            top: widgetContentMargins.top * scale,
+            leading: widgetContentMargins.leading * scale,
+            bottom: widgetContentMargins.bottom * scale,
+            trailing: widgetContentMargins.trailing * scale
         )
     }
 
@@ -112,7 +123,7 @@ private struct MyRAMMacWidgetEntryView: View {
                     .layoutPriority(0)
             }
         }
-        .padding(layoutPolicy.contentPadding)
+        .padding(contentInsets)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .widgetURL(entry.model.noteURL)
         .containerBackground(.background, for: .widget)
