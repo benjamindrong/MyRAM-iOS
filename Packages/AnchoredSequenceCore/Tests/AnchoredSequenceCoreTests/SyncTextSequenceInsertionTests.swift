@@ -289,7 +289,6 @@ final class SyncTextSequenceInsertionTests: XCTestCase {
         let siblingOperation = operation(1)
         let left = try element(baseOperation, 0)
         let right = try element(baseOperation, 1)
-        let sharedAnchor = try SyncOperationAnchor.between(left: left, right: right)
         let parentElement = try element(parentOperation, 0)
         let childElement = try element(childOperation, 0)
 
@@ -524,6 +523,64 @@ final class SyncTextSequenceInsertionTests: XCTestCase {
         ))
     }
 
+    func testIncorporatingOccupiedBeforeAndAfterOriginsRemainAdmissibleAcrossPermutations() throws {
+        let baseOperation = operation(0)
+        let operations = [operation(1), operation(2), operation(3)]
+        let first = try element(baseOperation, 0)
+        let final = try element(baseOperation, 2)
+        let cases: [(SyncOperationAnchor, String, [SyncOperationID])] = [
+            (
+                .before(first),
+                "321ABC",
+                [operation(3), operation(2), operation(1), baseOperation]
+            ),
+            (
+                .after(final),
+                "ABC321",
+                [baseOperation, operation(3), operation(2), operation(1)]
+            )
+        ]
+
+        for (anchor, expectedText, expectedFragmentOperations) in cases {
+            var completedStates: [SyncTextSequenceState] = []
+            for permutation in permutations(operations) {
+                var state = try rootState(operationID: baseOperation, text: "ABC")
+                for operationID in permutation {
+                    state = try state.incorporating(
+                        insert: insertPayload(operationID, anchor: anchor),
+                        insertedText: String(operationID.localCounter)
+                    )
+                }
+
+                XCTAssertEqual(state.visibleText, expectedText)
+                XCTAssertEqual(
+                    state.fragments.map(\.operationID),
+                    expectedFragmentOperations
+                )
+                XCTAssertEqual(state.visibleUTF16Count, 6)
+                XCTAssertEqual(state.tombstonedUTF16Count, 0)
+                for operationID in operations {
+                    let insertedRun = try XCTUnwrap(
+                        state.runs.first(where: { $0.operationID == operationID })
+                    )
+                    XCTAssertEqual(
+                        insertedRun.origin.leftElementID,
+                        anchor.leftElementID
+                    )
+                    XCTAssertEqual(
+                        insertedRun.origin.rightElementID,
+                        anchor.rightElementID
+                    )
+                }
+                completedStates.append(state)
+            }
+
+            for state in completedStates.dropFirst() {
+                XCTAssertEqual(state, completedStates[0])
+            }
+        }
+    }
+
     func testIncorporatingEmptyRootGapInsertionsConvergesAcrossAllPermutations() throws {
         let operations = [operation(1), operation(2), operation(3)]
         let expectedRuns = [
@@ -650,6 +707,85 @@ final class SyncTextSequenceInsertionTests: XCTestCase {
         XCTAssertFalse(observed.contains(.unknownOrigin(impossible)))
     }
 
+    func testEveryLegalCursorProducesIncorporablePayloadAcrossRepresentativeStates() throws {
+        let siblingBaseOperation = operation(0)
+        let siblingLeft = try element(siblingBaseOperation, 0)
+        let siblingRight = try element(siblingBaseOperation, 1)
+        let siblingAnchor = try SyncOperationAnchor.between(
+            left: siblingLeft,
+            right: siblingRight
+        )
+        var siblingState = try rootState(
+            operationID: siblingBaseOperation,
+            text: "AB"
+        )
+        for sibling in [operation(1), operation(2)] {
+            siblingState = try siblingState.incorporating(
+                insert: insertPayload(sibling, anchor: siblingAnchor),
+                insertedText: String(sibling.localCounter)
+            )
+        }
+
+        let descendantBaseOperation = operation(10)
+        let descendantLeft = try element(descendantBaseOperation, 0)
+        let descendantRight = try element(descendantBaseOperation, 1)
+        var descendantState = try rootState(
+            operationID: descendantBaseOperation,
+            text: "AB"
+        )
+        descendantState = try descendantState.incorporating(
+            insert: insertPayload(
+                operation(11),
+                anchor: try .between(
+                    left: descendantLeft,
+                    right: descendantRight
+                )
+            ),
+            insertedText: "P"
+        )
+        descendantState = try descendantState.incorporating(
+            insert: insertPayload(
+                operation(12),
+                anchor: try .between(
+                    left: element(operation(11), 0),
+                    right: descendantRight
+                )
+            ),
+            insertedText: "C"
+        )
+
+        let tombstonedOperation = operation(20)
+        let tombstonedState = try SyncTextSequenceState(
+            runs: [try run(tombstonedOperation, text: "ABC")],
+            fragments: [
+                try fragment(tombstonedOperation, start: 0, length: 1),
+                try fragment(
+                    tombstonedOperation,
+                    start: 1,
+                    length: 1,
+                    visibility: .tombstone
+                ),
+                try fragment(tombstonedOperation, start: 2, length: 1)
+            ]
+        )
+        let unicodeState = try rootState(
+            operationID: operation(30),
+            text: "a😀b"
+        )
+
+        for (index, state) in [
+            siblingState,
+            descendantState,
+            tombstonedState,
+            unicodeState
+        ].enumerated() {
+            try assertEveryLegalCursorProducesIncorporablePayload(
+                state,
+                startingCounter: UInt64(1_000 + index * 100)
+            )
+        }
+    }
+
     func testLargeSameAnchorIncorporationUsesIterativeProjection() throws {
         let runCount = 12_000
         var runs: [SyncTextSequenceRun] = []
@@ -691,7 +827,7 @@ final class SyncTextSequenceInsertionTests: XCTestCase {
         XCTAssertEqual(original.visibleUTF16Count, runCount)
     }
 
-    func testLargeCanonicalAnchorResolutionUsesBoundedLinearWork() throws {
+    func testRepeatedCanonicalAnchorResolutionUsesPrebuiltIndexAndBoundedSearchWork() throws {
         let runCount = 12_000
         var runs: [SyncTextSequenceRun] = []
         runs.reserveCapacity(runCount)
@@ -702,16 +838,37 @@ final class SyncTextSequenceInsertionTests: XCTestCase {
             try fragment($0.operationID, length: 1)
         }
         let state = try SyncTextSequenceState(runs: runs, fragments: fragments)
+        var aggregate = SyncTextSequenceAnchorResolutionMetrics()
 
-        let result = try state.operationAnchorWithMetrics(
-            atVisibleUTF16Offset: runCount / 2
+        for offset in 0...runCount {
+            let result = try state.operationAnchorWithMetrics(
+                atVisibleUTF16Offset: offset
+            )
+            XCTAssertNotEqual(result.anchor, .empty)
+            aggregate.indexedRuns += result.metrics.indexedRuns
+            aggregate.declaredOrigins += result.metrics.declaredOrigins
+            aggregate.visitedFragments += result.metrics.visitedFragments
+            aggregate.durableGapChecks += result.metrics.durableGapChecks
+        }
+
+        var maximumSearchSteps = 1
+        var indexedCapacity = 1
+        while indexedCapacity < runCount {
+            indexedCapacity *= 2
+            maximumSearchSteps += 1
+        }
+        let captureCount = runCount + 1
+
+        XCTAssertEqual(aggregate.indexedRuns, 0)
+        XCTAssertEqual(aggregate.declaredOrigins, 0)
+        XCTAssertLessThanOrEqual(
+            aggregate.visitedFragments,
+            captureCount * maximumSearchSteps
         )
-
-        XCTAssertNotEqual(result.anchor, .empty)
-        XCTAssertEqual(result.metrics.indexedRuns, runCount)
-        XCTAssertLessThanOrEqual(result.metrics.declaredOrigins, runCount)
-        XCTAssertLessThanOrEqual(result.metrics.visitedFragments, runCount)
-        XCTAssertLessThanOrEqual(result.metrics.durableGapChecks, 2)
+        XCTAssertLessThanOrEqual(
+            aggregate.durableGapChecks,
+            captureCount * 2
+        )
     }
 
     func testDeepChainIncorporationUsesIterativeProjection() throws {
@@ -824,6 +981,71 @@ final class SyncTextSequenceInsertionTests: XCTestCase {
                 length: text.utf16.count
             )]
         )
+    }
+
+    private func assertEveryLegalCursorProducesIncorporablePayload(
+        _ state: SyncTextSequenceState,
+        startingCounter: UInt64,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) throws {
+        let original = state
+        var nextCounter = startingCounter
+
+        for offset in 0...state.visibleUTF16Count {
+            let utf16Index = state.visibleText.utf16.index(
+                state.visibleText.utf16.startIndex,
+                offsetBy: offset
+            )
+            guard String.Index(utf16Index, within: state.visibleText) != nil else {
+                continue
+            }
+
+            let incomingOperation = operation(nextCounter)
+            nextCounter += 1
+            let payload = try state.insertOperationPayload(
+                operationID: incomingOperation,
+                atVisibleUTF16Offset: offset
+            )
+            let replacement = try state.incorporating(
+                insert: payload,
+                insertedText: "X"
+            )
+            let insertedRun = try XCTUnwrap(
+                replacement.runs.first(where: {
+                    $0.operationID == incomingOperation
+                }),
+                file: file,
+                line: line
+            )
+
+            XCTAssertEqual(
+                insertedRun.origin.leftElementID,
+                payload.anchor.leftElementID,
+                file: file,
+                line: line
+            )
+            XCTAssertEqual(
+                insertedRun.origin.rightElementID,
+                payload.anchor.rightElementID,
+                file: file,
+                line: line
+            )
+            XCTAssertEqual(
+                replacement.visibleUTF16Count,
+                state.visibleUTF16Count + 1,
+                file: file,
+                line: line
+            )
+            XCTAssertEqual(
+                replacement.tombstonedUTF16Count,
+                state.tombstonedUTF16Count,
+                file: file,
+                line: line
+            )
+        }
+
+        assertUnchanged(original, from: state, file: file, line: line)
     }
 
     private func assertStateError(

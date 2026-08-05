@@ -187,6 +187,7 @@ public struct SyncTextSequenceState: Equatable, Sendable {
     private let materializedVisibleText: String
     private let materializedVisibleUTF16Count: Int
     private let materializedTombstonedUTF16Count: Int
+    private let anchorResolutionIndex: SyncTextSequenceAnchorResolutionIndex
 
     /// Kept internal so complexity tests can prove traversal work without timing assertions.
     let validationMetrics: SyncTextSequenceTraversalMetrics
@@ -207,11 +208,16 @@ public struct SyncTextSequenceState: Equatable, Sendable {
             runs: runs,
             fragments: fragments
         )
+        let anchorResolutionIndex = try SyncTextSequenceAnchorResolutionIndex(
+            runs: runs,
+            fragments: fragments
+        )
         self.runs = runs
         self.fragments = fragments
         self.materializedVisibleText = validation.visibleText
         self.materializedVisibleUTF16Count = validation.visibleUTF16Count
         self.materializedTombstonedUTF16Count = validation.tombstonedUTF16Count
+        self.anchorResolutionIndex = anchorResolutionIndex
         self.validationMetrics = validation.metrics
     }
 
@@ -327,51 +333,38 @@ public struct SyncTextSequenceState: Equatable, Sendable {
             throw SyncTextSequenceStateError.visibleOffsetSplitsSurrogatePair(offset)
         }
 
-        let durableGaps = SyncTextSequenceDurableGapIndex(runs: runs)
-        var metrics = SyncTextSequenceAnchorResolutionMetrics(
-            indexedRuns: runs.count,
-            declaredOrigins: durableGaps.declaredOriginCount
-        )
+        var metrics = SyncTextSequenceAnchorResolutionMetrics()
+        let durableGaps = anchorResolutionIndex.durableGaps
         guard !fragments.isEmpty else {
             return (.empty, metrics)
         }
 
-        var visibleCursor = 0
-        var leftElementID: SyncTextElementID?
-        for fragment in fragments {
-            metrics.visitedFragments += 1
-            if fragment.visibility == .visible {
-                let nextVisibleCursor = visibleCursor + fragment.utf16Length
-                if offset < nextVisibleCursor {
-                    let offsetInFragment = offset - visibleCursor
-                    let rightElementID = try SyncTextElementID(
-                        operationID: fragment.operationID,
-                        elementOffset: fragment.startOffset + offsetInFragment
-                    )
-                    if offsetInFragment > 0 {
-                        leftElementID = try SyncTextElementID(
-                            operationID: fragment.operationID,
-                            elementOffset: fragment.startOffset + offsetInFragment - 1
-                        )
-                    }
-                    let anchor = try canonicalOperationAnchor(
-                        leftElementID: leftElementID,
-                        rightElementID: rightElementID,
-                        durableGaps: durableGaps,
-                        metrics: &metrics
-                    )
-                    return (anchor, metrics)
-                }
-                visibleCursor = nextVisibleCursor
-            }
-
-            leftElementID = try SyncTextElementID(
-                operationID: fragment.operationID,
-                elementOffset: fragment.startOffset + fragment.utf16Length - 1
+        if let entry = anchorResolutionIndex.visibleFragment(
+            containingVisibleUTF16Offset: offset,
+            metrics: &metrics
+        ) {
+            let offsetInFragment = offset - entry.visibleStartOffset
+            var leftElementID = entry.structuralLeftElementID
+            let rightElementID = try SyncTextElementID(
+                operationID: entry.fragment.operationID,
+                elementOffset: entry.fragment.startOffset + offsetInFragment
             )
+            if offsetInFragment > 0 {
+                leftElementID = try SyncTextElementID(
+                    operationID: entry.fragment.operationID,
+                    elementOffset: entry.fragment.startOffset + offsetInFragment - 1
+                )
+            }
+            let anchor = try canonicalOperationAnchor(
+                leftElementID: leftElementID,
+                rightElementID: rightElementID,
+                durableGaps: durableGaps,
+                metrics: &metrics
+            )
+            return (anchor, metrics)
         }
 
-        guard let leftElementID else {
+        guard let leftElementID = anchorResolutionIndex.finalStructuralElementID else {
             preconditionFailure("A structurally nonempty state must have a final element")
         }
         let anchor = try canonicalOperationAnchor(
@@ -449,7 +442,7 @@ public struct SyncTextSequenceState: Equatable, Sendable {
             throw SyncTextSequenceStateError.selfOrigin(payload.operationID)
         }
 
-        let durableGaps = SyncTextSequenceDurableGapIndex(runs: runs)
+        let durableGaps = anchorResolutionIndex.durableGaps
 
         func resolveEndpoint(
             _ elementID: SyncTextElementID,
@@ -725,12 +718,92 @@ public struct SyncTextSequenceState: Equatable, Sendable {
     }
 }
 
-private struct SyncTextSequenceGap: Equatable, Hashable {
+private struct SyncTextSequenceVisibleFragmentAnchorEntry: Sendable {
+    let fragment: SyncTextSequenceFragment
+    let visibleStartOffset: Int
+    let visibleEndOffset: Int
+    let structuralLeftElementID: SyncTextElementID?
+}
+
+private struct SyncTextSequenceAnchorResolutionIndex: Sendable {
+    let durableGaps: SyncTextSequenceDurableGapIndex
+    let visibleFragments: [SyncTextSequenceVisibleFragmentAnchorEntry]
+    let finalStructuralElementID: SyncTextElementID?
+
+    init(
+        runs: [SyncTextSequenceRun],
+        fragments: [SyncTextSequenceFragment]
+    ) throws {
+        self.durableGaps = SyncTextSequenceDurableGapIndex(runs: runs)
+
+        var visibleFragments: [SyncTextSequenceVisibleFragmentAnchorEntry] = []
+        visibleFragments.reserveCapacity(fragments.count)
+        var visibleCursor = 0
+        var structuralLeftElementID: SyncTextElementID?
+
+        for fragment in fragments {
+            if fragment.visibility == .visible {
+                let (visibleEndOffset, overflow) = visibleCursor.addingReportingOverflow(
+                    fragment.utf16Length
+                )
+                guard !overflow else {
+                    throw SyncTextSequenceStateError.countOverflow
+                }
+                visibleFragments.append(
+                    SyncTextSequenceVisibleFragmentAnchorEntry(
+                        fragment: fragment,
+                        visibleStartOffset: visibleCursor,
+                        visibleEndOffset: visibleEndOffset,
+                        structuralLeftElementID: structuralLeftElementID
+                    )
+                )
+                visibleCursor = visibleEndOffset
+            }
+
+            structuralLeftElementID = try SyncTextElementID(
+                operationID: fragment.operationID,
+                elementOffset: fragment.startOffset + fragment.utf16Length - 1
+            )
+        }
+
+        self.visibleFragments = visibleFragments
+        self.finalStructuralElementID = structuralLeftElementID
+    }
+
+    func visibleFragment(
+        containingVisibleUTF16Offset offset: Int,
+        metrics: inout SyncTextSequenceAnchorResolutionMetrics
+    ) -> SyncTextSequenceVisibleFragmentAnchorEntry? {
+        var lowerBound = 0
+        var upperBound = visibleFragments.count
+
+        while lowerBound < upperBound {
+            metrics.visitedFragments += 1
+            let middle = lowerBound + (upperBound - lowerBound) / 2
+            if offset < visibleFragments[middle].visibleEndOffset {
+                upperBound = middle
+            } else {
+                lowerBound = middle + 1
+            }
+        }
+
+        guard lowerBound < visibleFragments.count else { return nil }
+        let entry = visibleFragments[lowerBound]
+        guard entry.visibleStartOffset <= offset else {
+            preconditionFailure(
+                "A validated visible offset must resolve inside the indexed fragment"
+            )
+        }
+        return entry
+    }
+}
+
+private struct SyncTextSequenceGap: Equatable, Hashable, Sendable {
     let left: SyncTextElementID?
     let right: SyncTextElementID?
 }
 
-private struct SyncTextSequenceDurableGapIndex {
+private struct SyncTextSequenceDurableGapIndex: Sendable {
     private let runs: [SyncTextSequenceRun]
     private let runIndex: [SyncOperationID: Int]
     private let declaredOrigins: Set<SyncTextSequenceGap>
