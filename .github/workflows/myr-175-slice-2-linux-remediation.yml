@@ -44,8 +44,25 @@ jobs:
             /^          python3 - <<'\''PY'\''$/ { capture = 1; next }
             capture && /^          PY$/ { exit }
             capture { sub(/^          /, ""); print }
-          ' .github/workflows/myr-175-slice-2-review-remediation.yml > /tmp/myr175-remediate.py
-          test -s /tmp/myr175-remediate.py
+          ' .github/workflows/myr-175-slice-2-review-remediation.yml > /tmp/myr175-remediate-raw.py
+          test -s /tmp/myr175-remediate-raw.py
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path('/tmp/myr175-remediate-raw.py').read_text().splitlines()
+          output = []
+          inside_triple_string = False
+          for line in source:
+              if inside_triple_string and "'''" not in line:
+                  line = '    ' + line
+              output.append(line)
+              if line.count("'''") % 2 == 1:
+                  inside_triple_string = not inside_triple_string
+          if inside_triple_string:
+              raise SystemExit('Unclosed triple-quoted string in extracted patch definition')
+          Path('/tmp/myr175-remediate.py').write_text('\n'.join(output) + '\n')
+          PY
+          python3 -m py_compile /tmp/myr175-remediate.py
           python3 /tmp/myr175-remediate.py
 
       - name: Commit narrow remediation
