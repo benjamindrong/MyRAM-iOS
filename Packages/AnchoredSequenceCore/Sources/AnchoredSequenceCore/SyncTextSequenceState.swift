@@ -7,6 +7,18 @@ public enum SyncTextSequenceStateError: Error, Equatable, Sendable {
     case nonpositiveRangeLength(Int)
     case rangeOverflow(startOffset: Int, utf16Length: Int)
     case duplicateRun(SyncOperationID)
+    case missingAnchorDependency(SyncTextElementID)
+    case anchorElementOutOfBounds(SyncTextElementID)
+    case beforeAnchorNotAtStructuralHead(SyncTextElementID)
+    case betweenAnchorEndpointsReversed(
+        left: SyncTextElementID,
+        right: SyncTextElementID
+    )
+    case betweenAnchorEndpointsNonadjacent(
+        left: SyncTextElementID,
+        right: SyncTextElementID
+    )
+    case afterAnchorNotAtStructuralTail(SyncTextElementID)
     case noncanonicalRunOrder(previous: SyncOperationID, current: SyncOperationID)
     case noncanonicalSiblingOrder(previous: SyncOperationID, current: SyncOperationID)
     case unknownOrigin(SyncTextElementID)
@@ -384,6 +396,291 @@ public struct SyncTextSequenceState: Equatable, Sendable {
         return result
     }
 
+    /// Incorporates one validated structural insertion without mutating this state.
+    public func incorporating(
+        insert payload: SyncTextInsertOperationPayload,
+        insertedText: String
+    ) throws -> SyncTextSequenceState {
+        guard !insertedText.isEmpty else {
+            throw SyncTextSequenceStateError.emptyRunText(payload.operationID)
+        }
+        guard !runs.contains(where: { $0.operationID == payload.operationID }) else {
+            throw SyncTextSequenceStateError.duplicateRun(payload.operationID)
+        }
+
+        let endpoints = [
+            payload.anchor.leftElementID,
+            payload.anchor.rightElementID
+        ].compactMap { $0 }
+        if endpoints.contains(where: { $0.operationID == payload.operationID }) {
+            throw SyncTextSequenceStateError.selfOrigin(payload.operationID)
+        }
+
+        let runIndex = Dictionary(
+            uniqueKeysWithValues: runs.enumerated().map { ($1.operationID, $0) }
+        )
+
+        func resolveEndpoint(
+            _ elementID: SyncTextElementID,
+            isLeftEndpoint: Bool
+        ) throws {
+            guard let ownerIndex = runIndex[elementID.operationID] else {
+                throw SyncTextSequenceStateError.missingAnchorDependency(elementID)
+            }
+            let ownerText = runs[ownerIndex].text
+            guard elementID.elementOffset < ownerText.utf16.count else {
+                throw SyncTextSequenceStateError.anchorElementOutOfBounds(elementID)
+            }
+
+            let boundaryOffset = isLeftEndpoint
+                ? elementID.elementOffset + 1
+                : elementID.elementOffset
+            guard SyncTextSequenceStringBoundary.isBoundary(
+                boundaryOffset,
+                in: ownerText
+            ) else {
+                throw SyncTextSequenceStateError.originSplitsSurrogatePair(elementID)
+            }
+        }
+
+        switch payload.anchor.kind {
+        case .empty:
+            break
+        case .before:
+            try resolveEndpoint(payload.anchor.rightElementID!, isLeftEndpoint: false)
+        case .between:
+            try resolveEndpoint(payload.anchor.leftElementID!, isLeftEndpoint: true)
+            try resolveEndpoint(payload.anchor.rightElementID!, isLeftEndpoint: false)
+        case .after:
+            try resolveEndpoint(payload.anchor.leftElementID!, isLeftEndpoint: true)
+        }
+
+        var validGaps: Set<SyncTextSequenceGap> = [
+            SyncTextSequenceGap(left: nil, right: nil)
+        ]
+        for run in runs {
+            validGaps.insert(SyncTextSequenceGap(
+                left: run.origin.leftElementID,
+                right: run.origin.rightElementID
+            ))
+
+            let scalarSpans = SyncTextSequenceStringBoundary.scalarSpans(in: run.text)
+            guard let first = scalarSpans.first, let last = scalarSpans.last else {
+                throw SyncTextSequenceStateError.emptyRunText(run.operationID)
+            }
+
+            let firstElementID = try SyncTextElementID(
+                operationID: run.operationID,
+                elementOffset: first.startOffset
+            )
+            validGaps.insert(SyncTextSequenceGap(
+                left: run.origin.leftElementID,
+                right: firstElementID
+            ))
+
+            for scalarIndex in scalarSpans.indices.dropFirst() {
+                let previous = scalarSpans[scalarIndex - 1]
+                let current = scalarSpans[scalarIndex]
+                let previousFinalElementID = try SyncTextElementID(
+                    operationID: run.operationID,
+                    elementOffset: previous.startOffset + previous.utf16Length - 1
+                )
+                let currentFirstElementID = try SyncTextElementID(
+                    operationID: run.operationID,
+                    elementOffset: current.startOffset
+                )
+                validGaps.insert(SyncTextSequenceGap(
+                    left: previousFinalElementID,
+                    right: currentFirstElementID
+                ))
+            }
+
+            let finalElementID = try SyncTextElementID(
+                operationID: run.operationID,
+                elementOffset: last.startOffset + last.utf16Length - 1
+            )
+            validGaps.insert(SyncTextSequenceGap(
+                left: finalElementID,
+                right: run.origin.rightElementID
+            ))
+        }
+
+        let resolvedOrigin = try SyncTextInsertionOrigin(
+            leftElementID: payload.anchor.leftElementID,
+            rightElementID: payload.anchor.rightElementID
+        )
+        let declaredGap = SyncTextSequenceGap(
+            left: resolvedOrigin.leftElementID,
+            right: resolvedOrigin.rightElementID
+        )
+
+        switch payload.anchor.kind {
+        case .empty:
+            break
+        case .before:
+            let right = payload.anchor.rightElementID!
+            guard validGaps.contains(declaredGap) else {
+                throw SyncTextSequenceStateError.beforeAnchorNotAtStructuralHead(right)
+            }
+        case .between:
+            let left = payload.anchor.leftElementID!
+            let right = payload.anchor.rightElementID!
+            guard validGaps.contains(declaredGap) else {
+                let leftPosition = structuralPosition(of: left)
+                let rightPosition = structuralPosition(of: right)
+                if rightPosition < leftPosition {
+                    throw SyncTextSequenceStateError.betweenAnchorEndpointsReversed(
+                        left: left,
+                        right: right
+                    )
+                }
+                throw SyncTextSequenceStateError.betweenAnchorEndpointsNonadjacent(
+                    left: left,
+                    right: right
+                )
+            }
+        case .after:
+            let left = payload.anchor.leftElementID!
+            guard validGaps.contains(declaredGap) else {
+                throw SyncTextSequenceStateError.afterAnchorNotAtStructuralTail(left)
+            }
+        }
+
+        let insertedRun = try SyncTextSequenceRun(
+            operationID: payload.operationID,
+            origin: resolvedOrigin,
+            text: insertedText
+        )
+        var replacementRuns = runs
+        let insertionIndex = replacementRuns.firstIndex {
+            SyncOperationIDCanonicalOrder.isOrderedBefore(
+                payload.operationID,
+                $0.operationID
+            )
+        } ?? replacementRuns.endIndex
+        replacementRuns.insert(insertedRun, at: insertionIndex)
+
+        let replacementSpans = try SyncTextSequenceStateValidator.projectStructuralSpans(
+            runs: replacementRuns
+        )
+        let replacementFragments = try remapVisibility(
+            across: replacementSpans,
+            insertedOperationID: payload.operationID
+        )
+
+        return try SyncTextSequenceState(
+            runs: replacementRuns,
+            fragments: replacementFragments
+        )
+    }
+
+    private func structuralPosition(of elementID: SyncTextElementID) -> Int {
+        var position = 0
+        for fragment in fragments {
+            let endOffset = fragment.startOffset + fragment.utf16Length
+            if fragment.operationID == elementID.operationID,
+               fragment.startOffset <= elementID.elementOffset,
+               elementID.elementOffset < endOffset {
+                return position + elementID.elementOffset - fragment.startOffset
+            }
+            position += fragment.utf16Length
+        }
+        preconditionFailure("A preflight-resolved element must exist in the structural stream")
+    }
+
+    private func remapVisibility(
+        across structuralSpans: [SyncTextSequenceStructuralSpan],
+        insertedOperationID: SyncOperationID
+    ) throws -> [SyncTextSequenceFragment] {
+        var sourceFragmentsByOperation: [
+            SyncOperationID: [SyncTextSequenceFragment]
+        ] = [:]
+        for fragment in fragments {
+            sourceFragmentsByOperation[fragment.operationID, default: []].append(fragment)
+        }
+
+        var sourceIndexByOperation: [SyncOperationID: Int] = [:]
+        var result: [SyncTextSequenceFragment] = []
+
+        func appendFragment(
+            operationID: SyncOperationID,
+            startOffset: Int,
+            utf16Length: Int,
+            visibility: SyncTextSequenceElementVisibility
+        ) throws {
+            if let previous = result.last,
+               previous.operationID == operationID,
+               previous.visibility == visibility,
+               previous.startOffset + previous.utf16Length == startOffset {
+                result[result.count - 1] = try SyncTextSequenceFragment(
+                    operationID: operationID,
+                    startOffset: previous.startOffset,
+                    utf16Length: previous.utf16Length + utf16Length,
+                    visibility: visibility
+                )
+            } else {
+                result.append(try SyncTextSequenceFragment(
+                    operationID: operationID,
+                    startOffset: startOffset,
+                    utf16Length: utf16Length,
+                    visibility: visibility
+                ))
+            }
+        }
+
+        for span in structuralSpans {
+            if span.operationID == insertedOperationID {
+                try appendFragment(
+                    operationID: span.operationID,
+                    startOffset: span.startOffset,
+                    utf16Length: span.utf16Length,
+                    visibility: .visible
+                )
+                continue
+            }
+
+            guard let sourceFragments = sourceFragmentsByOperation[span.operationID] else {
+                throw SyncTextSequenceStateError.fragmentOrderNotMatchingOrigins
+            }
+
+            var sourceIndex = sourceIndexByOperation[span.operationID] ?? 0
+            var nextOffset = span.startOffset
+            let spanEnd = span.startOffset + span.utf16Length
+
+            while sourceIndex < sourceFragments.count,
+                  sourceFragments[sourceIndex].startOffset
+                    + sourceFragments[sourceIndex].utf16Length <= nextOffset {
+                sourceIndex += 1
+            }
+
+            while nextOffset < spanEnd {
+                guard sourceIndex < sourceFragments.count else {
+                    throw SyncTextSequenceStateError.fragmentOrderNotMatchingOrigins
+                }
+                let source = sourceFragments[sourceIndex]
+                let sourceEnd = source.startOffset + source.utf16Length
+                guard source.startOffset <= nextOffset, nextOffset < sourceEnd else {
+                    throw SyncTextSequenceStateError.fragmentOrderNotMatchingOrigins
+                }
+
+                let nextEnd = min(spanEnd, sourceEnd)
+                try appendFragment(
+                    operationID: span.operationID,
+                    startOffset: nextOffset,
+                    utf16Length: nextEnd - nextOffset,
+                    visibility: source.visibility
+                )
+                nextOffset = nextEnd
+                if nextOffset == sourceEnd {
+                    sourceIndex += 1
+                }
+            }
+            sourceIndexByOperation[span.operationID] = sourceIndex
+        }
+
+        return result
+    }
+
     private func append(
         _ span: SyncTextElementIDSpan,
         to result: inout [SyncTextElementIDSpan],
@@ -450,6 +747,33 @@ private struct SyncTextSequenceValidationResult {
 }
 
 private enum SyncTextSequenceStateValidator {
+    static func projectStructuralSpans(
+        runs: [SyncTextSequenceRun]
+    ) throws -> [SyncTextSequenceStructuralSpan] {
+        let runIndex = try validatedRunIndex(runs)
+        try validateCanonicalRunOrder(runs)
+        let scalarSpans = runs.map {
+            SyncTextSequenceStringBoundary.scalarSpans(in: $0.text)
+        }
+        let legalBoundaries = scalarSpans.map(
+            SyncTextSequenceStringBoundary.legalBoundaryOffsets
+        )
+        try validateOrigins(
+            runs,
+            runIndex: runIndex,
+            legalBoundaries: legalBoundaries
+        )
+        try validateAcyclicOrigins(runs, runIndex: runIndex)
+
+        var metrics = SyncTextSequenceTraversalMetrics()
+        return try deriveStructuralSpans(
+            runs: runs,
+            scalarSpans: scalarSpans,
+            gapIndex: makeGapIndex(runs),
+            metrics: &metrics
+        )
+    }
+
     static func validate(
         runs: [SyncTextSequenceRun],
         fragments: [SyncTextSequenceFragment]
