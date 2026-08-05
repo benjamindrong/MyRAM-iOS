@@ -9,16 +9,14 @@ public enum SyncTextSequenceStateError: Error, Equatable, Sendable {
     case duplicateRun(SyncOperationID)
     case missingAnchorDependency(SyncTextElementID)
     case anchorElementOutOfBounds(SyncTextElementID)
-    case beforeAnchorNotAtStructuralHead(SyncTextElementID)
     case betweenAnchorEndpointsReversed(
         left: SyncTextElementID,
         right: SyncTextElementID
     )
-    case betweenAnchorEndpointsNonadjacent(
-        left: SyncTextElementID,
-        right: SyncTextElementID
+    case anchorGapNotDurable(
+        left: SyncTextElementID?,
+        right: SyncTextElementID?
     )
-    case afterAnchorNotAtStructuralTail(SyncTextElementID)
     case noncanonicalRunOrder(previous: SyncOperationID, current: SyncOperationID)
     case noncanonicalSiblingOrder(previous: SyncOperationID, current: SyncOperationID)
     case unknownOrigin(SyncTextElementID)
@@ -175,6 +173,13 @@ struct SyncTextSequenceTraversalMetrics: Equatable, Sendable {
     var comparedSpans = 0
 }
 
+struct SyncTextSequenceAnchorResolutionMetrics: Equatable, Sendable {
+    var indexedRuns = 0
+    var declaredOrigins = 0
+    var visitedFragments = 0
+    var durableGapChecks = 0
+}
+
 public struct SyncTextSequenceState: Equatable, Sendable {
     public let runs: [SyncTextSequenceRun]
     public let fragments: [SyncTextSequenceFragment]
@@ -298,10 +303,20 @@ public struct SyncTextSequenceState: Equatable, Sendable {
         return result
     }
 
-    /// Resolves a visible cursor to one deterministic gap in the structural stream.
+    /// Resolves a visible cursor to one deterministic durable structural gap.
     public func operationAnchor(
         atVisibleUTF16Offset offset: Int
     ) throws -> SyncOperationAnchor {
+        try operationAnchorWithMetrics(atVisibleUTF16Offset: offset).anchor
+    }
+
+    /// Kept internal so complexity tests can prove capture work without timing assertions.
+    func operationAnchorWithMetrics(
+        atVisibleUTF16Offset offset: Int
+    ) throws -> (
+        anchor: SyncOperationAnchor,
+        metrics: SyncTextSequenceAnchorResolutionMetrics
+    ) {
         guard offset >= 0, offset <= visibleUTF16Count else {
             throw SyncTextSequenceStateError.visibleOffsetOutOfBounds(offset)
         }
@@ -311,11 +326,20 @@ public struct SyncTextSequenceState: Equatable, Sendable {
         ) else {
             throw SyncTextSequenceStateError.visibleOffsetSplitsSurrogatePair(offset)
         }
-        guard !fragments.isEmpty else { return .empty }
+
+        let durableGaps = SyncTextSequenceDurableGapIndex(runs: runs)
+        var metrics = SyncTextSequenceAnchorResolutionMetrics(
+            indexedRuns: runs.count,
+            declaredOrigins: durableGaps.declaredOriginCount
+        )
+        guard !fragments.isEmpty else {
+            return (.empty, metrics)
+        }
 
         var visibleCursor = 0
         var leftElementID: SyncTextElementID?
         for fragment in fragments {
+            metrics.visitedFragments += 1
             if fragment.visibility == .visible {
                 let nextVisibleCursor = visibleCursor + fragment.utf16Length
                 if offset < nextVisibleCursor {
@@ -330,10 +354,13 @@ public struct SyncTextSequenceState: Equatable, Sendable {
                             elementOffset: fragment.startOffset + offsetInFragment - 1
                         )
                     }
-                    return try Self.operationAnchor(
+                    let anchor = try canonicalOperationAnchor(
                         leftElementID: leftElementID,
-                        rightElementID: rightElementID
+                        rightElementID: rightElementID,
+                        durableGaps: durableGaps,
+                        metrics: &metrics
                     )
+                    return (anchor, metrics)
                 }
                 visibleCursor = nextVisibleCursor
             }
@@ -347,7 +374,13 @@ public struct SyncTextSequenceState: Equatable, Sendable {
         guard let leftElementID else {
             preconditionFailure("A structurally nonempty state must have a final element")
         }
-        return .after(leftElementID)
+        let anchor = try canonicalOperationAnchor(
+            leftElementID: leftElementID,
+            rightElementID: nil,
+            durableGaps: durableGaps,
+            metrics: &metrics
+        )
+        return (anchor, metrics)
     }
 
     /// Derives a portable insertion payload without reserving or persisting identity.
@@ -416,19 +449,16 @@ public struct SyncTextSequenceState: Equatable, Sendable {
             throw SyncTextSequenceStateError.selfOrigin(payload.operationID)
         }
 
-        let runIndex = Dictionary(
-            uniqueKeysWithValues: runs.enumerated().map { ($1.operationID, $0) }
-        )
+        let durableGaps = SyncTextSequenceDurableGapIndex(runs: runs)
 
         func resolveEndpoint(
             _ elementID: SyncTextElementID,
             isLeftEndpoint: Bool
         ) throws {
-            guard let ownerIndex = runIndex[elementID.operationID] else {
+            guard let owner = durableGaps.run(owning: elementID) else {
                 throw SyncTextSequenceStateError.missingAnchorDependency(elementID)
             }
-            let ownerText = runs[ownerIndex].text
-            guard elementID.elementOffset < ownerText.utf16.count else {
+            guard elementID.elementOffset < owner.text.utf16.count else {
                 throw SyncTextSequenceStateError.anchorElementOutOfBounds(elementID)
             }
 
@@ -437,7 +467,7 @@ public struct SyncTextSequenceState: Equatable, Sendable {
                 : elementID.elementOffset
             guard SyncTextSequenceStringBoundary.isBoundary(
                 boundaryOffset,
-                in: ownerText
+                in: owner.text
             ) else {
                 throw SyncTextSequenceStateError.originSplitsSurrogatePair(elementID)
             }
@@ -455,56 +485,6 @@ public struct SyncTextSequenceState: Equatable, Sendable {
             try resolveEndpoint(payload.anchor.leftElementID!, isLeftEndpoint: true)
         }
 
-        var validGaps: Set<SyncTextSequenceGap> = [
-            SyncTextSequenceGap(left: nil, right: nil)
-        ]
-        for run in runs {
-            validGaps.insert(SyncTextSequenceGap(
-                left: run.origin.leftElementID,
-                right: run.origin.rightElementID
-            ))
-
-            let scalarSpans = SyncTextSequenceStringBoundary.scalarSpans(in: run.text)
-            guard let first = scalarSpans.first, let last = scalarSpans.last else {
-                throw SyncTextSequenceStateError.emptyRunText(run.operationID)
-            }
-
-            let firstElementID = try SyncTextElementID(
-                operationID: run.operationID,
-                elementOffset: first.startOffset
-            )
-            validGaps.insert(SyncTextSequenceGap(
-                left: run.origin.leftElementID,
-                right: firstElementID
-            ))
-
-            for scalarIndex in scalarSpans.indices.dropFirst() {
-                let previous = scalarSpans[scalarIndex - 1]
-                let current = scalarSpans[scalarIndex]
-                let previousFinalElementID = try SyncTextElementID(
-                    operationID: run.operationID,
-                    elementOffset: previous.startOffset + previous.utf16Length - 1
-                )
-                let currentFirstElementID = try SyncTextElementID(
-                    operationID: run.operationID,
-                    elementOffset: current.startOffset
-                )
-                validGaps.insert(SyncTextSequenceGap(
-                    left: previousFinalElementID,
-                    right: currentFirstElementID
-                ))
-            }
-
-            let finalElementID = try SyncTextElementID(
-                operationID: run.operationID,
-                elementOffset: last.startOffset + last.utf16Length - 1
-            )
-            validGaps.insert(SyncTextSequenceGap(
-                left: finalElementID,
-                right: run.origin.rightElementID
-            ))
-        }
-
         let resolvedOrigin = try SyncTextInsertionOrigin(
             leftElementID: payload.anchor.leftElementID,
             rightElementID: payload.anchor.rightElementID
@@ -514,36 +494,22 @@ public struct SyncTextSequenceState: Equatable, Sendable {
             right: resolvedOrigin.rightElementID
         )
 
-        switch payload.anchor.kind {
-        case .empty:
-            break
-        case .before:
-            let right = payload.anchor.rightElementID!
-            guard validGaps.contains(declaredGap) else {
-                throw SyncTextSequenceStateError.beforeAnchorNotAtStructuralHead(right)
-            }
-        case .between:
+        if payload.anchor.kind == .between {
             let left = payload.anchor.leftElementID!
             let right = payload.anchor.rightElementID!
-            guard validGaps.contains(declaredGap) else {
-                let leftPosition = structuralPosition(of: left)
-                let rightPosition = structuralPosition(of: right)
-                if rightPosition < leftPosition {
-                    throw SyncTextSequenceStateError.betweenAnchorEndpointsReversed(
-                        left: left,
-                        right: right
-                    )
-                }
-                throw SyncTextSequenceStateError.betweenAnchorEndpointsNonadjacent(
+            if structuralPosition(of: right) < structuralPosition(of: left) {
+                throw SyncTextSequenceStateError.betweenAnchorEndpointsReversed(
                     left: left,
                     right: right
                 )
             }
-        case .after:
-            let left = payload.anchor.leftElementID!
-            guard validGaps.contains(declaredGap) else {
-                throw SyncTextSequenceStateError.afterAnchorNotAtStructuralTail(left)
-            }
+        }
+
+        guard durableGaps.contains(declaredGap) else {
+            throw SyncTextSequenceStateError.anchorGapNotDurable(
+                left: declaredGap.left,
+                right: declaredGap.right
+            )
         }
 
         let insertedRun = try SyncTextSequenceRun(
@@ -571,6 +537,48 @@ public struct SyncTextSequenceState: Equatable, Sendable {
         return try SyncTextSequenceState(
             runs: replacementRuns,
             fragments: replacementFragments
+        )
+    }
+
+    private func canonicalOperationAnchor(
+        leftElementID: SyncTextElementID?,
+        rightElementID: SyncTextElementID?,
+        durableGaps: SyncTextSequenceDurableGapIndex,
+        metrics: inout SyncTextSequenceAnchorResolutionMetrics
+    ) throws -> SyncOperationAnchor {
+        let immediateGap = SyncTextSequenceGap(
+            left: leftElementID,
+            right: rightElementID
+        )
+        metrics.durableGapChecks += 1
+        if durableGaps.contains(immediateGap) {
+            return try Self.operationAnchor(
+                leftElementID: immediateGap.left,
+                rightElementID: immediateGap.right
+            )
+        }
+
+        guard let leftElementID,
+              let owner = durableGaps.run(owning: leftElementID),
+              leftElementID.elementOffset == owner.text.utf16.count - 1 else {
+            preconditionFailure(
+                "A validated cursor boundary must resolve to a durable structural gap"
+            )
+        }
+
+        let exitGap = SyncTextSequenceGap(
+            left: leftElementID,
+            right: owner.origin.rightElementID
+        )
+        metrics.durableGapChecks += 1
+        guard durableGaps.contains(exitGap) else {
+            preconditionFailure(
+                "A completed structural subtree must expose its durable exit gap"
+            )
+        }
+        return try Self.operationAnchor(
+            leftElementID: exitGap.left,
+            rightElementID: exitGap.right
         )
     }
 
@@ -720,6 +728,76 @@ public struct SyncTextSequenceState: Equatable, Sendable {
 private struct SyncTextSequenceGap: Equatable, Hashable {
     let left: SyncTextElementID?
     let right: SyncTextElementID?
+}
+
+private struct SyncTextSequenceDurableGapIndex {
+    private let runs: [SyncTextSequenceRun]
+    private let runIndex: [SyncOperationID: Int]
+    private let declaredOrigins: Set<SyncTextSequenceGap>
+
+    init(runs: [SyncTextSequenceRun]) {
+        self.runs = runs
+        self.runIndex = Dictionary(
+            uniqueKeysWithValues: runs.enumerated().map { ($1.operationID, $0) }
+        )
+        self.declaredOrigins = Set(runs.map {
+            SyncTextSequenceGap(
+                left: $0.origin.leftElementID,
+                right: $0.origin.rightElementID
+            )
+        })
+    }
+
+    var declaredOriginCount: Int { declaredOrigins.count }
+
+    func run(owning elementID: SyncTextElementID) -> SyncTextSequenceRun? {
+        guard let index = runIndex[elementID.operationID] else { return nil }
+        return runs[index]
+    }
+
+    func contains(_ gap: SyncTextSequenceGap) -> Bool {
+        if gap.left == nil, gap.right == nil {
+            return true
+        }
+        if declaredOrigins.contains(gap) {
+            return true
+        }
+
+        switch (gap.left, gap.right) {
+        case (nil, let right?):
+            guard let owner = run(owning: right) else { return false }
+            return right.elementOffset == 0 && owner.origin.leftElementID == nil
+
+        case (let left?, nil):
+            guard let owner = run(owning: left) else { return false }
+            return left.elementOffset == owner.text.utf16.count - 1
+                && owner.origin.rightElementID == nil
+
+        case (let left?, let right?):
+            if left.operationID == right.operationID {
+                let (nextOffset, overflow) = left.elementOffset.addingReportingOverflow(1)
+                if !overflow, nextOffset == right.elementOffset {
+                    return true
+                }
+            }
+
+            if let rightOwner = run(owning: right),
+               right.elementOffset == 0,
+               rightOwner.origin.leftElementID == left {
+                return true
+            }
+
+            if let leftOwner = run(owning: left),
+               left.elementOffset == leftOwner.text.utf16.count - 1,
+               leftOwner.origin.rightElementID == right {
+                return true
+            }
+            return false
+
+        case (nil, nil):
+            return true
+        }
+    }
 }
 
 private struct SyncTextSequenceScalarSpan {

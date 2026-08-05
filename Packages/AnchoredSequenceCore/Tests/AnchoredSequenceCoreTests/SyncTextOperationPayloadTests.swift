@@ -425,6 +425,45 @@ final class SyncTextOperationPayloadTests: XCTestCase {
         )
     }
 
+    func testSiblingBoundaryCaptureCanonicalizesToDurableExitAndPayloadPreservesIt() throws {
+        let baseID = operation(0)
+        let firstSiblingID = operation(1)
+        let secondSiblingID = operation(2)
+        let left = try element(baseID, 0)
+        let right = try element(baseID, 1)
+        let value = try state(
+            runs: [
+                run(baseID, text: "ab"),
+                run(firstSiblingID, left: left, right: right, text: "1"),
+                run(secondSiblingID, left: left, right: right, text: "2")
+            ],
+            fragments: [
+                fragment(baseID, start: 0),
+                fragment(secondSiblingID),
+                fragment(firstSiblingID),
+                fragment(baseID, start: 1)
+            ]
+        )
+        let original = value
+        let expected = try SyncOperationAnchor.between(
+            left: element(secondSiblingID, 0),
+            right: right
+        )
+
+        XCTAssertEqual(
+            try value.operationAnchor(atVisibleUTF16Offset: 2),
+            expected
+        )
+        XCTAssertEqual(
+            try value.insertOperationPayload(
+                operationID: operation(10),
+                atVisibleUTF16Offset: 2
+            ).anchor,
+            expected
+        )
+        XCTAssertEqual(value, original)
+    }
+
     func testSupplementaryScalarAnchorAndDeletionBoundariesAreSafe() throws {
         let runID = operation(1)
         let value = try state(

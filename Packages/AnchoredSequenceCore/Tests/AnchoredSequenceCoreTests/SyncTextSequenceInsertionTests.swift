@@ -182,6 +182,152 @@ final class SyncTextSequenceInsertionTests: XCTestCase {
         }
     }
 
+    func testPackageGeneratedSiblingBoundaryPayloadRoundTripsWithoutRewriting() throws {
+        let baseOperation = operation(0)
+        let left = try element(baseOperation, 0)
+        let right = try element(baseOperation, 1)
+        let sharedAnchor = try SyncOperationAnchor.between(left: left, right: right)
+        var original = try rootState(operationID: baseOperation, text: "AB")
+        for sibling in [operation(1), operation(2)] {
+            original = try original.incorporating(
+                insert: insertPayload(sibling, anchor: sharedAnchor),
+                insertedText: String(sibling.localCounter)
+            )
+        }
+        XCTAssertEqual(original.visibleText, "A21B")
+
+        let incomingOperation = operation(10)
+        let payload = try original.insertOperationPayload(
+            operationID: incomingOperation,
+            atVisibleUTF16Offset: 2
+        )
+        let expectedAnchor = try SyncOperationAnchor.between(
+            left: element(operation(2), 0),
+            right: right
+        )
+        XCTAssertEqual(payload.anchor, expectedAnchor)
+
+        let replacement = try original.incorporating(
+            insert: payload,
+            insertedText: "X"
+        )
+
+        XCTAssertEqual(replacement.visibleText, "A2X1B")
+        let insertedRun = try XCTUnwrap(
+            replacement.runs.first(where: { $0.operationID == incomingOperation })
+        )
+        XCTAssertEqual(insertedRun.origin.leftElementID, payload.anchor.leftElementID)
+        XCTAssertEqual(insertedRun.origin.rightElementID, payload.anchor.rightElementID)
+        XCTAssertEqual(original.visibleText, "A21B")
+    }
+
+    func testCanonicalSiblingBoundaryPayloadConvergesAcrossEquivalentStatesAndPeerReplay() throws {
+        let baseOperation = operation(0)
+        let operations = [operation(1), operation(2), operation(3)]
+        let left = try element(baseOperation, 0)
+        let right = try element(baseOperation, 1)
+        let sharedAnchor = try SyncOperationAnchor.between(left: left, right: right)
+        var equivalentStates: [SyncTextSequenceState] = []
+
+        for permutation in permutations(operations) {
+            var state = try rootState(operationID: baseOperation, text: "AB")
+            for operationID in permutation {
+                state = try state.incorporating(
+                    insert: insertPayload(operationID, anchor: sharedAnchor),
+                    insertedText: String(operationID.localCounter)
+                )
+            }
+            equivalentStates.append(state)
+        }
+
+        for state in equivalentStates.dropFirst() {
+            XCTAssertEqual(state, equivalentStates[0])
+        }
+
+        let incomingOperation = operation(10)
+        let payloads = try equivalentStates.map {
+            try $0.insertOperationPayload(
+                operationID: incomingOperation,
+                atVisibleUTF16Offset: 3
+            )
+        }
+        let expectedAnchor = try SyncOperationAnchor.between(
+            left: element(operation(2), 0),
+            right: right
+        )
+        XCTAssertTrue(payloads.allSatisfy { $0.anchor == expectedAnchor })
+
+        let canonicalPayload = try XCTUnwrap(payloads.first)
+        let completed = try equivalentStates.map {
+            try $0.incorporating(insert: canonicalPayload, insertedText: "X")
+        }
+        XCTAssertEqual(completed[0].visibleText, "A32X1B")
+        for state in completed.dropFirst() {
+            XCTAssertEqual(state, completed[0])
+        }
+
+        var reconstructedPeer = try rootState(operationID: baseOperation, text: "AB")
+        for operationID in operations.reversed() {
+            reconstructedPeer = try reconstructedPeer.incorporating(
+                insert: insertPayload(operationID, anchor: sharedAnchor),
+                insertedText: String(operationID.localCounter)
+            )
+        }
+        let peerResult = try reconstructedPeer.incorporating(
+            insert: canonicalPayload,
+            insertedText: "X"
+        )
+        XCTAssertEqual(peerResult, completed[0])
+        XCTAssertEqual(peerResult.visibleUTF16Count, completed[0].visibleUTF16Count)
+        XCTAssertEqual(peerResult.tombstonedUTF16Count, completed[0].tombstonedUTF16Count)
+    }
+
+    func testCanonicalCaptureUsesTrailingTombstonedDescendantExitGap() throws {
+        let baseOperation = operation(0)
+        let parentOperation = operation(2)
+        let childOperation = operation(99)
+        let siblingOperation = operation(1)
+        let left = try element(baseOperation, 0)
+        let right = try element(baseOperation, 1)
+        let sharedAnchor = try SyncOperationAnchor.between(left: left, right: right)
+        let parentElement = try element(parentOperation, 0)
+        let childElement = try element(childOperation, 0)
+
+        let runs = [
+            try run(baseOperation, text: "AB"),
+            try run(siblingOperation, left: left, right: right, text: "S"),
+            try run(parentOperation, left: left, right: right, text: "P"),
+            try run(childOperation, left: parentElement, right: right, text: "C")
+        ]
+        let original = try SyncTextSequenceState(
+            runs: runs,
+            fragments: [
+                try fragment(baseOperation, start: 0, length: 1),
+                try fragment(parentOperation, length: 1),
+                try fragment(childOperation, length: 1, visibility: .tombstone),
+                try fragment(siblingOperation, length: 1),
+                try fragment(baseOperation, start: 1, length: 1)
+            ]
+        )
+        XCTAssertEqual(original.visibleText, "APSB")
+
+        let payload = try original.insertOperationPayload(
+            operationID: operation(100),
+            atVisibleUTF16Offset: 2
+        )
+        XCTAssertEqual(
+            payload.anchor,
+            try .between(left: childElement, right: right)
+        )
+        let replacement = try original.incorporating(
+            insert: payload,
+            insertedText: "X"
+        )
+        XCTAssertEqual(replacement.visibleText, "APXSB")
+        XCTAssertEqual(replacement.visibility(of: childElement), .tombstone)
+        XCTAssertEqual(replacement.tombstonedUTF16Count, 1)
+    }
+
     func testIncorporatingDescendantAfterDependenciesPreservesSubtreeContiguity() throws {
         let baseOperation = operation(0)
         let siblingOperation = operation(1)
@@ -315,7 +461,7 @@ final class SyncTextSequenceInsertionTests: XCTestCase {
         }
     }
 
-    func testIncorporatingDistinguishesReversedAndNonadjacentBetweenEndpoints() throws {
+    func testIncorporatingDistinguishesReversedAndNonDurableBetweenEndpoints() throws {
         let baseOperation = operation(0)
         let original = try rootState(operationID: baseOperation, text: "ABC")
         let first = try element(baseOperation, 0)
@@ -331,7 +477,7 @@ final class SyncTextSequenceInsertionTests: XCTestCase {
                 insertedText: "R"
             )
         }
-        assertStateError(.betweenAnchorEndpointsNonadjacent(left: first, right: third)) {
+        assertStateError(.anchorGapNotDurable(left: first, right: third)) {
             _ = try original.incorporating(
                 insert: insertPayload(
                     operation(1),
@@ -349,20 +495,20 @@ final class SyncTextSequenceInsertionTests: XCTestCase {
         ))
     }
 
-    func testIncorporatingRejectsInvalidBeforeAndAfterClaims() throws {
+    func testIncorporatingRejectsNonDurableOneSidedClaims() throws {
         let baseOperation = operation(0)
         let original = try rootState(operationID: baseOperation, text: "ABC")
         let first = try element(baseOperation, 0)
         let second = try element(baseOperation, 1)
         let third = try element(baseOperation, 2)
 
-        assertStateError(.beforeAnchorNotAtStructuralHead(second)) {
+        assertStateError(.anchorGapNotDurable(left: nil, right: second)) {
             _ = try original.incorporating(
                 insert: insertPayload(operation(1), anchor: .before(second)),
                 insertedText: "B"
             )
         }
-        assertStateError(.afterAnchorNotAtStructuralTail(second)) {
+        assertStateError(.anchorGapNotDurable(left: second, right: nil)) {
             _ = try original.incorporating(
                 insert: insertPayload(operation(1), anchor: .after(second)),
                 insertedText: "A"
@@ -543,6 +689,29 @@ final class SyncTextSequenceInsertionTests: XCTestCase {
         XCTAssertEqual(original.runs, runs)
         XCTAssertEqual(original.fragments, fragments)
         XCTAssertEqual(original.visibleUTF16Count, runCount)
+    }
+
+    func testLargeCanonicalAnchorResolutionUsesBoundedLinearWork() throws {
+        let runCount = 12_000
+        var runs: [SyncTextSequenceRun] = []
+        runs.reserveCapacity(runCount)
+        for counter in 0..<runCount {
+            runs.append(try run(operation(UInt64(counter)), text: "x"))
+        }
+        let fragments = try runs.reversed().map {
+            try fragment($0.operationID, length: 1)
+        }
+        let state = try SyncTextSequenceState(runs: runs, fragments: fragments)
+
+        let result = try state.operationAnchorWithMetrics(
+            atVisibleUTF16Offset: runCount / 2
+        )
+
+        XCTAssertNotEqual(result.anchor, .empty)
+        XCTAssertEqual(result.metrics.indexedRuns, runCount)
+        XCTAssertLessThanOrEqual(result.metrics.declaredOrigins, runCount)
+        XCTAssertLessThanOrEqual(result.metrics.visitedFragments, runCount)
+        XCTAssertLessThanOrEqual(result.metrics.durableGapChecks, 2)
     }
 
     func testDeepChainIncorporationUsesIterativeProjection() throws {
