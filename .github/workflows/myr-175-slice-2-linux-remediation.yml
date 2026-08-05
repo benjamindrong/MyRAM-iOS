@@ -50,8 +50,18 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .github/myr175-remediation/patch.b64.* \
-            | base64 --decode > /tmp/myr175-remediate.py
+          sha256sum -c <<'CHECKSUMS'
+          13c3419fae685ac49ee4abcbe9d84bd2ad281a21c50e1e3fd3946e0144b360d0  .github/myr175-remediation/patch.b64.00
+          df2d27f1061aa699eb1c35dd3c9921677f0747d48be9c8e60febdde0835aeed1  .github/myr175-remediation/patch.b64.01
+          b9c036ea8009a24802a812b3dfde64586efe68468d21e4b32e63d4876d32d241  .github/myr175-remediation/patch.b64.02
+          2cb221894a40bfeac89355c3bff42d3c4c2133643aed54e98f51238844f80249  .github/myr175-remediation/patch.b64.03
+          33f197fe8126de4b7cacc45a973869438ac3be7b914fe8f86920c7e8380a82f1  .github/myr175-remediation/patch.b64.04
+          3ab310972049d2709a56d89c38409cd0629d4973401155b41c0e0f7498705074  .github/myr175-remediation/patch.b64.05
+          CHECKSUMS
+          cat .github/myr175-remediation/patch.b64.* > /tmp/myr175-remediate.b64
+          test "$(sha256sum /tmp/myr175-remediate.b64 | awk '{print $1}')" = \
+            "57cae4c17d23626d516c6f031ee867ac7d8a2a6826c9becebb7ce07d47860165"
+          base64 --decode /tmp/myr175-remediate.b64 > /tmp/myr175-remediate.py
           python3 -m py_compile /tmp/myr175-remediate.py
           python3 /tmp/myr175-remediate.py
 
