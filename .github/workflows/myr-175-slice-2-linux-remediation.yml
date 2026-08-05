@@ -1,0 +1,97 @@
+name: MYR-175 Slice 2 Portable Review Remediation
+
+on:
+  push:
+    branches:
+      - MYR-175-Slice-2-Structural-insert-incorporation-and-anchor-resolution
+
+permissions:
+  contents: write
+
+concurrency:
+  group: myr-175-slice-2-linux-remediation
+  cancel-in-progress: false
+
+jobs:
+  remediate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out existing PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: MYR-175-Slice-2-Structural-insert-incorporation-and-anchor-resolution
+          fetch-depth: 0
+
+      - name: Confirm workflow-only starting delta
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE=0a65817fa835398d95927e167ada3233ec4ef5ca
+          git merge-base --is-ancestor "$BASE" HEAD
+          actual="$(git diff --name-only "$BASE"...HEAD | sort)"
+          expected="$(printf '%s\n' \
+            .github/workflows/myr-175-slice-2-linux-remediation.yml \
+            .github/workflows/myr-175-slice-2-review-remediation.yml | sort)"
+          test "$actual" = "$expected"
+          echo "STARTING_HEAD=$(git rev-parse HEAD)"
+
+      - name: Apply reviewed patch definition
+        shell: bash
+        run: |
+          set -euo pipefail
+          awk '
+            /^          python3 - <<'\''PY'\''$/ { capture = 1; next }
+            capture && /^          PY$/ { exit }
+            capture { sub(/^          /, ""); print }
+          ' .github/workflows/myr-175-slice-2-review-remediation.yml > /tmp/myr175-remediate.py
+          test -s /tmp/myr175-remediate.py
+          python3 /tmp/myr175-remediate.py
+
+      - name: Commit narrow remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm \
+            .github/workflows/myr-175-slice-2-linux-remediation.yml \
+            .github/workflows/myr-175-slice-2-review-remediation.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextSequenceState.swift \
+            Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextSequenceInsertionTests.swift \
+            docs/MYR-175-structural-insert-alignment.md \
+            .github/workflows/myr-175-slice-2-linux-remediation.yml \
+            .github/workflows/myr-175-slice-2-review-remediation.yml
+          git diff --cached --check
+          git commit -m "MYR-175 Cache anchor capture index and close coverage gaps"
+          test -z "$(git status --short)"
+          echo "CANDIDATE_HEAD=$(git rev-parse HEAD)"
+
+      - name: Run complete package Debug suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift package --package-path Packages/AnchoredSequenceCore clean
+          swift test \
+            --package-path Packages/AnchoredSequenceCore \
+            --configuration debug \
+            --parallel
+
+      - name: Run complete package Release suite
+        shell: bash
+        run: |
+          set -euo pipefail
+          swift package --package-path Packages/AnchoredSequenceCore clean
+          swift test \
+            --package-path Packages/AnchoredSequenceCore \
+            --configuration release \
+            --parallel
+
+      - name: Publish tested remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -z "$(git status --short)"
+          echo "TESTED_HEAD=$(git rev-parse HEAD)"
+          git push origin HEAD:MYR-175-Slice-2-Structural-insert-incorporation-and-anchor-resolution
