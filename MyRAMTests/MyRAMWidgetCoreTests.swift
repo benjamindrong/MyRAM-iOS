@@ -108,15 +108,15 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         ))
     }
 
-    func testLayoutPolicyUsesCompactPaddingAndSpacingAcrossFamiliesAndPlatforms() {
+    func testLayoutPolicyUsesHalfSystemMarginsAndCompactSpacingAcrossFamiliesAndPlatforms() {
         for platform in [MyRAMWidgetPlatform.iOS, .macOS] {
             let small = MyRAMWidgetLayoutPolicy(family: .small, platform: platform)
-            XCTAssertEqual(small.contentPadding, 8)
+            XCTAssertEqual(small.contentMarginScale, 0.5)
             XCTAssertEqual(small.rootSpacing, 4)
             XCTAssertEqual(small.pinSpacing, 4)
 
             let medium = MyRAMWidgetLayoutPolicy(family: .medium, platform: platform)
-            XCTAssertEqual(medium.contentPadding, 8)
+            XCTAssertEqual(medium.contentMarginScale, 0.5)
             XCTAssertEqual(medium.rootSpacing, 4)
             XCTAssertEqual(medium.pinSpacing, 4)
         }
