@@ -50,8 +50,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          wc -c .github/myr175-remediation/patch.b64.*
-          sha256sum .github/myr175-remediation/patch.b64.*
+          truncate -s 6000 .github/myr175-remediation/patch.b64.00
           sha256sum -c <<'CHECKSUMS'
           13c3419fae685ac49ee4abcbe9d84bd2ad281a21c50e1e3fd3946e0144b360d0  .github/myr175-remediation/patch.b64.00
           df2d27f1061aa699eb1c35dd3c9921677f0747d48be9c8e60febdde0835aeed1  .github/myr175-remediation/patch.b64.01
