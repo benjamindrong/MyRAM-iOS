@@ -114,3 +114,107 @@ Deferred:
 - application-owned dark replay seam and cross-host tests: Slice 3;
 - dependency persistence, retry, and eventual convergence: MYR-177;
 - production activation: MYR-179.
+
+## Slice 2 baseline
+
+- Slice: structural insert incorporation and anchor resolution.
+- MyRAM baseline: `19ae86b1552246092a5435636779a2f7a6ba6181`.
+- Initial PR head before remediation: `2fb1df13329780e43c701c18a4ceec0b00079fa2`.
+- Blacksmith instruction revision: `e9fd28870804eac07e71e8feaf767812743a37f2`.
+- Corrected Jira contract timestamp: `2026-08-05T06:06:58.961-05:00`.
+- Remediation review date: 2026-08-05.
+- Production activation remains deferred to MYR-179.
+
+## Slice 2 corrected contract
+
+The four serialized anchor shapes identify durable structural gaps, not every pair of elements that happen to be adjacent in one current projection.
+
+A durable gap is one of:
+
+- the root gap `(nil, nil)`;
+- an existing run's declared origin;
+- the gap before a run's first scalar;
+- a legal gap between adjacent scalars in one run;
+- the gap after a run's final scalar.
+
+Occupancy does not invalidate a durable gap. Same-anchor siblings and descendants may already occupy it.
+
+Local capture and incoming incorporation have separate responsibilities:
+
+- `operationAnchor(atVisibleUTF16Offset:)` canonicalizes a selected cursor boundary to an existing durable gap before payload construction;
+- `insertOperationPayload(...)` preserves the canonical anchor exactly;
+- `incorporating(insert:insertedText:)` validates and preserves the exact incoming anchor without receiver-side repair or reinterpretation.
+
+Canonicalization must return a durable gap whose expansion boundary is exactly the selected cursor boundary. Equivalent states produced through supported delivery permutations must derive the same canonical anchor, and peers incorporating the same canonical payload must produce exactly equal runs, fragments, visible text, visible count, and tombstone count.
+
+## Slice 2 completion matrix
+
+| Behavior | MyRAM requirement | Adopted mechanism or divergence | Compatibility/convergence impact | Production location | Proving tests |
+|---|---|---|---|---|---|
+| Missing dependency behavior | Only an absent referenced operation is eligible for later deferral. | Resolve endpoints before replacement construction and return `missingAnchorDependency`; never guess a visible offset or invoke fallback. | MYR-177 can defer one exact error without reinterpreting malformed references. | `SyncTextSequenceState.incorporating` endpoint preflight | `testIncorporatingChildBeforeParentReturnsMissingDependencyWithoutMutation`, `testIncorporatingDistinguishesMissingOperationFromOutOfBoundsElement` |
+| Durable root-gap semantics | `.empty` names `(nil, nil)` even after root siblings occupy it. | Treat the root as an always-reachable durable gap rather than an empty-state assertion. | Concurrent root insertions remain admissible and converge through the Slice 1 sibling order. | `SyncTextSequenceDurableGapIndex.contains` | `testIncorporatingEmptyRootGapInsertionsConvergesAcrossAllPermutations` |
+| Occupied durable origins | Occupancy must not invalidate `.before`, `.between`, or `.after` origins. | Validate the exact historical origin rather than current projected adjacency; repeated insertion at the same one-sided or two-sided origin remains admissible. | Peers preserve the same causal origin after siblings or descendants occupy it. | `SyncTextSequenceDurableGapIndex.contains`, `SyncTextSequenceState.incorporating` | `testIncorporatingOccupiedBeforeAndAfterOriginsRemainAdmissibleAcrossPermutations`, `testIncorporatingSameAnchorInsertionsConvergesAcrossAllPermutations` |
+| Targeted durable-gap validation | Exact incoming anchors must identify independently reachable structural gaps without allocating every scalar gap. | Build one immutable per-state index of runs, declared origins, visible-fragment bounds, and structural-left boundaries, then reuse it for binary-search capture and exact incoming validation without allocating scalar-gap tables. | Index construction is linear at validated-state creation; repeated capture performs logarithmic fragment-boundary search plus at most two durable-gap checks. | `SyncTextSequenceAnchorResolutionIndex`, `SyncTextSequenceDurableGapIndex` | `testRepeatedCanonicalAnchorResolutionUsesPrebuiltIndexAndBoundedSearchWork`, focused incorporation error tests |
+| Canonical local capture | Every supported visible cursor must produce an incorporable payload. | Binary-search the prebuilt visible-fragment boundary index, preserve the immediate pair when durable, and otherwise canonicalize a sibling-subtree boundary to the completed left subtree's durable exit gap. | Capture and replay use one stable causal origin rather than a projected-only sibling pair. | `SyncTextSequenceAnchorResolutionIndex`, `operationAnchorWithMetrics`, `canonicalOperationAnchor` | `testEveryLegalCursorProducesIncorporablePayloadAcrossRepresentativeStates`, `testSiblingBoundaryCaptureCanonicalizesToDurableExitAndPayloadPreservesIt`, `testPackageGeneratedSiblingBoundaryPayloadRoundTripsWithoutRewriting` |
+| Canonical convergence | Equivalent supported states must derive one anchor and replay identically. | Derive the canonical payload from every permutation-built equivalent state and replay one unchanged payload on every state and a separately reconstructed peer. | Runs, fragments, visible text, visible count, and tombstone count remain exactly equal. | Local capture plus existing Slice 1 traversal | `testCanonicalSiblingBoundaryPayloadConvergesAcrossEquivalentStatesAndPeerReplay` |
+| Tombstoned trailing descendants | Hidden structure participates in cursor placement without becoming visible. | The structural fragment walk retains tombstones when selecting the completed subtree exit gap. | A canonical payload remains stable even when the final structural element before the visible cursor is tombstoned. | `operationAnchorWithMetrics` | `testCanonicalCaptureUsesTrailingTombstonedDescendantExitGap` |
+| Strict incoming preservation | Receiving peers must not canonicalize or rewrite an existing payload. | Validate the exact supplied gap and construct the inserted run with the payload's unchanged endpoints. | All peers consume the same causal origin; malformed projected-only gaps fail closed. | `SyncTextSequenceState.incorporating` | Inserted-run origin assertions in `testPackageGeneratedSiblingBoundaryPayloadRoundTripsWithoutRewriting` |
+| Self-referential anchor rejection | Any endpoint owned by the incoming operation is impossible and has global precedence across the complete anchor. | Scan both endpoints after empty-text and duplicate checks but before dependency lookup. | Missing external endpoints cannot hide a nondeferrable self-reference. | `SyncTextSequenceState.incorporating` preflight | `testIncorporatingRejectsSelfReferentialAnchorWithoutMutation` |
+| Impossible reference classification | Missing operations, out-of-bounds elements, reversed endpoints, and non-durable exact gaps remain distinct. | Retain `missingAnchorDependency`, `anchorElementOutOfBounds`, and `betweenAnchorEndpointsReversed`; classify every valid-endpoint non-durable shape as `anchorGapNotDurable`. | MYR-177 defers only `missingAnchorDependency`; all other structural failures remain nondeferrable. | `SyncTextSequenceStateError`, `SyncTextSequenceState.incorporating` | `testIncorporatingDistinguishesMissingOperationFromOutOfBoundsElement`, `testIncorporatingDistinguishesReversedAndNonDurableBetweenEndpoints`, `testIncorporatingRejectsNonDurableOneSidedClaims`, `testIncorporatingMissingAndImpossibleEndpointsNeverUseUnknownOrigin` |
+| Role-specific scalar-boundary validation | Left endpoints name the boundary after an element; right endpoints name the boundary before an element. | Validate `elementOffset + 1` for left roles and `elementOffset` for right roles against Unicode-scalar boundaries. | Durable UTF-16 identity remains usable without permitting origins inside surrogate pairs. | `SyncTextSequenceState.incorporating` endpoint resolution | `testIncorporatingUsesRoleSpecificSurrogatePairBoundaries`, `testSupplementaryScalarAnchorAndDeletionBoundariesAreSafe` |
+| Mid-run and cross-run anchors | Placement derives from exact durable endpoints, not compatibility offsets or current text. | Recognize intrinsic scalar gaps and existing run entry/exit gaps while preserving both endpoints. | Placement is independent of `utf16Offset`, `baseContentHash`, and receipt order among supported operations. | `SyncTextSequenceDurableGapIndex`, `incorporating` | `testIncorporatingSupportsLeadingMidRunAndTrailingInsertion`, `testIncorporatingCrossRunInsertionPreservesBothEndpoints`, `testAnchorsCrossOperationOwnedRunBoundaries` |
+| Identity-based visibility preservation | Existing element visibility must survive structural splitting; all inserted elements are visible. | Reuse iterative projection, stream existing visibility across projected spans, and coalesce only structurally adjacent equal-visibility ranges. | Structural insertion cannot resurrect tombstones or hide new content. | `remapVisibility` | `testIncorporatingUsesTombstonedAnchorsAndPreservesVisibilityByIdentity`, `testCanonicalCaptureUsesTrailingTombstonedDescendantExitGap` |
+| Immutable replacement construction | Success and failure leave the input unchanged and success returns a fully validated state. | Complete every preflight check before constructing the new run, fragments, or state. | Canonical storage remains separate from materialization; no unchecked state or persistence change is introduced. | `SyncTextSequenceState.incorporating` | Existing immutability assertions, large sibling and deep-chain tests |
+
+## Slice 2 deliberate divergences
+
+### Durable `.empty` root gap
+
+- MyRAM requirement: operations captured concurrently from an empty state must remain admissible after the first root insertion arrives.
+- Reason for divergence: treating `.empty` as a one-time assertion would reject valid concurrent root siblings.
+- Compatibility and convergence: no serialization, persistence, or comparator change; peers derive one deterministic root projection.
+- Production location: `SyncTextSequenceDurableGapIndex.contains`.
+- Adversarial test: `testIncorporatingEmptyRootGapInsertionsConvergesAcrossAllPermutations`.
+
+### Canonical durable capture instead of projected-only adjacency
+
+- MyRAM requirement: every locally generated payload must be accepted unchanged by strict incorporation and converge on equivalent peers.
+- Reason for divergence: immediate adjacency between independent sibling subtrees does not create an origin independently reachable by the durable traversal.
+- Compatibility and convergence: local capture selects the completed left subtree's durable exit gap; incoming payloads remain unchanged; equivalent states derive and replay the same anchor.
+- Production location: `operationAnchorWithMetrics` and `canonicalOperationAnchor`.
+- Adversarial tests: `testPackageGeneratedSiblingBoundaryPayloadRoundTripsWithoutRewriting`, `testCanonicalSiblingBoundaryPayloadConvergesAcrossEquivalentStatesAndPeerReplay`, and `testCanonicalCaptureUsesTrailingTombstonedDescendantExitGap`.
+
+### Compact identity-based visibility remapping
+
+- MyRAM requirement: preserve the existing compact run/fragment representation while insertion splits structural ranges.
+- Reason for divergence: adopting a per-element replacement representation would expand scope and create unnecessary schema and persistence debt.
+- Compatibility and convergence: existing runs remain immutable, visibility is preserved by identity, and final fragments continue using the validated compact format.
+- Production location: `SyncTextSequenceState.remapVisibility`.
+- Adversarial tests: `testIncorporatingUsesTombstonedAnchorsAndPreservesVisibilityByIdentity`, `testLargeSameAnchorIncorporationUsesIterativeProjection`, and `testDeepChainIncorporationUsesIterativeProjection`.
+
+## Slice 2 boundary
+
+Implemented in Slice 2:
+
+- immutable structural insert incorporation;
+- exact durable-gap validation without a full scalar-gap set;
+- canonical local capture at sibling-subtree boundaries;
+- exact incoming-anchor preservation;
+- dependency, bounds, reversed-order, non-durable-gap, self-reference, and scalar-boundary classifications;
+- canonical run insertion and unchanged Slice 1 materialization reuse;
+- identity-based visibility preservation and inserted-element visibility;
+- same-anchor, occupied one-sided, descendant, tombstoned, root-gap, exhaustive legal-cursor, permutation, peer-replay, and prebuilt-index repeated-capture complexity coverage.
+
+Unchanged from completed Slice 1:
+
+- same-anchor sibling comparator;
+- canonical run-storage ordering;
+- exact-gap bucket ordering;
+- subtree-contiguous iterative traversal;
+- traversal metrics and projection validation.
+
+Deferred:
+
+- application-owned dark replay seam and cross-host tests: Slice 3;
+- dependency persistence, retry, and eventual convergence: MYR-177;
+- production capture, queue admission, convergence, persistence, editor apply, and capability activation: MYR-179.
