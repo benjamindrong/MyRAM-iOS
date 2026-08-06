@@ -23,6 +23,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: true
 
+      - name: Provide sibling package
+        run: |
+          set -euo pipefail
+          git clone https://github.com/benjamindrong/NearbySyncCore.git ../NearbySyncCore
+          git -C ../NearbySyncCore checkout --detach 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          test "$(git -C ../NearbySyncCore rev-parse HEAD)" = 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          test -z "$(git -C ../NearbySyncCore status --short)"
+
       - name: Apply Slice 3 implementation
         run: |
           set -euo pipefail
@@ -59,6 +67,12 @@ jobs:
           xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' -only-testing:MyRAMMacTests/SyncBatchAnchoredInsertReplayTests -derivedDataPath /tmp/MYR175-Mac-focused test
           xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/MYR175-iOS-build CODE_SIGNING_ALLOWED=NO build
           xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' -derivedDataPath /tmp/MYR175-Mac-build CODE_SIGNING_ALLOWED=NO build
+
+      - name: Verify sibling package unchanged
+        run: |
+          set -euo pipefail
+          test "$(git -C ../NearbySyncCore rev-parse HEAD)" = 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          test -z "$(git -C ../NearbySyncCore status --short)"
 
       - name: Commit tested implementation
         run: |
