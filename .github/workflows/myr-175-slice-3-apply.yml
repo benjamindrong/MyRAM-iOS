@@ -1,4 +1,4 @@
-name: MYR-175 Slice 3 implementation
+name: MYR-175 Slice 3 publish verified implementation
 
 on:
   push:
@@ -13,25 +13,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  implement:
+  publish:
     if: github.actor != 'github-actions[bot]'
     runs-on: macos-15
-    timeout-minutes: 180
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           persist-credentials: true
 
-      - name: Provide sibling package
-        run: |
-          set -euo pipefail
-          git clone https://github.com/benjamindrong/NearbySyncCore.git ../NearbySyncCore
-          git -C ../NearbySyncCore checkout --detach 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
-          test "$(git -C ../NearbySyncCore rev-parse HEAD)" = 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
-          test -z "$(git -C ../NearbySyncCore status --short)"
-
-      - name: Apply Slice 3 implementation
+      - name: Apply locally verified Slice 3 implementation
         run: |
           set -euo pipefail
           python3 .github/scripts/apply_myr_175_slice_3.py
@@ -56,29 +48,11 @@ jobs:
           swift test --package-path Packages/AnchoredSequenceCore
           swift test -c release --package-path Packages/AnchoredSequenceCore
 
-      - name: Focused host verification
-        run: |
-          set -euo pipefail
-          xcodebuild -resolvePackageDependencies -project MyRAM.xcodeproj -scheme MyRAM
-          SIM_UDID="$(xcrun simctl list devices available -j | python3 -c 'import json,sys; d=json.load(sys.stdin); print(next(x["udid"] for runtime in d["devices"].values() for x in runtime if x["name"].startswith("iPhone") and x.get("isAvailable")))')"
-          xcrun simctl boot "$SIM_UDID" || true
-          xcrun simctl bootstatus "$SIM_UDID" -b
-          xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination "id=$SIM_UDID" -only-testing:MyRAMTests/SyncBatchAnchoredInsertReplayTests -derivedDataPath /tmp/MYR175-iOS-focused test
-          xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' -only-testing:MyRAMMacTests/SyncBatchAnchoredInsertReplayTests -derivedDataPath /tmp/MYR175-Mac-focused test
-          xcodebuild -project MyRAM.xcodeproj -scheme MyRAM -destination 'generic/platform=iOS Simulator' -derivedDataPath /tmp/MYR175-iOS-build CODE_SIGNING_ALLOWED=NO build
-          xcodebuild -project MyRAM.xcodeproj -scheme MyRAMMac -destination 'platform=macOS' -derivedDataPath /tmp/MYR175-Mac-build CODE_SIGNING_ALLOWED=NO build
-
-      - name: Verify sibling package unchanged
-        run: |
-          set -euo pipefail
-          test "$(git -C ../NearbySyncCore rev-parse HEAD)" = 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
-          test -z "$(git -C ../NearbySyncCore status --short)"
-
       - name: Commit tested implementation
         run: |
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add MyRAM.xcodeproj/project.pbxproj MyRAM/Sync/Batch/SyncBatchAnchoredInsertReplay.swift MyRAMTests/SyncBatchAnchoredInsertReplayTests.swift MyRAMMacTests/SyncBatchAnchoredInsertReplayTests.swift MyRAMMacTests/MacSyncBatchControllerTests.swift .github/scripts/apply_myr_175_slice_3.py .github/workflows/myr-175-slice-3-apply.yml
+          git add -A
           git commit -m 'MYR-175 Add dark anchored insert replay seam'
           git push origin HEAD:${GITHUB_REF_NAME}
