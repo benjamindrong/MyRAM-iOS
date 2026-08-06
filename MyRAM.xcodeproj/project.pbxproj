@@ -282,6 +282,10 @@
 		C17421000000000000000006 /* SyncBatchTransportAdmissionPlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17422000000000000000004 /* SyncBatchTransportAdmissionPlannerTests.swift */; };
 		C17421000000000000000007 /* SyncBatchPeerCapabilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17422000000000000000005 /* SyncBatchPeerCapabilityTests.swift */; };
 		C17421000000000000000008 /* SyncBatchTransportAdmissionPlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17422000000000000000006 /* SyncBatchTransportAdmissionPlannerTests.swift */; };
+		C17501000000000000000001 /* SyncBatchAnchoredInsertReplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17502000000000000000001 /* SyncBatchAnchoredInsertReplay.swift */; };
+		C17501000000000000000002 /* SyncBatchAnchoredInsertReplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17502000000000000000001 /* SyncBatchAnchoredInsertReplay.swift */; };
+		C17501000000000000000003 /* SyncBatchAnchoredInsertReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17502000000000000000002 /* SyncBatchAnchoredInsertReplayTests.swift */; };
+		C17501000000000000000004 /* SyncBatchAnchoredInsertReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17502000000000000000003 /* SyncBatchAnchoredInsertReplayTests.swift */; };
 		C17101000000000000000002 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */; };
 		C17101000000000000000003 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */; };
 		C17101000000000000000004 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */; };
@@ -604,6 +608,9 @@
 		C17422000000000000000004 /* SyncBatchTransportAdmissionPlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchTransportAdmissionPlannerTests.swift; sourceTree = "<group>"; };
 		C17422000000000000000005 /* SyncBatchPeerCapabilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchPeerCapabilityTests.swift; sourceTree = "<group>"; };
 		C17422000000000000000006 /* SyncBatchTransportAdmissionPlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchTransportAdmissionPlannerTests.swift; sourceTree = "<group>"; };
+		C17502000000000000000001 /* SyncBatchAnchoredInsertReplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredInsertReplay.swift; sourceTree = "<group>"; };
+		C17502000000000000000002 /* SyncBatchAnchoredInsertReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredInsertReplayTests.swift; sourceTree = "<group>"; };
+		C17502000000000000000003 /* SyncBatchAnchoredInsertReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredInsertReplayTests.swift; sourceTree = "<group>"; };
 		D19502000000000000000001 /* MarkdownFileIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileIO.swift; sourceTree = "<group>"; };
 		D19502000000000000000002 /* MarkdownFileIOTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileIOTests.swift; sourceTree = "<group>"; };
 		D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditorFileOperationBridge.swift; sourceTree = "<group>"; };
@@ -831,6 +838,7 @@
 				C16802000000000000000003 /* MyRAMSyncOperationIDAllocatorTests.swift */,
 				BCA123020000000000000009 /* SyncBatchPayloadCompatibilityTests.swift */,
 				C17102000000000000000003 /* SyncBatchAnchoredPayloadTests.swift */,
+				C17502000000000000000002 /* SyncBatchAnchoredInsertReplayTests.swift */,
 				C17402000000000000000001 /* SyncBatchEnvelopeV2Tests.swift */,
 				C17422000000000000000003 /* SyncBatchPeerCapabilityTests.swift */,
 				C17422000000000000000004 /* SyncBatchTransportAdmissionPlannerTests.swift */,
@@ -929,6 +937,7 @@
 				BCA10A020000000000000002 /* MacSidebarCollapsePolicyTests.swift */,
 				C17402000000000000000002 /* SyncBatchEnvelopeV2Tests.swift */,
 				C17422000000000000000005 /* SyncBatchPeerCapabilityTests.swift */,
+				C17502000000000000000003 /* SyncBatchAnchoredInsertReplayTests.swift */,
 				C17422000000000000000006 /* SyncBatchTransportAdmissionPlannerTests.swift */,
 				BCA122020000000000000006 /* MacSyncDeviceIdentityTests.swift */,
 				BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */,
@@ -970,6 +979,7 @@
 			children = (
 				BCA123020000000000000001 /* SyncBatchPayload.swift */,
 				C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */,
+				C17502000000000000000001 /* SyncBatchAnchoredInsertReplay.swift */,
 				C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */,
 				C17422000000000000000001 /* SyncBatchPeerCapability.swift */,
 				C17422000000000000000002 /* SyncBatchTransportAdmissionPlanner.swift */,
@@ -1522,6 +1532,7 @@
 				BCA164010000000000000001 /* AttributedTextStorageKeys.swift in Sources */,
 				BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */,
 				C17101000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
+				C17501000000000000000001 /* SyncBatchAnchoredInsertReplay.swift in Sources */,
 				C17101000000000000000003 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */,
 				C17421000000000000000001 /* SyncBatchPeerCapability.swift in Sources */,
 				C17421000000000000000003 /* SyncBatchTransportAdmissionPlanner.swift in Sources */,
@@ -1631,6 +1642,7 @@
 				C16801000000000000000005 /* MyRAMSyncOperationIDAllocatorTests.swift in Sources */,
 				BCA123010000000000000014 /* SyncBatchPayloadCompatibilityTests.swift in Sources */,
 				C17101000000000000000005 /* SyncBatchAnchoredPayloadTests.swift in Sources */,
+				C17501000000000000000003 /* SyncBatchAnchoredInsertReplayTests.swift in Sources */,
 				C17401000000000000000001 /* SyncBatchEnvelopeV2Tests.swift in Sources */,
 				C17421000000000000000005 /* SyncBatchPeerCapabilityTests.swift in Sources */,
 				C17421000000000000000006 /* SyncBatchTransportAdmissionPlannerTests.swift in Sources */,
@@ -1721,6 +1733,7 @@
 				BCA10A010000000000000001 /* MacSidebarCollapsePolicy.swift in Sources */,
 				BCA123010000000000000006 /* SyncBatchPayload.swift in Sources */,
 				C17101000000000000000002 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
+				C17501000000000000000002 /* SyncBatchAnchoredInsertReplay.swift in Sources */,
 				C17101000000000000000004 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */,
 				C17421000000000000000002 /* SyncBatchPeerCapability.swift in Sources */,
 				C17421000000000000000004 /* SyncBatchTransportAdmissionPlanner.swift in Sources */,
@@ -1804,6 +1817,7 @@
 				C17401000000000000000002 /* SyncBatchEnvelopeV2Tests.swift in Sources */,
 				C17421000000000000000007 /* SyncBatchPeerCapabilityTests.swift in Sources */,
 				C17421000000000000000008 /* SyncBatchTransportAdmissionPlannerTests.swift in Sources */,
+				C17501000000000000000004 /* SyncBatchAnchoredInsertReplayTests.swift in Sources */,
 				BCA122010000000000000006 /* MacSyncDeviceIdentityTests.swift in Sources */,
 				BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */,
 				BCA122010000000000000008 /* MacSyncBatchAccumulatorTests.swift in Sources */,

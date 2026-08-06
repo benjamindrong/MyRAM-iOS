@@ -218,3 +218,70 @@ Deferred:
 - application-owned dark replay seam and cross-host tests: Slice 3;
 - dependency persistence, retry, and eventual convergence: MYR-177;
 - production capture, queue admission, convergence, persistence, editor apply, and capability activation: MYR-179.
+
+## Slice 3 baseline and completion
+
+- Slice: dark replay integration and completion evidence.
+- Refreshed MyRAM baseline: `6fdc9ec1d6ec7d89488fd0de56a0d07829e134b0`.
+- Tested implementation head: `c6b2737468a779be556a1fb303612ad4d2b48016`.
+- Tested implementation tree: `99cac213f425155d539394f22795a4f4de270009`.
+- Blacksmith instruction revision: `5aa30c8a0d072a05a02ea019da0b899ea81c9890`.
+- Local verification date: 2026-08-06.
+- Production activation remains deferred to MYR-179.
+
+### Slice 3 replay contract
+
+`SyncBatchAnchoredInsertReplay.applying(_:to:)` is the shared MyRAM-owned replay seam for iPhone and native Mac. It accepts an already constructed anchored inserted change and the current `SyncTextSequenceState`, delegates directly to `SyncTextSequenceState.incorporating(insert:insertedText:)`, and returns the resulting state with visible text derived from that state.
+
+The seam has no SwiftData, `Note`, `ModelContext`, controller, editor, queue, convergence, transport, acknowledgement, or raw-offset dependency. It does not read `utf16Offset` or `baseContentHash`, does not catch or reinterpret `SyncTextSequenceStateError`, and has no production caller while anchored capability remains disabled.
+
+### Slice 3 completion matrix
+
+| Behavior | MyRAM requirement | Adopted mechanism or divergence | Compatibility/convergence impact | Production location | Proving tests or audit |
+|---|---|---|---|---|---|
+| Shared pure replay | One replay implementation must serve both application targets without persistence or activation. | Add one value-only namespace and result type compiled into both targets. | iPhone and native Mac consume the same structural operation and cannot drift at the replay seam. | `MyRAM/Sync/Batch/SyncBatchAnchoredInsertReplay.swift` | Mirrored `SyncBatchAnchoredInsertReplayTests`; `testSyncTargetMembershipIncludesSharedCaptureAndMacPresentationTests` |
+| Empty and mid-run replay | Replay must work from empty state and at a durable mid-run boundary. | Delegate the captured payload and inserted text unchanged to package incorporation. | Placement remains structural and independent of compatibility offsets. | `SyncBatchAnchoredInsertReplay.applying` | `testEmptyAndMidRunReplayReturnDerivedVisibleTextWithoutMutatingInput` |
+| Same-anchor convergence | Supported sibling arrival orders must produce exactly equal state and visible text. | Reuse the Slice 1 comparator and Slice 2 incorporation path without application-layer ordering. | Both hosts receive one deterministic sibling projection. | Package incorporation called by `SyncBatchAnchoredInsertReplay.applying` | `testSameAnchorReplayConvergesAcrossArrivalOrders` |
+| Tombstoned-anchor participation | Hidden structural identity must remain usable for placement without becoming visible. | Pass the complete sequence state to package incorporation and derive visible text only from the returned state. | Tombstone count and visibility remain preserved by identity. | `SyncBatchAnchoredInsertReplay.applying`; `SyncBatchAnchoredInsertReplayResult.visibleText` | `testTombstonedAnchorParticipatesWithoutBecomingVisible` |
+| Compatibility metadata isolation | Negative or past-end offsets and matching, mismatching, or absent hashes must not affect pure replay. | The replay source reads only `change.payload` and `change.text`. | Structural identity remains authoritative; capture-time hash validation stays in the adapter boundary. | `SyncBatchAnchoredInsertReplay.applying` | `testCompatibilityOffsetAndHashDoNotAffectReplay`; zero forbidden-field matches |
+| Exact error propagation | Missing dependencies and impossible element references must remain distinguishable. | Do not catch, wrap, collapse, or translate package errors. | MYR-177 can defer only `missingAnchorDependency`; nondeferrable errors remain exact. | `SyncBatchAnchoredInsertReplay.applying` | `testCoreErrorsEscapeUnchangedAndPreserveInputState` |
+| Input-state preservation | Success and failure must not mutate the caller's state. | Return the immutable replacement state produced by package incorporation. | Failed replay cannot partially change application state. | `SyncBatchAnchoredInsertReplay.applying` | Focused replay suites, especially `testCoreErrorsEscapeUnchangedAndPreserveInputState` |
+| Dark production boundary | MYR-175 must not activate anchored apply, durability, convergence, persistence, or editor mutation. | Compile the seam but add no production call site; retain `SyncBatchAnchoredPayloadCapability.isEnabled == false`. | Production behavior and mixed-version compatibility remain unchanged until MYR-179. | No production caller; existing capability policy | Zero-caller audit; `testAnchoredBatchRejectsBeforeMutationSaveOrSeenMarking`; `testAnchoredDirectAdmissionRejectsBeforeDurabilityOrRuntimeSubmission` |
+| Legacy positional preservation | Existing positional insertion must remain unchanged. | Do not alter iPhone or native Mac active positional paths. | Current production sync behavior is preserved while anchored replay remains dark. | Existing active applier and convergence paths | `testIncomingInsertionFallsForwardAtUnsafeUTF16Boundary`, `testMatchingBaseHashUsesExistingPositionalInsertionPath`, and complete host suites |
+| Target isolation | Shared source and mirrored tests must compile only in intended targets; the retired Mac applier remains excluded. | Add explicit PBX memberships and extend the existing project audit. | No accidental reactivation or cross-target test leakage. | `MyRAM.xcodeproj/project.pbxproj` | `testSyncTargetMembershipIncludesSharedCaptureAndMacPresentationTests` |
+
+### Slice 3 deliberate boundary decisions
+
+#### Compatibility metadata remains non-authoritative
+
+- MyRAM requirement: anchored replay placement is derived from durable structural identity.
+- Decision: the shared replay seam does not inspect compatibility offset or hash fields.
+- Compatibility and convergence: changing only those fields cannot change replay output; capture-time hash validation remains at the existing adapter boundary.
+- Production location: `SyncBatchAnchoredInsertReplay.applying`.
+- Proving test: `testCompatibilityOffsetAndHashDoNotAffectReplay` on both hosts.
+
+#### Application activation remains deferred
+
+- MyRAM requirement: MYR-179 is the sole production activation boundary.
+- Decision: compile and test the replay seam without wiring it to any active application path.
+- Compatibility and convergence: current production routing, durability, persistence, acknowledgement, and editor behavior remain unchanged.
+- Production location: no caller exists in production source.
+- Proving evidence: zero-caller audit, capability-off audit, iPhone rejection regression, and native Mac direct-admission rejection regression.
+
+## MYR-175 final boundary
+
+Completed across the three slices:
+
+- deterministic same-anchor sibling ordering and subtree-contiguous structural traversal;
+- immutable durable-gap insertion incorporation and canonical local capture;
+- exact missing-dependency and impossible-reference classification;
+- shared dark iPhone/native Mac replay with identical structural behavior;
+- compatibility-offset and hash isolation during replay;
+- completion and alignment evidence.
+
+Still deferred:
+
+- persistence and retry of unavailable dependencies: MYR-177;
+- production activation, atomic body/state persistence, and editor publication: MYR-179;
+- identity-targeted deletion and tombstone creation: MYR-176;
+- later migration audit and closure work: MYR-180.
