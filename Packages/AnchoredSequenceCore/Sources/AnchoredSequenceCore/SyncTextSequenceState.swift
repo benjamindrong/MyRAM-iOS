@@ -17,6 +17,12 @@ public enum SyncTextSequenceStateError: Error, Equatable, Sendable {
         left: SyncTextElementID?,
         right: SyncTextElementID?
     )
+    case missingDeleteDependency(SyncOperationID)
+    case deleteTargetRangeExceedsRun(SyncTextElementIDSpan)
+    case deleteTargetSplitsSurrogatePair(
+        SyncTextElementIDSpan,
+        offset: Int
+    )
     case noncanonicalRunOrder(previous: SyncOperationID, current: SyncOperationID)
     case noncanonicalSiblingOrder(previous: SyncOperationID, current: SyncOperationID)
     case unknownOrigin(SyncTextElementID)
@@ -178,6 +184,13 @@ struct SyncTextSequenceAnchorResolutionMetrics: Equatable, Sendable {
     var declaredOrigins = 0
     var visitedFragments = 0
     var durableGapChecks = 0
+}
+
+struct SyncTextSequenceDeletionMetrics: Equatable, Sendable {
+    var preflightedSpans = 0
+    var visitedFragments = 0
+    var targetIntersections = 0
+    var emittedFragments = 0
 }
 
 public struct SyncTextSequenceState: Equatable, Sendable {
@@ -530,6 +543,188 @@ public struct SyncTextSequenceState: Equatable, Sendable {
         return try SyncTextSequenceState(
             runs: replacementRuns,
             fragments: replacementFragments
+        )
+    }
+
+
+    /// Incorporates one validated identity-targeted deletion without mutating this state.
+    public func incorporating(
+        delete payload: SyncTextDeleteOperationPayload
+    ) throws -> SyncTextSequenceState {
+        try incorporatingDeleteWithMetrics(payload).state
+    }
+
+    /// Kept internal so complexity tests can prove bounded work without timing assertions.
+    func incorporatingDeleteWithMetrics(
+        _ payload: SyncTextDeleteOperationPayload
+    ) throws -> (
+        state: SyncTextSequenceState,
+        metrics: SyncTextSequenceDeletionMetrics
+    ) {
+        var metrics = SyncTextSequenceDeletionMetrics()
+        let runsByOperation = Dictionary(
+            uniqueKeysWithValues: runs.map { ($0.operationID, $0) }
+        )
+        var spansByOperation: [
+            SyncOperationID: [SyncTextElementIDSpan]
+        ] = [:]
+
+        for span in payload.deletedElementIDSpans {
+            metrics.preflightedSpans += 1
+            guard let run = runsByOperation[span.operationID] else {
+                throw SyncTextSequenceStateError.missingDeleteDependency(
+                    span.operationID
+                )
+            }
+
+            let endOffset = span.startOffset + span.utf16Length
+            guard endOffset <= run.text.utf16.count else {
+                throw SyncTextSequenceStateError.deleteTargetRangeExceedsRun(span)
+            }
+            guard SyncTextSequenceStringBoundary.isBoundary(
+                span.startOffset,
+                in: run.text
+            ) else {
+                throw SyncTextSequenceStateError.deleteTargetSplitsSurrogatePair(
+                    span,
+                    offset: span.startOffset
+                )
+            }
+            guard SyncTextSequenceStringBoundary.isBoundary(
+                endOffset,
+                in: run.text
+            ) else {
+                throw SyncTextSequenceStateError.deleteTargetSplitsSurrogatePair(
+                    span,
+                    offset: endOffset
+                )
+            }
+
+            spansByOperation[span.operationID, default: []].append(span)
+        }
+
+        var nextSpanIndexByOperation: [SyncOperationID: Int] = [:]
+        var replacementFragments: [SyncTextSequenceFragment] = []
+        replacementFragments.reserveCapacity(fragments.count)
+        var changed = false
+
+        func appendFragment(
+            operationID: SyncOperationID,
+            startOffset: Int,
+            utf16Length: Int,
+            visibility: SyncTextSequenceElementVisibility
+        ) throws {
+            guard utf16Length > 0 else { return }
+
+            if let previous = replacementFragments.last,
+               previous.operationID == operationID,
+               previous.visibility == visibility,
+               previous.startOffset + previous.utf16Length == startOffset {
+                replacementFragments[replacementFragments.count - 1] =
+                    try SyncTextSequenceFragment(
+                        operationID: operationID,
+                        startOffset: previous.startOffset,
+                        utf16Length: previous.utf16Length + utf16Length,
+                        visibility: visibility
+                    )
+            } else {
+                replacementFragments.append(
+                    try SyncTextSequenceFragment(
+                        operationID: operationID,
+                        startOffset: startOffset,
+                        utf16Length: utf16Length,
+                        visibility: visibility
+                    )
+                )
+            }
+        }
+
+        for fragment in fragments {
+            metrics.visitedFragments += 1
+            guard let operationSpans = spansByOperation[fragment.operationID] else {
+                try appendFragment(
+                    operationID: fragment.operationID,
+                    startOffset: fragment.startOffset,
+                    utf16Length: fragment.utf16Length,
+                    visibility: fragment.visibility
+                )
+                continue
+            }
+
+            let fragmentEnd = fragment.startOffset + fragment.utf16Length
+            var spanIndex = nextSpanIndexByOperation[fragment.operationID] ?? 0
+            while spanIndex < operationSpans.count {
+                let span = operationSpans[spanIndex]
+                let spanEnd = span.startOffset + span.utf16Length
+                guard spanEnd <= fragment.startOffset else { break }
+                spanIndex += 1
+            }
+
+            var cursor = fragment.startOffset
+            var scanIndex = spanIndex
+            while scanIndex < operationSpans.count {
+                let span = operationSpans[scanIndex]
+                let spanEnd = span.startOffset + span.utf16Length
+
+                if spanEnd <= cursor {
+                    scanIndex += 1
+                    continue
+                }
+                if span.startOffset >= fragmentEnd {
+                    break
+                }
+
+                let intersectionStart = max(cursor, span.startOffset)
+                let intersectionEnd = min(fragmentEnd, spanEnd)
+                if cursor < intersectionStart {
+                    try appendFragment(
+                        operationID: fragment.operationID,
+                        startOffset: cursor,
+                        utf16Length: intersectionStart - cursor,
+                        visibility: fragment.visibility
+                    )
+                }
+                if intersectionStart < intersectionEnd {
+                    metrics.targetIntersections += 1
+                    changed = changed || fragment.visibility == .visible
+                    try appendFragment(
+                        operationID: fragment.operationID,
+                        startOffset: intersectionStart,
+                        utf16Length: intersectionEnd - intersectionStart,
+                        visibility: .tombstone
+                    )
+                    cursor = intersectionEnd
+                }
+
+                if spanEnd <= fragmentEnd {
+                    scanIndex += 1
+                } else {
+                    break
+                }
+            }
+
+            if cursor < fragmentEnd {
+                try appendFragment(
+                    operationID: fragment.operationID,
+                    startOffset: cursor,
+                    utf16Length: fragmentEnd - cursor,
+                    visibility: fragment.visibility
+                )
+            }
+            nextSpanIndexByOperation[fragment.operationID] = scanIndex
+        }
+
+        metrics.emittedFragments = replacementFragments.count
+        guard changed else {
+            return (self, metrics)
+        }
+
+        return (
+            try SyncTextSequenceState(
+                runs: runs,
+                fragments: replacementFragments
+            ),
+            metrics
         )
     }
 
