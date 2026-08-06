@@ -22,3 +22,23 @@ enum SyncBatchAnchoredInsertReplay {
         )
     }
 }
+
+struct SyncBatchAnchoredDeleteReplayResult: Equatable, Sendable {
+    let sequenceState: SyncTextSequenceState
+
+    var visibleText: String {
+        sequenceState.visibleText
+    }
+}
+
+/// Applies one already-validated anchored deletion without persistence or activation.
+enum SyncBatchAnchoredDeleteReplay {
+    static func applying(
+        _ change: SyncBatchNoteBodyTextDeletedAnchoredChange,
+        to state: SyncTextSequenceState
+    ) throws -> SyncBatchAnchoredDeleteReplayResult {
+        SyncBatchAnchoredDeleteReplayResult(
+            sequenceState: try state.incorporating(delete: change.payload)
+        )
+    }
+}

@@ -77,3 +77,24 @@ Deferred:
 - MyRAM-owned dark replay and cross-host tests: MYR-176 Slice 2;
 - production activation and atomic persistence: MYR-179;
 - aggregate alignment and live convergence: MYR-180.
+
+## Slice 2 dark replay integration
+
+- Slice 2 baseline: `da3f4a0af5b351aa4b4c7ec291fde5a205e538c0`.
+- Blacksmith instruction revision: `e71c956b55c5ff7d118d480a1d7bdd411d694965`.
+- Production activation remains deferred to MYR-179.
+- The replay seam extends the existing shared anchored replay source and mirrored test files, preserving their established iPhone and native Mac target membership without project-file churn.
+
+| Slice 2 requirement | Adopted mechanism | Production location | Mirrored proving tests | Deferred impact |
+|---|---|---|---|---|
+| Shared pure deletion replay | Accept the anchored deleted-change and current state, delegate directly to `SyncTextSequenceState.incorporating(delete:)`, and derive visible text from the returned state. | `SyncBatchAnchoredDeleteReplay` in `MyRAM/Sync/Batch/SyncBatchAnchoredInsertReplay.swift` | `SyncBatchAnchoredDeleteReplayTests` in the iPhone and native Mac anchored replay test files | Production routing, persistence, and editor publication remain owned by MYR-179. |
+| Identity-only replay | Read only `change.payload`; compatibility offset, length, expected text, and base hash are not consulted. | `SyncBatchAnchoredDeleteReplay.applying(_:to:)` | `testIdentityOnlyReplayIgnoresCompatibilityMetadataAndPreservesInput` | Compatibility fields remain encoded for staged migration interoperability. |
+| Idempotent delivery | Preserve the package result exactly, including the unchanged-state result for fully repeated delivery. | `SyncBatchAnchoredDeleteReplay.applying(_:to:)` | `testRepeatedAndPartiallyRepeatedReplayIsIdempotent` | Durable deduplication policy remains outside sequence state. |
+| Insert/delete convergence | Compose the existing insertion replay seam with the deletion replay seam in both supported arrival orders. | `SyncBatchAnchoredInsertReplay` and `SyncBatchAnchoredDeleteReplay` | `testInsertDeleteReplayConvergesAcrossArrivalOrders` | Missing-dependency persistence and retry remain owned by MYR-177. |
+| Deleted-anchor insertion | Preserve tombstoned structural identity so a previously captured insertion can still resolve its anchor. | Direct delegation to the retained-identity package state | `testInsertionCanUseDeletedAnchor` | Tombstone compaction remains outside MYR-176. |
+| Exact error propagation and atomicity | Do not catch or translate package errors; return no partial state. | `SyncBatchAnchoredDeleteReplay.applying(_:to:)` | `testCoreErrorsEscapeUnchangedAndPreserveInputState`; `testMultiSpanFailureIsAtomic` | MYR-177 may defer only the exact missing-dependency classification. |
+| Dark activation boundary | Add no production call site and leave anchored capability, capture, emission, queueing, convergence, persistence, apply, transport, acknowledgements, and invitations unchanged. | No production integration outside the pure replay declaration | `testCapabilityRemainsDisabled` plus completion-evidence static audits | MYR-179 remains the sole activation boundary. |
+
+### Slice 2 file-placement decision
+
+The deletion replay declaration is colocated with the existing insertion replay declaration because both are stateless MyRAM-owned structural replay boundaries with identical target membership and lifecycle. The mirrored deletion test classes are colocated in the existing anchored replay test files for the same reason. This avoids duplicate project configuration and keeps the dark replay surface in one production file and one test file per platform.
