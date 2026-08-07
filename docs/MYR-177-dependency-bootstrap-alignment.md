@@ -2,9 +2,9 @@
 
 ## Scope
 
-This record covers MYR-177 Slice 1 only: durable structural-dependency deferral, deterministic retry, interruption recovery, and immutable commit planning. Bootstrap conflict classification remains Slice 2.
+This record covers MYR-177 Slice 1 and Slice 2: durable structural-dependency recovery, deterministic retry, bootstrap admission and conflict isolation, explicit structural-foundation presence, and dark completion integration.
 
-The approved reference set was reviewed at these exact revisions:
+The approved reference set remains pinned to the exact revisions reviewed for MYR-177:
 
 - Reference A: `64248a12829d04f62ddf3230c6c592f6226b57ab`
 - Reference B: `cdeb8053c3aa2510189429d717ab09e70f134716`
@@ -12,191 +12,171 @@ The approved reference set was reviewed at these exact revisions:
 - Reference D: `89c162d3c1ae02c426c9002419aef0814e779ed8`
 - Reference E: `26f9425ef74d45937e00d6c8ec2e8bb12889013d`
 
-Repository names, organizations, URLs, and copied external source are intentionally omitted.
+Repository names, organizations, URLs, and copied external source remain intentionally omitted. Slice 2 carries these approved revisions forward without substituting later or inferred reference content.
 
-## Alignment summary
+## Durable recovery and interruption ordering
 
-### Durable state and restart
+Slice 1 established a versioned file-backed recovery store, exact anchored-change preservation, deterministic restart reconstruction, persisted store health, compare-and-swap transitions, atomic replacement, and rollback on write failure.
 
-Reference A serializes synchronization state independently from transient reliable-session state and requires explicit reset after an interrupted session. Reference B separates durable document bytes from in-memory orchestration and reconstructs state by loading the durable base plus incremental changes.
-
-MYR-177 adopts:
-
-- a versioned recovery-store envelope;
-- a mandatory resolved durable destination;
-- typed failure when the application-support directory is unavailable;
-- exact operation payload preservation;
-- deterministic reconstruction of the dependency index after restart;
-- explicit persisted-store health instead of assuming decoded state is usable.
-
-MYR-177 deliberately diverges by storing unresolved anchored operations rather than peer-session state or whole-document change chunks. This keeps the persistence scope limited to the ticket and avoids introducing a second synchronization engine.
-
-Production locations:
-
-- `SyncBatchAnchoredRecoveryTypes.swift`
-- `FileBackedSyncBatchAnchoredRecoveryStore.swift`
-
-Proving tests:
-
-- `SyncBatchAnchoredRecoveryStoreTests.testFileLocationResolvesExpectedHostPaths`
-- `SyncBatchAnchoredRecoveryStoreTests.testFileLocationThrowsWhenApplicationSupportIsUnavailable`
-- `SyncBatchAnchoredRecoveryStoreTests.testStoreRoundTripsRecordsInDeterministicOrder`
-- `SyncBatchAnchoredRecoveryStoreTests.testInitialAdmissionFailurePreservesEmptyMemoryAndDisk`
-- `SyncBatchAnchoredRecoveryStoreTests.testRemovalFailurePreservesPriorMemoryAndDisk`
-- `SyncBatchAnchoredRecoveryStoreTests.testFullRecoveryReplacementFailurePreservesPriorSnapshotThenRecovers`
-- `SyncBatchAnchoredRecoveryStoreTests.testCorruptAndUnsupportedVersionRemainDistinct`
-- `SyncBatchAnchoredRecoveryTests.testNativeMacRecoveryStoreRoundTripsTemporaryFile`
-
-### Persist before cleanup
-
-Reference B compacts by durably storing the replacement document before removing incremental chunks. Removal is intentionally last so interruption cannot destroy the only recoverable representation.
-
-MYR-177 adopts the same ordering invariant for future activation:
+The ordering contract remains:
 
 1. plan without mutation;
 2. persist application state;
 3. durably apply recovery-store transitions;
 4. acknowledge only after both boundaries succeed.
 
-Slice 1 does not wire that transaction. It returns an immutable commit plan and retains the original record until explicit commit confirmation.
-
-Production location:
-
-- `SyncBatchAnchoredRecoveryPlanner.swift`
-
-Proving tests:
-
-- `SyncBatchAnchoredRecoveryPlannerTests.testInterruptedInsertionCleanupUsesExactAppliedEquivalence`
-- `SyncBatchAnchoredRecoveryPlannerTests.testFileBackedInterruptedCleanupSurvivesRestartAndCleansUpExactly`
-- `SyncBatchAnchoredRecoveryStoreTests.testWriteFailureRollsBackMemoryAndDiskAndMarksWriteFailure`
-
-Deferred ownership:
-
-- MYR-179 owns application-state persistence, recovery transition application, publication, and acknowledgement ordering.
-
-### Structural identity and dependency progress
-
-Reference D represents changes with stable actor, sequence, dependency, operation, object, and element identities. Its text metadata keeps deleted elements structurally represented. Reference E likewise retains deleted structure and anchor-related metadata rather than treating current visible offsets as durable identity.
-
-MYR-177 adopts:
-
-- note identity plus anchored operation identity as the recovery key;
-- complete missing element identity for insertion deferral;
-- missing target operation identity for deletion deferral;
-- operation-ID-indexed retry;
-- tombstoned runs as structurally available dependencies;
-- exact original anchored changes as replay authority.
-
-MYR-177 deliberately rejects:
-
-- visible-offset reconstruction;
-- retargeting delete spans;
-- current-body placement authority;
-- generic Boolean retry state;
-- payload expiry.
+Slice 2 does not activate that transaction. MYR-179 remains responsible for production application-state persistence, recovery cleanup ordering, publication, and acknowledgement.
 
 Production locations:
 
-- `SyncBatchAnchoredRecoveryTypes.swift`
-- `SyncBatchAnchoredRecoveryPlanner.swift`
+- `MyRAM/Sync/Batch/SyncBatchAnchoredRecoveryTypes.swift`
+- `MyRAM/Sync/Batch/SyncBatchAnchoredRecoveryPlanner.swift`
+- `MyRAM/Sync/Batch/FileBackedSyncBatchAnchoredRecoveryStore.swift`
 
-Proving tests:
+Representative retained tests:
 
-- `SyncBatchAnchoredRecoveryPlannerTests.testInitialMissingInsertionCreatesExactWaitingRecord`
-- `SyncBatchAnchoredRecoveryPlannerTests.testDeletionWaitsForTargetThenTombstonesIt`
-- `SyncBatchAnchoredRecoveryPlannerTests.testRetryReindexesFromOneMissingAnchorToAnother`
-- `SyncBatchAnchoredRecoveryTests.testNativeMacDeletionWaitsForTargetThenTombstonesExactRange`
+- `SyncBatchAnchoredRecoveryPlannerTests.testFileBackedInterruptedCleanupSurvivesRestartAndCleansUpExactly`
+- `SyncBatchAnchoredRecoveryStoreTests.testWriteFailureRollsBackMemoryAndDiskAndMarksWriteFailure`
+- `SyncBatchAnchoredRecoveryStoreTests.testCorruptAndUnsupportedVersionRemainDistinct`
 
-### Deterministic bounded retry
+## Structural identity and deterministic retry
 
-Reference D records explicit causal dependencies on each change rather than discovering readiness through repeated full-state polling. Reference A uses stable change hashes and heads to describe causal state. Reference B keeps document and synchronization state behind serialized ownership boundaries.
+MYR-177 continues to treat stable operation and element identity, not visible offsets, as replay authority. Recovery preserves complete missing insertion anchors and missing deletion-target operation IDs. Tombstoned runs remain structurally represented and can satisfy dependencies.
 
-MYR-177 adopts:
-
-- one dependency index rebuilt from durable records;
-- canonical operation ordering;
-- stable recovery-key tie-breaking;
-- one in-memory candidate sequence state;
-- bounded chained progression when successful insertion exposes another structural operation;
-- exact reindexing when replay reveals a different missing dependency.
-
-MYR-177 deliberately does not adopt Reference D's volatile timer queue because that queue has no durable retry or failure-preservation contract.
+Slice 2 retains the Slice 1 bounded worklist and extends initial planning so a newly represented operation can progress newly satisfiable waiting records in the same immutable plan. Reindexing remains exact when replay reveals another dependency, and transition collapse is still computed against the original durable snapshot.
 
 Production location:
 
-- `SyncBatchAnchoredRecoveryPlanner.swift`
+- `MyRAM/Sync/Batch/SyncBatchAnchoredRecoveryPlanner.swift`
 
-Proving tests:
+Representative tests:
 
-- `SyncBatchAnchoredRecoveryPlannerTests.testInsertionRetriesAfterParentArrivalAndProducesRemovalPlan`
 - `SyncBatchAnchoredRecoveryPlannerTests.testRetryReindexesFromOneMissingAnchorToAnother`
 - `SyncBatchAnchoredRecoveryPlannerTests.testMultiLevelInsertionChainProgressesInOneDeterministicPlan`
 - `SyncBatchAnchoredRecoveryPlannerTests.testSameAnchorSnapshotOrderDoesNotChangePlan`
-- `SyncBatchAnchoredRecoveryPlannerTests.testRetryMetricsSelectOnlyTriggeredDependencyChain`
+- `SyncBatchAnchoredRecoveryPlannerTests.testNonemptyBootstrapUnblocksWaitingDependentInSameInitialPlan`
+- `SyncBatchAnchoredRecoveryTests.testNativeMacBootstrapUnblocksWaitingDependentInSamePlan`
 
-### Duplicate delivery and interruption recovery
+## Duplicate and collision semantics preserved from Slice 1
 
-The approved references preserve operation or change identities across transport, persistence, merge, and deletion. Reference B compares durable document heads before saving and retains recoverable incremental data until replacement persistence succeeds.
+Slice 2 preserves the merged Slice 1 rules exactly:
 
-MYR-177 adopts exact applied equivalence only for interrupted cleanup backed by an existing durable recovery record:
+- fresh structural duplicates retain normal `AnchoredSequenceCore` validation;
+- applied equivalence is available only when an existing durable recovery record proves interrupted cleanup;
+- same-key/different-content redelivery of a waiting record terminalizes the original stored change as identity collision;
+- conflicting redelivery against an already-terminal record cannot rewrite the durable terminal record.
 
-- insertion requires the same operation ID, origin endpoints, and text;
-- deletion relies on identity-targeted tombstoning being idempotent;
-- fresh insertion delivery does not receive an applied-equivalence exception and retains the core `duplicateRun` contract;
-- non-equivalent reuse of an insertion identity during recovery is terminal;
-- conflicting redelivery against a waiting recovery key preserves the original durable change and transitions that record to terminal identity collision rather than retaining ordinary waiting state or adopting the conflicting payload.
+Bootstrap handling does not weaken these rules or reuse applied-equivalence as general duplicate acceptance.
 
-This does not weaken `AnchoredSequenceCore` duplicate-run validation and does not add a delete ledger.
+Representative tests:
 
-Production location:
-
-- `SyncBatchAnchoredRecoveryPlanner.swift`
-
-Proving tests:
-
-- `SyncBatchAnchoredRecoveryPlannerTests.testInterruptedInsertionCleanupUsesExactAppliedEquivalence`
-- `SyncBatchAnchoredRecoveryPlannerTests.testFileBackedInterruptedCleanupSurvivesRestartAndCleansUpExactly`
 - `SyncBatchAnchoredRecoveryPlannerTests.testFreshInsertionDuplicateUsesCoreDuplicateRun`
 - `SyncBatchAnchoredRecoveryPlannerTests.testPersistedRecoveryInsertionWithNonEquivalentStateBecomesTerminalIdentityCollision`
 - `SyncBatchAnchoredRecoveryPlannerTests.testConflictingWaitingRedeliveryTerminalizesOriginalRecordAndPersists`
 - `SyncBatchAnchoredRecoveryPlannerTests.testConflictingRedeliveryCannotRewriteExistingTerminalRecord`
-- `SyncBatchAnchoredRecoveryStoreTests.testSameKeyDifferentContentIsRejectedWithoutOverwrite`
 
-### Host and platform boundaries
+## Deterministic bootstrap descriptor
 
-Reference C was reviewed for host-level document persistence and synchronization ownership. Its application-facing integration reinforces that transport, persistence, and UI publication are separate concerns from structural change semantics.
+`AnchoredSequenceCore` now exposes `SyncTextLegacyBootstrapDescriptor`, containing the deterministic synthetic bootstrap `operationID` and canonical `SyncTextSequenceState`.
 
-MYR-177 adopts only shared, future-callable dark components. It does not activate platform controllers or editor publication.
+The identity derivation remains versioned and based on the note ID plus exact UTF-16 body. Empty content still produces canonical `.empty` sequence state, but its synthetic operation identity is retained by the descriptor. Only explicitly represented format versions are accepted.
 
-Production and test locations:
+Production location:
 
-- shared sources under `MyRAM/Sync/Batch/`;
-- iPhone coverage under `MyRAMTests/`;
-- native Mac coverage under `MyRAMMacTests/`;
-- explicit shared-source and test-target membership in `MyRAM.xcodeproj/project.pbxproj`.
+- `Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextLegacyBootstrap.swift`
 
-Proving tests and audits:
+Proving tests:
 
-- `SyncBatchAnchoredRecoveryPlannerTests.testMirroredHostContractPlansIdenticalInsertionAndDeletionRetry`
-- `SyncBatchAnchoredRecoveryTests.testMirroredHostContractPlansIdenticalInsertionAndDeletionRetry`
-- `SyncBatchAnchoredRecoveryTests.testNativeMacPlansMissingInsertionAndRetry`
-- `SyncBatchAnchoredRecoveryTests.testNativeMacDeletionWaitsForTargetThenTombstonesExactRange`
-- `SyncBatchAnchoredRecoveryTests.testNativeMacRecoveryStoreRoundTripsTemporaryFile`
-- exact target-membership and mirrored-fixture audits in the Slice 1 remediation local completion runner
+- `SyncTextLegacyBootstrapTests.testV1EmptyKnownVectorFreezesDeterministicOperationID`
+- `SyncTextLegacyBootstrapTests.testV1KnownVectorFreezesDeterministicOperationID`
+- `SyncTextLegacyBootstrapTests.testDescriptorMatchesExistingStateAPI`
+- `SyncTextLegacyBootstrapTests.testUnknownFormatVersionCannotBeConstructed`
 
-Deferred ownership:
+## Foundation admission
 
-- MYR-179 owns production wiring.
-- MYR-180 owns live two-device verification and Stage 2 closure.
+Slice 2 makes structural-foundation presence explicit:
 
-## Bootstrap review carried forward to Slice 2
+- `.absent`
+- `.established(SyncTextSequenceState)`
 
-The approved reference review also covered conflict isolation, existing structural history, deleted-state retention, and host integration boundaries. Slice 2 must map those observations to:
+An absent foundation is not an empty document. Bootstrap may classify either state. Ordinary anchored insertion, deletion, dependency retry, and restart recovery require `.established` and fail closed with `missingStructuralFoundation(noteID:)` when the foundation is absent.
 
-- admissible bootstrap;
-- exact idempotent bootstrap;
-- bootstrap-content conflict;
-- late-bootstrap rejection after edit or tombstone history;
-- prohibition against ordinary dependency or rewrite-safety conflict routing.
+No `.empty` candidate is synthesized for ordinary replay, no recovery record is created merely because the foundation is absent, and no positional fallback is available through this seam.
 
-No bootstrap production code is added in Slice 1.
+An admissible empty bootstrap transitions `.absent` to `.established(.empty)`, so `didChangeApplicationState` is true even though the sequence value and visible text are empty. Equivalent bootstrap against `.established(.empty)` is idempotent and reports no application-state change.
+
+Production locations:
+
+- `MyRAM/Sync/Batch/SyncBatchAnchoredRecoveryTypes.swift`
+- `MyRAM/Sync/Batch/SyncBatchAnchoredRecoveryPlanner.swift`
+
+Proving tests:
+
+- `SyncBatchAnchoredRecoveryPlannerTests.testAbsentNonemptyBootstrapIsAdmissibleAndEstablishesFoundation`
+- `SyncBatchAnchoredRecoveryPlannerTests.testAbsentEmptyBootstrapEstablishesEmptyFoundationWithoutOperation`
+- `SyncBatchAnchoredRecoveryPlannerTests.testMissingFoundationRejectsInitialInsertionAndDeletionWithoutMutation`
+- `SyncBatchAnchoredRecoveryPlannerTests.testMissingFoundationRejectsDependencyAndRestartRetry`
+- `SyncBatchAnchoredRecoveryTests.testNativeMacEmptyBootstrapEstablishesFoundationWithoutOperation`
+- `SyncBatchAnchoredRecoveryTests.testNativeMacMissingFoundationRejectsInsertionDeletionAndRetry`
+
+## Bootstrap classification and conflict isolation
+
+A validated bootstrap change stores the note ID, exact body, supported format version, and core-derived operation ID. Construction and decoding recompute the descriptor identity and reject unsupported or tampered input.
+
+Classification is structural:
+
+- absent foundation: admissible;
+- established state exactly equal to the canonical bootstrap state: idempotent;
+- any other established structural state: bootstrap-content conflict.
+
+Visible-text equality does not establish equivalence. Tombstoned history therefore conflicts even if visible text would otherwise permit a legacy snapshot to appear current. Rejected bootstrap exposes no structural operation and does not enter dependency waiting or rewrite-safety handling.
+
+Representative tests:
+
+- `SyncBatchAnchoredRecoveryPlannerTests.testEquivalentNonemptyBootstrapIsIdempotentAndExposesRepresentedOperation`
+- `SyncBatchAnchoredRecoveryPlannerTests.testSameVisibleTextWithDifferentStructureCreatesBootstrapConflict`
+- `SyncBatchAnchoredRecoveryPlannerTests.testTombstoneHistoryConflictsAndLateBootstrapCannotResurrectContent`
+- `SyncBatchAnchoredRecoveryPlannerTests.testBootstrapCannotWaitAndOrdinaryChangesCannotHoldBootstrapConflict`
+- `SyncBatchAnchoredRecoveryTests.testNativeMacBootstrapAdmissionIdempotenceAndConflict`
+- `SyncBatchAnchoredRecoveryTests.testNativeMacBootstrapTombstoneConflictPreservesExactEvidence`
+
+## Recovery-owned structural conflict evidence
+
+Bootstrap conflicts persist the exact validated incoming bootstrap change plus recovery-owned structural evidence for the established sequence state. The evidence contains run operation IDs, insertion-origin endpoints, exact run text, fragment operation IDs, fragment ranges, and visibility/tombstone state.
+
+Evidence reconstruction passes through normal `SyncTextInsertionOrigin`, `SyncTextSequenceRun`, `SyncTextSequenceFragment`, and `SyncTextSequenceState` validation. Malformed evidence is rejected during decoding. The representation does not depend on SwiftData records, revision fields, or sequence-persistence payload metadata.
+
+Conflict reasons are intentionally minimal:
+
+- `nonEquivalentEstablishedState`
+- `tombstoneHistory`
+
+Persisted reason and evidence must agree; a forged tombstone reason without tombstone evidence is rejected.
+
+Production location:
+
+- `MyRAM/Sync/Batch/SyncBatchAnchoredRecoveryTypes.swift`
+
+Proving tests:
+
+- `SyncBatchAnchoredRecoveryPlannerTests.testStructuralEvidenceRoundTripsExactlyAndRejectsMalformedState`
+- `SyncBatchAnchoredRecoveryPlannerTests.testBootstrapChangeDecodingRejectsUnsupportedVersionAndTamperedIdentity`
+- `SyncBatchAnchoredRecoveryPlannerTests.testBootstrapConflictPersistsAndSurvivesRestartExactly`
+- `SyncBatchAnchoredRecoveryPlannerTests.testBootstrapConflictWriteFailurePreservesPriorMemoryAndDisk`
+- `SyncBatchAnchoredRecoveryTests.testNativeMacBootstrapConflictDecodingRejectsReasonEvidenceMismatch`
+
+## Host and activation boundaries
+
+The Slice 2 planner and recovery types remain shared source used by the iPhone and native Mac test targets. No duplicated platform production implementation is introduced.
+
+The production activation boundary remains unchanged:
+
+- anchored capability remains disabled;
+- the dark recovery planner has no active production caller;
+- no anchored queue admission, capture, emission, convergence submission, editor publication, persistence wiring, or acknowledgement is added;
+- no raw-offset fallback or general replay-time `baseContentHash` gate is introduced;
+- SwiftData schema and transport formats remain unchanged.
+
+MYR-179 remains the sole production activation boundary. MYR-180 remains responsible for live two-device closure.
+
+Exact-head target membership, zero-production-reachability, capability, transport, schema, editor, acknowledgement, offset/hash, NearbySyncCore, and changed-scope audits are part of the Slice 2 local completion runner and completion evidence.
