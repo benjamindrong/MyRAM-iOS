@@ -138,11 +138,13 @@ Proving tests:
 
 The approved references preserve operation or change identities across transport, persistence, merge, and deletion. Reference B compares durable document heads before saving and retains recoverable incremental data until replacement persistence succeeds.
 
-MYR-177 adopts exact applied equivalence only for interrupted cleanup:
+MYR-177 adopts exact applied equivalence only for interrupted cleanup backed by an existing durable recovery record:
 
 - insertion requires the same operation ID, origin endpoints, and text;
 - deletion relies on identity-targeted tombstoning being idempotent;
-- non-equivalent reuse of an insertion identity is terminal.
+- fresh insertion delivery does not receive an applied-equivalence exception and retains the core `duplicateRun` contract;
+- non-equivalent reuse of an insertion identity during recovery is terminal;
+- conflicting redelivery against a waiting recovery key preserves the original durable change and transitions that record to terminal identity collision rather than retaining ordinary waiting state or adopting the conflicting payload.
 
 This does not weaken `AnchoredSequenceCore` duplicate-run validation and does not add a delete ledger.
 
@@ -154,7 +156,10 @@ Proving tests:
 
 - `SyncBatchAnchoredRecoveryPlannerTests.testInterruptedInsertionCleanupUsesExactAppliedEquivalence`
 - `SyncBatchAnchoredRecoveryPlannerTests.testFileBackedInterruptedCleanupSurvivesRestartAndCleansUpExactly`
-- `SyncBatchAnchoredRecoveryPlannerTests.testSameInsertionIdentityWithDifferentTextBecomesTerminal`
+- `SyncBatchAnchoredRecoveryPlannerTests.testFreshInsertionDuplicateUsesCoreDuplicateRun`
+- `SyncBatchAnchoredRecoveryPlannerTests.testPersistedRecoveryInsertionWithNonEquivalentStateBecomesTerminalIdentityCollision`
+- `SyncBatchAnchoredRecoveryPlannerTests.testConflictingWaitingRedeliveryTerminalizesOriginalRecordAndPersists`
+- `SyncBatchAnchoredRecoveryPlannerTests.testConflictingRedeliveryCannotRewriteExistingTerminalRecord`
 - `SyncBatchAnchoredRecoveryStoreTests.testSameKeyDifferentContentIsRejectedWithoutOverwrite`
 
 ### Host and platform boundaries
