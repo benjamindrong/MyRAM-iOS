@@ -41,9 +41,10 @@ Focused test changes are confined to:
 
 - `Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextLegacyBootstrapTests.swift`
 - `MyRAMTests/SyncBatchAnchoredRecoveryPlannerTests.swift`
+- `MyRAMTests/SyncBatchAnchoredRecoveryStoreTests.swift`
 - `MyRAMMacTests/SyncBatchAnchoredRecoveryTests.swift`
 
-The retained `SyncBatchAnchoredRecoveryStoreTests` suite remains unchanged and is included in focused and complete local verification for version, corruption, deterministic persistence, CAS, rollback, and unhealthy-store behavior.
+`SyncBatchAnchoredRecoveryStoreTests` changes only the malformed-record fixture envelope from store version 1 to current store version 2. This preserves the test's intended distinction between `unsupportedRecordShape` and `readFailed`; a version-1 envelope correctly stops earlier at the unsupported-version gate after the Slice 2 store-version bump.
 
 Documentation changes are confined to:
 
@@ -68,7 +69,7 @@ No Slice 2 change is intended for SwiftData models, transport envelopes, converg
 | Keep bootstrap conflict separate from dependency lifecycle | Recovery change/lifecycle record invariants | Bootstrap-cannot-wait and ordinary-cannot-conflict test |
 | Progress dependents in one deterministic plan | Shared planner worklist | Nonempty bootstrap dependent-unblocking tests on iOS and Mac |
 | Empty bootstrap exposes no nonexistent operation | Bootstrap planner evaluation | Empty-bootstrap operation-list tests |
-| Version the incompatible bootstrap-capable store representation | `PersistedSyncBatchAnchoredRecoveryStore.currentVersion = 2` | Recovery-store unsupported-version/round-trip suite plus exact-head version audit |
+| Version the incompatible bootstrap-capable store representation | `PersistedSyncBatchAnchoredRecoveryStore.currentVersion = 2` | Recovery-store unsupported-version/round-trip/malformed-shape suite plus exact-head version audit |
 | Preserve Slice 1 duplicate/applied-equivalence/collision semantics | Shared ordinary replay path | Full retained `SyncBatchAnchoredRecoveryPlannerTests` suite |
 | Preserve persistence on conflict write failure | File-backed recovery store + bootstrap conflict transition | Bootstrap conflict write-failure test |
 | Preserve shared iPhone/native Mac production seam | Shared `MyRAM/Sync/Batch` source | Mirrored host tests and target-membership audit |
@@ -105,11 +106,12 @@ Reconstruction uses normal `AnchoredSequenceCore` initializers and `SyncTextSequ
 
 - Slice 1 start gate: passed; Slice 2 branch was created from merged `main` base `d83973f677c53dcf7f4fdf57657ab2e07761dbd3`.
 - Branch/PR naming: matches the Slice 2 ticket title convention.
-- Candidate scope is confined to the four production sources, three focused test files, and two MYR-177 evidence documents listed above.
+- Candidate scope is confined to the four production sources, four focused test files, and two MYR-177 evidence documents listed above.
 - The recovery-store format changed from v1 to v2 only because the persisted recovery record representation gained incompatible bootstrap variants; no migration code was introduced.
 - Production caller search for `SyncBatchAnchoredRecoveryPlanner`: no active application caller found; references were test-only.
 - GitHub Actions: no workflow run was available for the Slice 2 PR head, so no remote Xcode compile/test result is claimed.
 - An earlier exact-head local run against `de0ff96e21950543da5e9ab78ec089c0902605fb` reached the iOS focused build and exposed two missing `try` markers in `SyncBatchAnchoredStructuralStateEvidence.init(from:)`. That compile defect was remediated in follow-up source history; the failed run is not completion evidence for the current head.
+- A later exact-head local run against `7e2ba382996bf1cbade963d11468905be3e557bc` compiled the focused target and executed 50 selected tests. One retained store test failed because its malformed-record fixture still declared store version 1 after the intentional v2 format bump, causing the loader to correctly return `unsupportedVersion(1)` before record-shape decoding. The fixture was updated to version 2; that failed run is also non-closing evidence.
 
 ### Pending required local observation
 
@@ -143,7 +145,7 @@ The exact candidate head must pass:
 
 ## Persistence and interruption results
 
-Implementation-level tests cover conflict restart persistence, exact evidence reconstruction, interrupted Slice 1 cleanup, conflict write-failure preservation, deterministic store encoding, unsupported-version handling, CAS transitions, and rollback. Their execution status is `PENDING LOCAL EXACT-HEAD RUN`.
+Implementation-level tests cover conflict restart persistence, exact evidence reconstruction, interrupted Slice 1 cleanup, conflict write-failure preservation, deterministic store encoding, unsupported-version handling, malformed current-version record handling, CAS transitions, and rollback. Their execution status is `PENDING LOCAL EXACT-HEAD RUN`.
 
 ## Activation-boundary results
 
