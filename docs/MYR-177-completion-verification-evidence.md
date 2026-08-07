@@ -24,7 +24,7 @@ The approved MYR-177 private/reference review remains pinned by the merged align
 - Reference D: `89c162d3c1ae02c426c9002419aef0814e779ed8`
 - Reference E: `26f9425ef74d45937e00d6c8ec2e8bb12889013d`
 
-Slice 2 carries these exact approved revisions forward. This record does not claim an independent re-fetch of undisclosed reference repositories; it preserves the revisions approved and recorded by merged Slice 1 evidence.
+Slice 2 carries these exact approved revisions forward. This record does not claim an independent re-fetch of undisclosed reference repositories; it preserves the revisions approved and recorded by merged Slice 1 evidence. The local completion runner re-fetches or reuses the neutral approved-reference cache and verifies all five exact SHAs before expensive verification.
 
 ## Implementation inventory
 
@@ -33,12 +33,17 @@ Production changes are confined to:
 - `Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextLegacyBootstrap.swift`
 - `MyRAM/Sync/Batch/SyncBatchAnchoredRecoveryTypes.swift`
 - `MyRAM/Sync/Batch/SyncBatchAnchoredRecoveryPlanner.swift`
+- `MyRAM/Sync/Batch/FileBackedSyncBatchAnchoredRecoveryStore.swift`
+
+The recovery-store file changes only its persisted format version from 1 to 2. Slice 2 adds persisted bootstrap change and bootstrap-conflict lifecycle variants that a Slice 1 version-1 reader cannot decode, so this is an actual incompatible representation. No migration support is added for dark-only historical files.
 
 Focused test changes are confined to:
 
 - `Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextLegacyBootstrapTests.swift`
 - `MyRAMTests/SyncBatchAnchoredRecoveryPlannerTests.swift`
 - `MyRAMMacTests/SyncBatchAnchoredRecoveryTests.swift`
+
+The retained `SyncBatchAnchoredRecoveryStoreTests` suite remains unchanged and is included in focused and complete local verification for version, corruption, deterministic persistence, CAS, rollback, and unhealthy-store behavior.
 
 Documentation changes are confined to:
 
@@ -63,8 +68,9 @@ No Slice 2 change is intended for SwiftData models, transport envelopes, converg
 | Keep bootstrap conflict separate from dependency lifecycle | Recovery change/lifecycle record invariants | Bootstrap-cannot-wait and ordinary-cannot-conflict test |
 | Progress dependents in one deterministic plan | Shared planner worklist | Nonempty bootstrap dependent-unblocking tests on iOS and Mac |
 | Empty bootstrap exposes no nonexistent operation | Bootstrap planner evaluation | Empty-bootstrap operation-list tests |
+| Version the incompatible bootstrap-capable store representation | `PersistedSyncBatchAnchoredRecoveryStore.currentVersion = 2` | Recovery-store unsupported-version/round-trip suite plus exact-head version audit |
 | Preserve Slice 1 duplicate/applied-equivalence/collision semantics | Shared ordinary replay path | Full retained `SyncBatchAnchoredRecoveryPlannerTests` suite |
-| Preserve persistence on conflict write failure | Existing file-backed recovery store + bootstrap conflict transition | Bootstrap conflict write-failure test |
+| Preserve persistence on conflict write failure | File-backed recovery store + bootstrap conflict transition | Bootstrap conflict write-failure test |
 | Preserve shared iPhone/native Mac production seam | Shared `MyRAM/Sync/Batch` source | Mirrored host tests and target-membership audit |
 | Keep anchored production behavior dark | No new production callers or activation source | Capability-off and zero-production-reachability audits |
 
@@ -99,7 +105,8 @@ Reconstruction uses normal `AnchoredSequenceCore` initializers and `SyncTextSequ
 
 - Slice 1 start gate: passed; Slice 2 branch was created from merged `main` base `d83973f677c53dcf7f4fdf57657ab2e07761dbd3`.
 - Branch/PR naming: matches the Slice 2 ticket title convention.
-- PR scope before evidence publication: confined to the three production sources and three focused test files listed above.
+- Candidate scope is confined to the four production sources, three focused test files, and two MYR-177 evidence documents listed above.
+- The recovery-store format changed from v1 to v2 only because the persisted recovery record representation gained incompatible bootstrap variants; no migration code was introduced.
 - Production caller search for `SyncBatchAnchoredRecoveryPlanner`: no active application caller found; references were test-only.
 - GitHub Actions: no workflow run was available for the Slice 2 PR head, so no remote Xcode compile/test result is claimed.
 
@@ -122,6 +129,7 @@ The exact candidate head must pass:
 - structural-evidence round-trip and malformed-evidence tests;
 - missing-foundation fail-closed tests;
 - changed-scope and target-membership audits;
+- recovery-store v2 audit;
 - public API audit;
 - capability-off and zero-production-reachability audits;
 - no-offset/no-general-hash-validation audits;
@@ -134,7 +142,7 @@ The exact candidate head must pass:
 
 ## Persistence and interruption results
 
-Implementation-level tests cover conflict restart persistence, exact evidence reconstruction, interrupted Slice 1 cleanup, and conflict write-failure preservation. Their execution status is `PENDING LOCAL EXACT-HEAD RUN`.
+Implementation-level tests cover conflict restart persistence, exact evidence reconstruction, interrupted Slice 1 cleanup, conflict write-failure preservation, deterministic store encoding, unsupported-version handling, CAS transitions, and rollback. Their execution status is `PENDING LOCAL EXACT-HEAD RUN`.
 
 ## Activation-boundary results
 
@@ -144,7 +152,7 @@ MYR-179 remains the sole production activation boundary. MYR-180 remains respons
 
 ## Final evidence location
 
-The local completion runner creates a unique external evidence directory and prints its absolute path. That directory contains the command log, result summaries, audit output, relevant result-bundle locations, exact tested SHA/tree/parity information, and runner identity.
+The local completion runner creates a unique external evidence directory and prints its absolute path. That directory contains the command log, result summaries, audit output, relevant result-bundle locations, exact tested SHA/tree/parity information, approved-reference verification, and runner identity.
 
 After execution, the external summary should be attached or pasted to PR #127. The repository evidence document must not be edited merely to copy those results after exact-head verification, because doing so would create a new untested head.
 
