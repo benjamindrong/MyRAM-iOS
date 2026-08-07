@@ -302,7 +302,7 @@ final class FileBackedSyncBatchAnchoredRecoveryStore {
 }
 
 private struct PersistedSyncBatchAnchoredRecoveryStore: Codable {
-  static let currentVersion = 1
+  static let currentVersion = 2
 
   let version: Int
   let records: [SyncBatchAnchoredRecoveryRecord]
