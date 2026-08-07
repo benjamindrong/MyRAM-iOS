@@ -5,6 +5,227 @@ enum SyncBatchAnchoredRecoveryCodingError: Error, Equatable {
   case unsupportedRecordShape
 }
 
+enum SyncBatchAnchoredDarkOrchestrationError: Error, Equatable {
+  case missingStructuralFoundation(noteID: SyncBatchNoteID)
+}
+
+enum SyncBatchAnchoredStructuralFoundation: Equatable, Sendable {
+  case absent
+  case established(SyncTextSequenceState)
+
+  var sequenceState: SyncTextSequenceState? {
+    guard case .established(let state) = self else { return nil }
+    return state
+  }
+}
+
+struct SyncBatchAnchoredBootstrapChange: Equatable, Sendable {
+  let noteID: SyncBatchNoteID
+  let body: String
+  let formatVersion: SyncTextLegacyBootstrapFormatVersion
+  let operationID: SyncOperationID
+
+  init(
+    noteID: SyncBatchNoteID,
+    body: String,
+    formatVersion: SyncTextLegacyBootstrapFormatVersion = .v1
+  ) throws {
+    let descriptor = try SyncTextLegacyBootstrap.makeDescriptor(
+      noteID: noteID,
+      body: body,
+      formatVersion: formatVersion
+    )
+    self.noteID = noteID
+    self.body = body
+    self.formatVersion = formatVersion
+    self.operationID = descriptor.operationID
+  }
+
+  fileprivate init(
+    validatingNoteID noteID: SyncBatchNoteID,
+    body: String,
+    formatVersion: SyncTextLegacyBootstrapFormatVersion,
+    operationID: SyncOperationID
+  ) throws {
+    let descriptor = try SyncTextLegacyBootstrap.makeDescriptor(
+      noteID: noteID,
+      body: body,
+      formatVersion: formatVersion
+    )
+    guard descriptor.operationID == operationID else {
+      throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
+    }
+    self.noteID = noteID
+    self.body = body
+    self.formatVersion = formatVersion
+    self.operationID = operationID
+  }
+
+  func makeDescriptor() throws -> SyncTextLegacyBootstrapDescriptor {
+    let descriptor = try SyncTextLegacyBootstrap.makeDescriptor(
+      noteID: noteID,
+      body: body,
+      formatVersion: formatVersion
+    )
+    guard descriptor.operationID == operationID else {
+      throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
+    }
+    return descriptor
+  }
+}
+
+extension SyncBatchAnchoredBootstrapChange: Codable {
+  private enum CodingKeys: String, CodingKey {
+    case noteID
+    case body
+    case formatVersion
+    case operationID
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(noteID, forKey: .noteID)
+    try container.encode(body, forKey: .body)
+    try container.encode(formatVersion.rawValue, forKey: .formatVersion)
+    try container.encode(operationID, forKey: .operationID)
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    let rawVersion = try container.decode(UInt32.self, forKey: .formatVersion)
+    guard let formatVersion = SyncTextLegacyBootstrapFormatVersion(rawValue: rawVersion) else {
+      throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
+    }
+    try self.init(
+      validatingNoteID: container.decode(SyncBatchNoteID.self, forKey: .noteID),
+      body: container.decode(String.self, forKey: .body),
+      formatVersion: formatVersion,
+      operationID: container.decode(SyncOperationID.self, forKey: .operationID)
+    )
+  }
+}
+
+struct SyncBatchAnchoredStructuralStateEvidence: Equatable, Sendable {
+  struct Run: Codable, Equatable, Sendable {
+    let operationID: SyncOperationID
+    let leftElementID: SyncTextElementID?
+    let rightElementID: SyncTextElementID?
+    let text: String
+  }
+
+  enum FragmentVisibility: String, Codable, Equatable, Sendable {
+    case visible
+    case tombstone
+  }
+
+  struct Fragment: Codable, Equatable, Sendable {
+    let operationID: SyncOperationID
+    let startOffset: Int
+    let utf16Length: Int
+    let visibility: FragmentVisibility
+  }
+
+  let runs: [Run]
+  let fragments: [Fragment]
+
+  init(validating state: SyncTextSequenceState) {
+    runs = state.runs.map {
+      Run(
+        operationID: $0.operationID,
+        leftElementID: $0.origin.leftElementID,
+        rightElementID: $0.origin.rightElementID,
+        text: $0.text
+      )
+    }
+    fragments = state.fragments.map {
+      Fragment(
+        operationID: $0.operationID,
+        startOffset: $0.startOffset,
+        utf16Length: $0.utf16Length,
+        visibility: $0.visibility == .visible ? .visible : .tombstone
+      )
+    }
+  }
+
+  fileprivate init(runs: [Run], fragments: [Fragment]) {
+    self.runs = runs
+    self.fragments = fragments
+  }
+
+  var containsTombstones: Bool {
+    fragments.contains { $0.visibility == .tombstone }
+  }
+
+  func makeValidatedSequenceState() throws -> SyncTextSequenceState {
+    let reconstructedRuns = try runs.map { run in
+      try SyncTextSequenceRun(
+        operationID: run.operationID,
+        origin: SyncTextInsertionOrigin(
+          leftElementID: run.leftElementID,
+          rightElementID: run.rightElementID
+        ),
+        text: run.text
+      )
+    }
+    let reconstructedFragments = try fragments.map { fragment in
+      try SyncTextSequenceFragment(
+        operationID: fragment.operationID,
+        startOffset: fragment.startOffset,
+        utf16Length: fragment.utf16Length,
+        visibility: fragment.visibility == .visible ? .visible : .tombstone
+      )
+    }
+    return try SyncTextSequenceState(
+      runs: reconstructedRuns,
+      fragments: reconstructedFragments
+    )
+  }
+}
+
+extension SyncBatchAnchoredStructuralStateEvidence: Codable {
+  private enum CodingKeys: String, CodingKey {
+    case runs
+    case fragments
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(runs, forKey: .runs)
+    try container.encode(fragments, forKey: .fragments)
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    self.init(
+      runs: container.decode([Run].self, forKey: .runs),
+      fragments: container.decode([Fragment].self, forKey: .fragments)
+    )
+    do {
+      _ = try makeValidatedSequenceState()
+    } catch {
+      throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
+    }
+  }
+}
+
+enum SyncBatchAnchoredBootstrapConflictReason: String, Codable, Equatable, Sendable {
+  case nonEquivalentEstablishedState
+  case tombstoneHistory
+}
+
+struct SyncBatchAnchoredBootstrapConflict: Codable, Equatable, Sendable {
+  let establishedState: SyncBatchAnchoredStructuralStateEvidence
+  let reason: SyncBatchAnchoredBootstrapConflictReason
+
+  init(establishedState: SyncTextSequenceState) {
+    let evidence = SyncBatchAnchoredStructuralStateEvidence(validating: establishedState)
+    self.establishedState = evidence
+    self.reason = evidence.containsTombstones
+      ? .tombstoneHistory
+      : .nonEquivalentEstablishedState
+  }
+}
+
 struct SyncBatchAnchoredRecoveryRecordKey:
   Codable,
   Equatable,
@@ -40,11 +261,13 @@ struct SyncBatchAnchoredRecoveryRecordKey:
 }
 
 enum SyncBatchAnchoredRecoveryChange: Equatable, Sendable {
+  case bootstrap(SyncBatchAnchoredBootstrapChange)
   case insertion(SyncBatchNoteBodyTextInsertedAnchoredChange)
   case deletion(SyncBatchNoteBodyTextDeletedAnchoredChange)
 
   var noteID: SyncBatchNoteID {
     switch self {
+    case .bootstrap(let change): change.noteID
     case .insertion(let change): change.noteID
     case .deletion(let change): change.noteID
     }
@@ -52,6 +275,7 @@ enum SyncBatchAnchoredRecoveryChange: Equatable, Sendable {
 
   var operationID: SyncOperationID {
     switch self {
+    case .bootstrap(let change): change.operationID
     case .insertion(let change): change.payload.operationID
     case .deletion(let change): change.payload.operationID
     }
@@ -68,11 +292,13 @@ enum SyncBatchAnchoredRecoveryChange: Equatable, Sendable {
 extension SyncBatchAnchoredRecoveryChange: Codable {
   private enum CodingKeys: String, CodingKey {
     case kind
+    case bootstrap
     case insertion
     case deletion
   }
 
   private enum Kind: String, Codable {
+    case bootstrap
     case insertion
     case deletion
   }
@@ -80,6 +306,9 @@ extension SyncBatchAnchoredRecoveryChange: Codable {
   func encode(to encoder: Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     switch self {
+    case .bootstrap(let change):
+      try container.encode(Kind.bootstrap, forKey: .kind)
+      try container.encode(change, forKey: .bootstrap)
     case .insertion(let change):
       try container.encode(Kind.insertion, forKey: .kind)
       try container.encode(change, forKey: .insertion)
@@ -96,8 +325,21 @@ extension SyncBatchAnchoredRecoveryChange: Codable {
       throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
     }
     switch kind {
+    case .bootstrap:
+      guard container.contains(.bootstrap),
+        !container.contains(.insertion),
+        !container.contains(.deletion)
+      else {
+        throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
+      }
+      self = .bootstrap(
+        try container.decode(SyncBatchAnchoredBootstrapChange.self, forKey: .bootstrap)
+      )
     case .insertion:
-      guard container.contains(.insertion), !container.contains(.deletion) else {
+      guard container.contains(.insertion),
+        !container.contains(.bootstrap),
+        !container.contains(.deletion)
+      else {
         throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
       }
       self = .insertion(
@@ -107,7 +349,10 @@ extension SyncBatchAnchoredRecoveryChange: Codable {
         )
       )
     case .deletion:
-      guard container.contains(.deletion), !container.contains(.insertion) else {
+      guard container.contains(.deletion),
+        !container.contains(.bootstrap),
+        !container.contains(.insertion)
+      else {
         throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
       }
       self = .deletion(
@@ -467,12 +712,14 @@ enum SyncBatchAnchoredRecoveryErrorClassification: Equatable, Sendable {
     case .duplicateStructuralReachability(let operationID):
       self = .terminal(
         .init(
-          validatedCode: .duplicateStructuralReachability, evidence: .init(operationID: operationID)
+          validatedCode: .duplicateStructuralReachability,
+          evidence: .init(operationID: operationID)
         ))
     case .fragmentReferencesUnknownRun(let operationID):
       self = .terminal(
         .init(
-          validatedCode: .fragmentReferencesUnknownRun, evidence: .init(operationID: operationID)))
+          validatedCode: .fragmentReferencesUnknownRun,
+          evidence: .init(operationID: operationID)))
     case .fragmentRangeExceedsRun(let operationID):
       self = .terminal(
         .init(validatedCode: .fragmentRangeExceedsRun, evidence: .init(operationID: operationID)))
@@ -507,6 +754,7 @@ enum SyncBatchAnchoredRecoveryErrorClassification: Equatable, Sendable {
 enum SyncBatchAnchoredRecoveryLifecycle: Equatable, Sendable {
   case waiting(SyncBatchAnchoredMissingDependency)
   case terminalStructuralFailure(SyncBatchAnchoredStructuralFailure)
+  case bootstrapContentConflict(SyncBatchAnchoredBootstrapConflict)
 
   var isWaiting: Bool {
     if case .waiting = self { return true }
@@ -514,8 +762,12 @@ enum SyncBatchAnchoredRecoveryLifecycle: Equatable, Sendable {
   }
 
   var isTerminal: Bool {
-    if case .terminalStructuralFailure = self { return true }
-    return false
+    switch self {
+    case .terminalStructuralFailure, .bootstrapContentConflict:
+      true
+    case .waiting:
+      false
+    }
   }
 }
 
@@ -524,11 +776,13 @@ extension SyncBatchAnchoredRecoveryLifecycle: Codable {
     case kind
     case waiting
     case terminalStructuralFailure
+    case bootstrapContentConflict
   }
 
   private enum Kind: String {
     case waiting
     case terminalStructuralFailure
+    case bootstrapContentConflict
   }
 
   func encode(to encoder: Encoder) throws {
@@ -540,6 +794,9 @@ extension SyncBatchAnchoredRecoveryLifecycle: Codable {
     case .terminalStructuralFailure(let failure):
       try container.encode(Kind.terminalStructuralFailure.rawValue, forKey: .kind)
       try container.encode(failure, forKey: .terminalStructuralFailure)
+    case .bootstrapContentConflict(let conflict):
+      try container.encode(Kind.bootstrapContentConflict.rawValue, forKey: .kind)
+      try container.encode(conflict, forKey: .bootstrapContentConflict)
     }
   }
 
@@ -551,7 +808,10 @@ extension SyncBatchAnchoredRecoveryLifecycle: Codable {
     }
     switch kind {
     case .waiting:
-      guard container.contains(.waiting), !container.contains(.terminalStructuralFailure) else {
+      guard container.contains(.waiting),
+        !container.contains(.terminalStructuralFailure),
+        !container.contains(.bootstrapContentConflict)
+      else {
         throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
       }
       self = .waiting(
@@ -561,13 +821,29 @@ extension SyncBatchAnchoredRecoveryLifecycle: Codable {
         )
       )
     case .terminalStructuralFailure:
-      guard container.contains(.terminalStructuralFailure), !container.contains(.waiting) else {
+      guard container.contains(.terminalStructuralFailure),
+        !container.contains(.waiting),
+        !container.contains(.bootstrapContentConflict)
+      else {
         throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
       }
       self = .terminalStructuralFailure(
         try container.decode(
           SyncBatchAnchoredStructuralFailure.self,
           forKey: .terminalStructuralFailure
+        )
+      )
+    case .bootstrapContentConflict:
+      guard container.contains(.bootstrapContentConflict),
+        !container.contains(.waiting),
+        !container.contains(.terminalStructuralFailure)
+      else {
+        throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
+      }
+      self = .bootstrapContentConflict(
+        try container.decode(
+          SyncBatchAnchoredBootstrapConflict.self,
+          forKey: .bootstrapContentConflict
         )
       )
     }
@@ -588,12 +864,18 @@ struct SyncBatchAnchoredRecoveryRecord: Codable, Equatable, Sendable {
       throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
     }
     switch (change, lifecycle) {
-    case (.insertion, .waiting(.insertionAnchor)),
+    case (.bootstrap, .bootstrapContentConflict),
+      (.insertion, .waiting(.insertionAnchor)),
       (.deletion, .waiting(.deletionTarget)),
-      (_, .terminalStructuralFailure):
+      (.insertion, .terminalStructuralFailure),
+      (.deletion, .terminalStructuralFailure):
       break
-    case (.insertion, .waiting(.deletionTarget)),
-      (.deletion, .waiting(.insertionAnchor)):
+    case (.bootstrap, .waiting),
+      (.bootstrap, .terminalStructuralFailure),
+      (.insertion, .waiting(.deletionTarget)),
+      (.deletion, .waiting(.insertionAnchor)),
+      (.insertion, .bootstrapContentConflict),
+      (.deletion, .bootstrapContentConflict):
       throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
     }
     self.key = key
@@ -664,13 +946,27 @@ struct SyncBatchAnchoredRecoveryPlanningMetrics: Equatable, Sendable {
 
 struct SyncBatchAnchoredRecoveryCommitPlan: Equatable, Sendable {
   let noteID: SyncBatchNoteID
-  let initialSequenceState: SyncTextSequenceState
-  let finalSequenceState: SyncTextSequenceState
+  let initialFoundation: SyncBatchAnchoredStructuralFoundation
+  let finalFoundation: SyncBatchAnchoredStructuralFoundation
   let appliedRecords: [SyncBatchAnchoredRecoveryRecord]
   let recoveryStoreTransitions: [SyncBatchAnchoredRecoveryStoreTransition]
   let structurallyAvailableOperationIDs: [SyncOperationID]
   let didChangeApplicationState: Bool
   let metrics: SyncBatchAnchoredRecoveryPlanningMetrics
+
+  var initialSequenceState: SyncTextSequenceState {
+    guard case .established(let state) = initialFoundation else {
+      preconditionFailure("An absent structural foundation has no initial sequence state")
+    }
+    return state
+  }
+
+  var finalSequenceState: SyncTextSequenceState {
+    guard case .established(let state) = finalFoundation else {
+      preconditionFailure("An absent structural foundation has no final sequence state")
+    }
+    return state
+  }
 
   var visibleText: String {
     finalSequenceState.visibleText

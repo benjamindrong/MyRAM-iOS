@@ -18,6 +18,8 @@ enum SyncBatchAnchoredRecoveryReplay {
     to state: SyncTextSequenceState
   ) throws -> SyncTextSequenceState {
     switch change {
+    case .bootstrap:
+      throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
     case .insertion(let change):
       try SyncBatchAnchoredInsertReplay.applying(
         change,
@@ -38,14 +40,28 @@ enum SyncBatchAnchoredRecoveryPlanner {
     sequenceState: SyncTextSequenceState,
     recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot
   ) throws -> SyncBatchAnchoredRecoveryCommitPlan {
+    try planInitialDelivery(
+      change: change,
+      foundation: .established(sequenceState),
+      recoverySnapshot: recoverySnapshot
+    )
+  }
+
+  static func planInitialDelivery(
+    change: SyncBatchAnchoredRecoveryChange,
+    foundation: SyncBatchAnchoredStructuralFoundation,
+    recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot
+  ) throws -> SyncBatchAnchoredRecoveryCommitPlan {
+    try requireFoundationIfNeeded(change: change, foundation: foundation)
     try requireUsable(recoverySnapshot)
+
     let key = change.recordKey
     let existing = recoverySnapshot.record(for: key)
     if let existing, existing.change != change {
       if existing.lifecycle.isWaiting {
         return try terminalIdentityCollisionPlan(
           existingRecord: existing,
-          sequenceState: sequenceState
+          foundation: foundation
         )
       }
       throw SyncBatchAnchoredRecoveryPlannerError.identityCollision(key)
@@ -53,76 +69,94 @@ enum SyncBatchAnchoredRecoveryPlanner {
     if let existing, existing.lifecycle.isTerminal {
       return emptyPlan(
         noteID: change.noteID,
-        sequenceState: sequenceState
+        foundation: foundation
       )
     }
 
+    let originalRecords = recordsByKey(
+      recoverySnapshot.records.filter { $0.key.noteID == change.noteID }
+    )
+    var currentRecords = originalRecords
     var metrics = SyncBatchAnchoredRecoveryPlanningMetrics()
+    var candidateFoundation = foundation
+    var appliedRecordsByKey: [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryRecord] =
+      [:]
+    var directlyExposedOperationIDs: Set<SyncOperationID> = []
+
     let outcome = try evaluate(
       change,
-      against: sequenceState,
+      against: foundation,
       allowsAppliedEquivalence: existing != nil,
       metrics: &metrics
     )
-    let transition: SyncBatchAnchoredRecoveryStoreTransition?
-    let finalState: SyncTextSequenceState
-    var appliedRecords: [SyncBatchAnchoredRecoveryRecord] = []
-    var available: [SyncOperationID] = []
 
     switch outcome {
-    case .applied(let state, let exposesOperationID):
-      finalState = state
+    case .applied(let finalFoundation, let exposesOperationID):
+      candidateFoundation = finalFoundation
       if let existing {
-        transition = .removeCommitted(expected: existing)
-        appliedRecords = [existing]
-      } else {
-        transition = nil
+        currentRecords.removeValue(forKey: key)
+        appliedRecordsByKey[key] = existing
       }
       if exposesOperationID {
-        available = [change.operationID]
+        directlyExposedOperationIDs.insert(change.operationID)
       }
 
     case .waiting(let dependency):
-      finalState = sequenceState
       let replacement = try SyncBatchAnchoredRecoveryRecord(
         change: change,
         lifecycle: .waiting(dependency)
       )
-      if let existing {
-        transition =
-          existing == replacement
-          ? nil
-          : .replace(expected: existing, replacement: replacement)
-      } else {
-        transition = .insertExpectedAbsent(replacement)
-      }
+      currentRecords[key] = replacement
 
     case .terminal(let failure):
-      finalState = sequenceState
       let replacement = try SyncBatchAnchoredRecoveryRecord(
         change: change,
         lifecycle: .terminalStructuralFailure(failure)
       )
-      if let existing {
-        transition =
-          existing == replacement
-          ? nil
-          : .replace(expected: existing, replacement: replacement)
-      } else {
-        transition = .insertExpectedAbsent(replacement)
-      }
+      currentRecords[key] = replacement
+
+    case .bootstrapConflict(let conflict):
+      let replacement = try SyncBatchAnchoredRecoveryRecord(
+        change: change,
+        lifecycle: .bootstrapContentConflict(conflict)
+      )
+      currentRecords[key] = replacement
     }
 
-    let transitions = transition.map { [$0] } ?? []
+    let chainedExposedOperationIDs: Set<SyncOperationID>
+    if directlyExposedOperationIDs.isEmpty {
+      chainedExposedOperationIDs = []
+    } else {
+      guard case .established(let candidateState) = candidateFoundation else {
+        preconditionFailure("An exposed structural operation requires an established foundation")
+      }
+      var mutableCandidateState = candidateState
+      chainedExposedOperationIDs = try progressWaitingRecords(
+        noteID: change.noteID,
+        candidateState: &mutableCandidateState,
+        currentRecords: &currentRecords,
+        originalRecords: originalRecords,
+        appliedRecordsByKey: &appliedRecordsByKey,
+        seedOperationIDs: Array(directlyExposedOperationIDs),
+        metrics: &metrics
+      )
+      candidateFoundation = .established(mutableCandidateState)
+    }
+
+    let transitions = collapsedTransitions(
+      originalRecords: originalRecords,
+      currentRecords: currentRecords
+    )
     metrics.emittedTransitions = transitions.count
-    return SyncBatchAnchoredRecoveryCommitPlan(
+
+    let allExposed = directlyExposedOperationIDs.union(chainedExposedOperationIDs)
+    return makePlan(
       noteID: change.noteID,
-      initialSequenceState: sequenceState,
-      finalSequenceState: finalState,
-      appliedRecords: appliedRecords,
+      initialFoundation: foundation,
+      finalFoundation: candidateFoundation,
+      appliedRecords: appliedRecordsByKey.values.sorted { $0.key < $1.key },
       recoveryStoreTransitions: transitions,
-      structurallyAvailableOperationIDs: sortedOperationIDs(available),
-      didChangeApplicationState: finalState != sequenceState,
+      structurallyAvailableOperationIDs: sortedOperationIDs(Array(allExposed)),
       metrics: metrics
     )
   }
@@ -133,33 +167,176 @@ enum SyncBatchAnchoredRecoveryPlanner {
     recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot,
     trigger: SyncBatchAnchoredRecoveryRetryTrigger
   ) throws -> SyncBatchAnchoredRecoveryCommitPlan {
+    try planRetry(
+      noteID: noteID,
+      foundation: .established(sequenceState),
+      recoverySnapshot: recoverySnapshot,
+      trigger: trigger
+    )
+  }
+
+  static func planRetry(
+    noteID: SyncBatchNoteID,
+    foundation: SyncBatchAnchoredStructuralFoundation,
+    recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot,
+    trigger: SyncBatchAnchoredRecoveryRetryTrigger
+  ) throws -> SyncBatchAnchoredRecoveryCommitPlan {
+    guard case .established(let sequenceState) = foundation else {
+      throw SyncBatchAnchoredDarkOrchestrationError.missingStructuralFoundation(noteID: noteID)
+    }
     try requireUsable(recoverySnapshot)
-    let originalRecords = Dictionary(
-      uniqueKeysWithValues: recoverySnapshot.records
-        .filter { $0.key.noteID == noteID }
-        .map { ($0.key, $0) }
+
+    let originalRecords = recordsByKey(
+      recoverySnapshot.records.filter { $0.key.noteID == noteID }
     )
     var currentRecords = originalRecords
-    var waitingIndex = recoverySnapshot.waitingIndex(noteID: noteID)
     var candidateState = sequenceState
     var metrics = SyncBatchAnchoredRecoveryPlanningMetrics()
     var appliedRecordsByKey: [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryRecord] =
       [:]
-    var availableOperationIDs: Set<SyncOperationID> = []
-
+    let waitingIndex = makeWaitingIndex(records: currentRecords)
     let runOperationIDs = Set(sequenceState.runs.map(\.operationID))
-    var worklist: [SyncOperationID]
+
+    let seedOperationIDs: [SyncOperationID]
     switch trigger {
     case .newlyAvailable(let operationIDs):
-      worklist = sortedOperationIDs(
+      seedOperationIDs = sortedOperationIDs(
         operationIDs.filter { runOperationIDs.contains($0) }
       )
     case .restartRecovery:
-      worklist = sortedOperationIDs(
+      seedOperationIDs = sortedOperationIDs(
         waitingIndex.keys.filter { runOperationIDs.contains($0) }
       )
     }
+
+    let exposedOperationIDs = try progressWaitingRecords(
+      noteID: noteID,
+      candidateState: &candidateState,
+      currentRecords: &currentRecords,
+      originalRecords: originalRecords,
+      appliedRecordsByKey: &appliedRecordsByKey,
+      seedOperationIDs: seedOperationIDs,
+      metrics: &metrics
+    )
+
+    let finalFoundation = SyncBatchAnchoredStructuralFoundation.established(candidateState)
+    let transitions = collapsedTransitions(
+      originalRecords: originalRecords,
+      currentRecords: currentRecords
+    )
+    metrics.emittedTransitions = transitions.count
+
+    return makePlan(
+      noteID: noteID,
+      initialFoundation: foundation,
+      finalFoundation: finalFoundation,
+      appliedRecords: appliedRecordsByKey.values.sorted { $0.key < $1.key },
+      recoveryStoreTransitions: transitions,
+      structurallyAvailableOperationIDs: sortedOperationIDs(Array(exposedOperationIDs)),
+      metrics: metrics
+    )
+  }
+
+  private enum EvaluationOutcome {
+    case applied(SyncBatchAnchoredStructuralFoundation, exposesOperationID: Bool)
+    case waiting(SyncBatchAnchoredMissingDependency)
+    case terminal(SyncBatchAnchoredStructuralFailure)
+    case bootstrapConflict(SyncBatchAnchoredBootstrapConflict)
+  }
+
+  private static func evaluate(
+    _ change: SyncBatchAnchoredRecoveryChange,
+    against foundation: SyncBatchAnchoredStructuralFoundation,
+    allowsAppliedEquivalence: Bool,
+    metrics: inout SyncBatchAnchoredRecoveryPlanningMetrics
+  ) throws -> EvaluationOutcome {
+    switch change {
+    case .bootstrap(let bootstrap):
+      let descriptor = try bootstrap.makeDescriptor()
+      switch foundation {
+      case .absent:
+        return .applied(
+          .established(descriptor.state),
+          exposesOperationID: !descriptor.state.runs.isEmpty
+        )
+      case .established(let state):
+        guard state != descriptor.state else {
+          return .applied(
+            foundation,
+            exposesOperationID: !descriptor.state.runs.isEmpty
+          )
+        }
+        return .bootstrapConflict(
+          SyncBatchAnchoredBootstrapConflict(establishedState: state)
+        )
+      }
+
+    case .insertion, .deletion:
+      guard case .established(let state) = foundation else {
+        throw SyncBatchAnchoredDarkOrchestrationError.missingStructuralFoundation(
+          noteID: change.noteID
+        )
+      }
+
+      if allowsAppliedEquivalence {
+        metrics.appliedEquivalentChecks += 1
+        if case .insertion(let insertion) = change,
+          let existingRun = state.runs.first(where: {
+            $0.operationID == insertion.payload.operationID
+          })
+        {
+          if insertionIsAppliedEquivalent(insertion, existingRun: existingRun) {
+            return .applied(foundation, exposesOperationID: true)
+          }
+          return .terminal(
+            .identityCollision(operationID: insertion.payload.operationID)
+          )
+        }
+      }
+
+      do {
+        metrics.replayAttempts += 1
+        let result = try SyncBatchAnchoredRecoveryReplay.apply(change, to: state)
+        let exposesOperationID: Bool
+        switch change {
+        case .bootstrap:
+          preconditionFailure("Bootstrap evaluation is handled before replay")
+        case .insertion:
+          exposesOperationID = true
+        case .deletion:
+          exposesOperationID = false
+        }
+        return .applied(
+          .established(result),
+          exposesOperationID: exposesOperationID
+        )
+      } catch let error as SyncTextSequenceStateError {
+        switch SyncBatchAnchoredRecoveryErrorClassification(error) {
+        case .waiting(let dependency):
+          return .waiting(dependency)
+        case .terminal(let failure):
+          return .terminal(failure)
+        }
+      }
+    }
+  }
+
+  private static func progressWaitingRecords(
+    noteID: SyncBatchNoteID,
+    candidateState: inout SyncTextSequenceState,
+    currentRecords: inout [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryRecord],
+    originalRecords: [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryRecord],
+    appliedRecordsByKey: inout [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryRecord],
+    seedOperationIDs: [SyncOperationID],
+    metrics: inout SyncBatchAnchoredRecoveryPlanningMetrics
+  ) throws -> Set<SyncOperationID> {
+    var waitingIndex = makeWaitingIndex(records: currentRecords)
+    let representedRunIDs = Set(candidateState.runs.map(\.operationID))
+    var worklist = sortedOperationIDs(
+      seedOperationIDs.filter { representedRunIDs.contains($0) }
+    )
     var enqueued = Set(worklist)
+    var exposedOperationIDs: Set<SyncOperationID> = []
     var cursor = 0
 
     while cursor < worklist.count {
@@ -170,7 +347,8 @@ enum SyncBatchAnchoredRecoveryPlanner {
       metrics.selectedRecords += selectedKeys.count
 
       for key in selectedKeys {
-        guard var record = currentRecords[key],
+        guard key.noteID == noteID,
+          var record = currentRecords[key],
           case .waiting(let currentDependency) = record.lifecycle,
           currentDependency.operationID == dependencyID
         else {
@@ -183,18 +361,23 @@ enum SyncBatchAnchoredRecoveryPlanner {
         while true {
           let outcome = try evaluate(
             record.change,
-            against: candidateState,
+            against: .established(candidateState),
             allowsAppliedEquivalence: true,
             metrics: &metrics
           )
           switch outcome {
-          case .applied(let state, let exposesOperationID):
+          case .applied(let finalFoundation, let exposesOperationID):
+            guard case .established(let state) = finalFoundation else {
+              preconditionFailure("Ordinary recovery cannot remove an established foundation")
+            }
             candidateState = state
             currentRecords.removeValue(forKey: key)
-            appliedRecordsByKey[key] = originalRecords[key]
+            if let original = originalRecords[key] {
+              appliedRecordsByKey[key] = original
+            }
             if exposesOperationID {
               let operationID = record.change.operationID
-              availableOperationIDs.insert(operationID)
+              exposedOperationIDs.insert(operationID)
               if enqueued.insert(operationID).inserted {
                 insertSorted(operationID, into: &worklist, after: cursor)
               }
@@ -225,88 +408,16 @@ enum SyncBatchAnchoredRecoveryPlanner {
             }
             waitingIndex[dependency.operationID, default: []].append(key)
             waitingIndex[dependency.operationID]?.sort()
+
+          case .bootstrapConflict:
+            preconditionFailure("A waiting ordinary record cannot become a bootstrap conflict")
           }
           break
         }
       }
     }
 
-    var transitions: [SyncBatchAnchoredRecoveryStoreTransition] = []
-    for key in originalRecords.keys.sorted() {
-      guard let original = originalRecords[key] else { continue }
-      if let current = currentRecords[key] {
-        if current != original {
-          transitions.append(
-            .replace(expected: original, replacement: current)
-          )
-        }
-      } else {
-        transitions.append(.removeCommitted(expected: original))
-      }
-    }
-    metrics.emittedTransitions = transitions.count
-
-    return SyncBatchAnchoredRecoveryCommitPlan(
-      noteID: noteID,
-      initialSequenceState: sequenceState,
-      finalSequenceState: candidateState,
-      appliedRecords: appliedRecordsByKey.values.sorted { $0.key < $1.key },
-      recoveryStoreTransitions: transitions,
-      structurallyAvailableOperationIDs: sortedOperationIDs(
-        Array(availableOperationIDs)
-      ),
-      didChangeApplicationState: candidateState != sequenceState,
-      metrics: metrics
-    )
-  }
-
-  private enum EvaluationOutcome {
-    case applied(SyncTextSequenceState, exposesOperationID: Bool)
-    case waiting(SyncBatchAnchoredMissingDependency)
-    case terminal(SyncBatchAnchoredStructuralFailure)
-  }
-
-  private static func evaluate(
-    _ change: SyncBatchAnchoredRecoveryChange,
-    against state: SyncTextSequenceState,
-    allowsAppliedEquivalence: Bool,
-    metrics: inout SyncBatchAnchoredRecoveryPlanningMetrics
-  ) throws -> EvaluationOutcome {
-    if allowsAppliedEquivalence {
-      metrics.appliedEquivalentChecks += 1
-      if case .insertion(let insertion) = change,
-        let existingRun = state.runs.first(where: {
-          $0.operationID == insertion.payload.operationID
-        })
-      {
-        if insertionIsAppliedEquivalent(insertion, existingRun: existingRun) {
-          return .applied(state, exposesOperationID: true)
-        }
-        return .terminal(
-          .identityCollision(operationID: insertion.payload.operationID)
-        )
-      }
-    }
-
-    do {
-      metrics.replayAttempts += 1
-      let result = try SyncBatchAnchoredRecoveryReplay.apply(change, to: state)
-      let exposesOperationID: Bool
-      switch change {
-      case .insertion:
-        exposesOperationID = true
-      case .deletion:
-        exposesOperationID = false
-      }
-      return .applied(result, exposesOperationID: exposesOperationID)
-    } catch let error as SyncTextSequenceStateError {
-      switch SyncBatchAnchoredRecoveryErrorClassification(error) {
-      case .waiting(let dependency):
-        return .waiting(dependency)
-      case .terminal(let failure):
-        return .terminal(failure)
-      }
-    }
+    return exposedOperationIDs
   }
 
   private static func insertionIsAppliedEquivalent(
@@ -338,7 +449,7 @@ enum SyncBatchAnchoredRecoveryPlanner {
 
   private static func terminalIdentityCollisionPlan(
     existingRecord: SyncBatchAnchoredRecoveryRecord,
-    sequenceState: SyncTextSequenceState
+    foundation: SyncBatchAnchoredStructuralFoundation
   ) throws -> SyncBatchAnchoredRecoveryCommitPlan {
     let replacement = try SyncBatchAnchoredRecoveryRecord(
       key: existingRecord.key,
@@ -349,18 +460,31 @@ enum SyncBatchAnchoredRecoveryPlanner {
     )
     var metrics = SyncBatchAnchoredRecoveryPlanningMetrics()
     metrics.emittedTransitions = 1
-    return SyncBatchAnchoredRecoveryCommitPlan(
+    return makePlan(
       noteID: existingRecord.key.noteID,
-      initialSequenceState: sequenceState,
-      finalSequenceState: sequenceState,
+      initialFoundation: foundation,
+      finalFoundation: foundation,
       appliedRecords: [],
       recoveryStoreTransitions: [
         .replace(expected: existingRecord, replacement: replacement)
       ],
       structurallyAvailableOperationIDs: [],
-      didChangeApplicationState: false,
       metrics: metrics
     )
+  }
+
+  private static func requireFoundationIfNeeded(
+    change: SyncBatchAnchoredRecoveryChange,
+    foundation: SyncBatchAnchoredStructuralFoundation
+  ) throws {
+    guard case .bootstrap = change else {
+      guard case .established = foundation else {
+        throw SyncBatchAnchoredDarkOrchestrationError.missingStructuralFoundation(
+          noteID: change.noteID
+        )
+      }
+      return
+    }
   }
 
   private static func requireUsable(
@@ -379,18 +503,79 @@ enum SyncBatchAnchoredRecoveryPlanner {
 
   private static func emptyPlan(
     noteID: SyncBatchNoteID,
-    sequenceState: SyncTextSequenceState
+    foundation: SyncBatchAnchoredStructuralFoundation
   ) -> SyncBatchAnchoredRecoveryCommitPlan {
-    SyncBatchAnchoredRecoveryCommitPlan(
+    makePlan(
       noteID: noteID,
-      initialSequenceState: sequenceState,
-      finalSequenceState: sequenceState,
+      initialFoundation: foundation,
+      finalFoundation: foundation,
       appliedRecords: [],
       recoveryStoreTransitions: [],
       structurallyAvailableOperationIDs: [],
-      didChangeApplicationState: false,
       metrics: SyncBatchAnchoredRecoveryPlanningMetrics()
     )
+  }
+
+  private static func makePlan(
+    noteID: SyncBatchNoteID,
+    initialFoundation: SyncBatchAnchoredStructuralFoundation,
+    finalFoundation: SyncBatchAnchoredStructuralFoundation,
+    appliedRecords: [SyncBatchAnchoredRecoveryRecord],
+    recoveryStoreTransitions: [SyncBatchAnchoredRecoveryStoreTransition],
+    structurallyAvailableOperationIDs: [SyncOperationID],
+    metrics: SyncBatchAnchoredRecoveryPlanningMetrics
+  ) -> SyncBatchAnchoredRecoveryCommitPlan {
+    SyncBatchAnchoredRecoveryCommitPlan(
+      noteID: noteID,
+      initialFoundation: initialFoundation,
+      finalFoundation: finalFoundation,
+      appliedRecords: appliedRecords,
+      recoveryStoreTransitions: recoveryStoreTransitions,
+      structurallyAvailableOperationIDs: structurallyAvailableOperationIDs,
+      didChangeApplicationState: initialFoundation != finalFoundation,
+      metrics: metrics
+    )
+  }
+
+  private static func recordsByKey(
+    _ records: [SyncBatchAnchoredRecoveryRecord]
+  ) -> [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryRecord] {
+    Dictionary(uniqueKeysWithValues: records.map { ($0.key, $0) })
+  }
+
+  private static func makeWaitingIndex(
+    records: [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryRecord]
+  ) -> [SyncOperationID: [SyncBatchAnchoredRecoveryRecordKey]] {
+    var result: [SyncOperationID: [SyncBatchAnchoredRecoveryRecordKey]] = [:]
+    for record in records.values {
+      guard case .waiting(let dependency) = record.lifecycle else { continue }
+      result[dependency.operationID, default: []].append(record.key)
+    }
+    for operationID in Array(result.keys) {
+      result[operationID]?.sort()
+    }
+    return result
+  }
+
+  private static func collapsedTransitions(
+    originalRecords: [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryRecord],
+    currentRecords: [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryRecord]
+  ) -> [SyncBatchAnchoredRecoveryStoreTransition] {
+    let keys = Set(originalRecords.keys).union(currentRecords.keys).sorted()
+    var transitions: [SyncBatchAnchoredRecoveryStoreTransition] = []
+    for key in keys {
+      switch (originalRecords[key], currentRecords[key]) {
+      case (nil, let current?):
+        transitions.append(.insertExpectedAbsent(current))
+      case (let original?, nil):
+        transitions.append(.removeCommitted(expected: original))
+      case (let original?, let current?) where original != current:
+        transitions.append(.replace(expected: original, replacement: current))
+      default:
+        break
+      }
+    }
+    return transitions
   }
 
   private static func remove(
