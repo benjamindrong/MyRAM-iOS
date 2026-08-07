@@ -398,7 +398,7 @@ final class SyncBatchAnchoredRecoveryPlannerTests: XCTestCase {
     )
   }
 
-  func testSameInsertionIdentityWithDifferentTextBecomesTerminal() throws {
+  func testFreshInsertionDuplicateUsesCoreDuplicateRun() throws {
     let operationID = SyncBatchAnchoredRecoveryTestFactory.operation(2)
     let incoming = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
       state: .empty,
@@ -406,32 +406,156 @@ final class SyncBatchAnchoredRecoveryPlannerTests: XCTestCase {
       text: "A",
       operationID: operationID
     )
-    let conflicting = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
-      state: .empty,
-      offset: 0,
-      text: "B",
-      operationID: operationID
-    )
-    let conflictState = try SyncBatchAnchoredRecoveryTestFactory.applying(
-      conflicting,
+    let existingState = try SyncBatchAnchoredRecoveryTestFactory.applying(
+      incoming,
       to: .empty
     )
 
     let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
       change: incoming,
-      sequenceState: conflictState,
+      sequenceState: existingState,
       recoverySnapshot: emptySnapshot()
     )
 
-    XCTAssertEqual(plan.finalSequenceState, conflictState)
+    XCTAssertEqual(plan.finalSequenceState, existingState)
     XCTAssertFalse(plan.didChangeApplicationState)
+    XCTAssertEqual(plan.metrics.appliedEquivalentChecks, 0)
+    XCTAssertEqual(plan.metrics.replayAttempts, 1)
     guard case .insertExpectedAbsent(let record) = plan.recoveryStoreTransitions.first,
       case .terminalStructuralFailure(let failure) = record.lifecycle
     else {
-      return XCTFail("Expected terminal identity collision")
+      return XCTFail("Expected terminal duplicate-run recovery record")
     }
-    XCTAssertEqual(failure.code, .identityCollision)
+    XCTAssertEqual(record.change, incoming)
+    XCTAssertEqual(failure.code, .duplicateRun)
     XCTAssertEqual(failure.evidence.operationID, operationID)
+  }
+
+  func testPersistedRecoveryInsertionWithNonEquivalentStateBecomesTerminalIdentityCollision() throws {
+    let fixture = try insertionDependencyFixture()
+    let initial = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: fixture.child,
+      sequenceState: .empty,
+      recoverySnapshot: emptySnapshot()
+    )
+    let waitingRecord = try insertedRecord(from: initial)
+    let conflicting = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+      state: fixture.parentState,
+      offset: 1,
+      text: "C",
+      operationID: fixture.child.operationID
+    )
+    let conflictingState = try SyncBatchAnchoredRecoveryTestFactory.applying(
+      conflicting,
+      to: fixture.parentState
+    )
+
+    let plan = try SyncBatchAnchoredRecoveryPlanner.planRetry(
+      noteID: SyncBatchAnchoredRecoveryTestFactory.noteID,
+      sequenceState: conflictingState,
+      recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot(
+        records: [waitingRecord],
+        health: .healthy
+      ),
+      trigger: .restartRecovery
+    )
+
+    XCTAssertEqual(plan.finalSequenceState, conflictingState)
+    XCTAssertFalse(plan.didChangeApplicationState)
+    guard case .replace(let expected, let replacement) = plan.recoveryStoreTransitions.first,
+      case .terminalStructuralFailure(let failure) = replacement.lifecycle
+    else {
+      return XCTFail("Expected persisted recovery record to become terminal")
+    }
+    XCTAssertEqual(expected, waitingRecord)
+    XCTAssertEqual(replacement.change, waitingRecord.change)
+    XCTAssertEqual(failure.code, .identityCollision)
+    XCTAssertEqual(failure.evidence.operationID, fixture.child.operationID)
+  }
+
+  func testConflictingWaitingRedeliveryTerminalizesOriginalRecordAndPersists() throws {
+    let fixture = try insertionDependencyFixture()
+    let initial = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: fixture.child,
+      sequenceState: .empty,
+      recoverySnapshot: emptySnapshot()
+    )
+    let waitingRecord = try insertedRecord(from: initial)
+    let fileURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("myr177-collision-\(UUID().uuidString).json")
+    let store = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
+    XCTAssertTrue(try store.apply(initial.recoveryStoreTransitions))
+
+    let conflicting = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+      state: fixture.parentState,
+      offset: 1,
+      text: "C",
+      operationID: fixture.child.operationID
+    )
+    let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: conflicting,
+      sequenceState: .empty,
+      recoverySnapshot: store.snapshot()
+    )
+
+    XCTAssertEqual(plan.finalSequenceState, .empty)
+    XCTAssertFalse(plan.didChangeApplicationState)
+    XCTAssertEqual(plan.recoveryStoreTransitions.count, 1)
+    guard case .replace(let expected, let replacement) = plan.recoveryStoreTransitions[0],
+      case .terminalStructuralFailure(let failure) = replacement.lifecycle
+    else {
+      return XCTFail("Expected waiting record to terminalize on conflicting redelivery")
+    }
+    XCTAssertEqual(expected, waitingRecord)
+    XCTAssertEqual(replacement.change, waitingRecord.change)
+    XCTAssertNotEqual(replacement.change, conflicting)
+    XCTAssertEqual(failure.code, .identityCollision)
+    XCTAssertEqual(failure.evidence.operationID, fixture.child.operationID)
+
+    XCTAssertTrue(try store.apply(plan.recoveryStoreTransitions))
+    let reopened = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
+    XCTAssertEqual(reopened.snapshot().records, [replacement])
+  }
+
+  func testConflictingRedeliveryCannotRewriteExistingTerminalRecord() throws {
+    let fixture = try insertionDependencyFixture()
+    let initial = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: fixture.child,
+      sequenceState: .empty,
+      recoverySnapshot: emptySnapshot()
+    )
+    let waitingRecord = try insertedRecord(from: initial)
+    let terminalRecord = try SyncBatchAnchoredRecoveryRecord(
+      key: waitingRecord.key,
+      change: waitingRecord.change,
+      lifecycle: .terminalStructuralFailure(
+        .identityCollision(operationID: waitingRecord.key.operationID)
+      )
+    )
+    let conflicting = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+      state: fixture.parentState,
+      offset: 1,
+      text: "C",
+      operationID: fixture.child.operationID
+    )
+    let snapshot = SyncBatchAnchoredRecoveryStoreSnapshot(
+      records: [terminalRecord],
+      health: .healthy
+    )
+
+    XCTAssertThrowsError(
+      try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+        change: conflicting,
+        sequenceState: .empty,
+        recoverySnapshot: snapshot
+      )
+    ) { error in
+      XCTAssertEqual(
+        error as? SyncBatchAnchoredRecoveryPlannerError,
+        .identityCollision(waitingRecord.key)
+      )
+    }
+    XCTAssertEqual(snapshot.records, [terminalRecord])
   }
 
   func testInitialSuccessfulInsertionAndDeletionNeedNoRecoveryRecord() throws {
