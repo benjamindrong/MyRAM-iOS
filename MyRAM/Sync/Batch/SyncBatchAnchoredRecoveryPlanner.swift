@@ -42,6 +42,12 @@ enum SyncBatchAnchoredRecoveryPlanner {
     let key = change.recordKey
     let existing = recoverySnapshot.record(for: key)
     if let existing, existing.change != change {
+      if existing.lifecycle.isWaiting {
+        return try terminalIdentityCollisionPlan(
+          existingRecord: existing,
+          sequenceState: sequenceState
+        )
+      }
       throw SyncBatchAnchoredRecoveryPlannerError.identityCollision(key)
     }
     if let existing, existing.lifecycle.isTerminal {
@@ -55,6 +61,7 @@ enum SyncBatchAnchoredRecoveryPlanner {
     let outcome = try evaluate(
       change,
       against: sequenceState,
+      allowsAppliedEquivalence: existing != nil,
       metrics: &metrics
     )
     let transition: SyncBatchAnchoredRecoveryStoreTransition?
@@ -177,6 +184,7 @@ enum SyncBatchAnchoredRecoveryPlanner {
           let outcome = try evaluate(
             record.change,
             against: candidateState,
+            allowsAppliedEquivalence: true,
             metrics: &metrics
           )
           switch outcome {
@@ -261,20 +269,23 @@ enum SyncBatchAnchoredRecoveryPlanner {
   private static func evaluate(
     _ change: SyncBatchAnchoredRecoveryChange,
     against state: SyncTextSequenceState,
+    allowsAppliedEquivalence: Bool,
     metrics: inout SyncBatchAnchoredRecoveryPlanningMetrics
   ) throws -> EvaluationOutcome {
-    metrics.appliedEquivalentChecks += 1
-    if case .insertion(let insertion) = change,
-      let existingRun = state.runs.first(where: {
-        $0.operationID == insertion.payload.operationID
-      })
-    {
-      if insertionIsAppliedEquivalent(insertion, existingRun: existingRun) {
-        return .applied(state, exposesOperationID: true)
+    if allowsAppliedEquivalence {
+      metrics.appliedEquivalentChecks += 1
+      if case .insertion(let insertion) = change,
+        let existingRun = state.runs.first(where: {
+          $0.operationID == insertion.payload.operationID
+        })
+      {
+        if insertionIsAppliedEquivalent(insertion, existingRun: existingRun) {
+          return .applied(state, exposesOperationID: true)
+        }
+        return .terminal(
+          .identityCollision(operationID: insertion.payload.operationID)
+        )
       }
-      return .terminal(
-        .identityCollision(operationID: insertion.payload.operationID)
-      )
     }
 
     do {
@@ -323,6 +334,33 @@ enum SyncBatchAnchoredRecoveryPlanner {
     return existingRun.origin.leftElementID == expectedEndpoints.left
       && existingRun.origin.rightElementID == expectedEndpoints.right
       && existingRun.text == change.text
+  }
+
+  private static func terminalIdentityCollisionPlan(
+    existingRecord: SyncBatchAnchoredRecoveryRecord,
+    sequenceState: SyncTextSequenceState
+  ) throws -> SyncBatchAnchoredRecoveryCommitPlan {
+    let replacement = try SyncBatchAnchoredRecoveryRecord(
+      key: existingRecord.key,
+      change: existingRecord.change,
+      lifecycle: .terminalStructuralFailure(
+        .identityCollision(operationID: existingRecord.key.operationID)
+      )
+    )
+    var metrics = SyncBatchAnchoredRecoveryPlanningMetrics()
+    metrics.emittedTransitions = 1
+    return SyncBatchAnchoredRecoveryCommitPlan(
+      noteID: existingRecord.key.noteID,
+      initialSequenceState: sequenceState,
+      finalSequenceState: sequenceState,
+      appliedRecords: [],
+      recoveryStoreTransitions: [
+        .replace(expected: existingRecord, replacement: replacement)
+      ],
+      structurallyAvailableOperationIDs: [],
+      didChangeApplicationState: false,
+      metrics: metrics
+    )
   }
 
   private static func requireUsable(
