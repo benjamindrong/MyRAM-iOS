@@ -197,8 +197,8 @@ extension SyncBatchAnchoredStructuralStateEvidence: Codable {
   init(from decoder: Decoder) throws {
     let container = try decoder.container(keyedBy: CodingKeys.self)
     self.init(
-      runs: container.decode([Run].self, forKey: .runs),
-      fragments: container.decode([Fragment].self, forKey: .fragments)
+      runs: try container.decode([Run].self, forKey: .runs),
+      fragments: try container.decode([Fragment].self, forKey: .fragments)
     )
     do {
       _ = try makeValidatedSequenceState()
