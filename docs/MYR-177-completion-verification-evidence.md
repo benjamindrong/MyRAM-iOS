@@ -109,6 +109,7 @@ Reconstruction uses normal `AnchoredSequenceCore` initializers and `SyncTextSequ
 - The recovery-store format changed from v1 to v2 only because the persisted recovery record representation gained incompatible bootstrap variants; no migration code was introduced.
 - Production caller search for `SyncBatchAnchoredRecoveryPlanner`: no active application caller found; references were test-only.
 - GitHub Actions: no workflow run was available for the Slice 2 PR head, so no remote Xcode compile/test result is claimed.
+- An earlier exact-head local run against `de0ff96e21950543da5e9ab78ec089c0902605fb` reached the iOS focused build and exposed two missing `try` markers in `SyncBatchAnchoredStructuralStateEvidence.init(from:)`. That compile defect was remediated in follow-up source history; the failed run is not completion evidence for the current head.
 
 ### Pending required local observation
 
