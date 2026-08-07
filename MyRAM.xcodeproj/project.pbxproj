@@ -286,6 +286,15 @@
 		C17501000000000000000002 /* SyncBatchAnchoredInsertReplay.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17502000000000000000001 /* SyncBatchAnchoredInsertReplay.swift */; };
 		C17501000000000000000003 /* SyncBatchAnchoredInsertReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17502000000000000000002 /* SyncBatchAnchoredInsertReplayTests.swift */; };
 		C17501000000000000000004 /* SyncBatchAnchoredInsertReplayTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17502000000000000000003 /* SyncBatchAnchoredInsertReplayTests.swift */; };
+		C17701000000000000000007 /* SyncBatchAnchoredRecoveryStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17702000000000000000004 /* SyncBatchAnchoredRecoveryStoreTests.swift */; };
+		C17701000000000000000008 /* SyncBatchAnchoredRecoveryPlannerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17702000000000000000005 /* SyncBatchAnchoredRecoveryPlannerTests.swift */; };
+		C17701000000000000000009 /* SyncBatchAnchoredRecoveryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17702000000000000000006 /* SyncBatchAnchoredRecoveryTests.swift */; };
+		C17701000000000000000001 /* SyncBatchAnchoredRecoveryTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17702000000000000000001 /* SyncBatchAnchoredRecoveryTypes.swift */; };
+		C17701000000000000000002 /* SyncBatchAnchoredRecoveryTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17702000000000000000001 /* SyncBatchAnchoredRecoveryTypes.swift */; };
+		C17701000000000000000003 /* FileBackedSyncBatchAnchoredRecoveryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17702000000000000000002 /* FileBackedSyncBatchAnchoredRecoveryStore.swift */; };
+		C17701000000000000000004 /* FileBackedSyncBatchAnchoredRecoveryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17702000000000000000002 /* FileBackedSyncBatchAnchoredRecoveryStore.swift */; };
+		C17701000000000000000005 /* SyncBatchAnchoredRecoveryPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17702000000000000000003 /* SyncBatchAnchoredRecoveryPlanner.swift */; };
+		C17701000000000000000006 /* SyncBatchAnchoredRecoveryPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17702000000000000000003 /* SyncBatchAnchoredRecoveryPlanner.swift */; };
 		C17101000000000000000002 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */; };
 		C17101000000000000000003 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */; };
 		C17101000000000000000004 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */; };
@@ -611,6 +620,12 @@
 		C17502000000000000000001 /* SyncBatchAnchoredInsertReplay.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredInsertReplay.swift; sourceTree = "<group>"; };
 		C17502000000000000000002 /* SyncBatchAnchoredInsertReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredInsertReplayTests.swift; sourceTree = "<group>"; };
 		C17502000000000000000003 /* SyncBatchAnchoredInsertReplayTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredInsertReplayTests.swift; sourceTree = "<group>"; };
+		C17702000000000000000004 /* SyncBatchAnchoredRecoveryStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredRecoveryStoreTests.swift; sourceTree = "<group>"; };
+		C17702000000000000000005 /* SyncBatchAnchoredRecoveryPlannerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredRecoveryPlannerTests.swift; sourceTree = "<group>"; };
+		C17702000000000000000006 /* SyncBatchAnchoredRecoveryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredRecoveryTests.swift; sourceTree = "<group>"; };
+		C17702000000000000000001 /* SyncBatchAnchoredRecoveryTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredRecoveryTypes.swift; sourceTree = "<group>"; };
+		C17702000000000000000002 /* FileBackedSyncBatchAnchoredRecoveryStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileBackedSyncBatchAnchoredRecoveryStore.swift; sourceTree = "<group>"; };
+		C17702000000000000000003 /* SyncBatchAnchoredRecoveryPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredRecoveryPlanner.swift; sourceTree = "<group>"; };
 		D19502000000000000000001 /* MarkdownFileIO.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileIO.swift; sourceTree = "<group>"; };
 		D19502000000000000000002 /* MarkdownFileIOTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileIOTests.swift; sourceTree = "<group>"; };
 		D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditorFileOperationBridge.swift; sourceTree = "<group>"; };
@@ -839,6 +854,8 @@
 				BCA123020000000000000009 /* SyncBatchPayloadCompatibilityTests.swift */,
 				C17102000000000000000003 /* SyncBatchAnchoredPayloadTests.swift */,
 				C17502000000000000000002 /* SyncBatchAnchoredInsertReplayTests.swift */,
+				C17702000000000000000004 /* SyncBatchAnchoredRecoveryStoreTests.swift */,
+				C17702000000000000000005 /* SyncBatchAnchoredRecoveryPlannerTests.swift */,
 				C17402000000000000000001 /* SyncBatchEnvelopeV2Tests.swift */,
 				C17422000000000000000003 /* SyncBatchPeerCapabilityTests.swift */,
 				C17422000000000000000004 /* SyncBatchTransportAdmissionPlannerTests.swift */,
@@ -938,6 +955,7 @@
 				C17402000000000000000002 /* SyncBatchEnvelopeV2Tests.swift */,
 				C17422000000000000000005 /* SyncBatchPeerCapabilityTests.swift */,
 				C17502000000000000000003 /* SyncBatchAnchoredInsertReplayTests.swift */,
+				C17702000000000000000006 /* SyncBatchAnchoredRecoveryTests.swift */,
 				C17422000000000000000006 /* SyncBatchTransportAdmissionPlannerTests.swift */,
 				BCA122020000000000000006 /* MacSyncDeviceIdentityTests.swift */,
 				BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */,
@@ -980,6 +998,9 @@
 				BCA123020000000000000001 /* SyncBatchPayload.swift */,
 				C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */,
 				C17502000000000000000001 /* SyncBatchAnchoredInsertReplay.swift */,
+				C17702000000000000000001 /* SyncBatchAnchoredRecoveryTypes.swift */,
+				C17702000000000000000002 /* FileBackedSyncBatchAnchoredRecoveryStore.swift */,
+				C17702000000000000000003 /* SyncBatchAnchoredRecoveryPlanner.swift */,
 				C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */,
 				C17422000000000000000001 /* SyncBatchPeerCapability.swift */,
 				C17422000000000000000002 /* SyncBatchTransportAdmissionPlanner.swift */,
@@ -1533,6 +1554,9 @@
 				BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */,
 				C17101000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
 				C17501000000000000000001 /* SyncBatchAnchoredInsertReplay.swift in Sources */,
+				C17701000000000000000001 /* SyncBatchAnchoredRecoveryTypes.swift in Sources */,
+				C17701000000000000000003 /* FileBackedSyncBatchAnchoredRecoveryStore.swift in Sources */,
+				C17701000000000000000005 /* SyncBatchAnchoredRecoveryPlanner.swift in Sources */,
 				C17101000000000000000003 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */,
 				C17421000000000000000001 /* SyncBatchPeerCapability.swift in Sources */,
 				C17421000000000000000003 /* SyncBatchTransportAdmissionPlanner.swift in Sources */,
@@ -1643,6 +1667,8 @@
 				BCA123010000000000000014 /* SyncBatchPayloadCompatibilityTests.swift in Sources */,
 				C17101000000000000000005 /* SyncBatchAnchoredPayloadTests.swift in Sources */,
 				C17501000000000000000003 /* SyncBatchAnchoredInsertReplayTests.swift in Sources */,
+				C17701000000000000000007 /* SyncBatchAnchoredRecoveryStoreTests.swift in Sources */,
+				C17701000000000000000008 /* SyncBatchAnchoredRecoveryPlannerTests.swift in Sources */,
 				C17401000000000000000001 /* SyncBatchEnvelopeV2Tests.swift in Sources */,
 				C17421000000000000000005 /* SyncBatchPeerCapabilityTests.swift in Sources */,
 				C17421000000000000000006 /* SyncBatchTransportAdmissionPlannerTests.swift in Sources */,
@@ -1734,6 +1760,9 @@
 				BCA123010000000000000006 /* SyncBatchPayload.swift in Sources */,
 				C17101000000000000000002 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
 				C17501000000000000000002 /* SyncBatchAnchoredInsertReplay.swift in Sources */,
+				C17701000000000000000002 /* SyncBatchAnchoredRecoveryTypes.swift in Sources */,
+				C17701000000000000000004 /* FileBackedSyncBatchAnchoredRecoveryStore.swift in Sources */,
+				C17701000000000000000006 /* SyncBatchAnchoredRecoveryPlanner.swift in Sources */,
 				C17101000000000000000004 /* SyncBatchAnchoredPayloadPolicy.swift in Sources */,
 				C17421000000000000000002 /* SyncBatchPeerCapability.swift in Sources */,
 				C17421000000000000000004 /* SyncBatchTransportAdmissionPlanner.swift in Sources */,
@@ -1818,6 +1847,7 @@
 				C17421000000000000000007 /* SyncBatchPeerCapabilityTests.swift in Sources */,
 				C17421000000000000000008 /* SyncBatchTransportAdmissionPlannerTests.swift in Sources */,
 				C17501000000000000000004 /* SyncBatchAnchoredInsertReplayTests.swift in Sources */,
+				C17701000000000000000009 /* SyncBatchAnchoredRecoveryTests.swift in Sources */,
 				BCA122010000000000000006 /* MacSyncDeviceIdentityTests.swift in Sources */,
 				BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */,
 				BCA122010000000000000008 /* MacSyncBatchAccumulatorTests.swift in Sources */,
