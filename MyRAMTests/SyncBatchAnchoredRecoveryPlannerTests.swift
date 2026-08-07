@@ -1017,3 +1017,439 @@ final class SyncBatchAnchoredRecoveryPlannerTests: XCTestCase {
     case injectedWriteFailure
   }
 }
+
+extension SyncBatchAnchoredRecoveryPlannerTests {
+  func testAbsentNonemptyBootstrapIsAdmissibleAndEstablishesFoundation() throws {
+    let bootstrap = try bootstrapChange(body: "A")
+    guard case .bootstrap(let value) = bootstrap else {
+      return XCTFail("Expected bootstrap change")
+    }
+    let descriptor = try value.makeDescriptor()
+
+    let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: bootstrap,
+      foundation: .absent,
+      recoverySnapshot: emptySnapshot()
+    )
+
+    XCTAssertEqual(plan.initialFoundation, .absent)
+    XCTAssertEqual(plan.finalFoundation, .established(descriptor.state))
+    XCTAssertTrue(plan.didChangeApplicationState)
+    XCTAssertEqual(plan.structurallyAvailableOperationIDs, [value.operationID])
+    XCTAssertTrue(plan.recoveryStoreTransitions.isEmpty)
+  }
+
+  func testAbsentEmptyBootstrapEstablishesEmptyFoundationWithoutOperation() throws {
+    let bootstrap = try bootstrapChange(body: "")
+
+    let first = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: bootstrap,
+      foundation: .absent,
+      recoverySnapshot: emptySnapshot()
+    )
+    XCTAssertEqual(first.initialFoundation, .absent)
+    XCTAssertEqual(first.finalFoundation, .established(.empty))
+    XCTAssertTrue(first.didChangeApplicationState)
+    XCTAssertTrue(first.structurallyAvailableOperationIDs.isEmpty)
+
+    let second = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: bootstrap,
+      foundation: .established(.empty),
+      recoverySnapshot: emptySnapshot()
+    )
+    XCTAssertEqual(second.initialFoundation, .established(.empty))
+    XCTAssertEqual(second.finalFoundation, .established(.empty))
+    XCTAssertFalse(second.didChangeApplicationState)
+    XCTAssertTrue(second.structurallyAvailableOperationIDs.isEmpty)
+  }
+
+  func testEquivalentNonemptyBootstrapIsIdempotentAndExposesRepresentedOperation() throws {
+    let bootstrap = try bootstrapChange(body: "A")
+    guard case .bootstrap(let value) = bootstrap else {
+      return XCTFail("Expected bootstrap change")
+    }
+    let descriptor = try value.makeDescriptor()
+
+    let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: bootstrap,
+      foundation: .established(descriptor.state),
+      recoverySnapshot: emptySnapshot()
+    )
+
+    XCTAssertEqual(plan.initialFoundation, .established(descriptor.state))
+    XCTAssertEqual(plan.finalFoundation, .established(descriptor.state))
+    XCTAssertFalse(plan.didChangeApplicationState)
+    XCTAssertEqual(plan.structurallyAvailableOperationIDs, [value.operationID])
+    XCTAssertTrue(plan.recoveryStoreTransitions.isEmpty)
+  }
+
+  func testNonemptyBootstrapUnblocksWaitingDependentInSameInitialPlan() throws {
+    let bootstrap = try bootstrapChange(body: "A")
+    guard case .bootstrap(let value) = bootstrap else {
+      return XCTFail("Expected bootstrap change")
+    }
+    let descriptor = try value.makeDescriptor()
+    let child = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+      state: descriptor.state,
+      offset: 1,
+      text: "B",
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(60)
+    )
+    let waiting = try insertedRecord(
+      from: SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+        change: child,
+        sequenceState: .empty,
+        recoverySnapshot: emptySnapshot()
+      )
+    )
+
+    let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: bootstrap,
+      foundation: .absent,
+      recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot(
+        records: [waiting],
+        health: .healthy
+      )
+    )
+
+    XCTAssertEqual(plan.visibleText, "AB")
+    XCTAssertEqual(plan.appliedRecords, [waiting])
+    XCTAssertEqual(
+      plan.recoveryStoreTransitions,
+      [.removeCommitted(expected: waiting)]
+    )
+    XCTAssertEqual(
+      Set(plan.structurallyAvailableOperationIDs),
+      Set([value.operationID, child.operationID])
+    )
+  }
+
+  func testSameVisibleTextWithDifferentStructureCreatesBootstrapConflict() throws {
+    let bootstrap = try bootstrapChange(body: "A")
+    let alternate = try SyncBatchAnchoredRecoveryTestFactory.state(
+      text: "A",
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(70)
+    )
+
+    let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: bootstrap,
+      foundation: .established(alternate),
+      recoverySnapshot: emptySnapshot()
+    )
+
+    XCTAssertEqual(plan.finalFoundation, .established(alternate))
+    XCTAssertFalse(plan.didChangeApplicationState)
+    XCTAssertTrue(plan.structurallyAvailableOperationIDs.isEmpty)
+    guard case .insertExpectedAbsent(let record) = plan.recoveryStoreTransitions.first,
+      case .bootstrapContentConflict(let conflict) = record.lifecycle
+    else {
+      return XCTFail("Expected bootstrap conflict")
+    }
+    XCTAssertEqual(record.change, bootstrap)
+    XCTAssertEqual(conflict.reason, .nonEquivalentEstablishedState)
+    XCTAssertFalse(conflict.establishedState.containsTombstones)
+    XCTAssertEqual(
+      try conflict.establishedState.makeValidatedSequenceState(),
+      alternate
+    )
+    XCTAssertTrue(record.lifecycle.isTerminal)
+    XCTAssertFalse(record.lifecycle.isWaiting)
+  }
+
+  func testTombstoneHistoryConflictsAndLateBootstrapCannotResurrectContent() throws {
+    let bootstrap = try bootstrapChange(body: "A")
+    guard case .bootstrap(let value) = bootstrap else {
+      return XCTFail("Expected bootstrap change")
+    }
+    let descriptor = try value.makeDescriptor()
+    let deletion = try SyncBatchAnchoredRecoveryTestFactory.deletionChange(
+      state: descriptor.state,
+      offset: 0,
+      length: 1,
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(71)
+    )
+    let tombstoned = try SyncBatchAnchoredRecoveryTestFactory.applying(
+      deletion,
+      to: descriptor.state
+    )
+    XCTAssertEqual(tombstoned.visibleText, "")
+
+    let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: bootstrap,
+      foundation: .established(tombstoned),
+      recoverySnapshot: emptySnapshot()
+    )
+
+    XCTAssertEqual(plan.finalFoundation, .established(tombstoned))
+    XCTAssertFalse(plan.didChangeApplicationState)
+    XCTAssertTrue(plan.structurallyAvailableOperationIDs.isEmpty)
+    guard case .insertExpectedAbsent(let record) = plan.recoveryStoreTransitions.first,
+      case .bootstrapContentConflict(let conflict) = record.lifecycle
+    else {
+      return XCTFail("Expected tombstone bootstrap conflict")
+    }
+    XCTAssertEqual(conflict.reason, .tombstoneHistory)
+    XCTAssertTrue(conflict.establishedState.containsTombstones)
+    XCTAssertEqual(
+      try conflict.establishedState.makeValidatedSequenceState(),
+      tombstoned
+    )
+  }
+
+  func testStructuralEvidenceRoundTripsExactlyAndRejectsMalformedState() throws {
+    let insertion = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+      state: .empty,
+      offset: 0,
+      text: "AB",
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(80)
+    )
+    let inserted = try SyncBatchAnchoredRecoveryTestFactory.applying(insertion, to: .empty)
+    let deletion = try SyncBatchAnchoredRecoveryTestFactory.deletionChange(
+      state: inserted,
+      offset: 0,
+      length: 1,
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(81)
+    )
+    let state = try SyncBatchAnchoredRecoveryTestFactory.applying(deletion, to: inserted)
+    let evidence = SyncBatchAnchoredStructuralStateEvidence(validating: state)
+    let encoded = try JSONEncoder().encode(evidence)
+    let decoded = try JSONDecoder().decode(
+      SyncBatchAnchoredStructuralStateEvidence.self,
+      from: encoded
+    )
+
+    XCTAssertEqual(decoded, evidence)
+    XCTAssertEqual(try decoded.makeValidatedSequenceState(), state)
+    let encodedText = String(decoding: encoded, as: UTF8.self)
+    XCTAssertFalse(encodedText.contains("revision"))
+    XCTAssertFalse(encodedText.contains("payload"))
+    XCTAssertFalse(encodedText.contains("NoteSequenceStateRecord"))
+
+    guard var object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any],
+      var runs = object["runs"] as? [[String: Any]],
+      !runs.isEmpty
+    else {
+      return XCTFail("Unable to inspect structural evidence")
+    }
+    runs[0]["text"] = ""
+    object["runs"] = runs
+    let malformed = try JSONSerialization.data(withJSONObject: object)
+    XCTAssertThrowsError(
+      try JSONDecoder().decode(
+        SyncBatchAnchoredStructuralStateEvidence.self,
+        from: malformed
+      )
+    )
+  }
+
+  func testBootstrapChangeDecodingRejectsUnsupportedVersionAndTamperedIdentity() throws {
+    let bootstrap = try SyncBatchAnchoredBootstrapChange(
+      noteID: SyncBatchAnchoredRecoveryTestFactory.noteID,
+      body: "A",
+      formatVersion: .v1
+    )
+    let encoded = try JSONEncoder().encode(bootstrap)
+    guard var object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+      return XCTFail("Unable to inspect bootstrap encoding")
+    }
+
+    object["formatVersion"] = 99
+    let unsupported = try JSONSerialization.data(withJSONObject: object)
+    XCTAssertThrowsError(
+      try JSONDecoder().decode(SyncBatchAnchoredBootstrapChange.self, from: unsupported)
+    )
+
+    object = try XCTUnwrap(
+      JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+    )
+    object["operationID"] = try JSONSerialization.jsonObject(
+      with: JSONEncoder().encode(SyncBatchAnchoredRecoveryTestFactory.operation(999))
+    )
+    let tampered = try JSONSerialization.data(withJSONObject: object)
+    XCTAssertThrowsError(
+      try JSONDecoder().decode(SyncBatchAnchoredBootstrapChange.self, from: tampered)
+    )
+  }
+
+  func testBootstrapConflictWriteFailurePreservesPriorMemoryAndDisk() throws {
+    let fixture = try insertionDependencyFixture()
+    let waiting = try insertedRecord(
+      from: SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+        change: fixture.child,
+        sequenceState: .empty,
+        recoverySnapshot: emptySnapshot()
+      )
+    )
+    let fileURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("myr177-bootstrap-conflict-\(UUID().uuidString).json")
+    var failWrites = false
+    let store = FileBackedSyncBatchAnchoredRecoveryStore(
+      fileURL: fileURL,
+      atomicWriter: { data, url in
+        if failWrites { throw TestError.injectedWriteFailure }
+        try data.write(to: url, options: .atomic)
+      }
+    )
+    XCTAssertTrue(try store.apply([.insertExpectedAbsent(waiting)]))
+    let priorData = try Data(contentsOf: fileURL)
+
+    let bootstrap = try bootstrapChange(body: "A")
+    let alternate = try SyncBatchAnchoredRecoveryTestFactory.state(
+      text: "A",
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(90)
+    )
+    let conflictPlan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: bootstrap,
+      foundation: .established(alternate),
+      recoverySnapshot: store.snapshot()
+    )
+    failWrites = true
+
+    XCTAssertThrowsError(try store.apply(conflictPlan.recoveryStoreTransitions)) { error in
+      XCTAssertEqual(
+        error as? SyncBatchAnchoredRecoveryStoreError,
+        .persistenceFailed
+      )
+    }
+    XCTAssertEqual(store.snapshot().records, [waiting])
+    XCTAssertEqual(try Data(contentsOf: fileURL), priorData)
+    XCTAssertEqual(
+      FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL).snapshot().records,
+      [waiting]
+    )
+  }
+
+  func testBootstrapConflictPersistsAndSurvivesRestartExactly() throws {
+    let bootstrap = try bootstrapChange(body: "A")
+    let alternate = try SyncBatchAnchoredRecoveryTestFactory.state(
+      text: "A",
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(91)
+    )
+    let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: bootstrap,
+      foundation: .established(alternate),
+      recoverySnapshot: emptySnapshot()
+    )
+    let conflictRecord = try insertedRecord(from: plan)
+    let fileURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("myr177-bootstrap-restart-\(UUID().uuidString).json")
+    let store = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
+    XCTAssertTrue(try store.apply(plan.recoveryStoreTransitions))
+
+    let reopened = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
+    XCTAssertEqual(reopened.snapshot().records, [conflictRecord])
+    guard case .bootstrapContentConflict(let conflict) = conflictRecord.lifecycle else {
+      return XCTFail("Expected bootstrap conflict")
+    }
+    XCTAssertEqual(
+      try conflict.establishedState.makeValidatedSequenceState(),
+      alternate
+    )
+  }
+
+  func testBootstrapCannotWaitAndOrdinaryChangesCannotHoldBootstrapConflict() throws {
+    let bootstrap = try bootstrapChange(body: "A")
+    XCTAssertThrowsError(
+      try SyncBatchAnchoredRecoveryRecord(
+        change: bootstrap,
+        lifecycle: .waiting(
+          .deletionTarget(SyncBatchAnchoredRecoveryTestFactory.operation(1))
+        )
+      )
+    )
+
+    let insertion = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+      state: .empty,
+      offset: 0,
+      text: "A",
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(92)
+    )
+    let conflict = SyncBatchAnchoredBootstrapConflict(establishedState: .empty)
+    XCTAssertThrowsError(
+      try SyncBatchAnchoredRecoveryRecord(
+        change: insertion,
+        lifecycle: .bootstrapContentConflict(conflict)
+      )
+    )
+  }
+
+  func testMissingFoundationRejectsInitialInsertionAndDeletionWithoutMutation() throws {
+    let insertion = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+      state: .empty,
+      offset: 0,
+      text: "A",
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(100)
+    )
+    let insertionState = try SyncBatchAnchoredRecoveryTestFactory.applying(insertion, to: .empty)
+    let deletion = try SyncBatchAnchoredRecoveryTestFactory.deletionChange(
+      state: insertionState,
+      offset: 0,
+      length: 1,
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(101)
+    )
+    let snapshot = emptySnapshot()
+
+    for change in [insertion, deletion] {
+      XCTAssertThrowsError(
+        try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+          change: change,
+          foundation: .absent,
+          recoverySnapshot: snapshot
+        )
+      ) { error in
+        XCTAssertEqual(
+          error as? SyncBatchAnchoredDarkOrchestrationError,
+          .missingStructuralFoundation(noteID: SyncBatchAnchoredRecoveryTestFactory.noteID)
+        )
+      }
+    }
+    XCTAssertEqual(snapshot.records, [])
+    XCTAssertEqual(insertion.operationID, SyncBatchAnchoredRecoveryTestFactory.operation(100))
+    XCTAssertEqual(deletion.operationID, SyncBatchAnchoredRecoveryTestFactory.operation(101))
+  }
+
+  func testMissingFoundationRejectsDependencyAndRestartRetry() throws {
+    let fixture = try insertionDependencyFixture()
+    let waiting = try insertedRecord(
+      from: SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+        change: fixture.child,
+        sequenceState: .empty,
+        recoverySnapshot: emptySnapshot()
+      )
+    )
+    let snapshot = SyncBatchAnchoredRecoveryStoreSnapshot(
+      records: [waiting],
+      health: .healthy
+    )
+
+    for trigger in [
+      SyncBatchAnchoredRecoveryRetryTrigger.newlyAvailable([fixture.parent.operationID]),
+      .restartRecovery,
+    ] {
+      XCTAssertThrowsError(
+        try SyncBatchAnchoredRecoveryPlanner.planRetry(
+          noteID: SyncBatchAnchoredRecoveryTestFactory.noteID,
+          foundation: .absent,
+          recoverySnapshot: snapshot,
+          trigger: trigger
+        )
+      ) { error in
+        XCTAssertEqual(
+          error as? SyncBatchAnchoredDarkOrchestrationError,
+          .missingStructuralFoundation(noteID: SyncBatchAnchoredRecoveryTestFactory.noteID)
+        )
+      }
+    }
+    XCTAssertEqual(snapshot.records, [waiting])
+  }
+
+  private func bootstrapChange(body: String) throws -> SyncBatchAnchoredRecoveryChange {
+    .bootstrap(
+      try SyncBatchAnchoredBootstrapChange(
+        noteID: SyncBatchAnchoredRecoveryTestFactory.noteID,
+        body: body,
+        formatVersion: .v1
+      )
+    )
+  }
+}
