@@ -23,6 +23,8 @@ Reference A serializes synchronization state independently from transient reliab
 MYR-177 adopts:
 
 - a versioned recovery-store envelope;
+- a mandatory resolved durable destination;
+- typed failure when the application-support directory is unavailable;
 - exact operation payload preservation;
 - deterministic reconstruction of the dependency index after restart;
 - explicit persisted-store health instead of assuming decoded state is usable.
@@ -36,7 +38,12 @@ Production locations:
 
 Proving tests:
 
+- `SyncBatchAnchoredRecoveryStoreTests.testFileLocationResolvesExpectedHostPaths`
+- `SyncBatchAnchoredRecoveryStoreTests.testFileLocationThrowsWhenApplicationSupportIsUnavailable`
 - `SyncBatchAnchoredRecoveryStoreTests.testStoreRoundTripsRecordsInDeterministicOrder`
+- `SyncBatchAnchoredRecoveryStoreTests.testInitialAdmissionFailurePreservesEmptyMemoryAndDisk`
+- `SyncBatchAnchoredRecoveryStoreTests.testRemovalFailurePreservesPriorMemoryAndDisk`
+- `SyncBatchAnchoredRecoveryStoreTests.testFullRecoveryReplacementFailurePreservesPriorSnapshotThenRecovers`
 - `SyncBatchAnchoredRecoveryStoreTests.testCorruptAndUnsupportedVersionRemainDistinct`
 - `SyncBatchAnchoredRecoveryTests.testNativeMacRecoveryStoreRoundTripsTemporaryFile`
 
@@ -60,6 +67,7 @@ Production location:
 Proving tests:
 
 - `SyncBatchAnchoredRecoveryPlannerTests.testInterruptedInsertionCleanupUsesExactAppliedEquivalence`
+- `SyncBatchAnchoredRecoveryPlannerTests.testFileBackedInterruptedCleanupSurvivesRestartAndCleansUpExactly`
 - `SyncBatchAnchoredRecoveryStoreTests.testWriteFailureRollsBackMemoryAndDiskAndMarksWriteFailure`
 
 Deferred ownership:
@@ -97,6 +105,7 @@ Proving tests:
 - `SyncBatchAnchoredRecoveryPlannerTests.testInitialMissingInsertionCreatesExactWaitingRecord`
 - `SyncBatchAnchoredRecoveryPlannerTests.testDeletionWaitsForTargetThenTombstonesIt`
 - `SyncBatchAnchoredRecoveryPlannerTests.testRetryReindexesFromOneMissingAnchorToAnother`
+- `SyncBatchAnchoredRecoveryTests.testNativeMacDeletionWaitsForTargetThenTombstonesExactRange`
 
 ### Deterministic bounded retry
 
@@ -144,6 +153,7 @@ Production location:
 Proving tests:
 
 - `SyncBatchAnchoredRecoveryPlannerTests.testInterruptedInsertionCleanupUsesExactAppliedEquivalence`
+- `SyncBatchAnchoredRecoveryPlannerTests.testFileBackedInterruptedCleanupSurvivesRestartAndCleansUpExactly`
 - `SyncBatchAnchoredRecoveryPlannerTests.testSameInsertionIdentityWithDifferentTextBecomesTerminal`
 - `SyncBatchAnchoredRecoveryStoreTests.testSameKeyDifferentContentIsRejectedWithoutOverwrite`
 
@@ -162,9 +172,12 @@ Production and test locations:
 
 Proving tests and audits:
 
+- `SyncBatchAnchoredRecoveryPlannerTests.testMirroredHostContractPlansIdenticalInsertionAndDeletionRetry`
+- `SyncBatchAnchoredRecoveryTests.testMirroredHostContractPlansIdenticalInsertionAndDeletionRetry`
 - `SyncBatchAnchoredRecoveryTests.testNativeMacPlansMissingInsertionAndRetry`
+- `SyncBatchAnchoredRecoveryTests.testNativeMacDeletionWaitsForTargetThenTombstonesExactRange`
 - `SyncBatchAnchoredRecoveryTests.testNativeMacRecoveryStoreRoundTripsTemporaryFile`
-- exact target-membership audit in the Slice 1 local completion runner
+- exact target-membership and mirrored-fixture audits in the Slice 1 remediation local completion runner
 
 Deferred ownership:
 

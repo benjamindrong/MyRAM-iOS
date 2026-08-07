@@ -68,15 +68,24 @@ enum SyncBatchAnchoredRecoveryStoreError: Error, Equatable {
   case persistenceFailed
 }
 
+enum SyncBatchAnchoredRecoveryStoreFileLocationError: Error, Equatable {
+  case applicationSupportDirectoryUnavailable
+}
+
 enum SyncBatchAnchoredRecoveryStoreFileLocation {
-  static func fileURL(for platform: SyncBatchPlatform) -> URL? {
-    guard
-      let supportDirectory = FileManager.default.urls(
+  typealias ApplicationSupportDirectoryProvider = () -> URL?
+
+  static func fileURL(
+    for platform: SyncBatchPlatform,
+    applicationSupportDirectory: ApplicationSupportDirectoryProvider = {
+      FileManager.default.urls(
         for: .applicationSupportDirectory,
         in: .userDomainMask
       ).first
-    else {
-      return nil
+    }
+  ) throws -> URL {
+    guard let supportDirectory = applicationSupportDirectory() else {
+      throw SyncBatchAnchoredRecoveryStoreFileLocationError.applicationSupportDirectoryUnavailable
     }
     let filename: String
     switch platform {
@@ -95,7 +104,7 @@ enum SyncBatchAnchoredRecoveryStoreFileLocation {
 final class FileBackedSyncBatchAnchoredRecoveryStore {
   typealias AtomicWriter = (Data, URL) throws -> Void
 
-  private let fileURL: URL?
+  private let fileURL: URL
   private let fileManager: FileManager
   private let atomicWriter: AtomicWriter
   private var recordsByKey: [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryRecord] =
@@ -103,7 +112,7 @@ final class FileBackedSyncBatchAnchoredRecoveryStore {
   private var health: SyncBatchAnchoredRecoveryStoreHealth = .healthy
 
   init(
-    fileURL: URL?,
+    fileURL: URL,
     fileManager: FileManager = .default,
     atomicWriter: @escaping AtomicWriter = { data, url in
       try data.write(to: url, options: .atomic)
@@ -216,7 +225,6 @@ final class FileBackedSyncBatchAnchoredRecoveryStore {
   private func persistReplacement(
     _ replacement: [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryRecord]
   ) throws {
-    guard let fileURL else { return }
     do {
       try fileManager.createDirectory(
         at: fileURL.deletingLastPathComponent(),
@@ -237,15 +245,9 @@ final class FileBackedSyncBatchAnchoredRecoveryStore {
   }
 
   private static func load(
-    fileURL: URL?,
+    fileURL: URL,
     fileManager: FileManager
   ) -> SyncBatchAnchoredRecoveryStoreSnapshot {
-    guard let fileURL else {
-      return SyncBatchAnchoredRecoveryStoreSnapshot(
-        records: [],
-        health: .healthy
-      )
-    }
     guard fileManager.fileExists(atPath: fileURL.path) else {
       return SyncBatchAnchoredRecoveryStoreSnapshot(
         records: [],

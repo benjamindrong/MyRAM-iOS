@@ -178,6 +178,43 @@ enum SyncBatchAnchoredRecoveryTestFactory {
 }
 
 final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
+  func testFileLocationResolvesExpectedHostPaths() throws {
+    let supportDirectory = URL(fileURLWithPath: "/tmp/myram-application-support", isDirectory: true)
+
+    XCTAssertEqual(
+      try SyncBatchAnchoredRecoveryStoreFileLocation.fileURL(
+        for: .iPhone,
+        applicationSupportDirectory: { supportDirectory }
+      ),
+      supportDirectory
+        .appendingPathComponent("MyRAM", isDirectory: true)
+        .appendingPathComponent("ios-anchored-recovery-store.json")
+    )
+    XCTAssertEqual(
+      try SyncBatchAnchoredRecoveryStoreFileLocation.fileURL(
+        for: .nativeMac,
+        applicationSupportDirectory: { supportDirectory }
+      ),
+      supportDirectory
+        .appendingPathComponent("MyRAM", isDirectory: true)
+        .appendingPathComponent("mac-anchored-recovery-store.json")
+    )
+  }
+
+  func testFileLocationThrowsWhenApplicationSupportIsUnavailable() {
+    XCTAssertThrowsError(
+      try SyncBatchAnchoredRecoveryStoreFileLocation.fileURL(
+        for: .iPhone,
+        applicationSupportDirectory: { nil }
+      )
+    ) { error in
+      XCTAssertEqual(
+        error as? SyncBatchAnchoredRecoveryStoreFileLocationError,
+        .applicationSupportDirectoryUnavailable
+      )
+    }
+  }
+
   func testStoreRoundTripsRecordsInDeterministicOrder() throws {
     let fileURL = temporaryFileURL()
     let firstChange = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
@@ -250,6 +287,35 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
     XCTAssertFalse(try store.apply([.insertExpectedAbsent(record)]))
     XCTAssertEqual(writes, 1)
     XCTAssertEqual(store.snapshot().records, [record])
+  }
+
+  func testInitialAdmissionFailurePreservesEmptyMemoryAndDisk() throws {
+    let fileURL = temporaryFileURL()
+    let record = try makeWaitingRecord(counter: 2, dependencyCounter: 1)
+    let store = FileBackedSyncBatchAnchoredRecoveryStore(
+      fileURL: fileURL,
+      atomicWriter: { _, _ in throw InjectedError.failure }
+    )
+
+    XCTAssertThrowsError(
+      try store.apply([.insertExpectedAbsent(record)])
+    ) { error in
+      XCTAssertEqual(
+        error as? SyncBatchAnchoredRecoveryStoreError,
+        .persistenceFailed
+      )
+    }
+    XCTAssertTrue(store.snapshot().records.isEmpty)
+    assertWriteFailed(store.snapshot().health)
+    XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    XCTAssertThrowsError(
+      try store.apply([.insertExpectedAbsent(record)])
+    ) { error in
+      XCTAssertEqual(
+        error as? SyncBatchAnchoredRecoveryStoreError,
+        .unhealthyPersistence
+      )
+    }
   }
 
   func testSameKeyDifferentContentIsRejectedWithoutOverwrite() throws {
@@ -344,9 +410,7 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
       )
     }
     XCTAssertEqual(store.snapshot().records, [first])
-    guard case .writeFailed = store.snapshot().health else {
-      return XCTFail("Expected writeFailed health")
-    }
+    assertWriteFailed(store.snapshot().health)
     XCTAssertEqual(
       FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
         .snapshot().records,
@@ -360,6 +424,76 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
         .unhealthyPersistence
       )
     }
+  }
+
+  func testRemovalFailurePreservesPriorMemoryAndDisk() throws {
+    let fileURL = temporaryFileURL()
+    var shouldFail = false
+    let record = try makeWaitingRecord(counter: 2, dependencyCounter: 1)
+    let store = FileBackedSyncBatchAnchoredRecoveryStore(
+      fileURL: fileURL,
+      atomicWriter: { data, url in
+        if shouldFail { throw InjectedError.failure }
+        try data.write(to: url, options: .atomic)
+      }
+    )
+    try store.apply([.insertExpectedAbsent(record)])
+    let originalData = try Data(contentsOf: fileURL)
+    shouldFail = true
+
+    XCTAssertThrowsError(
+      try store.apply([.removeCommitted(expected: record)])
+    ) { error in
+      XCTAssertEqual(
+        error as? SyncBatchAnchoredRecoveryStoreError,
+        .persistenceFailed
+      )
+    }
+    XCTAssertEqual(store.snapshot().records, [record])
+    assertWriteFailed(store.snapshot().health)
+    XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+    XCTAssertEqual(
+      FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
+        .snapshot().records,
+      [record]
+    )
+  }
+
+  func testFullRecoveryReplacementFailurePreservesPriorSnapshotThenRecovers() throws {
+    let fileURL = temporaryFileURL()
+    var shouldFail = false
+    let record = try makeWaitingRecord(counter: 2, dependencyCounter: 1)
+    let store = FileBackedSyncBatchAnchoredRecoveryStore(
+      fileURL: fileURL,
+      atomicWriter: { data, url in
+        if shouldFail { throw InjectedError.failure }
+        try data.write(to: url, options: .atomic)
+      }
+    )
+    try store.apply([.insertExpectedAbsent(record)])
+    let originalData = try Data(contentsOf: fileURL)
+    shouldFail = true
+
+    XCTAssertThrowsError(
+      try store.replaceAllForRecovery([])
+    ) { error in
+      XCTAssertEqual(
+        error as? SyncBatchAnchoredRecoveryStoreError,
+        .persistenceFailed
+      )
+    }
+    XCTAssertEqual(store.snapshot().records, [record])
+    assertWriteFailed(store.snapshot().health)
+    XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+
+    shouldFail = false
+    try store.replaceAllForRecovery([])
+
+    XCTAssertEqual(store.snapshot().health, .healthy)
+    XCTAssertTrue(store.snapshot().records.isEmpty)
+    let reopened = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
+    XCTAssertEqual(reopened.snapshot().health, .healthy)
+    XCTAssertTrue(reopened.snapshot().records.isEmpty)
   }
 
   func testCorruptAndUnsupportedVersionRemainDistinct() throws {
@@ -465,7 +599,8 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
     try first.apply(records.map(SyncBatchAnchoredRecoveryStoreTransition.insertExpectedAbsent))
     let second = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: secondURL)
     try second.apply(
-      records.reversed().map(SyncBatchAnchoredRecoveryStoreTransition.insertExpectedAbsent))
+      records.reversed().map(SyncBatchAnchoredRecoveryStoreTransition.insertExpectedAbsent)
+    )
 
     XCTAssertEqual(try Data(contentsOf: firstURL), try Data(contentsOf: secondURL))
   }
@@ -660,6 +795,37 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
         .snapshot().records,
       [record]
     )
+  }
+
+  private func makeWaitingRecord(
+    counter: UInt64,
+    dependencyCounter: UInt64
+  ) throws -> SyncBatchAnchoredRecoveryRecord {
+    let change = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+      state: .empty,
+      offset: 0,
+      text: "A",
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(counter)
+    )
+    return try SyncBatchAnchoredRecoveryTestFactory.waitingRecord(
+      change: change,
+      dependency: .insertionAnchor(
+        try SyncBatchAnchoredRecoveryTestFactory.element(
+          SyncBatchAnchoredRecoveryTestFactory.operation(dependencyCounter),
+          offset: 0
+        )
+      )
+    )
+  }
+
+  private func assertWriteFailed(
+    _ health: SyncBatchAnchoredRecoveryStoreHealth,
+    file: StaticString = #filePath,
+    line: UInt = #line
+  ) {
+    guard case .writeFailed = health else {
+      return XCTFail("Expected writeFailed health", file: file, line: line)
+    }
   }
 
   private func temporaryFileURL() -> URL {

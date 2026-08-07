@@ -1,4 +1,5 @@
 import AnchoredSequenceCore
+import Foundation
 import XCTest
 
 @testable import MyRAM
@@ -217,6 +218,184 @@ final class SyncBatchAnchoredRecoveryPlannerTests: XCTestCase {
       [.removeCommitted(expected: waitingRecord)]
     )
     XCTAssertEqual(retry.appliedRecords, [waitingRecord])
+  }
+
+  func testFileBackedInterruptedCleanupSurvivesRestartAndCleansUpExactly() throws {
+    let fileURL = FileManager.default.temporaryDirectory
+      .appendingPathComponent("myr177-interrupted-\(UUID().uuidString).json")
+    var failWrites = false
+    let fixture = try insertionDependencyFixture()
+    let initial = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: fixture.child,
+      sequenceState: .empty,
+      recoverySnapshot: emptySnapshot()
+    )
+    let waitingRecord = try insertedRecord(from: initial)
+    let store = FileBackedSyncBatchAnchoredRecoveryStore(
+      fileURL: fileURL,
+      atomicWriter: { data, url in
+        if failWrites { throw TestError.injectedWriteFailure }
+        try data.write(to: url, options: .atomic)
+      }
+    )
+    XCTAssertTrue(try store.apply(initial.recoveryStoreTransitions))
+    XCTAssertEqual(
+      FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
+        .snapshot().records,
+      [waitingRecord]
+    )
+
+    let committedState = try SyncBatchAnchoredRecoveryTestFactory.applying(
+      fixture.child,
+      to: fixture.parentState
+    )
+    let expectedMetrics = SyncBatchAnchoredRecoveryPlanningMetrics(
+      dequeuedDependencies: 2,
+      selectedRecords: 1,
+      replayAttempts: 0,
+      appliedEquivalentChecks: 1,
+      emittedTransitions: 1
+    )
+    let firstCleanup = try SyncBatchAnchoredRecoveryPlanner.planRetry(
+      noteID: SyncBatchAnchoredRecoveryTestFactory.noteID,
+      sequenceState: committedState,
+      recoverySnapshot: store.snapshot(),
+      trigger: .restartRecovery
+    )
+
+    XCTAssertEqual(firstCleanup.initialSequenceState, committedState)
+    XCTAssertEqual(firstCleanup.finalSequenceState, committedState)
+    XCTAssertEqual(firstCleanup.visibleText, committedState.visibleText)
+    XCTAssertEqual(firstCleanup.appliedRecords, [waitingRecord])
+    XCTAssertEqual(
+      firstCleanup.recoveryStoreTransitions,
+      [.removeCommitted(expected: waitingRecord)]
+    )
+    XCTAssertEqual(
+      firstCleanup.structurallyAvailableOperationIDs,
+      [fixture.child.operationID]
+    )
+    XCTAssertFalse(firstCleanup.didChangeApplicationState)
+    XCTAssertEqual(firstCleanup.metrics, expectedMetrics)
+
+    failWrites = true
+    XCTAssertThrowsError(
+      try store.apply(firstCleanup.recoveryStoreTransitions)
+    ) { error in
+      XCTAssertEqual(
+        error as? SyncBatchAnchoredRecoveryStoreError,
+        .persistenceFailed
+      )
+    }
+    XCTAssertEqual(store.snapshot().records, [waitingRecord])
+    guard case .writeFailed = store.snapshot().health else {
+      return XCTFail("Expected writeFailed health")
+    }
+    XCTAssertThrowsError(
+      try store.apply(firstCleanup.recoveryStoreTransitions)
+    ) { error in
+      XCTAssertEqual(
+        error as? SyncBatchAnchoredRecoveryStoreError,
+        .unhealthyPersistence
+      )
+    }
+
+    let reopened = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
+    XCTAssertEqual(reopened.snapshot().health, .healthy)
+    XCTAssertEqual(reopened.snapshot().records, [waitingRecord])
+
+    let secondCleanup = try SyncBatchAnchoredRecoveryPlanner.planRetry(
+      noteID: SyncBatchAnchoredRecoveryTestFactory.noteID,
+      sequenceState: committedState,
+      recoverySnapshot: reopened.snapshot(),
+      trigger: .restartRecovery
+    )
+    XCTAssertEqual(secondCleanup, firstCleanup)
+    XCTAssertEqual(secondCleanup.finalSequenceState, committedState)
+    XCTAssertFalse(secondCleanup.didChangeApplicationState)
+
+    XCTAssertTrue(try reopened.apply(secondCleanup.recoveryStoreTransitions))
+    let finalStore = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
+    XCTAssertEqual(finalStore.snapshot().health, .healthy)
+    XCTAssertTrue(finalStore.snapshot().records.isEmpty)
+  }
+
+  func testMirroredHostContractPlansIdenticalInsertionAndDeletionRetry() throws {
+    let parent = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+      state: .empty,
+      offset: 0,
+      text: "A",
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(1)
+    )
+    let parentState = try SyncBatchAnchoredRecoveryTestFactory.applying(parent, to: .empty)
+    let child = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+      state: parentState,
+      offset: 1,
+      text: "B",
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(2)
+    )
+    let deletion = try SyncBatchAnchoredRecoveryTestFactory.deletionChange(
+      state: parentState,
+      offset: 0,
+      length: 1,
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(3)
+    )
+    let childRecord = try insertedRecord(
+      from: SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+        change: child,
+        sequenceState: .empty,
+        recoverySnapshot: emptySnapshot()
+      )
+    )
+    let deletionRecord = try insertedRecord(
+      from: SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+        change: deletion,
+        sequenceState: .empty,
+        recoverySnapshot: emptySnapshot()
+      )
+    )
+    let stateWithChild = try SyncBatchAnchoredRecoveryTestFactory.applying(
+      child,
+      to: parentState
+    )
+    let expectedFinalState = try SyncBatchAnchoredRecoveryTestFactory.applying(
+      deletion,
+      to: stateWithChild
+    )
+
+    let plan = try SyncBatchAnchoredRecoveryPlanner.planRetry(
+      noteID: SyncBatchAnchoredRecoveryTestFactory.noteID,
+      sequenceState: parentState,
+      recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot(
+        records: [deletionRecord, childRecord],
+        health: .healthy
+      ),
+      trigger: .newlyAvailable([parent.operationID])
+    )
+
+    XCTAssertEqual(plan.initialSequenceState, parentState)
+    XCTAssertEqual(plan.finalSequenceState, expectedFinalState)
+    XCTAssertEqual(plan.visibleText, "B")
+    XCTAssertEqual(plan.appliedRecords, [childRecord, deletionRecord])
+    XCTAssertEqual(
+      plan.recoveryStoreTransitions,
+      [
+        .removeCommitted(expected: childRecord),
+        .removeCommitted(expected: deletionRecord),
+      ]
+    )
+    XCTAssertEqual(plan.structurallyAvailableOperationIDs, [child.operationID])
+    XCTAssertTrue(plan.didChangeApplicationState)
+    XCTAssertEqual(
+      plan.metrics,
+      SyncBatchAnchoredRecoveryPlanningMetrics(
+        dequeuedDependencies: 2,
+        selectedRecords: 2,
+        replayAttempts: 2,
+        appliedEquivalentChecks: 2,
+        emittedTransitions: 2
+      )
+    )
   }
 
   func testSameInsertionIdentityWithDifferentTextBecomesTerminal() throws {
@@ -711,5 +890,6 @@ final class SyncBatchAnchoredRecoveryPlannerTests: XCTestCase {
 
   private enum TestError: Error {
     case missingInsertedRecord
+    case injectedWriteFailure
   }
 }
