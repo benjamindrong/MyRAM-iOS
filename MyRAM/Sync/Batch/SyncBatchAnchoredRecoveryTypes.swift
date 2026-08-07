@@ -213,16 +213,60 @@ enum SyncBatchAnchoredBootstrapConflictReason: String, Codable, Equatable, Senda
   case tombstoneHistory
 }
 
-struct SyncBatchAnchoredBootstrapConflict: Codable, Equatable, Sendable {
+struct SyncBatchAnchoredBootstrapConflict: Equatable, Sendable {
   let establishedState: SyncBatchAnchoredStructuralStateEvidence
   let reason: SyncBatchAnchoredBootstrapConflictReason
 
   init(establishedState: SyncTextSequenceState) {
     let evidence = SyncBatchAnchoredStructuralStateEvidence(validating: establishedState)
     self.establishedState = evidence
-    self.reason = evidence.containsTombstones
+    self.reason = Self.reason(for: evidence)
+  }
+
+  fileprivate init(
+    validating establishedState: SyncBatchAnchoredStructuralStateEvidence,
+    reason: SyncBatchAnchoredBootstrapConflictReason
+  ) throws {
+    guard Self.reason(for: establishedState) == reason else {
+      throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
+    }
+    self.establishedState = establishedState
+    self.reason = reason
+  }
+
+  private static func reason(
+    for evidence: SyncBatchAnchoredStructuralStateEvidence
+  ) -> SyncBatchAnchoredBootstrapConflictReason {
+    evidence.containsTombstones
       ? .tombstoneHistory
       : .nonEquivalentEstablishedState
+  }
+}
+
+extension SyncBatchAnchoredBootstrapConflict: Codable {
+  private enum CodingKeys: String, CodingKey {
+    case establishedState
+    case reason
+  }
+
+  func encode(to encoder: Encoder) throws {
+    var container = encoder.container(keyedBy: CodingKeys.self)
+    try container.encode(establishedState, forKey: .establishedState)
+    try container.encode(reason, forKey: .reason)
+  }
+
+  init(from decoder: Decoder) throws {
+    let container = try decoder.container(keyedBy: CodingKeys.self)
+    try self.init(
+      validating: container.decode(
+        SyncBatchAnchoredStructuralStateEvidence.self,
+        forKey: .establishedState
+      ),
+      reason: container.decode(
+        SyncBatchAnchoredBootstrapConflictReason.self,
+        forKey: .reason
+      )
+    )
   }
 }
 

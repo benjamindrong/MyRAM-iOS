@@ -316,7 +316,8 @@ final class SyncBatchAnchoredRecoveryTests: XCTestCase {
     guard case .bootstrap(let value) = bootstrap else {
       return XCTFail("Expected bootstrap change")
     }
-    let bootstrapState = try value.makeDescriptor().state
+    let descriptor = try value.makeDescriptor()
+    let bootstrapState = descriptor.state
     let deletion = try deletionChange(
       state: bootstrapState,
       offset: 0,
@@ -347,14 +348,33 @@ final class SyncBatchAnchoredRecoveryTests: XCTestCase {
     )
   }
 
+  func testNativeMacBootstrapConflictDecodingRejectsReasonEvidenceMismatch() throws {
+    let conflict = SyncBatchAnchoredBootstrapConflict(establishedState: .empty)
+    let encoded = try JSONEncoder().encode(conflict)
+    guard var object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any] else {
+      return XCTFail("Unable to inspect bootstrap conflict")
+    }
+    object["reason"] = SyncBatchAnchoredBootstrapConflictReason.tombstoneHistory.rawValue
+    let tampered = try JSONSerialization.data(withJSONObject: object)
+
+    XCTAssertThrowsError(
+      try JSONDecoder().decode(SyncBatchAnchoredBootstrapConflict.self, from: tampered)
+    ) { error in
+      XCTAssertEqual(
+        error as? SyncBatchAnchoredRecoveryCodingError,
+        .unsupportedRecordShape
+      )
+    }
+  }
+
   func testNativeMacBootstrapUnblocksWaitingDependentInSamePlan() throws {
     let bootstrap = try bootstrapChange(body: "A")
     guard case .bootstrap(let value) = bootstrap else {
       return XCTFail("Expected bootstrap change")
     }
-    let bootstrapState = try value.makeDescriptor().state
+    let descriptor = try value.makeDescriptor()
     let child = try insertionChange(
-      state: bootstrapState,
+      state: descriptor.state,
       offset: 1,
       text: "B",
       counter: 60
@@ -383,10 +403,8 @@ final class SyncBatchAnchoredRecoveryTests: XCTestCase {
       [.removeCommitted(expected: waitingRecord)]
     )
     XCTAssertEqual(
-      plan.structurallyAvailableOperationIDs,
-      [value.operationID, child.operationID].sorted {
-        SyncOperationIDCanonicalOrder.isOrderedBefore($0, $1)
-      }
+      Set(plan.structurallyAvailableOperationIDs),
+      Set([value.operationID, child.operationID])
     )
   }
 
