@@ -747,10 +747,8 @@ final class MacSyncBatchApplierTests: XCTestCase {
         defaults.removePersistentDomain(forName: suiteName)
         return defaults
     }
-}
 
-// MYR-178 Slice 1 shared Mac compatibility semantics
-extension MacSyncBatchApplierTests {
+    // MYR-178 Slice 1 shared Mac compatibility semantics
     func testMYR178MacConsumerUsesSharedMatchingBaseDecisionSemantics() {
         let noteID = UUID(uuidString: "17800000-0000-0000-0000-000000000001")!
         let body = "Mac authoritative body"
