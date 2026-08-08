@@ -51,7 +51,12 @@ Slice 2 production changes remain confined to:
 - `MyRAM/Sync/Batch/SyncBatchAnchoredRecoveryPlanner.swift`
 - `MyRAM/Sync/Batch/FileBackedSyncBatchAnchoredRecoveryStore.swift`
 
-The remediation adds focused test coverage in existing iOS and native Mac test-target files and revises only the two MYR-177 evidence documents. No production source is changed by the remediation itself.
+The remediation adds the two required bootstrap-conflict scenarios as dedicated `SyncBatchAnchoredBootstrapConflictCoverageTests` classes in these already existing iOS/native Mac test-target files:
+
+- `MyRAMTests/SyncBatchTransportAdmissionPlannerTests.swift`
+- `MyRAMMacTests/SyncBatchTransportAdmissionPlannerTests.swift`
+
+The files already belong to their respective host test targets, so no project-membership change is required. The remediation also revises only the two MYR-177 evidence documents. No production source is changed by the remediation itself.
 
 ## Requirement mapping
 
