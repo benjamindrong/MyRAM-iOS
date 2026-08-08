@@ -171,3 +171,87 @@ final class SyncBatchTransportAdmissionPlannerTests: XCTestCase {
         )
     }
 }
+
+final class SyncBatchAnchoredBootstrapConflictCoverageTests: XCTestCase {
+    func testDifferentBootstrapAgainstEstablishedBootstrapCreatesConflict() throws {
+        let establishedBootstrap = try bootstrapChange(body: "A")
+        guard case .bootstrap(let establishedValue) = establishedBootstrap else {
+            return XCTFail("Expected established bootstrap change")
+        }
+        let establishedState = try establishedValue.makeDescriptor().state
+        let incomingBootstrap = try bootstrapChange(body: "B")
+
+        let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+            change: incomingBootstrap,
+            foundation: .established(establishedState),
+            recoverySnapshot: emptyRecoverySnapshot()
+        )
+
+        XCTAssertEqual(plan.finalFoundation, .established(establishedState))
+        XCTAssertFalse(plan.didChangeApplicationState)
+        XCTAssertTrue(plan.structurallyAvailableOperationIDs.isEmpty)
+        guard case .insertExpectedAbsent(let record) = plan.recoveryStoreTransitions.first,
+              case .bootstrapContentConflict(let conflict) = record.lifecycle else {
+            return XCTFail("Expected bootstrap-content conflict")
+        }
+        XCTAssertEqual(record.change, incomingBootstrap)
+        XCTAssertEqual(conflict.reason, .nonEquivalentEstablishedState)
+        XCTAssertEqual(
+            try conflict.establishedState.makeValidatedSequenceState(),
+            establishedState
+        )
+    }
+
+    func testLateBootstrapAfterOrdinaryEditCreatesConflict() throws {
+        let bootstrap = try bootstrapChange(body: "A")
+        guard case .bootstrap(let bootstrapValue) = bootstrap else {
+            return XCTFail("Expected bootstrap change")
+        }
+        let bootstrapState = try bootstrapValue.makeDescriptor().state
+        let edit = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+            state: bootstrapState,
+            offset: 1,
+            text: "B",
+            operationID: SyncBatchAnchoredRecoveryTestFactory.operation(110)
+        )
+        let editedState = try SyncBatchAnchoredRecoveryTestFactory.applying(
+            edit,
+            to: bootstrapState
+        )
+
+        let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+            change: bootstrap,
+            foundation: .established(editedState),
+            recoverySnapshot: emptyRecoverySnapshot()
+        )
+
+        XCTAssertEqual(plan.finalFoundation, .established(editedState))
+        XCTAssertEqual(plan.visibleText, "AB")
+        XCTAssertFalse(plan.didChangeApplicationState)
+        XCTAssertTrue(plan.structurallyAvailableOperationIDs.isEmpty)
+        guard case .insertExpectedAbsent(let record) = plan.recoveryStoreTransitions.first,
+              case .bootstrapContentConflict(let conflict) = record.lifecycle else {
+            return XCTFail("Expected late-bootstrap content conflict")
+        }
+        XCTAssertEqual(record.change, bootstrap)
+        XCTAssertEqual(conflict.reason, .nonEquivalentEstablishedState)
+        XCTAssertEqual(
+            try conflict.establishedState.makeValidatedSequenceState(),
+            editedState
+        )
+    }
+
+    private func bootstrapChange(body: String) throws -> SyncBatchAnchoredRecoveryChange {
+        .bootstrap(
+            try SyncBatchAnchoredBootstrapChange(
+                noteID: SyncBatchAnchoredRecoveryTestFactory.noteID,
+                body: body,
+                formatVersion: .v1
+            )
+        )
+    }
+
+    private func emptyRecoverySnapshot() -> SyncBatchAnchoredRecoveryStoreSnapshot {
+        SyncBatchAnchoredRecoveryStoreSnapshot(records: [], health: .healthy)
+    }
+}
