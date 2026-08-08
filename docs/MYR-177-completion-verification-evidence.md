@@ -17,7 +17,7 @@ The earlier successful matrix at `bfaab5be12d15ac7dcc5d5c1066a47791e1fb4be` rema
 - Instruction repository revision used for remediation: `5eab9420bf8ef6dd72ae6efc9dae4d7d0182bbea`.
 - Verification state: `PENDING LOCAL EXACT-HEAD REMEDIATION RUN`.
 
-The exact candidate identity is bound by the external completion-runner manifest and PR metadata. The repository document intentionally does not record the commit containing itself as a self-referential “final evidence SHA”.
+The exact candidate identity is bound by the external completion-runner manifest and PR metadata. This repository document intentionally does not record the commit containing itself as a self-referential final-evidence SHA.
 
 ## Approved reference confirmation
 
