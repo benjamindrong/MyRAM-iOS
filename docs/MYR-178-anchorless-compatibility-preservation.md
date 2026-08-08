@@ -115,12 +115,6 @@ iOS/shared semantics:
 - hashless in-range, clampable, Unicode-split, and `expectedText`/substring-plausible cases remain unavailable;
 - repeated classification is deterministic and does not mutate its inputs.
 
-iPhone visibility of the shared semantics:
-
-- `MyRAMTests/IPhoneSyncBatchApplierTests.swift`
-- matching declared hash is eligible;
-- hashless deletion with plausible `expectedText` remains unavailable.
-
 Native Mac visibility of the shared semantics:
 
 - `MyRAMMacTests/MacSyncBatchApplierTests.swift`
