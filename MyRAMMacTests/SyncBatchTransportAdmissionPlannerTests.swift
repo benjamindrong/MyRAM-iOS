@@ -1,3 +1,5 @@
+import AnchoredSequenceCore
+import Foundation
 import XCTest
 @testable import MyRAMMac
 
@@ -169,5 +171,125 @@ final class SyncBatchTransportAdmissionPlannerTests: XCTestCase {
             stableDeviceID: deviceID ?? "peer-\(index)",
             hasExplicitCurrentSessionV2Support: supportsV2
         )
+    }
+}
+
+final class SyncBatchAnchoredBootstrapConflictCoverageTests: XCTestCase {
+    private let noteID = UUID(
+        uuidString: "17710000-0000-0000-0000-000000000001"
+    )!
+    private let deviceID = UUID(
+        uuidString: "17710000-0000-0000-0000-000000000002"
+    )!
+    private let modifiedAt = Date(timeIntervalSince1970: 1_771)
+
+    func testDifferentBootstrapAgainstEstablishedBootstrapCreatesConflict() throws {
+        let establishedBootstrap = try bootstrapChange(body: "A")
+        guard case .bootstrap(let establishedValue) = establishedBootstrap else {
+            return XCTFail("Expected established bootstrap change")
+        }
+        let establishedState = try establishedValue.makeDescriptor().state
+        let incomingBootstrap = try bootstrapChange(body: "B")
+
+        let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+            change: incomingBootstrap,
+            foundation: .established(establishedState),
+            recoverySnapshot: emptyRecoverySnapshot()
+        )
+
+        XCTAssertEqual(plan.finalFoundation, .established(establishedState))
+        XCTAssertFalse(plan.didChangeApplicationState)
+        XCTAssertTrue(plan.structurallyAvailableOperationIDs.isEmpty)
+        guard case .insertExpectedAbsent(let record) = plan.recoveryStoreTransitions.first,
+              case .bootstrapContentConflict(let conflict) = record.lifecycle else {
+            return XCTFail("Expected bootstrap-content conflict")
+        }
+        XCTAssertEqual(record.change, incomingBootstrap)
+        XCTAssertEqual(conflict.reason, .nonEquivalentEstablishedState)
+        XCTAssertEqual(
+            try conflict.establishedState.makeValidatedSequenceState(),
+            establishedState
+        )
+    }
+
+    func testLateBootstrapAfterOrdinaryEditCreatesConflict() throws {
+        let bootstrap = try bootstrapChange(body: "A")
+        guard case .bootstrap(let bootstrapValue) = bootstrap else {
+            return XCTFail("Expected bootstrap change")
+        }
+        let bootstrapState = try bootstrapValue.makeDescriptor().state
+        let edit = try insertionChange(
+            state: bootstrapState,
+            offset: 1,
+            text: "B",
+            counter: 110
+        )
+        let editedState = try SyncBatchAnchoredRecoveryReplay.apply(
+            edit,
+            to: bootstrapState
+        )
+
+        let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+            change: bootstrap,
+            foundation: .established(editedState),
+            recoverySnapshot: emptyRecoverySnapshot()
+        )
+
+        XCTAssertEqual(plan.finalFoundation, .established(editedState))
+        XCTAssertEqual(plan.visibleText, "AB")
+        XCTAssertFalse(plan.didChangeApplicationState)
+        XCTAssertTrue(plan.structurallyAvailableOperationIDs.isEmpty)
+        guard case .insertExpectedAbsent(let record) = plan.recoveryStoreTransitions.first,
+              case .bootstrapContentConflict(let conflict) = record.lifecycle else {
+            return XCTFail("Expected late-bootstrap content conflict")
+        }
+        XCTAssertEqual(record.change, bootstrap)
+        XCTAssertEqual(conflict.reason, .nonEquivalentEstablishedState)
+        XCTAssertEqual(
+            try conflict.establishedState.makeValidatedSequenceState(),
+            editedState
+        )
+    }
+
+    private func bootstrapChange(body: String) throws -> SyncBatchAnchoredRecoveryChange {
+        .bootstrap(
+            try SyncBatchAnchoredBootstrapChange(
+                noteID: noteID,
+                body: body,
+                formatVersion: .v1
+            )
+        )
+    }
+
+    private func insertionChange(
+        state: SyncTextSequenceState,
+        offset: Int,
+        text: String,
+        counter: UInt64
+    ) throws -> SyncBatchAnchoredRecoveryChange {
+        let batchChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: offset,
+            text: text,
+            modifiedAt: modifiedAt,
+            baseContentHash: nil,
+            operationID: SyncOperationID(
+                deviceID: deviceID,
+                localCounter: counter
+            ),
+            state: state
+        )
+        guard case .noteBodyTextInsertedAnchored(let change) = batchChange else {
+            throw CoverageError.unexpectedChange
+        }
+        return .insertion(change)
+    }
+
+    private func emptyRecoverySnapshot() -> SyncBatchAnchoredRecoveryStoreSnapshot {
+        SyncBatchAnchoredRecoveryStoreSnapshot(records: [], health: .healthy)
+    }
+
+    private enum CoverageError: Error {
+        case unexpectedChange
     }
 }
