@@ -2,21 +2,26 @@
 
 ## Status
 
-Implementation is present on the Slice 2 feature branch. Completion remains pending the required local exact-head Xcode verification matrix. This document defines the implementation/evidence mapping before local verification begins; exact local execution output is written outside the repository so recording results does not invalidate the tested head.
+MYR-177 Slice 2 remediation is implemented on the existing PR branch. Completion is pending a fresh local exact-head Xcode verification matrix because the remediation adds required focused tests and updates the closing evidence/alignment contract after the previously verified candidate.
+
+The earlier successful matrix at `bfaab5be12d15ac7dcc5d5c1066a47791e1fb4be` remains valid historical evidence for that exact head, but it is not closing evidence for the remediated candidate.
 
 ## Identity
 
 - Ticket: MYR-177 — Add missing-anchor deferral and bootstrap-conflict handling.
 - Slice: 2 — Bootstrap-conflict isolation and dark completion integration.
+- Pull request: #127.
 - Branch: `MYR-177-Slice-2-Bootstrap-conflict-isolation-and-dark-completion-integration`.
 - Slice 2 base SHA: `d83973f677c53dcf7f4fdf57657ab2e07761dbd3`.
-- Instruction repository revision: `b3333d8ca55b70794e09c3c946c0e1a09d912a1a`.
-- Pull request: #127.
-- Verification state: `PENDING LOCAL EXACT-HEAD RUN`.
+- Independent-review starting head: `bfaab5be12d15ac7dcc5d5c1066a47791e1fb4be`.
+- Instruction repository revision used for remediation: `5eab9420bf8ef6dd72ae6efc9dae4d7d0182bbea`.
+- Verification state: `PENDING LOCAL EXACT-HEAD REMEDIATION RUN`.
+
+The exact remediation candidate SHA is resolved after all remediation commits exist and is bound by the external completion-runner manifest. The repository document intentionally does not use a self-referential “final evidence SHA” field.
 
 ## Approved reference confirmation
 
-The approved MYR-177 private/reference review remains pinned by the merged alignment record to:
+The approved MYR-177 private/reference review remains pinned to:
 
 - Reference A: `64248a12829d04f62ddf3230c6c592f6226b57ab`
 - Reference B: `cdeb8053c3aa2510189429d717ab09e70f134716`
@@ -24,141 +29,100 @@ The approved MYR-177 private/reference review remains pinned by the merged align
 - Reference D: `89c162d3c1ae02c426c9002419aef0814e779ed8`
 - Reference E: `26f9425ef74d45937e00d6c8ec2e8bb12889013d`
 
-Slice 2 carries these exact approved revisions forward. This record does not claim an independent re-fetch of undisclosed reference repositories; it preserves the revisions approved and recorded by merged Slice 1 evidence. The local completion runner re-fetches or reuses the neutral approved-reference cache and verifies all five exact SHAs before expensive verification.
+The local completion runner must verify those exact revisions before expensive Xcode verification. `docs/MYR-177-dependency-bootstrap-alignment.md` contains the finalized neutral behavior-to-requirement traceability without naming or linking the private repositories.
+
+## Remediation scope
+
+Independent review identified four proposed blockers. Current approved-procedure review resolves them as follows:
+
+1. The proposed extra empty-bootstrap provenance layer is **not adopted**. The approved Slice 2 contract explicitly distinguishes `.absent` from `.established(.empty)` and defines an equivalent empty bootstrap against the established empty foundation as idempotent. Adding a second provenance persistence mechanism would contradict that approved design and unnecessarily broaden persistence scope.
+2. Required focused coverage is added for a different bootstrap delivered against an established bootstrap and for a late equivalent bootstrap delivered after an ordinary structural edit. Both cases are mirrored on iOS and native Mac.
+3. The external-reference alignment record now maps required behaviors to approved neutral reference revisions, adopted mechanisms or deliberate divergences, impacts, production locations, exact proof, and deferred ownership.
+4. This completion-evidence record now distinguishes historical verification from the pending remediation exact-head run instead of claiming that the current candidate is already verified.
+
+No remediation production source, recovery-store format, transport representation, SwiftData schema, controller, editor, acknowledgement, capability, or `NearbySyncCore` change is introduced.
 
 ## Implementation inventory
 
-Production changes are confined to:
+Slice 2 production changes remain confined to:
 
 - `Packages/AnchoredSequenceCore/Sources/AnchoredSequenceCore/SyncTextLegacyBootstrap.swift`
 - `MyRAM/Sync/Batch/SyncBatchAnchoredRecoveryTypes.swift`
 - `MyRAM/Sync/Batch/SyncBatchAnchoredRecoveryPlanner.swift`
 - `MyRAM/Sync/Batch/FileBackedSyncBatchAnchoredRecoveryStore.swift`
 
-The recovery-store file changes only its persisted format version from 1 to 2. Slice 2 adds persisted bootstrap change and bootstrap-conflict lifecycle variants that a Slice 1 version-1 reader cannot decode, so this is an actual incompatible representation. No migration support is added for dark-only historical files.
-
-Focused test changes are confined to:
-
-- `Packages/AnchoredSequenceCore/Tests/AnchoredSequenceCoreTests/SyncTextLegacyBootstrapTests.swift`
-- `MyRAMTests/SyncBatchAnchoredRecoveryPlannerTests.swift`
-- `MyRAMTests/SyncBatchAnchoredRecoveryStoreTests.swift`
-- `MyRAMMacTests/SyncBatchAnchoredRecoveryTests.swift`
-
-`SyncBatchAnchoredRecoveryStoreTests` changes only the malformed-record fixture envelope from store version 1 to current store version 2. This preserves the test's intended distinction between `unsupportedRecordShape` and `readFailed`; a version-1 envelope correctly stops earlier at the unsupported-version gate after the Slice 2 store-version bump.
-
-Documentation changes are confined to:
-
-- `docs/MYR-177-dependency-bootstrap-alignment.md`
-- `docs/MYR-177-completion-verification-evidence.md`
-
-No Slice 2 change is intended for SwiftData models, transport envelopes, convergence submission, active application persistence, editors, acknowledgements, anchored queue admission, or capability activation.
+The remediation adds focused test coverage in existing iOS and native Mac test-target files and revises only the two MYR-177 evidence documents. No production source is changed by the remediation itself.
 
 ## Requirement mapping
 
 | Requirement | Production location | Test or audit evidence |
 |---|---|---|
-| Deterministic bootstrap identity for empty and nonempty bodies | `SyncTextLegacyBootstrap.makeDescriptor` | V1 empty/nonempty known-vector tests; descriptor compatibility test |
-| Accept only known bootstrap versions and verified derived identity | `SyncBatchAnchoredBootstrapChange` custom decoding | Unsupported-version and tampered-operation-ID test |
-| Preserve absent versus established-empty foundation | `SyncBatchAnchoredStructuralFoundation`; commit-plan foundations | Empty-bootstrap admission/idempotence tests on iOS and Mac |
-| Fail ordinary replay closed when foundation is absent | Foundation overloads in `SyncBatchAnchoredRecoveryPlanner` | Initial insertion/deletion plus dependency/restart retry rejection tests |
-| Classify bootstrap by exact structural state, not visible text | Bootstrap branch of planner evaluation | Same-visible-text/different-structure conflict test |
-| Prevent late bootstrap resurrection after tombstones | Bootstrap conflict classification | Tombstone-history conflict/non-resurrection tests on iOS and Mac |
-| Persist exact recovery-owned structural conflict evidence | `SyncBatchAnchoredStructuralStateEvidence` | Exact round-trip and restart persistence tests |
-| Reject malformed structural evidence | Evidence custom decoding through core validation | Malformed evidence decode test |
-| Keep conflict reason consistent with evidence | `SyncBatchAnchoredBootstrapConflict` custom decoding | Native Mac reason/evidence mismatch test |
-| Keep bootstrap conflict separate from dependency lifecycle | Recovery change/lifecycle record invariants | Bootstrap-cannot-wait and ordinary-cannot-conflict test |
-| Progress dependents in one deterministic plan | Shared planner worklist | Nonempty bootstrap dependent-unblocking tests on iOS and Mac |
-| Empty bootstrap exposes no nonexistent operation | Bootstrap planner evaluation | Empty-bootstrap operation-list tests |
-| Version the incompatible bootstrap-capable store representation | `PersistedSyncBatchAnchoredRecoveryStore.currentVersion = 2` | Recovery-store unsupported-version/round-trip/malformed-shape suite plus exact-head version audit |
-| Preserve Slice 1 duplicate/applied-equivalence/collision semantics | Shared ordinary replay path | Full retained `SyncBatchAnchoredRecoveryPlannerTests` suite |
-| Preserve persistence on conflict write failure | File-backed recovery store + bootstrap conflict transition | Bootstrap conflict write-failure test |
-| Preserve shared iPhone/native Mac production seam | Shared `MyRAM/Sync/Batch` source | Mirrored host tests and target-membership audit |
-| Keep anchored production behavior dark | No new production callers or activation source | Capability-off and zero-production-reachability audits |
+| Deterministic bootstrap identity for empty and nonempty bodies | `SyncTextLegacyBootstrap.makeDescriptor` | empty/nonempty known-vector and descriptor compatibility tests |
+| Preserve absent versus established-empty foundation | `SyncBatchAnchoredStructuralFoundation`; planner commit plans | existing empty-bootstrap admission/idempotence tests on iOS and Mac |
+| Reject a different bootstrap against an established bootstrap | bootstrap branch of `SyncBatchAnchoredRecoveryPlanner` | `SyncBatchAnchoredBootstrapConflictCoverageTests.testDifferentBootstrapAgainstEstablishedBootstrapCreatesConflict` on both hosts |
+| Reject a late bootstrap after ordinary structural edits | bootstrap branch of `SyncBatchAnchoredRecoveryPlanner` | `SyncBatchAnchoredBootstrapConflictCoverageTests.testLateBootstrapAfterOrdinaryEditCreatesConflict` on both hosts |
+| Prevent late bootstrap resurrection after tombstones | bootstrap conflict classification | retained tombstone-history conflict/non-resurrection tests on iOS and Mac |
+| Persist bootstrap conflict separately from dependency waiting | recovery change/lifecycle types and file-backed store | retained lifecycle, restart, exact-evidence, and write-failure tests |
+| Fail ordinary replay closed when foundation is absent | foundation planner overloads | retained insertion/deletion/retry/restart missing-foundation tests |
+| Preserve deterministic dependency retry and Slice 1 collision semantics | shared planner worklist | retained Slice 1 planner/store suites |
+| Preserve iPhone/native Mac shared dark behavior | shared `MyRAM/Sync/Batch` production source | mirrored host tests and target-membership audit |
+| Keep production anchored behavior dark | no active caller or activation-source remediation | capability-off and zero-production-reachability audits |
+| Preserve external-reference traceability | `docs/MYR-177-dependency-bootstrap-alignment.md` | exact-reference and mapping audits |
 
-## Foundation admission behavior
+## Historical exact-head verification
 
-Expected immutable planning behavior:
+The pre-remediation candidate `bfaab5be12d15ac7dcc5d5c1066a47791e1fb4be` passed the local runner `MYR-177-S2-local-completion-v4-store-fixture-remediation-20260807` with SHA-256 `b612987c8dd2fdcc4bf6a5a7132e40d4c79579f4fac6a3b4a13ffd1be82df448`.
 
-- `.absent` + nonempty bootstrap -> `.established(candidate)`, application state changed, bootstrap operation exposed.
-- `.absent` + empty bootstrap -> `.established(.empty)`, application state changed, no structural operation exposed.
-- `.established(candidate)` + equivalent bootstrap -> unchanged foundation, no application-state change; nonempty represented operation may be exposed to progress existing dependents.
-- `.established(other)` + bootstrap -> durable bootstrap-content conflict, established foundation unchanged, no operation exposed.
-- `.absent` + ordinary insertion/deletion/retry/restart -> typed `missingStructuralFoundation`, no synthesized sequence state and no recovery-store transition.
+Historical results at that exact head were:
 
-The missing-foundation contract is represented as a typed thrown orchestration error rather than a successful commit plan. Because planning stops before mutation or transition creation, no application-state change or structural-operation availability can be requested by that result.
+- approved references A–E: exact revisions verified;
+- `AnchoredSequenceCore` Debug and Release: passed;
+- iOS focused recovery tests: 50/50 passed;
+- native Mac focused recovery tests: 10/10 passed;
+- complete iOS application tests: 1136/1136 passed;
+- complete native Mac tests: 671/671 passed;
+- required iOS UI tests: 13/13 passed;
+- iOS application build: passed;
+- native Mac application build: passed;
+- scope, target, store-version, public-API, capability, activation, offset/hash, SwiftData, `NearbySyncCore`, clean-tree, and parity audits: passed.
 
-## Structural evidence representation and validation
+Those results establish the baseline but do not close the remediation candidate because test and documentation commits were added afterward.
 
-Bootstrap conflict evidence records:
+## Required remediation verification
 
-- run operation identities;
-- left and right insertion-origin element identities;
-- exact run text;
-- fragment operation identities;
-- fragment start offsets and UTF-16 lengths;
-- visible/tombstone fragment state.
+The exact remediation candidate must pass:
 
-Reconstruction uses normal `AnchoredSequenceCore` initializers and `SyncTextSequenceState` validation. The recovery representation has no dependency on SwiftData records or persistence-specific revision/payload metadata. Persisted conflict reason must match evidence-derived tombstone presence.
-
-## Verification results
-
-### Remotely observed before local exact-head verification
-
-- Slice 1 start gate: passed; Slice 2 branch was created from merged `main` base `d83973f677c53dcf7f4fdf57657ab2e07761dbd3`.
-- Branch/PR naming: matches the Slice 2 ticket title convention.
-- Candidate scope is confined to the four production sources, four focused test files, and two MYR-177 evidence documents listed above.
-- The recovery-store format changed from v1 to v2 only because the persisted recovery record representation gained incompatible bootstrap variants; no migration code was introduced.
-- Production caller search for `SyncBatchAnchoredRecoveryPlanner`: no active application caller found; references were test-only.
-- GitHub Actions: no workflow run was available for the Slice 2 PR head, so no remote Xcode compile/test result is claimed.
-- An earlier exact-head local run against `de0ff96e21950543da5e9ab78ec089c0902605fb` reached the iOS focused build and exposed two missing `try` markers in `SyncBatchAnchoredStructuralStateEvidence.init(from:)`. That compile defect was remediated in follow-up source history; the failed run is not completion evidence for the current head.
-- A later exact-head local run against `7e2ba382996bf1cbade963d11468905be3e557bc` compiled the focused target and executed 50 selected tests. One retained store test failed because its malformed-record fixture still declared store version 1 after the intentional v2 format bump, causing the loader to correctly return `unsupportedVersion(1)` before record-shape decoding. The fixture was updated to version 2; that failed run is also non-closing evidence.
-
-### Pending required local observation
-
-The exact candidate head must pass:
-
-- focused Slice 2 recovery tests;
-- retained Slice 1 recovery tests;
+- the two new bootstrap-conflict scenarios on iOS and native Mac;
+- all retained Slice 1 and Slice 2 focused recovery tests;
 - `AnchoredSequenceCore` Debug and Release;
 - complete iOS application tests;
 - required iOS UI tests;
 - complete native Mac tests;
 - iOS application build;
 - native Mac application build;
-- persistence/restart/corruption/unsupported-version/write-failure tests;
-- deterministic bounded-work tests;
-- interrupted-cleanup recovery;
-- bootstrap-conflict restart and persistence-failure tests;
-- structural-evidence round-trip and malformed-evidence tests;
-- missing-foundation fail-closed tests;
+- persistence round-trip, restart, corruption, unsupported-version, malformed-record, interruption, and injected-write-failure coverage;
+- deterministic bounded-work and reindex coverage;
 - changed-scope and target-membership audits;
-- recovery-store v2 audit;
-- public API audit;
+- recovery-store version and public API audits;
 - capability-off and zero-production-reachability audits;
-- no-offset/no-general-hash-validation audits;
-- transport/convergence/editor/acknowledgement audits;
-- SwiftData schema audit;
-- NearbySyncCore preservation;
+- no-offset and no-general-hash-validation audits;
+- transport, convergence, editor, persistence, and acknowledgement boundary audits;
+- unchanged SwiftData schema audit;
+- `NearbySyncCore` preservation;
 - `git diff --check`;
 - clean tree;
 - local/upstream/PR-head parity.
 
-## Persistence and interruption results
+Any production or test change after this matrix begins invalidates candidate-specific verification and requires the matrix to restart.
 
-Implementation-level tests cover conflict restart persistence, exact evidence reconstruction, interrupted Slice 1 cleanup, conflict write-failure preservation, deterministic store encoding, unsupported-version handling, malformed current-version record handling, CAS transitions, and rollback. Their execution status is `PENDING LOCAL EXACT-HEAD RUN`.
+## Evidence contract
 
-## Activation-boundary results
+The local completion runner creates a unique external evidence directory and machine-readable manifest. Candidate-specific phases are bound to the exact candidate SHA. The runner preserves failed attempts, uses unique phase/attempt identities, and may resume only evidence that remains valid for the same candidate and evidence-contract version.
 
-Source scope shows no intended production activation changes. Exact-head audits for capability state, zero production reachability, queue/capture/emission/convergence/persistence/editor/acknowledgement absence, no raw-offset fallback, no general replay-time `baseContentHash` validation, unchanged transport, and unchanged SwiftData schema are `PENDING LOCAL EXACT-HEAD RUN`.
+The runner must not commit, push, merge, reset, rebase, force-push, or mutate `main`. It may verify branch parity through standard Git without requiring `gh`.
 
-MYR-179 remains the sole production activation boundary. MYR-180 remains responsible for live two-device closure.
-
-## Final evidence location
-
-The local completion runner creates a unique external evidence directory and prints its absolute path. That directory contains the command log, result summaries, audit output, relevant result-bundle locations, exact tested SHA/tree/parity information, approved-reference verification, and runner identity.
-
-After execution, the external summary should be attached or pasted to PR #127. The repository evidence document must not be edited merely to copy those results after exact-head verification, because doing so would create a new untested head.
+After a successful run, the external summary is the closing exact-head evidence. The PR body should be updated with the candidate SHA, runner identity, evidence location, observed counts, builds, audits, and parity result. A later documentation-only closure change must not be described as though the Xcode matrix executed against that later documentation SHA.
 
 ## Completion boundary
 
-MYR-177 Slice 2 is not complete until the local exact-head matrix passes and its external evidence proves the tested local SHA, upstream branch SHA, and PR head are identical. Any production or test change after that matrix begins invalidates the run and requires a fresh exact-head verification.
+MYR-177 Slice 2 is ready for final independent PR review only after the remediation candidate passes the complete local matrix and the external evidence proves candidate identity and local/upstream/PR-head parity. MYR-179 remains the sole production activation boundary, and MYR-180 remains responsible for live two-device Stage 2 closure.
