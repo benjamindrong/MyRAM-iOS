@@ -731,7 +731,7 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
     }
     lifecycle["kind"] = "futureLifecycle"
     object["lifecycle"] = lifecycle
-    let envelope: [String: Any] = ["version": 1, "records": [object]]
+    let envelope: [String: Any] = ["version": 2, "records": [object]]
     try JSONSerialization.data(withJSONObject: envelope)
       .write(to: validURL, options: .atomic)
     XCTAssertEqual(

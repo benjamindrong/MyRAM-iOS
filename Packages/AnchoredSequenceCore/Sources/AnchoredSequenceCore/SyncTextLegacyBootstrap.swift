@@ -5,20 +5,31 @@ public enum SyncTextLegacyBootstrapFormatVersion: UInt32, Sendable {
     case v1 = 1
 }
 
+public struct SyncTextLegacyBootstrapDescriptor: Equatable, Sendable {
+    public let operationID: SyncOperationID
+    public let state: SyncTextSequenceState
+}
+
 /// Introduces a preexisting full-body snapshot as one operation-owned sequence run.
 public enum SyncTextLegacyBootstrap {
-    public static func makeState(
+    public static func makeDescriptor(
         noteID: UUID,
         body: String,
         formatVersion: SyncTextLegacyBootstrapFormatVersion = .v1
-    ) throws -> SyncTextSequenceState {
-        guard !body.isEmpty else { return .empty }
-
+    ) throws -> SyncTextLegacyBootstrapDescriptor {
         let operationID = legacyOperationID(
             noteID: noteID,
             body: body,
             formatVersion: formatVersion
         )
+
+        guard !body.isEmpty else {
+            return SyncTextLegacyBootstrapDescriptor(
+                operationID: operationID,
+                state: .empty
+            )
+        }
+
         let origin = try SyncTextInsertionOrigin(
             leftElementID: nil,
             rightElementID: nil
@@ -34,11 +45,27 @@ public enum SyncTextLegacyBootstrap {
             utf16Length: body.utf16.count,
             visibility: .visible
         )
-
-        return try SyncTextSequenceState(
+        let state = try SyncTextSequenceState(
             runs: [run],
             fragments: [fragment]
         )
+
+        return SyncTextLegacyBootstrapDescriptor(
+            operationID: operationID,
+            state: state
+        )
+    }
+
+    public static func makeState(
+        noteID: UUID,
+        body: String,
+        formatVersion: SyncTextLegacyBootstrapFormatVersion = .v1
+    ) throws -> SyncTextSequenceState {
+        try makeDescriptor(
+            noteID: noteID,
+            body: body,
+            formatVersion: formatVersion
+        ).state
     }
 
     private static func legacyOperationID(

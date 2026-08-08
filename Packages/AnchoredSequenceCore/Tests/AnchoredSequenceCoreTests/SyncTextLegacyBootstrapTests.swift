@@ -17,20 +17,38 @@ final class SyncTextLegacyBootstrapTests: XCTestCase {
         XCTAssertEqual(state.tombstonedUTF16Count, 0)
     }
 
+    func testV1EmptyKnownVectorFreezesDeterministicOperationID() throws {
+        let descriptor = try SyncTextLegacyBootstrap.makeDescriptor(
+            noteID: uuid("00000000-0000-0000-0000-000000000001"),
+            body: "",
+            formatVersion: .v1
+        )
+
+        XCTAssertEqual(descriptor.state, .empty)
+        XCTAssertEqual(
+            descriptor.operationID,
+            SyncOperationID(
+                deviceID: uuid("1f0168cd-7bb4-8b07-9554-ee9bba71ab03"),
+                localCounter: 9_211_785_381_960_649_402
+            )
+        )
+    }
+
     func testV1KnownVectorFreezesDeterministicOperationID() throws {
-        let state = try SyncTextLegacyBootstrap.makeState(
+        let descriptor = try SyncTextLegacyBootstrap.makeDescriptor(
             noteID: uuid("00000000-0000-0000-0000-000000000001"),
             body: "Hello 👋",
             formatVersion: .v1
         )
 
         XCTAssertEqual(
-            try XCTUnwrap(state.runs.first).operationID,
+            descriptor.operationID,
             SyncOperationID(
                 deviceID: uuid("40be31f3-909e-84c5-8ffb-660683e73ce8"),
                 localCounter: 3_307_257_957_749_224_882
             )
         )
+        XCTAssertEqual(try XCTUnwrap(descriptor.state.runs.first).operationID, descriptor.operationID)
     }
 
     func testIdenticalInputsProduceIdenticalBootstrapState() throws {
@@ -45,6 +63,18 @@ final class SyncTextLegacyBootstrapTests: XCTestCase {
         XCTAssertEqual(second, third)
     }
 
+    func testDescriptorMatchesExistingStateAPI() throws {
+        let noteID = noteID()
+        let body = "Descriptor compatibility"
+        let descriptor = try SyncTextLegacyBootstrap.makeDescriptor(noteID: noteID, body: body)
+
+        XCTAssertEqual(
+            descriptor.state,
+            try SyncTextLegacyBootstrap.makeState(noteID: noteID, body: body)
+        )
+        XCTAssertEqual(try operationID(in: descriptor.state), descriptor.operationID)
+    }
+
     func testDefaultFormatMatchesExplicitV1() throws {
         let noteID = noteID()
         let body = "Default format"
@@ -57,6 +87,10 @@ final class SyncTextLegacyBootstrapTests: XCTestCase {
         )
 
         XCTAssertEqual(defaultState, explicitState)
+    }
+
+    func testUnknownFormatVersionCannotBeConstructed() {
+        XCTAssertNil(SyncTextLegacyBootstrapFormatVersion(rawValue: 2))
     }
 
     func testSameBodyUnderDifferentNoteIDsProducesDifferentRunIDs() throws {
