@@ -25,7 +25,7 @@ The approved MYR-177 private/reference review remains pinned to:
 
 - Reference A: `64248a12829d04f62ddf3230c6c592f6226b57ab`
 - Reference B: `cdeb8053c3aa2510189429d717ab09e70f134716`
-- Reference C: `5fa067b182ddda3ea2477c4d5e4054da7318973f`
+- Reference C: `5fa067b182ddda3ea2477c4d5c4054da7318973f`
 - Reference D: `89c162d3c1ae02c426c9002419aef0814e779ed8`
 - Reference E: `26f9425ef74d45937e00d6c8ec2e8bb12889013d`
 
@@ -116,7 +116,7 @@ The exact remediation candidate must pass:
 - `NearbySyncCore` preservation;
 - `git diff --check`;
 - clean tree;
-- local/upstream/PR-head parity.
+- detached exact candidate / remote branch / PR-head parity.
 
 Any production or test change after this matrix begins invalidates candidate-specific verification and requires the matrix to restart.
 
@@ -130,4 +130,4 @@ After a successful run, the external summary is the closing exact-head evidence.
 
 ## Completion boundary
 
-MYR-177 Slice 2 is ready for final independent PR review only after the remediation candidate passes the complete local matrix and the external evidence proves candidate identity and local/upstream/PR-head parity. MYR-179 remains the sole production activation boundary, and MYR-180 remains responsible for live two-device Stage 2 closure.
+MYR-177 Slice 2 is ready for final independent PR review only after the remediation candidate passes the complete local matrix and the external evidence proves candidate identity and detached local candidate / remote branch / PR-head parity. MYR-179 remains the sole production activation boundary, and MYR-180 remains responsible for live two-device Stage 2 closure.
