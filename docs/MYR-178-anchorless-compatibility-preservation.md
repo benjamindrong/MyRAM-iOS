@@ -26,10 +26,12 @@ The post-MYR-177 production map contains these raw-offset application boundaries
 
 - iPhone direct application:
   - `MyRAM/iOS/Sync/Batch/IPhoneSyncBatchApplier.swift`
+  - `apply(_:)`
   - `applyBodyTextInserted(_:)`
   - `applyBodyTextDeleted(_:)`
 - Native Mac direct application:
   - `MyRAM/Mac/Sync/MacSyncBatchApplier.swift`
+  - `apply(_:)`
   - `applyBodyTextInserted(_:rollbackSnapshots:)`
   - `applyBodyTextDeleted(_:rollbackSnapshots:)`
 - Shared preflight positional simulation:
@@ -44,14 +46,37 @@ The post-MYR-177 production map contains these raw-offset application boundaries
 
 Slice 1 does not wire the new decision into any of these entry points. Slice 2 owns that activation and structural guarding.
 
-## Matching-base evidence
+## Matching-base evidence and exact provenance
 
-Slice 1 accepts exactly one evidence source for positive direct-replay eligibility:
+Slice 1 accepts exactly one evidence source for positive direct-replay eligibility: declared `baseContentHash` on an anchorless insertion or deletion.
 
-- Declared `baseContentHash` on the anchorless insertion or deletion.
-- Provenance: the payload field is the sender-declared hash of the body against which the operation offsets were created.
-- Consumption boundary: `SyncBatchAnchorlessCompatibilityEvaluator.evaluate(change:authoritativeBody:)`.
-- Proof rule: SHA-256 of the authoritative pre-operation body must exactly equal the declared hash.
+The production provenance contract is shared across platforms:
+
+- `MyRAM/Sync/Batch/SyncBatchNoteChangeCapture.swift`
+- `SyncBatchNoteChangeCapture.capturedBodyChanges` delegates to `bodyTextChanges`.
+- `bodyTextChanges` delegates to `SyncBatchBodyEditScript.changes`.
+- `SyncBatchBodyEditScript.makeInsert` and `makeDelete` set `baseContentHash` to SHA-256 of the exact `baseBody` against which that operation's UTF-16 offset or range is constructed when body-hash capability is enabled.
+- For a multi-operation script, `scriptedChanges` advances `currentBody` after each generated operation and passes that updated body as the next operation's `baseBody`. Each operation therefore carries the hash of its own exact pre-operation positional base, not merely the original edit-session body.
+
+Platform production capture entries into that shared contract are:
+
+- iPhone prepared local body edit:
+  - `MyRAM/ViewModels/NotesViewModel.swift`
+  - `NotesViewModel.prepareLocalNoteEdit`
+  - direct call to `SyncBatchNoteChangeCapture.capturedBodyChanges`
+- iPhone wrapper used by other capture/test seams:
+  - `MyRAM/iOS/Sync/Batch/IPhoneSyncBatchCaptureHook.swift`
+  - `bodyTextChanges` delegates to `SyncBatchNoteChangeCapture.bodyTextChanges`
+- Native Mac prepared local body edit:
+  - `MyRAM/Mac/MacNotePersistenceAdapter.swift`
+  - `MacNotePersistenceAdapter.prepareLocalNoteEdit`
+  - direct call to `SyncBatchNoteChangeCapture.capturedBodyChanges`
+
+Consumption remains separate from production:
+
+- `MyRAM/Sync/Batch/SyncBatchAnchoredPayloadPolicy.swift`
+- `SyncBatchAnchorlessCompatibilityEvaluator.evaluate(change:authoritativeBody:)`
+- Positive proof requires SHA-256 of the authoritative pre-operation body to equal the declared `baseContentHash` exactly.
 
 No non-hash evidence source is accepted in Slice 1.
 
@@ -84,15 +109,48 @@ The new direct-replay classifier does not authorize raw replay against a diverge
 
 Slice 1 does not change queue, acknowledgement, seen/incorporated, persistence, editor publication, rollback, or runtime outcomes.
 
-Existing ownership remains:
+### iPhone
 
-- convergence planning outcomes in `SyncConvergencePlanningTypes.swift`;
-- convergence runtime/queue handling in `SyncConvergenceRuntime.swift`;
-- iPhone incoming queue/application boundaries in the iPhone sync batch path;
-- native Mac incoming queue/application boundaries in the Mac sync batch path;
-- direct-apply preflight errors in `SyncBatchPayload.swift`.
+Transport receipt and acknowledgement ownership remain in:
 
-Slice 2 owns routing new compatibility rejection into those existing recoverable/observable outcomes. Slice 1 intentionally does not emit a new production failure.
+- `MyRAM/Sync/MyRAMSyncController.swift`
+- `onDurablyCaptureIncomingBatch`
+- `onBatchReceived`
+- batch acknowledgement after durable capture
+
+Incoming durable queue and convergence ownership remain in:
+
+- `MyRAM/ViewModels/NotesViewModel.swift`
+- `pendingIncomingBatches`
+- `durablyCaptureIncomingBatch(_:)`
+- `applyIncomingSyncBatch(_:)`
+- `syncConvergenceRuntime.submitRemoteBatch`
+
+Direct mutation ownership remains in `MyRAM/iOS/Sync/Batch/IPhoneSyncBatchApplier.swift` at the raw-offset methods named above.
+
+### Native Mac
+
+Transport/controller receipt and acknowledgement ownership remain in:
+
+- `MyRAM/Mac/Sync/MacSyncBatchController.swift`
+
+Incoming durable queue and convergence ownership remain in:
+
+- `MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift`
+- `pendingIncomingQueue`
+- `durablyCaptureIncomingBatch(_:)`
+- `submitRemoteBatch(_:)`
+- shared `SyncConvergenceRuntime`
+
+Direct mutation ownership remains in `MyRAM/Mac/Sync/MacSyncBatchApplier.swift` at the raw-offset methods named above.
+
+### Shared runtime and failure ownership
+
+- convergence planning outcomes: `MyRAM/Sync/Convergence/SyncConvergencePlanningTypes.swift`
+- convergence runtime/queue handling: `MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift`
+- direct-apply preflight errors: `MyRAM/Sync/Batch/SyncBatchPayload.swift`
+
+Slice 2 owns routing new compatibility rejection into these existing recoverable and observable outcomes. Slice 1 intentionally emits no new production failure.
 
 ## Shared compatibility decision
 
@@ -107,21 +165,38 @@ The positive eligibility value can only be created by the evaluator. It is bound
 
 ## Proving tests
 
-iOS/shared semantics:
+### Evidence-production provenance
 
-- `MyRAMTests/SyncBatchAnchoredPayloadTests.swift`
+`MyRAMTests/IPhoneSyncBatchAccumulatorTests.swift` proves the shared construction contract through:
+
+- `testCapturedBodyEvidenceSurvivesPendingBatchEmission`
+- `testSharedCapturedBodyChangesReturnEvidenceChain`
+- `testIPhoneBodyCaptureMatchesSharedCapturedOperationSequence`
+- `testBodyReplacementEmitsContinuousDeleteInsertChain`
+
+Together these prove captured pre/post evidence continuity, shared iPhone operation construction, and that replacement operations use the correct intermediate base hash.
+
+### Slice 1 compatibility classification
+
+`MyRAMTests/SyncBatchAnchoredPayloadTests.swift` proves:
+
 - matching declared hash produces positive eligibility;
 - mismatched declared hash produces distinct divergence;
 - hashless in-range, clampable, Unicode-split, and `expectedText`/substring-plausible cases remain unavailable;
+- current-body similarity alone remains unavailable;
+- operation/batch ordering alone remains unavailable;
 - repeated classification is deterministic and does not mutate its inputs.
 
-Native Mac visibility of the shared semantics:
+### Platform/runtime preservation coverage
 
-- `MyRAMMacTests/MacSyncBatchApplierTests.swift`
-- matching declared hash is eligible;
-- hashless deletion with plausible `expectedText` remains unavailable.
+- Native Mac shared-decision parity: `MyRAMMacTests/MacSyncBatchControllerTests.swift`, `testMYR178MacConsumerUsesSharedMatchingBaseDecisionSemantics`.
+- iPhone transport and durable-capture behavior: `MyRAMTests/MyRAMSyncControllerTests.swift`.
+- iPhone direct application: `MyRAMTests/IPhoneSyncBatchApplierTests.swift`.
+- Native Mac convergence and durable incoming ownership: `MyRAMMacTests/MacSyncConvergenceCoordinatorTests.swift`.
+- Native Mac direct application and rollback behavior: `MyRAMMacTests/MacSyncBatchApplierTests.swift`.
+- Exact-base reconstruction and unreconstructable-base planning: `MyRAMTests/SyncConvergencePlanningTests.swift`.
 
-Existing convergence coverage remains authoritative for exact-base reconstruction and unreconstructable-base deferral in `MyRAMTests/SyncConvergencePlanningTests.swift` and related convergence tests.
+These existing runtime tests remain preservation evidence; Slice 1 does not change their production paths.
 
 ## Deliberate divergence
 

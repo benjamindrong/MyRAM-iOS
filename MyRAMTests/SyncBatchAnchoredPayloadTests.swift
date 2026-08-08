@@ -768,6 +768,58 @@ extension SyncBatchAnchoredPayloadTests {
         }
     }
 
+    func testMYR178HashlessCurrentBodySimilarityDoesNotAuthorizeReplay() {
+        let presumedHistoricalBody = "prefix stable suffix"
+        let authoritativeBody = "prefix stable suffix!"
+        let change: SyncBatchChange = .noteBodyTextInserted(.init(
+            noteID: noteID,
+            utf16Offset: "prefix stable ".utf16.count,
+            text: "new ",
+            modifiedAt: modifiedAt
+        ))
+
+        XCTAssertNotEqual(presumedHistoricalBody, authoritativeBody)
+        XCTAssertTrue(authoritativeBody.hasPrefix(presumedHistoricalBody))
+        XCTAssertEqual(
+            SyncBatchAnchorlessCompatibilityEvaluator.evaluate(
+                change: change,
+                authoritativeBody: authoritativeBody
+            ),
+            .unavailableEvidence(noteID: noteID)
+        )
+    }
+
+    func testMYR178HashlessOperationOrBatchOrderingDoesNotAuthorizeReplay() {
+        let authoritativeBody = "AB"
+        let orderedChanges: [SyncBatchChange] = [
+            .noteBodyTextInserted(.init(
+                noteID: noteID,
+                utf16Offset: 1,
+                text: "x",
+                modifiedAt: modifiedAt
+            )),
+            .noteBodyTextDeleted(.init(
+                noteID: noteID,
+                utf16Offset: 0,
+                utf16Length: 1,
+                expectedText: "A",
+                modifiedAt: modifiedAt
+            ))
+        ]
+
+        for sequence in [orderedChanges, Array(orderedChanges.reversed())] {
+            for change in sequence {
+                XCTAssertEqual(
+                    SyncBatchAnchorlessCompatibilityEvaluator.evaluate(
+                        change: change,
+                        authoritativeBody: authoritativeBody
+                    ),
+                    .unavailableEvidence(noteID: noteID)
+                )
+            }
+        }
+    }
+
     func testMYR178ClassificationIsDeterministicAndSideEffectFree() {
         let body = "stable"
         let originalBody = body
