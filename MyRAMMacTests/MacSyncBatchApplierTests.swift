@@ -748,3 +748,39 @@ final class MacSyncBatchApplierTests: XCTestCase {
         return defaults
     }
 }
+
+// MYR-178 Slice 1 shared Mac compatibility semantics
+extension MacSyncBatchApplierTests {
+    func testMYR178MacConsumerUsesSharedMatchingBaseDecisionSemantics() {
+        let noteID = UUID(uuidString: "17800000-0000-0000-0000-000000000001")!
+        let body = "Mac authoritative body"
+        let matching: SyncBatchChange = .noteBodyTextInserted(.init(
+            noteID: noteID,
+            utf16Offset: 0,
+            text: "x",
+            modifiedAt: Date(timeIntervalSince1970: 1_780),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: body)
+        ))
+        let hashless: SyncBatchChange = .noteBodyTextDeleted(.init(
+            noteID: noteID,
+            utf16Offset: 0,
+            utf16Length: 3,
+            expectedText: "Mac",
+            modifiedAt: Date(timeIntervalSince1970: 1_780)
+        ))
+
+        guard case .eligible = SyncBatchAnchorlessCompatibilityEvaluator.evaluate(
+            change: matching,
+            authoritativeBody: body
+        ) else {
+            return XCTFail("Expected matching hash to be eligible on native Mac")
+        }
+        XCTAssertEqual(
+            SyncBatchAnchorlessCompatibilityEvaluator.evaluate(
+                change: hashless,
+                authoritativeBody: body
+            ),
+            .unavailableEvidence(noteID: noteID)
+        )
+    }
+}

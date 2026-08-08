@@ -116,3 +116,71 @@ extension SyncBatch {
         return .none
     }
 }
+
+// MYR-178 Slice 1 dark anchorless compatibility decision
+struct SyncBatchAnchorlessReplayEligibility: Equatable, Sendable {
+    let change: SyncBatchChange
+    let authoritativeBodyHash: String
+
+    fileprivate init(change: SyncBatchChange, authoritativeBodyHash: String) {
+        self.change = change
+        self.authoritativeBodyHash = authoritativeBodyHash
+    }
+}
+
+enum SyncBatchAnchorlessCompatibilityDecision: Equatable, Sendable {
+    case eligible(SyncBatchAnchorlessReplayEligibility)
+    case unavailableEvidence(noteID: UUID)
+    case divergentBase(
+        noteID: UUID,
+        declaredBaseContentHash: String,
+        authoritativeBodyHash: String
+    )
+    case notAnchorlessBodyOperation
+}
+
+/// Side-effect-free classification only. Slice 1 intentionally has no production callers.
+/// Slice 2 will make the positive eligibility value mandatory at direct raw-offset replay.
+enum SyncBatchAnchorlessCompatibilityEvaluator {
+    static func evaluate(
+        change: SyncBatchChange,
+        authoritativeBody: String
+    ) -> SyncBatchAnchorlessCompatibilityDecision {
+        let noteID: UUID
+        let declaredBaseContentHash: String?
+
+        switch change {
+        case .noteBodyTextInserted(let insert):
+            noteID = insert.noteID
+            declaredBaseContentHash = insert.baseContentHash
+        case .noteBodyTextDeleted(let delete):
+            noteID = delete.noteID
+            declaredBaseContentHash = delete.baseContentHash
+        case .noteCreated,
+             .noteTitleChanged,
+             .noteBodyTextInsertedAnchored,
+             .noteBodyTextDeletedAnchored,
+             .noteBodyReconciled,
+             .noteLifecycleChanged:
+            return .notAnchorlessBodyOperation
+        }
+
+        guard let declaredBaseContentHash else {
+            return .unavailableEvidence(noteID: noteID)
+        }
+
+        let authoritativeBodyHash = SyncBatchContentHash.sha256Hex(for: authoritativeBody)
+        guard declaredBaseContentHash == authoritativeBodyHash else {
+            return .divergentBase(
+                noteID: noteID,
+                declaredBaseContentHash: declaredBaseContentHash,
+                authoritativeBodyHash: authoritativeBodyHash
+            )
+        }
+
+        return .eligible(SyncBatchAnchorlessReplayEligibility(
+            change: change,
+            authoritativeBodyHash: authoritativeBodyHash
+        ))
+    }
+}

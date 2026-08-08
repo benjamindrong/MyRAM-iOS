@@ -673,3 +673,126 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
         }
     }
 }
+
+// MYR-178 Slice 1 anchorless compatibility decision tests
+extension SyncBatchAnchoredPayloadTests {
+    func testMYR178MatchingDeclaredHashProducesPositiveEligibility() {
+        let body = "A😀B"
+        let change: SyncBatchChange = .noteBodyTextInserted(.init(
+            noteID: noteID,
+            utf16Offset: 1,
+            text: "x",
+            modifiedAt: modifiedAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: body)
+        ))
+
+        let decision = SyncBatchAnchorlessCompatibilityEvaluator.evaluate(
+            change: change,
+            authoritativeBody: body
+        )
+
+        guard case .eligible(let eligibility) = decision else {
+            return XCTFail("Expected positive anchorless replay eligibility")
+        }
+        XCTAssertEqual(eligibility.change, change)
+        XCTAssertEqual(
+            eligibility.authoritativeBodyHash,
+            SyncBatchContentHash.sha256Hex(for: body)
+        )
+        XCTAssertEqual(body, "A😀B")
+    }
+
+    func testMYR178MismatchedDeclaredHashProducesDistinctDivergence() {
+        let body = "authoritative"
+        let change: SyncBatchChange = .noteBodyTextDeleted(.init(
+            noteID: noteID,
+            utf16Offset: 0,
+            utf16Length: 4,
+            expectedText: "auth",
+            modifiedAt: modifiedAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "different")
+        ))
+        let actualHash = SyncBatchContentHash.sha256Hex(for: body)
+
+        XCTAssertEqual(
+            SyncBatchAnchorlessCompatibilityEvaluator.evaluate(
+                change: change,
+                authoritativeBody: body
+            ),
+            .divergentBase(
+                noteID: noteID,
+                declaredBaseContentHash: SyncBatchContentHash.sha256Hex(for: "different"),
+                authoritativeBodyHash: actualHash
+            )
+        )
+    }
+
+    func testMYR178HashlessPositionalPlausibilityNeverAuthorizesReplay() {
+        let body = "A😀B expected substring"
+        let plausibleChanges: [SyncBatchChange] = [
+            .noteBodyTextInserted(.init(
+                noteID: noteID,
+                utf16Offset: 0,
+                text: "x",
+                modifiedAt: modifiedAt
+            )),
+            .noteBodyTextInserted(.init(
+                noteID: noteID,
+                utf16Offset: 999,
+                text: "x",
+                modifiedAt: modifiedAt
+            )),
+            .noteBodyTextInserted(.init(
+                noteID: noteID,
+                utf16Offset: 2,
+                text: "x",
+                modifiedAt: modifiedAt
+            )),
+            .noteBodyTextDeleted(.init(
+                noteID: noteID,
+                utf16Offset: 5,
+                utf16Length: 8,
+                expectedText: "expected",
+                modifiedAt: modifiedAt
+            ))
+        ]
+
+        for change in plausibleChanges {
+            XCTAssertEqual(
+                SyncBatchAnchorlessCompatibilityEvaluator.evaluate(
+                    change: change,
+                    authoritativeBody: body
+                ),
+                .unavailableEvidence(noteID: noteID)
+            )
+        }
+    }
+
+    func testMYR178ClassificationIsDeterministicAndSideEffectFree() {
+        let body = "stable"
+        let originalBody = body
+        let change: SyncBatchChange = .noteBodyTextInserted(.init(
+            noteID: noteID,
+            utf16Offset: 0,
+            text: "x",
+            modifiedAt: modifiedAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: body)
+        ))
+
+        let first = SyncBatchAnchorlessCompatibilityEvaluator.evaluate(
+            change: change,
+            authoritativeBody: body
+        )
+        for _ in 0..<20 {
+            XCTAssertEqual(
+                SyncBatchAnchorlessCompatibilityEvaluator.evaluate(
+                    change: change,
+                    authoritativeBody: body
+                ),
+                first
+            )
+        }
+        XCTAssertEqual(body, originalBody)
+        XCTAssertEqual(change, change)
+    }
+}
