@@ -25,7 +25,7 @@ The approved MYR-177 private/reference review remains pinned to:
 
 - Reference A: `64248a12829d04f62ddf3230c6c592f6226b57ab`
 - Reference B: `cdeb8053c3aa2510189429d717ab09e70f134716`
-- Reference C: `5fa067b182ddda3ea2477c4d5c4054da7318973f`
+- Reference C: `5fa067b182ddda3ea2477c4d5e4054da7318973f`
 - Reference D: `89c162d3c1ae02c426c9002419aef0814e779ed8`
 - Reference E: `26f9425ef74d45937e00d6c8ec2e8bb12889013d`
 
