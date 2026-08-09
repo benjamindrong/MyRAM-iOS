@@ -8,6 +8,26 @@ import XCTest
 #endif
 
 final class SyncConvergencePlanningTests: XCTestCase {
+    func testMYR179FailureFirstEveryNonSuccessRuntimeOutcomeIsFailClosedForAcknowledgement() {
+        let batchID = UUID()
+        let outcomes: [SyncConvergenceRuntimeOutcome] = [
+            .alreadyDraining,
+            .pending([.queueCleanup]),
+            .blocked(.init(batchID: batchID, kind: .persistence)),
+            .quarantined(.init(items: [])),
+            .deferred(.init(incoming: [], localObligations: [], postCommit: []))
+        ]
+
+        for outcome in outcomes {
+            XCTAssertNotEqual(
+                SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                    for: outcome,
+                    batchID: batchID
+                ),
+                .acknowledgementPermitted
+            )
+        }
+    }
     func testAnchoredBatchFailsPlanningBeforeCanonicalWork() throws {
         let batch = try makeAnchoredInsertBatchForTest()
 

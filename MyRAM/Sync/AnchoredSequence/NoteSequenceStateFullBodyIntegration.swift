@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import Foundation
 import SwiftData
 
@@ -7,8 +8,84 @@ enum NoteSequenceStateFullBodyIntegrationResult: Equatable {
     case replaced(previousRevision: UInt64, revision: UInt64)
 }
 
+struct NoteSequenceStateMutationSnapshot: Equatable, Sendable {
+    let noteID: UUID
+    let body: String
+    let revision: UInt64
+    let state: SyncTextSequenceState
+}
+
 /// Keeps a complete note body and its dark anchored-sequence state in one caller-owned transaction.
 enum NoteSequenceStateFullBodyIntegration {
+    static func loadMutationSnapshot(
+        for note: Note,
+        in context: ModelContext
+    ) throws -> NoteSequenceStateMutationSnapshot {
+        try requireManaged(note, in: context)
+        guard let record = try fetchRecord(noteID: note.id, in: context) else {
+            throw NoteSequenceStateStoreError.expectedRowButRowIsMissing
+        }
+        let state = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record,
+            noteID: note.id
+        )
+        guard NoteSequenceStateExactText.matches(state.visibleText, note.content) else {
+            throw NoteSequenceStateStoreError.visibleBodyChanged(
+                expected: state.visibleText,
+                actual: note.content
+            )
+        }
+        return NoteSequenceStateMutationSnapshot(
+            noteID: note.id,
+            body: note.content,
+            revision: record.revision,
+            state: state
+        )
+    }
+
+    @discardableResult
+    static func stageSuppliedStateMutation(
+        of note: Note,
+        expected snapshot: NoteSequenceStateMutationSnapshot,
+        newBody: String,
+        finalState: SyncTextSequenceState,
+        in context: ModelContext
+    ) throws -> NoteSequenceStateFullBodyIntegrationResult {
+        try requireManaged(note, in: context)
+        guard snapshot.noteID == note.id else {
+            throw NoteSequenceStateStoreError.preparedStateNoteIDMismatch
+        }
+        guard NoteSequenceStateExactText.matches(note.content, snapshot.body) else {
+            throw NoteSequenceStateStoreError.visibleBodyChanged(expected: snapshot.body, actual: note.content)
+        }
+        guard let record = try fetchRecord(noteID: note.id, in: context) else {
+            throw NoteSequenceStateStoreError.expectedRowButRowIsMissing
+        }
+        guard record.revision == snapshot.revision else {
+            throw NoteSequenceStateStoreError.staleRevision(expected: snapshot.revision, actual: record.revision)
+        }
+        let currentState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record,
+            noteID: note.id
+        )
+        guard currentState == snapshot.state,
+              NoteSequenceStateExactText.matches(currentState.visibleText, snapshot.body) else {
+            throw NoteSequenceStateStoreError.verificationFailure
+        }
+        guard NoteSequenceStateExactText.matches(finalState.visibleText, newBody) else {
+            throw NoteSequenceStateStoreError.newStateBodyMismatch
+        }
+        let next = try nextRevision(after: snapshot.revision)
+        let payload = try NoteSequenceStatePersistenceCodec.encode(state: finalState, noteID: note.id)
+        note.content = newBody
+        record.formatVersion = NoteSequenceStatePersistenceCodec.formatVersion
+        record.revision = next
+        record.visibleUTF16Count = finalState.visibleUTF16Count
+        record.tombstonedUTF16Count = finalState.tombstonedUTF16Count
+        record.payloadByteCount = payload.count
+        record.statePayloadData = payload
+        return .replaced(previousRevision: snapshot.revision, revision: next)
+    }
     static func insertNewNote(
         _ note: Note,
         preparedState: PreparedInitialNoteSequenceState,

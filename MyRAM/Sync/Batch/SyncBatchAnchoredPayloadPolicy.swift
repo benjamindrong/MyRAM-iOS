@@ -30,47 +30,56 @@ enum SyncBatchAnchoredPayloadPolicyError: Error, Equatable, Sendable {
 /// Keeps the Stage 1 capability dark at every side-effecting batch boundary.
 enum SyncBatchAnchoredPayloadPolicy {
     static func validateTransportEncode(_ batch: SyncBatch) throws {
-        try validate(batch, boundary: .transportEncode)
+        try validate(batch, boundary: .transportEncode, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
     static func validateOutbound(_ batch: SyncBatch) throws {
-        try validate(batch, boundary: .outboundController)
+        try validate(batch, boundary: .outboundController, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
     static func validateInbound(_ batch: SyncBatch) throws {
-        try validate(batch, boundary: .inboundController)
+        try validate(batch, boundary: .inboundController, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
     static func validateDurableAdmission(_ batch: SyncBatch) throws {
-        try validate(batch, boundary: .durableQueue)
+        try validate(batch, boundary: .durableQueue, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
     static func validateConvergence(_ batch: SyncBatch) throws {
-        try validate(batch, boundary: .convergence)
+        try validate(batch, boundary: .convergence, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
     static func validateRecovery(_ batch: SyncBatch) throws {
-        try validate(batch, boundary: .recovery)
+        try validate(batch, boundary: .recovery, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
     static func validateOffsetReplay(_ batch: SyncBatch) throws {
-        try validate(batch, boundary: .offsetReplay)
+        try validate(batch, boundary: .offsetReplay, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
     static func validateApply(_ batch: SyncBatch) throws {
-        try validate(batch, boundary: .apply)
+        try validate(batch, boundary: .apply, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
+    }
+
+    static func validateConvergenceCore(_ batch: SyncBatch, activationEnabled: Bool) throws {
+        try validate(batch, boundary: .convergence, activationEnabled: activationEnabled)
+    }
+
+    static func validateRecoveryCore(_ batch: SyncBatch, activationEnabled: Bool) throws {
+        try validate(batch, boundary: .recovery, activationEnabled: activationEnabled)
     }
 
     private static func validate(
         _ batch: SyncBatch,
-        boundary: SyncBatchAnchoredPayloadPolicyError.Boundary
+        boundary: SyncBatchAnchoredPayloadPolicyError.Boundary,
+        activationEnabled: Bool
     ) throws {
         switch batch.bodyOperationRepresentation {
         case .mixed:
             throw SyncBatchAnchoredPayloadPolicyError.mixedBodyOperationRepresentations(
                 boundary: boundary
             )
-        case .anchored where !SyncBatchAnchoredPayloadCapability.isEnabled:
+        case .anchored where !activationEnabled:
             guard let noteID = batch.changes.first(where: {
                 $0.bodyOperationRepresentation == .anchored
             })?.noteID else {

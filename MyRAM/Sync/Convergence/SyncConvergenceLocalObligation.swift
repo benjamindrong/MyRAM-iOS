@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import Foundation
 
 struct SyncConvergenceCapturedLocalChange: Codable, Equatable, Sendable {
@@ -78,12 +79,53 @@ enum SyncConvergenceLocalEvidenceCapture {
             )
             return SyncConvergenceCapturedLocalChange(change: change, evidence: evidence)
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
-            throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(
-                noteID: change.noteID
-            )
+            throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: change.noteID)
         case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return SyncConvergenceCapturedLocalChange(change: change, evidence: nil)
         }
+    }
+
+    static func capturedAnchoredChange(
+        for change: SyncBatchChange,
+        structuralPreState: SyncTextSequenceState,
+        structuralPostState: SyncTextSequenceState
+    ) throws -> SyncConvergenceCapturedLocalChange {
+        let replayedState: SyncTextSequenceState
+        switch change {
+        case .noteBodyTextInsertedAnchored(let inserted):
+            replayedState = try SyncBatchAnchoredInsertReplay.applying(
+                inserted,
+                to: structuralPreState
+            ).sequenceState
+        case .noteBodyTextDeletedAnchored(let deleted):
+            replayedState = try SyncBatchAnchoredDeleteReplay.applying(
+                deleted,
+                to: structuralPreState
+            ).sequenceState
+        default:
+            throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: change.noteID)
+        }
+        guard replayedState == structuralPostState else {
+            throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: change.noteID)
+        }
+        let preBody = structuralPreState.visibleText
+        let postBody = structuralPostState.visibleText
+        let preHash = SyncBatchContentHash.sha256Hex(for: preBody)
+        if let declared = change.baseContentHash, declared != preHash {
+            throw SyncConvergenceLocalEvidenceCaptureError.mismatchedBaseHash(noteID: change.noteID)
+        }
+        return SyncConvergenceCapturedLocalChange(
+            change: change,
+            evidence: SyncConvergenceCapturedChangeEvidence(
+                noteID: change.noteID,
+                preBodyHash: preHash,
+                postBodyHash: SyncBatchContentHash.sha256Hex(for: postBody),
+                preBodySnapshot: preBody,
+                postBodySnapshot: postBody,
+                insertedText: insertedText(for: change),
+                deletedText: deletedText(for: change)
+            )
+        )
     }
 
     static func validate(obligation: SyncConvergenceLocalObligation) throws -> [SyncConvergenceCapturedLocalChange] {
@@ -116,9 +158,23 @@ enum SyncConvergenceLocalEvidenceCapture {
                 throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: evidence.noteID)
             }
             if let preBody = evidence.preBodySnapshot,
-               let postBody = evidence.postBodySnapshot,
-               try apply(capturedChange.change, to: preBody) != postBody {
-                throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: evidence.noteID)
+               let postBody = evidence.postBodySnapshot {
+                switch capturedChange.change {
+                case .noteBodyTextInsertedAnchored(let inserted):
+                    guard evidence.insertedText == inserted.text,
+                          postBody.utf16.count == preBody.utf16.count + inserted.text.utf16.count else {
+                        throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: evidence.noteID)
+                    }
+                case .noteBodyTextDeletedAnchored(let deleted):
+                    guard evidence.deletedText == deleted.expectedText,
+                          postBody.utf16.count + deleted.utf16Length == preBody.utf16.count else {
+                        throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: evidence.noteID)
+                    }
+                default:
+                    guard try apply(capturedChange.change, to: preBody) == postBody else {
+                        throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: evidence.noteID)
+                    }
+                }
             }
             if let declaredBaseHash = baseContentHash(for: capturedChange.change),
                declaredBaseHash != evidence.preBodyHash {
@@ -170,21 +226,27 @@ enum SyncConvergenceLocalEvidenceCapture {
     }
 
     static func insertedText(for change: SyncBatchChange) -> String? {
-        guard case .noteBodyTextInserted(let payload) = change else { return nil }
-        return payload.text
+        switch change {
+        case .noteBodyTextInserted(let payload): payload.text
+        case .noteBodyTextInsertedAnchored(let payload): payload.text
+        default: nil
+        }
     }
 
     static func deletedText(for change: SyncBatchChange) -> String? {
-        guard case .noteBodyTextDeleted(let payload) = change else { return nil }
-        return payload.expectedText
+        switch change {
+        case .noteBodyTextDeleted(let payload): payload.expectedText
+        case .noteBodyTextDeletedAnchored(let payload): payload.expectedText
+        default: nil
+        }
     }
 
     static func isBodyTextOperation(_ change: SyncBatchChange) -> Bool {
         switch change {
-        case .noteBodyTextInserted, .noteBodyTextDeleted:
+        case .noteBodyTextInserted, .noteBodyTextDeleted,
+             .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
             true
-        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
-             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             false
         }
     }

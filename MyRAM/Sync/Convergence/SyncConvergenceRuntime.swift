@@ -22,22 +22,25 @@ enum SyncConvergenceRemoteBatchDispositionPolicy {
         for outcome: SyncConvergenceRuntimeOutcome,
         batchID: UUID
     ) -> SyncConvergenceRemoteBatchDisposition {
-        if case .alreadyDraining = outcome {
+        switch outcome {
+        case .drained(let appliedBatchIDs):
+            return appliedBatchIDs.contains(batchID)
+                ? .acknowledgementPermitted
+                : .acknowledgementDeferred
+        case .alreadyDraining, .pending, .blocked, .quarantined:
+            return .acknowledgementDeferred
+        case .deferred(let work):
+            for item in work.incoming where item.batchID == batchID {
+                guard case .planning(let reason) = item.reason else { continue }
+                switch reason {
+                case .anchorlessMatchingBaseEvidenceUnavailable, .unreconstructableBase:
+                    return .recoverableAnchorlessCompatibilityRejection
+                case .unsupportedReconciliation, .historyPressure:
+                    continue
+                }
+            }
             return .acknowledgementDeferred
         }
-        guard case .deferred(let work) = outcome else {
-            return .acknowledgementPermitted
-        }
-        for item in work.incoming where item.batchID == batchID {
-            guard case .planning(let reason) = item.reason else { continue }
-            switch reason {
-            case .anchorlessMatchingBaseEvidenceUnavailable, .unreconstructableBase:
-                return .recoverableAnchorlessCompatibilityRejection
-            case .unsupportedReconciliation, .historyPressure:
-                continue
-            }
-        }
-        return .acknowledgementPermitted
     }
 }
 
@@ -857,8 +860,39 @@ final class SyncConvergenceRuntime {
                 canonicalReplayKey: replayKey,
                 modifiedAt: deleted.modifiedAt
             )
-        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
-             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteBodyTextInsertedAnchored(let inserted):
+            return SyncConvergenceRetainedOperationRecord(
+                noteID: inserted.noteID,
+                batchID: batch.id,
+                originDeviceID: batch.originDeviceID,
+                operationIndex: operationIndex,
+                operationKind: .insert,
+                utf16Offset: inserted.utf16Offset,
+                utf16Length: nil,
+                text: inserted.text,
+                expectedText: nil,
+                baseContentHash: baseHash,
+                resultContentHash: resultHash,
+                canonicalReplayKey: replayKey,
+                modifiedAt: inserted.modifiedAt
+            )
+        case .noteBodyTextDeletedAnchored(let deleted):
+            return SyncConvergenceRetainedOperationRecord(
+                noteID: deleted.noteID,
+                batchID: batch.id,
+                originDeviceID: batch.originDeviceID,
+                operationIndex: operationIndex,
+                operationKind: .delete,
+                utf16Offset: deleted.utf16Offset,
+                utf16Length: deleted.utf16Length,
+                text: nil,
+                expectedText: deleted.expectedText,
+                baseContentHash: baseHash,
+                resultContentHash: resultHash,
+                canonicalReplayKey: replayKey,
+                modifiedAt: deleted.modifiedAt
+            )
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
         }
     }

@@ -274,6 +274,10 @@
 		C1700100000000000000000C /* MYR170MacFullBodyPathIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */; };
 		C1700100000000000000000D /* MacStartupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1700200000000000000000A /* MacStartupCoordinatorTests.swift */; };
 		C17101000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */; };
+		C17901000000000000000001 /* SyncBatchAnchoredLocalCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17902000000000000000001 /* SyncBatchAnchoredLocalCapture.swift */; };
+		C17901000000000000000002 /* SyncBatchAnchoredLocalCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17902000000000000000001 /* SyncBatchAnchoredLocalCapture.swift */; };
+		C17901000000000000000003 /* SyncBatchAnchoredActivationPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17902000000000000000002 /* SyncBatchAnchoredActivationPlanner.swift */; };
+		C17901000000000000000004 /* SyncBatchAnchoredActivationPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17902000000000000000002 /* SyncBatchAnchoredActivationPlanner.swift */; };
 		C17401000000000000000001 /* SyncBatchEnvelopeV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17402000000000000000001 /* SyncBatchEnvelopeV2Tests.swift */; };
 		C17401000000000000000002 /* SyncBatchEnvelopeV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17402000000000000000002 /* SyncBatchEnvelopeV2Tests.swift */; };
 		C17421000000000000000001 /* SyncBatchPeerCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17422000000000000000001 /* SyncBatchPeerCapability.swift */; };
@@ -609,6 +613,8 @@
 		C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR170MacFullBodyPathIntegrationTests.swift; sourceTree = "<group>"; };
 		C1700200000000000000000A /* MacStartupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStartupCoordinatorTests.swift; sourceTree = "<group>"; };
 		C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadAdapter.swift; sourceTree = "<group>"; };
+		C17902000000000000000001 /* SyncBatchAnchoredLocalCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredLocalCapture.swift; sourceTree = "<group>"; };
+		C17902000000000000000002 /* SyncBatchAnchoredActivationPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredActivationPlanner.swift; sourceTree = "<group>"; };
 		C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadPolicy.swift; sourceTree = "<group>"; };
 		C17102000000000000000003 /* SyncBatchAnchoredPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadTests.swift; sourceTree = "<group>"; };
 		C17402000000000000000001 /* SyncBatchEnvelopeV2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchEnvelopeV2Tests.swift; sourceTree = "<group>"; };
@@ -999,6 +1005,8 @@
 			children = (
 				BCA123020000000000000001 /* SyncBatchPayload.swift */,
 				C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */,
+				C17902000000000000000001 /* SyncBatchAnchoredLocalCapture.swift */,
+				C17902000000000000000002 /* SyncBatchAnchoredActivationPlanner.swift */,
 				C17502000000000000000001 /* SyncBatchAnchoredInsertReplay.swift */,
 				C17702000000000000000001 /* SyncBatchAnchoredRecoveryTypes.swift */,
 				C17702000000000000000002 /* FileBackedSyncBatchAnchoredRecoveryStore.swift */,
@@ -1555,6 +1563,8 @@
 				BCA164010000000000000001 /* AttributedTextStorageKeys.swift in Sources */,
 				BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */,
 				C17101000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
+				C17901000000000000000001 /* SyncBatchAnchoredLocalCapture.swift in Sources */,
+				C17901000000000000000003 /* SyncBatchAnchoredActivationPlanner.swift in Sources */,
 				C17501000000000000000001 /* SyncBatchAnchoredInsertReplay.swift in Sources */,
 				C17701000000000000000001 /* SyncBatchAnchoredRecoveryTypes.swift in Sources */,
 				C17701000000000000000003 /* FileBackedSyncBatchAnchoredRecoveryStore.swift in Sources */,
@@ -1761,6 +1771,8 @@
 				BCA10A010000000000000001 /* MacSidebarCollapsePolicy.swift in Sources */,
 				BCA123010000000000000006 /* SyncBatchPayload.swift in Sources */,
 				C17101000000000000000002 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
+				C17901000000000000000002 /* SyncBatchAnchoredLocalCapture.swift in Sources */,
+				C17901000000000000000004 /* SyncBatchAnchoredActivationPlanner.swift in Sources */,
 				C17501000000000000000002 /* SyncBatchAnchoredInsertReplay.swift in Sources */,
 				C17701000000000000000002 /* SyncBatchAnchoredRecoveryTypes.swift in Sources */,
 				C17701000000000000000004 /* FileBackedSyncBatchAnchoredRecoveryStore.swift in Sources */,

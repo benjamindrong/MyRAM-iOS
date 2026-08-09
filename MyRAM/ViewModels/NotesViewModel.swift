@@ -1,5 +1,6 @@
 // NotesViewModel.swift
 import NearbySyncCore
+import AnchoredSequenceCore
 import SwiftUI
 import SwiftData
 
@@ -34,6 +35,8 @@ enum PendingSyncRecoveryStatus: Equatable {
 private struct PreparedLocalNoteEdit {
     let titleChange: SyncConvergenceCapturedLocalChange?
     let bodyChanges: [SyncConvergenceCapturedLocalChange]
+    let structuralSnapshot: NoteSequenceStateMutationSnapshot?
+    let finalStructuralState: SyncTextSequenceState?
 
     var capturedChanges: [SyncConvergenceCapturedLocalChange] {
         (titleChange.map { [$0] } ?? []) + bodyChanges
@@ -679,6 +682,83 @@ final class NotesViewModel: ObservableObject {
         }
         recordActiveNoteTextEdited(note)
         recordPreparedLocalNoteEdit(preparedEdit)
+        return true
+    }
+
+    @discardableResult
+    func commitNoteEditForProduction(
+        _ note: Note,
+        title: String,
+        content: String,
+        richTextContentData: Data? = nil
+    ) async -> Bool {
+        await commitNoteEditCore(
+            note,
+            title: title,
+            content: content,
+            richTextContentData: richTextContentData,
+            activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
+            operationIDReserver: MyRAMSyncOperationIDAllocator.shared
+        )
+    }
+
+    @discardableResult
+    func commitNoteEditCore(
+        _ note: Note,
+        title: String,
+        content: String,
+        richTextContentData: Data? = nil,
+        activationEnabled: Bool,
+        operationIDReserver: any SyncOperationIDReserving
+    ) async -> Bool {
+        guard activationEnabled else {
+            return commitNoteEdit(
+                note,
+                title: title,
+                content: content,
+                richTextContentData: richTextContentData
+            )
+        }
+        guard note.deletedAt == nil else { return false }
+        let oldTitle = note.title
+        let oldContent = note.content
+        let oldRichTextContentData = note.richTextContentData
+        let oldModifiedAt = note.modifiedAt
+        let modifiedAt = Date.now
+        let prepared: PreparedLocalNoteEdit
+        do {
+            prepared = try await prepareAnchoredLocalNoteEdit(
+                note: note,
+                newTitle: title,
+                newBody: content,
+                modifiedAt: modifiedAt,
+                operationIDReserver: operationIDReserver
+            )
+            note.title = title
+            note.richTextContentData = richTextContentData
+            note.modifiedAt = modifiedAt
+            if let snapshot = prepared.structuralSnapshot,
+               let finalState = prepared.finalStructuralState {
+                _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+                    of: note,
+                    expected: snapshot,
+                    newBody: content,
+                    finalState: finalState,
+                    in: context
+                )
+            }
+            try saveContext()
+        } catch {
+            context.rollback()
+            note.title = oldTitle
+            note.content = oldContent
+            note.richTextContentData = oldRichTextContentData
+            note.modifiedAt = oldModifiedAt
+            syncBatchErrorMessage = "Unable to save the latest edit."
+            return false
+        }
+        recordActiveNoteTextEdited(note)
+        recordPreparedLocalNoteEdit(prepared)
         return true
     }
 
@@ -1503,7 +1583,45 @@ final class NotesViewModel: ObservableObject {
             bodyHashCapabilityEnabled: bodyHashCapabilityEnabled
         )
 
-        return PreparedLocalNoteEdit(titleChange: titleChange, bodyChanges: bodyChanges)
+        return PreparedLocalNoteEdit(
+            titleChange: titleChange,
+            bodyChanges: bodyChanges,
+            structuralSnapshot: nil,
+            finalStructuralState: nil
+        )
+    }
+
+    private func prepareAnchoredLocalNoteEdit(
+        note: Note,
+        newTitle: String,
+        newBody: String,
+        modifiedAt: Date,
+        operationIDReserver: any SyncOperationIDReserving
+    ) async throws -> PreparedLocalNoteEdit {
+        let snapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        )
+        let titleChange = IPhoneSyncBatchCaptureHook.titleChanged(
+            noteID: note.id,
+            oldTitle: note.title,
+            newTitle: newTitle,
+            modifiedAt: modifiedAt
+        ).map { SyncConvergenceCapturedLocalChange(change: $0, evidence: nil) }
+        let capture = try await SyncBatchAnchoredLocalCapture.capture(
+            noteID: note.id,
+            oldBody: snapshot.body,
+            newBody: newBody,
+            modifiedAt: modifiedAt,
+            initialState: snapshot.state,
+            operationIDReserver: operationIDReserver
+        )
+        return PreparedLocalNoteEdit(
+            titleChange: titleChange,
+            bodyChanges: capture.capturedChanges,
+            structuralSnapshot: snapshot,
+            finalStructuralState: capture.finalState
+        )
     }
 
     private func recordPreparedLocalNoteEdit(_ edit: PreparedLocalNoteEdit) {

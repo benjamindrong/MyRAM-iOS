@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import XCTest
+import AnchoredSequenceCore
 
 #if os(macOS)
 @testable import MyRAMMac
@@ -10,6 +11,63 @@ import XCTest
 
 @MainActor
 final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
+    func testMYR179SuppliedStructuralStateMutatesBodyAndRevisionTogether() throws {
+        let fixture = try makeSeededFixture(body: "AB", revision: 7)
+        let snapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: fixture.note,
+            in: fixture.context
+        )
+        let change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: fixture.note.id,
+            utf16Offset: 1,
+            text: "x",
+            modifiedAt: .now,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+            operationID: SyncOperationID(deviceID: UUID(), localCounter: 179),
+            state: snapshot.state
+        )
+        guard case .noteBodyTextInsertedAnchored(let inserted) = change else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let finalState = try SyncBatchAnchoredInsertReplay.applying(
+            inserted,
+            to: snapshot.state
+        ).sequenceState
+
+        XCTAssertEqual(
+            try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+                of: fixture.note,
+                expected: snapshot,
+                newBody: "AxB",
+                finalState: finalState,
+                in: fixture.context
+            ),
+            .replaced(previousRevision: 7, revision: 8)
+        )
+        try fixture.context.save()
+        try assertCommittedState(noteID: fixture.note.id, body: "AxB", revision: 8, in: fixture.container)
+    }
+
+    func testMYR179SuppliedStructuralStateRejectsIdenticalTextRevisionDrift() throws {
+        let fixture = try makeSeededFixture(body: "AB", revision: 7)
+        let snapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: fixture.note,
+            in: fixture.context
+        )
+        fixture.record.revision = 8
+        try fixture.context.save()
+
+        XCTAssertThrowsError(try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: fixture.note,
+            expected: snapshot,
+            newBody: "AB",
+            finalState: snapshot.state,
+            in: fixture.context
+        )) { error in
+            XCTAssertEqual(error as? NoteSequenceStateStoreError, .staleRevision(expected: 7, actual: 8))
+        }
+        XCTAssertEqual(fixture.note.content, "AB")
+    }
     func testInsertNewNoteCommitsDetachedNoteAndRevisionZeroStateTogether() throws {
         let container = try makeContainer()
         let context = ModelContext(container)

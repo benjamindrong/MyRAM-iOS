@@ -22,8 +22,21 @@ struct SyncConvergencePlanner {
     }
 
     func plan(input: SyncConvergencePlanningInput) -> SyncConvergencePlanningOutcome {
+        planCore(
+            input: input,
+            activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
+        )
+    }
+
+    func planCore(
+        input: SyncConvergencePlanningInput,
+        activationEnabled: Bool
+    ) -> SyncConvergencePlanningOutcome {
         do {
-            try SyncBatchAnchoredPayloadPolicy.validateConvergence(input.incomingBatch)
+            try SyncBatchAnchoredPayloadPolicy.validateConvergenceCore(
+                input.incomingBatch,
+                activationEnabled: activationEnabled
+            )
         } catch SyncBatchAnchoredPayloadPolicyError.anchoredPayloadDisabled(_, let noteID) {
             return .failedBeforeCommit(.invalidMergePlan(noteID: noteID))
         } catch {
@@ -2619,10 +2632,10 @@ private extension SyncBatchChange {
 
     var isBodyTextOperation: Bool {
         switch self {
-        case .noteBodyTextInserted, .noteBodyTextDeleted:
+        case .noteBodyTextInserted, .noteBodyTextDeleted,
+             .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
             return true
-        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
-             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return false
         }
     }
