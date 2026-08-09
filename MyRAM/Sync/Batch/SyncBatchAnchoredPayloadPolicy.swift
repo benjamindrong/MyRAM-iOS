@@ -139,8 +139,8 @@ enum SyncBatchAnchorlessCompatibilityDecision: Equatable, Sendable {
     case notAnchorlessBodyOperation
 }
 
-/// Side-effect-free classification only. Slice 1 intentionally has no production callers.
-/// Slice 2 will make the positive eligibility value mandatory at direct raw-offset replay.
+/// Shared MYR-178 authority for current/sequential anchorless replay eligibility.
+/// Slice 2 requires the positive token before any direct raw-offset replay.
 enum SyncBatchAnchorlessCompatibilityEvaluator {
     static func evaluate(
         change: SyncBatchChange,
@@ -182,5 +182,80 @@ enum SyncBatchAnchorlessCompatibilityEvaluator {
             change: change,
             authoritativeBodyHash: authoritativeBodyHash
         ))
+    }
+
+    static func evaluate(
+        change: SyncBatchChange,
+        authoritativeBodyHash: String
+    ) -> SyncBatchAnchorlessCompatibilityDecision {
+        let noteID: UUID
+        let declaredBaseContentHash: String?
+        switch change {
+        case .noteBodyTextInserted(let insert):
+            noteID = insert.noteID
+            declaredBaseContentHash = insert.baseContentHash
+        case .noteBodyTextDeleted(let delete):
+            noteID = delete.noteID
+            declaredBaseContentHash = delete.baseContentHash
+        case .noteCreated, .noteTitleChanged, .noteBodyTextInsertedAnchored,
+             .noteBodyTextDeletedAnchored, .noteBodyReconciled, .noteLifecycleChanged:
+            return .notAnchorlessBodyOperation
+        }
+        guard let declaredBaseContentHash else {
+            return .unavailableEvidence(noteID: noteID)
+        }
+        guard declaredBaseContentHash == authoritativeBodyHash else {
+            return .divergentBase(
+                noteID: noteID,
+                declaredBaseContentHash: declaredBaseContentHash,
+                authoritativeBodyHash: authoritativeBodyHash
+            )
+        }
+        return .eligible(SyncBatchAnchorlessReplayEligibility(
+            change: change,
+            authoritativeBodyHash: authoritativeBodyHash
+        ))
+    }
+
+    static func requireEligibility(
+        change: SyncBatchChange,
+        authoritativeBody: String
+    ) throws -> SyncBatchAnchorlessReplayEligibility {
+        try requireEligibility(
+            change: change,
+            authoritativeBodyHash: SyncBatchContentHash.sha256Hex(for: authoritativeBody)
+        )
+    }
+
+    static func requireEligibility(
+        change: SyncBatchChange,
+        authoritativeBodyHash: String
+    ) throws -> SyncBatchAnchorlessReplayEligibility {
+        switch evaluate(change: change, authoritativeBodyHash: authoritativeBodyHash) {
+        case .eligible(let eligibility):
+            return eligibility
+        case .unavailableEvidence(let noteID):
+            throw SyncBatchApplyPreflightError.unavailableAnchorlessBaseEvidence(noteID: noteID)
+        case .divergentBase(let noteID, let declared, let actual):
+            throw SyncBatchApplyPreflightError.mismatchedBaseContentHash(
+                noteID: noteID,
+                expected: declared,
+                actual: actual
+            )
+        case .notAnchorlessBodyOperation:
+            throw SyncBatchApplyPreflightError.invalidAnchorlessReplayEligibility(noteID: change.noteID)
+        }
+    }
+
+    static func validate(
+        eligibility: SyncBatchAnchorlessReplayEligibility,
+        for change: SyncBatchChange,
+        authoritativeBody: String
+    ) throws {
+        let authoritativeBodyHash = SyncBatchContentHash.sha256Hex(for: authoritativeBody)
+        guard eligibility.change == change,
+              eligibility.authoritativeBodyHash == authoritativeBodyHash else {
+            throw SyncBatchApplyPreflightError.invalidAnchorlessReplayEligibility(noteID: change.noteID)
+        }
     }
 }

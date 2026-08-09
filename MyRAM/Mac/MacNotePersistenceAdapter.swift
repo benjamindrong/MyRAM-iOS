@@ -119,7 +119,8 @@ final class MacNotePersistenceAdapter {
             noteID: note.id,
             oldBody: note.content,
             newBody: proposedBody,
-            modifiedAt: modifiedAt
+            modifiedAt: modifiedAt,
+            bodyHashCapabilityEnabled: true
         )
 
         return MacPreparedLocalNoteEdit(

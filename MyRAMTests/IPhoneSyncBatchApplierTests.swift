@@ -107,37 +107,69 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
         XCTAssertEqual(note.content, "A😀xB")
     }
 
-    func testReplacementSkippedThenDefaultGateInsertAppliesHashless() throws {
+    func testHashlessInsertionRejectsBeforeMutationSaveOrSeenMarking() throws {
         let container = try makeInMemoryContainer()
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000125106")!, content: "remote", in: container)
-
-        XCTAssertNil(SyncBatchNoteChangeCapture.bodyTextChanged(
-            noteID: note.id,
-            oldBody: "local",
-            newBody: "remote",
-            modifiedAt: Date(timeIntervalSince1970: 3)
-        ))
-        guard case .noteBodyTextInserted(let change) = SyncBatchNoteChangeCapture.bodyTextChanged(
-            noteID: note.id,
-            oldBody: "remote",
-            newBody: "remote!",
-            modifiedAt: Date(timeIntervalSince1970: 4)
-        ) else {
-            return XCTFail("Expected follow-up insert")
-        }
-
-        XCTAssertNil(change.baseContentHash)
-        try IPhoneSyncBatchApplier(
+        let batchID = UUID(uuidString: "00000000-0000-0000-0000-000000125206")!
+        let seenStore = SyncBatchSeenBatchStore(defaults: makeDefaults())
+        let applier = IPhoneSyncBatchApplier(
             context: container.mainContext,
-            seenBatchStore: SyncBatchSeenBatchStore(defaults: makeDefaults())
-        ).apply(SyncBatch(
-            id: UUID(uuidString: "00000000-0000-0000-0000-000000125206")!,
+            seenBatchStore: seenStore
+        )
+        let change = SyncBatchNoteBodyTextInsertedChange(
+            noteID: note.id,
+            utf16Offset: 6,
+            text: "!",
+            modifiedAt: Date(timeIntervalSince1970: 4)
+        )
+
+        XCTAssertThrowsError(try applier.apply(SyncBatch(
+            id: batchID,
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000125306")!,
             createdAt: Date(timeIntervalSince1970: 5),
             changes: [.noteBodyTextInserted(change)]
-        ))
+        ))) { error in
+            XCTAssertEqual(
+                error as? SyncBatchApplyPreflightError,
+                .unavailableAnchorlessBaseEvidence(noteID: note.id)
+            )
+        }
+        XCTAssertEqual(note.content, "remote")
+        XCTAssertFalse(seenStore.hasSeen(batchID))
+        XCTAssertFalse(container.mainContext.hasChanges)
+    }
 
-        XCTAssertEqual(note.content, "remote!")
+    func testHashlessDeletionRejectsBeforeMutationOrSeenMarking() throws {
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000125107")!, content: "remote", in: container)
+        let batchID = UUID(uuidString: "00000000-0000-0000-0000-000000125207")!
+        let seenStore = SyncBatchSeenBatchStore(defaults: makeDefaults())
+        let applier = IPhoneSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: seenStore
+        )
+        let change = SyncBatchNoteBodyTextDeletedChange(
+            noteID: note.id,
+            utf16Offset: 0,
+            utf16Length: 1,
+            expectedText: "r",
+            modifiedAt: Date(timeIntervalSince1970: 4)
+        )
+
+        XCTAssertThrowsError(try applier.apply(SyncBatch(
+            id: batchID,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000125307")!,
+            createdAt: Date(timeIntervalSince1970: 5),
+            changes: [.noteBodyTextDeleted(change)]
+        ))) { error in
+            XCTAssertEqual(
+                error as? SyncBatchApplyPreflightError,
+                .unavailableAnchorlessBaseEvidence(noteID: note.id)
+            )
+        }
+        XCTAssertEqual(note.content, "remote")
+        XCTAssertFalse(seenStore.hasSeen(batchID))
+        XCTAssertFalse(container.mainContext.hasChanges)
     }
 
     func testDeleteAppliesOnlyWhenSafeAndExpectedTextMatches() throws {
@@ -237,7 +269,8 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
                         noteID: note.id,
                         utf16Offset: 0,
                         text: "Once",
-                        modifiedAt: Date(timeIntervalSince1970: 7)
+                        modifiedAt: Date(timeIntervalSince1970: 7),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "")
                     )
                 )
             ]
@@ -496,9 +529,67 @@ final class IPhoneSyncBatchApplierTests: XCTestCase {
                 id: UUID(uuidString: batchID)!,
                 originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000125200")!,
                 createdAt: Date(timeIntervalSince1970: 1),
-                changes: changes
+                changes: try changesWithMatchingBaseEvidence(changes, in: container)
             )
         )
+    }
+
+    private func changesWithMatchingBaseEvidence(
+        _ changes: [SyncBatchChange],
+        in container: ModelContainer
+    ) throws -> [SyncBatchChange] {
+        var bodies: [UUID: String] = [:]
+        var loaded: Set<UUID> = []
+        func body(for noteID: UUID) throws -> String? {
+            if loaded.contains(noteID) { return bodies[noteID] }
+            loaded.insert(noteID)
+            if let current = try fetchNote(id: noteID, in: container)?.content {
+                bodies[noteID] = current
+                return current
+            }
+            return nil
+        }
+        var result: [SyncBatchChange] = []
+        for change in changes {
+            switch change {
+            case .noteCreated(let created):
+                if try body(for: created.noteID) == nil { bodies[created.noteID] = created.body }
+                result.append(change)
+            case .noteBodyTextInserted(let insert):
+                guard var current = try body(for: insert.noteID) else { result.append(change); continue }
+                let rewritten = SyncBatchNoteBodyTextInsertedChange(
+                    noteID: insert.noteID, utf16Offset: insert.utf16Offset, text: insert.text,
+                    modifiedAt: insert.modifiedAt,
+                    baseContentHash: insert.baseContentHash ?? SyncBatchContentHash.sha256Hex(for: current)
+                )
+                result.append(.noteBodyTextInserted(rewritten))
+                if !insert.text.isEmpty {
+                    let offset = current.syncBatchSafeInsertionOffset(fallingForwardFrom: insert.utf16Offset)
+                    current = current.syncBatchInserting(insert.text, atUTF16Offset: offset)
+                    bodies[insert.noteID] = current
+                }
+            case .noteBodyTextDeleted(let delete):
+                guard var current = try body(for: delete.noteID) else { result.append(change); continue }
+                let rewritten = SyncBatchNoteBodyTextDeletedChange(
+                    noteID: delete.noteID, utf16Offset: delete.utf16Offset, utf16Length: delete.utf16Length,
+                    expectedText: delete.expectedText, modifiedAt: delete.modifiedAt,
+                    baseContentHash: delete.baseContentHash ?? SyncBatchContentHash.sha256Hex(for: current)
+                )
+                result.append(.noteBodyTextDeleted(rewritten))
+                if delete.utf16Length > 0,
+                   let range = current.syncBatchSafeUTF16Range(location: delete.utf16Offset, length: delete.utf16Length),
+                   let swiftRange = Range(range, in: current) {
+                    let actual = String(current[swiftRange])
+                    if delete.expectedText == nil || delete.expectedText == actual {
+                        current.removeSubrange(swiftRange)
+                        bodies[delete.noteID] = current
+                    }
+                }
+            default:
+                result.append(change)
+            }
+        }
+        return result
     }
 
     private func createChange(noteID: UUID) -> SyncBatchChange {

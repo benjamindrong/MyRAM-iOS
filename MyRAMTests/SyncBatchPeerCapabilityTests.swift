@@ -446,7 +446,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             durableCaptureCount += 1
             return true
         }
-        controller.onBatchReceived = { _ in callbackCount += 1 }
+        controller.onBatchReceived = { _ in callbackCount += 1; return .acknowledgementPermitted }
 
         controller.browser(
             browser,

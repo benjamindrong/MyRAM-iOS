@@ -611,6 +611,7 @@ struct SyncConvergenceCleanupPlan: Equatable {
 }
 
 enum SyncConvergenceDeferredReason: Equatable {
+    case anchorlessMatchingBaseEvidenceUnavailable(noteID: UUID, batchID: UUID)
     case unreconstructableBase(noteID: UUID, batchID: UUID, baseContentHash: String)
     case unsupportedReconciliation(noteID: UUID, batchID: UUID)
     case historyPressure(noteID: UUID, blockingBatchID: UUID?)

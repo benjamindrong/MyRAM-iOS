@@ -1024,12 +1024,12 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertEqual(executableEntry.incrementalOperations.map(\.operationIndex), [1])
         XCTAssertEqual(executableEntry.committedPostBodyHash, SyncBatchContentHash.sha256Hex(for: "ABC"))
 
-        let legacy = try makeLegacyPositionalFixture()
+        let matchingBase = try makeMatchingBasePositionalFixture()
         let legacyResult = try planIncorporateAndDecode(
-            input: legacy.input,
-            notes: [legacy.noteID: legacy.initialNote],
-            committedAt: legacy.committedAt,
-            expectedRoutings: [legacy.noteID: .incremental]
+            input: matchingBase.input,
+            notes: [matchingBase.noteID: matchingBase.initialNote],
+            committedAt: matchingBase.committedAt,
+            expectedRoutings: [matchingBase.noteID: .incremental]
         )
         let legacyEntry = try XCTUnwrap(legacyResult.work.presentationEntries.first)
         XCTAssertEqual(legacyEntry.routing, .incremental)
@@ -1923,7 +1923,7 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         return MYR134Fixture(noteID: noteID, input: input, initialNote: initialNote, committedAt: date(6))
     }
 
-    private func makeLegacyPositionalFixture() throws -> MYR134Fixture {
+    private func makeMatchingBasePositionalFixture() throws -> MYR134Fixture {
         let noteID = uuid("00000000-0000-0000-0000-000000134021")
         let batch = SyncBatch(
             id: uuid("00000000-0000-0000-0000-000000134022"),
@@ -1936,14 +1936,15 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
                     utf16Offset: 0,
                     utf16Length: 1,
                     expectedText: "a",
-                    modifiedAt: date(4)
+                    modifiedAt: date(4),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "abc")
                 )),
                 .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
                     noteID: noteID,
                     utf16Offset: 2,
                     text: "d",
                     modifiedAt: date(5),
-                    baseContentHash: nil
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "bc")
                 ))
             ]
         )

@@ -84,7 +84,7 @@ final class MyRAMTests: XCTestCase {
     private final class RecordingSyncController: MyRAMSyncControlling, SyncConvergenceLocalBatchTransportAdapter {
         var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])?
         var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
-        var onBatchReceived: ((SyncBatch) async -> Void)?
+        var onBatchReceived: ((SyncBatch) async -> SyncConvergenceRemoteBatchDisposition)?
         var onDurablyCaptureIncomingBatch: ((SyncBatch) async -> Bool)?
         private(set) var recordedChanges: [SyncChange] = []
         private(set) var recordedBatches: [SyncBatch] = []
@@ -2171,7 +2171,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(change.noteID, note.id)
         XCTAssertEqual(change.utf16Offset, "Hello".utf16.count)
         XCTAssertEqual(change.text, " world")
-        XCTAssertNil(change.baseContentHash)
+        XCTAssertEqual(change.baseContentHash, SyncBatchContentHash.sha256Hex(for: "Hello"))
     }
 
     func testReadyLocalBatchRegistersConvergenceEvidenceBeforeTransport() async throws {
@@ -4003,7 +4003,8 @@ final class MyRAMTests: XCTestCase {
                 noteID: activeNoteID,
                 utf16Offset: "stable body".utf16.count,
                 text: "END",
-                modifiedAt: Date(timeIntervalSince1970: 1)
+                modifiedAt: Date(timeIntervalSince1970: 1),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "stable body")
             ))]
         )
         let startInsertion = SyncBatch(
@@ -4014,7 +4015,8 @@ final class MyRAMTests: XCTestCase {
                 noteID: activeNoteID,
                 utf16Offset: 0,
                 text: "TOP",
-                modifiedAt: Date(timeIntervalSince1970: 2)
+                modifiedAt: Date(timeIntervalSince1970: 2),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "stable bodyEND")
             ))]
         )
         let middleDeletion = SyncBatch(
@@ -4026,7 +4028,8 @@ final class MyRAMTests: XCTestCase {
                 utf16Offset: 3,
                 utf16Length: "stable ".utf16.count,
                 expectedText: "stable ",
-                modifiedAt: Date(timeIntervalSince1970: 3)
+                modifiedAt: Date(timeIntervalSince1970: 3),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "TOPstable bodyEND")
             ))]
         )
 
@@ -4527,6 +4530,89 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.content, baseBody + "[presentation]")
     }
 
+    func testReentrantHashlessBatchDefersAcknowledgementWhileActiveDrainClassifiesIt() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let baseBody = "authoritative"
+        let note = Note(title: "Base", content: baseBody)
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        let presentationBatch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [.noteBodyTextInserted(.init(
+                noteID: noteID,
+                utf16Offset: baseBody.utf16.count,
+                text: "!",
+                modifiedAt: Date(timeIntervalSince1970: 2),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: baseBody)
+            ))]
+        )
+        let reentrantBatch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 3),
+            changes: [.noteBodyTextInserted(.init(
+                noteID: noteID,
+                utf16Offset: baseBody.utf16.count,
+                text: " unsafe",
+                modifiedAt: Date(timeIntervalSince1970: 4)
+            ))]
+        )
+        let queue = FileBackedSyncBatchQueue(fileURL: nil)
+        try queue.enqueueIncoming(presentationBatch)
+        let adapter = ReentrantPresentationAdapter()
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: queue,
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: adapter
+        )
+        adapter.onFirstPresentation = {
+            await runtime.submitRemoteBatch(reentrantBatch)
+        }
+
+        let activeDrainOutcome = await runtime.resumePendingWork()
+
+        let reentrantOutcome = try XCTUnwrap(adapter.reentrantOutcome)
+        guard case .alreadyDraining = reentrantOutcome else {
+            return XCTFail("Expected the production runtime seam to return alreadyDraining")
+        }
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: reentrantOutcome,
+                batchID: reentrantBatch.id
+            ),
+            .acknowledgementDeferred,
+            "an undecided reentrant batch must not be acknowledged while the active drain classifies it"
+        )
+        guard case .deferred(let deferred) = activeDrainOutcome else {
+            return XCTFail("Expected the active drain to classify hashless Batch B recoverably")
+        }
+        XCTAssertEqual(queue.pendingBatches, [reentrantBatch])
+        XCTAssertEqual(
+            deferred.incoming.map(\.batchID),
+            [reentrantBatch.id]
+        )
+        XCTAssertEqual(note.content, baseBody + "!")
+
+        let duplicateOutcome = await runtime.submitRemoteBatch(reentrantBatch)
+        XCTAssertEqual(queue.pendingBatches, [reentrantBatch])
+        XCTAssertEqual(note.content, baseBody + "!")
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: duplicateOutcome,
+                batchID: reentrantBatch.id
+            ),
+            .recoverableAnchorlessCompatibilityRejection
+        )
+    }
+
     func testKDelayedBatchDrainAppliesBodyInsertionsExactlyOnceAcrossRegionsAndRejectsDuplicateIncorporation() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -4541,7 +4627,7 @@ final class MyRAMTests: XCTestCase {
         let middleOffset = baseBody.utf16.count / 2
         let startOffset = 10
 
-        func insertionBatch(sequence: UInt64, offset: Int, text: String) -> SyncBatch {
+        func insertionBatch(sequence: UInt64, offset: Int, text: String, base: String) -> SyncBatch {
             SyncBatch(
                 id: UUID(),
                 originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000156100")!,
@@ -4552,7 +4638,8 @@ final class MyRAMTests: XCTestCase {
                         noteID: noteID,
                         utf16Offset: offset,
                         text: text,
-                        modifiedAt: Date(timeIntervalSince1970: TimeInterval(sequence))
+                        modifiedAt: Date(timeIntervalSince1970: TimeInterval(sequence)),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: base)
                     ))
                 ]
             )
@@ -4561,9 +4648,12 @@ final class MyRAMTests: XCTestCase {
         // Queued end-to-start so each batch's offset, expressed against the original body,
         // remains valid at application time: every earlier insertion lands strictly after
         // the offset the next queued batch will target.
-        let endBatch = insertionBatch(sequence: 1, offset: endOffset, text: "[END]")
-        let middleBatch = insertionBatch(sequence: 2, offset: middleOffset, text: "[MID]")
-        let startBatch = insertionBatch(sequence: 3, offset: startOffset, text: "[TOP]")
+        var sequentialBase = baseBody
+        let endBatch = insertionBatch(sequence: 1, offset: endOffset, text: "[END]", base: sequentialBase)
+        sequentialBase.insert(contentsOf: "[END]", at: sequentialBase.index(sequentialBase.startIndex, offsetBy: endOffset))
+        let middleBatch = insertionBatch(sequence: 2, offset: middleOffset, text: "[MID]", base: sequentialBase)
+        sequentialBase.insert(contentsOf: "[MID]", at: sequentialBase.index(sequentialBase.startIndex, offsetBy: middleOffset))
+        let startBatch = insertionBatch(sequence: 3, offset: startOffset, text: "[TOP]", base: sequentialBase)
 
         let queue = FileBackedSyncBatchQueue(fileURL: nil)
         try queue.enqueueIncoming(endBatch)
@@ -4984,7 +5074,8 @@ final class MyRAMTests: XCTestCase {
                     noteID: note.id,
                     utf16Offset: "Hello".utf16.count,
                     text: " remote",
-                    modifiedAt: Date(timeIntervalSince1970: 5)
+                    modifiedAt: Date(timeIntervalSince1970: 5),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello")
                 ))
             ]
         ))
@@ -5168,7 +5259,8 @@ final class MyRAMTests: XCTestCase {
                     noteID: fixture.note.id,
                     utf16Offset: "Hello".utf16.count,
                     text: " remote",
-                    modifiedAt: Date(timeIntervalSince1970: 12)
+                    modifiedAt: Date(timeIntervalSince1970: 12),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello")
                 ))
             ]
         ))
@@ -5230,7 +5322,8 @@ final class MyRAMTests: XCTestCase {
                     noteID: fixture.note.id,
                     utf16Offset: 0,
                     text: "remote ",
-                    modifiedAt: Date(timeIntervalSince1970: 22)
+                    modifiedAt: Date(timeIntervalSince1970: 22),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "body")
                 ))
             ]
         ))
@@ -5331,7 +5424,8 @@ final class MyRAMTests: XCTestCase {
                 utf16Offset: 6,
                 utf16Length: 5,
                 expectedText: "world",
-                modifiedAt: Date(timeIntervalSince1970: 1)
+                modifiedAt: Date(timeIntervalSince1970: 1),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello world")
             ))]
         ))
 
@@ -5373,7 +5467,8 @@ final class MyRAMTests: XCTestCase {
                         noteID: noteA.id,
                         utf16Offset: noteA.content.utf16.count,
                         text: " remote-a",
-                        modifiedAt: Date(timeIntervalSince1970: 2)
+                        modifiedAt: Date(timeIntervalSince1970: 2),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "hello")
                     )
                 )
             ]
@@ -5388,7 +5483,8 @@ final class MyRAMTests: XCTestCase {
                         noteID: noteB.id,
                         utf16Offset: noteB.content.utf16.count,
                         text: " remote-b",
-                        modifiedAt: Date(timeIntervalSince1970: 4)
+                        modifiedAt: Date(timeIntervalSince1970: 4),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "world")
                     )
                 )
             ]
@@ -9314,6 +9410,7 @@ private final class ReentrantPresentationAdapter: SyncConvergencePresentationAda
     var onFirstPresentation: (() async -> SyncConvergenceRuntimeOutcome)?
     private(set) var reentrantOutcomeCount = 0
     private(set) var didObserveAlreadyDraining = false
+    private(set) var reentrantOutcome: SyncConvergenceRuntimeOutcome?
 
     func refreshPresentation(
         for request: SyncConvergencePresentationRequest
@@ -9321,7 +9418,9 @@ private final class ReentrantPresentationAdapter: SyncConvergencePresentationAda
         guard let onFirstPresentation else { return .verifiedComplete }
         self.onFirstPresentation = nil
         reentrantOutcomeCount += 1
-        if case .alreadyDraining = await onFirstPresentation() {
+        let outcome = await onFirstPresentation()
+        reentrantOutcome = outcome
+        if case .alreadyDraining = outcome {
             didObserveAlreadyDraining = true
         }
         return .verifiedComplete

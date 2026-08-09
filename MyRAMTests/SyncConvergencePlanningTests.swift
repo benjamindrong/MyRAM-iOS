@@ -268,7 +268,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
         )
     }
 
-    func testLegacyPositionalEffectPreservesExpectedTextNoop() {
+    func testHashlessAnchorlessBodyOperationDefersBeforeCurrentBodyReplay() {
         let noteID = uuid("00000000-0000-0000-0000-000000132204")
         let batch = SyncBatch(
             id: uuid("00000000-0000-0000-0000-000000132304"),
@@ -290,12 +290,90 @@ final class SyncConvergencePlanningTests: XCTestCase {
             currentNotes: [projectedNote(noteID: noteID, body: "abc")]
         ))
 
-        guard case .planned(let validatedInput) = outcome,
-              let plan = Optional(validatedInput.plan),
-              case .legacyPositional(let bodyPlan) = plan.affectedNotePlans[0].bodyEffect else {
-            return XCTFail("Expected legacy positional plan, got \(outcome)")
+        guard case .deferred(let reason) = outcome else {
+            return XCTFail("Expected typed compatibility deferral, got \(outcome)")
         }
-        XCTAssertEqual(bodyPlan.finalBody, "abc")
+        XCTAssertEqual(
+            reason,
+            .anchorlessMatchingBaseEvidenceUnavailable(
+                noteID: noteID,
+                batchID: batch.id
+            )
+        )
+    }
+
+    func testAnchorlessCompatibilityDeferralSuppressesTransportAcknowledgement() {
+        let noteID = UUID(uuidString: "17800000-0000-0000-0000-0000000000D1")!
+        let batchID = UUID(uuidString: "17800000-0000-0000-0000-0000000000D2")!
+        let deferred = SyncConvergenceDeferredWork(
+            incoming: [SyncConvergenceDeferredItem(
+                domain: .incoming,
+                batchID: batchID,
+                affectedNoteIDs: [noteID],
+                reason: .planning(.anchorlessMatchingBaseEvidenceUnavailable(
+                    noteID: noteID,
+                    batchID: batchID
+                ))
+            )],
+            localObligations: [],
+            postCommit: []
+        )
+
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: .deferred(deferred),
+                batchID: batchID
+            ),
+            .recoverableAnchorlessCompatibilityRejection
+        )
+    }
+
+    func testAlreadyDrainingDefersTransportAcknowledgementWithoutClassifyingCompatibility() {
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: .alreadyDraining,
+                batchID: UUID()
+            ),
+            .acknowledgementDeferred
+        )
+    }
+
+    func testCompletedMatchingCompatibilityBatchPermitsTransportAcknowledgement() {
+        let batchID = UUID()
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: .drained(appliedBatchIDs: [batchID]),
+                batchID: batchID
+            ),
+            .acknowledgementPermitted
+        )
+    }
+
+    func testDivergentUnreconstructableBaseSuppressesTransportAcknowledgement() {
+        let noteID = UUID(uuidString: "17800000-0000-0000-0000-0000000000D3")!
+        let batchID = UUID(uuidString: "17800000-0000-0000-0000-0000000000D4")!
+        let deferred = SyncConvergenceDeferredWork(
+            incoming: [SyncConvergenceDeferredItem(
+                domain: .incoming,
+                batchID: batchID,
+                affectedNoteIDs: [noteID],
+                reason: .planning(.unreconstructableBase(
+                    noteID: noteID,
+                    batchID: batchID,
+                    baseContentHash: String(repeating: "a", count: 64)
+                ))
+            )],
+            localObligations: [],
+            postCommit: []
+        )
+
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: .deferred(deferred),
+                batchID: batchID
+            ),
+            .recoverableAnchorlessCompatibilityRejection
+        )
     }
 
     func testReconstructedConflictDroppingUnprovenTextReturnsUnprovenTextLoss() {

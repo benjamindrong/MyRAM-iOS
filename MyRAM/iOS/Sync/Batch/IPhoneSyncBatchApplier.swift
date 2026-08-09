@@ -144,7 +144,20 @@ final class IPhoneSyncBatchApplier {
     }
 
     private func applyBodyTextInserted(_ change: SyncBatchNoteBodyTextInsertedChange) throws -> AppliedEditorMutation? {
-        guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return nil }
+        guard let note = try loadNote(id: change.noteID) else { return nil }
+        // MYR-178 Slice 2: proof precedes no-op/offset handling at the raw mutation seam.
+        let authoritativeBody = note.content
+        let anchorlessChange = SyncBatchChange.noteBodyTextInserted(change)
+        let eligibility = try SyncBatchAnchorlessCompatibilityEvaluator.requireEligibility(
+            change: anchorlessChange,
+            authoritativeBody: authoritativeBody
+        )
+        try SyncBatchAnchorlessCompatibilityEvaluator.validate(
+            eligibility: eligibility,
+            for: anchorlessChange,
+            authoritativeBody: authoritativeBody
+        )
+        guard !change.text.isEmpty else { return nil }
 
         let clampedOffset = note.content.syncBatchClampedUTF16Offset(change.utf16Offset)
         let insertionOffset = note.content.syncBatchSafeInsertionOffset(fallingForwardFrom: clampedOffset)
@@ -160,8 +173,20 @@ final class IPhoneSyncBatchApplier {
     }
 
     private func applyBodyTextDeleted(_ change: SyncBatchNoteBodyTextDeletedChange) throws -> AppliedEditorMutation? {
-        guard let note = try loadNote(id: change.noteID),
-              change.utf16Length > 0,
+        guard let note = try loadNote(id: change.noteID) else { return nil }
+        // MYR-178 Slice 2: proof precedes no-op/range/expectedText handling.
+        let authoritativeBody = note.content
+        let anchorlessChange = SyncBatchChange.noteBodyTextDeleted(change)
+        let eligibility = try SyncBatchAnchorlessCompatibilityEvaluator.requireEligibility(
+            change: anchorlessChange,
+            authoritativeBody: authoritativeBody
+        )
+        try SyncBatchAnchorlessCompatibilityEvaluator.validate(
+            eligibility: eligibility,
+            for: anchorlessChange,
+            authoritativeBody: authoritativeBody
+        )
+        guard change.utf16Length > 0,
               let range = note.content.syncBatchSafeUTF16Range(location: change.utf16Offset, length: change.utf16Length) else {
             return nil
         }

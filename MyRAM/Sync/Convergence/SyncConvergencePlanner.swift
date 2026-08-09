@@ -450,7 +450,6 @@ struct SyncConvergencePlanner {
         let initialHash = SyncBatchContentHash.sha256Hex(for: initialBody)
         var sequentialResults: [PlannedBodyResult] = []
         var idempotentIdentities: [OperationIdentityPayload] = []
-        var sawLegacy = false
         let retainedByIdentityKey = Dictionary(
             (input.retainedLocalOperations + input.retainedRemoteOperations)
                 .filter { $0.noteID == noteID }
@@ -475,21 +474,35 @@ struct SyncConvergencePlanner {
                 idempotentIdentities.append(identity)
                 continue
             }
-            let baseHash = indexedChange.change.baseContentHash
-            let currentHash = SyncBatchContentHash.sha256Hex(for: workingNote.body)
-            if let baseHash, baseHash != currentHash {
+            let compatibility = SyncBatchAnchorlessCompatibilityEvaluator.evaluate(
+                change: indexedChange.change,
+                authoritativeBody: workingNote.body
+            )
+            let eligibility: SyncBatchAnchorlessReplayEligibility
+            switch compatibility {
+            case .eligible(let validatedEligibility):
+                eligibility = validatedEligibility
+            case .unavailableEvidence:
+                return .deferred(.anchorlessMatchingBaseEvidenceUnavailable(
+                    noteID: noteID,
+                    batchID: input.incomingBatch.id
+                ))
+            case .divergentBase(_, let declaredBaseContentHash, _):
                 return planReconstructedBodyChanges(
                     indexedChanges,
                     noteID: noteID,
-                    requiredBaseHash: baseHash,
+                    requiredBaseHash: declaredBaseContentHash,
                     initialBody: initialBody,
                     current: workingNote,
                     input: input,
                     queueSelection: queueSelection
                 )
+            case .notAnchorlessBodyOperation:
+                return .failed(.invalidMergePlan(noteID: noteID))
             }
             let result = planSequentialBodyChange(
                 indexedChange.change,
+                eligibility: eligibility,
                 operationIndex: indexedChange.operationIndex,
                 current: workingNote,
                 input: input
@@ -505,9 +518,6 @@ struct SyncConvergencePlanner {
                     modifiedAt: indexedChange.change.modifiedAtForReplayOrdering
                 )
                 sequentialResults.append(planned)
-                if case .legacyPositional = planned.effect {
-                    sawLegacy = true
-                }
             case .deferred(let reason):
                 return .deferred(reason)
             case .failed(let failure):
@@ -528,27 +538,15 @@ struct SyncConvergencePlanner {
             canonicalReplayKey: operationIdentities.last?.canonicalReplayKey
         )
         let routing: SyncConvergencePresentationRouting = retainedAdditions.isEmpty ? .none : .incremental
-        let effect: SyncConvergenceBodyEffect
-        if sawLegacy {
-            effect = .legacyPositional(LegacyBodyPlan(
-                noteID: noteID,
-                initialBody: initialBody,
-                operations: retainedAdditions,
-                finalBody: workingNote.body,
-                finalBodyHash: finalHash,
-                resultEvidence: evidence
-            ))
-        } else {
-            effect = .matchingBaseIncremental(MatchingBaseBodyPlan(
-                noteID: noteID,
-                initialBody: initialBody,
-                initialBodyHash: initialHash,
-                operations: retainedAdditions,
-                finalBody: workingNote.body,
-                finalBodyHash: finalHash,
-                resultEvidence: evidence
-            ))
-        }
+        let effect: SyncConvergenceBodyEffect = .matchingBaseIncremental(MatchingBaseBodyPlan(
+            noteID: noteID,
+            initialBody: initialBody,
+            initialBodyHash: initialHash,
+            operations: retainedAdditions,
+            finalBody: workingNote.body,
+            finalBodyHash: finalHash,
+            resultEvidence: evidence
+        ))
 
         return .success(PlannedBodyResult(
             effect: effect,
@@ -675,22 +673,25 @@ struct SyncConvergencePlanner {
 
     private func planSequentialBodyChange(
         _ change: SyncBatchChange,
+        eligibility: SyncBatchAnchorlessReplayEligibility,
         operationIndex: Int,
         current: SyncConvergenceProjectedNote,
         input: SyncConvergencePlanningInput
     ) -> BodyPlanningResult {
         let replayEngine = SyncOperationReplayEngine()
-        let identity = operationIdentity(for: change, in: input.incomingBatch, operationIndex: operationIndex, kind: change.operationKind)
-        let currentHash = SyncBatchContentHash.sha256Hex(for: current.body)
-        let baseHash = change.baseContentHash
-
-        if baseHash == nil {
-            return replayEngine.planLegacy(change, identity: identity, current: current, batchID: input.incomingBatch.id)
-        }
-        if baseHash == currentHash {
-            return replayEngine.planMatchingBase(change, identity: identity, current: current, batchID: input.incomingBatch.id)
-        }
-        return .failed(.invalidMergePlan(noteID: current.noteID))
+        let identity = operationIdentity(
+            for: change,
+            in: input.incomingBatch,
+            operationIndex: operationIndex,
+            kind: change.operationKind
+        )
+        return replayEngine.planMatchingBase(
+            change,
+            eligibility: eligibility,
+            identity: identity,
+            current: current,
+            batchID: input.incomingBatch.id
+        )
     }
 
     private func queuedBodyOperations(
@@ -1185,49 +1186,20 @@ struct SyncConvergenceEvidenceSelector {
 }
 
 private struct SyncOperationReplayEngine {
-    func planLegacy(
-        _ change: SyncBatchChange,
-        identity: OperationIdentityPayload,
-        current: SyncConvergenceProjectedNote,
-        batchID: UUID
-    ) -> BodyPlanningResult {
-        replaySingle(change, identity: identity, body: current.body, noteID: current.noteID, mode: .legacyPositional).map { replay in
-            let finalHash = replay.resultEvidence.postHash ?? SyncBatchContentHash.sha256Hex(for: replay.finalBody)
-            let operation = replay.retainedAdditions[0]
-            let evidence = SyncConvergenceResultEvidence(
-                batchID: batchID,
-                noteID: current.noteID,
-                kind: .body,
-                preHash: SyncBatchContentHash.sha256Hex(for: current.body),
-                postHash: finalHash,
-                canonicalReplayKey: identity.canonicalReplayKey
-            )
-            return PlannedBodyResult(
-                effect: .legacyPositional(LegacyBodyPlan(
-                    noteID: current.noteID,
-                    initialBody: current.body,
-                    operations: [operation],
-                    finalBody: replay.finalBody,
-                    finalBodyHash: finalHash,
-                    resultEvidence: evidence
-                )),
-                finalBody: replay.finalBody,
-                operationIdentities: [identity],
-                resultEvidence: evidence,
-                retainedAdditions: [operation],
-                snapshotAdditions: [],
-                routing: .incremental
-            )
-        }
-    }
-
     func planMatchingBase(
         _ change: SyncBatchChange,
+        eligibility: SyncBatchAnchorlessReplayEligibility,
         identity: OperationIdentityPayload,
         current: SyncConvergenceProjectedNote,
         batchID: UUID
     ) -> BodyPlanningResult {
-        replaySingle(change, identity: identity, body: current.body, noteID: current.noteID, mode: .legacyPositional).map { replay in
+        replaySingle(
+            change,
+            identity: identity,
+            body: current.body,
+            noteID: current.noteID,
+            mode: .matchingCurrentBase(eligibility)
+        ).map { replay in
             let initialHash = SyncBatchContentHash.sha256Hex(for: current.body)
             let finalHash = replay.resultEvidence.postHash ?? SyncBatchContentHash.sha256Hex(for: replay.finalBody)
             let operation = replay.retainedAdditions[0]
@@ -1430,6 +1402,17 @@ private struct SyncOperationReplayEngine {
         noteID: UUID,
         mode: SyncOperationReplayMode
     ) -> BodyPlanningResult {
+        if case .matchingCurrentBase(let eligibility) = mode {
+            do {
+                try SyncBatchAnchorlessCompatibilityEvaluator.validate(
+                    eligibility: eligibility,
+                    for: change,
+                    authoritativeBody: body
+                )
+            } catch {
+                return .failed(.invalidMergePlan(noteID: noteID))
+            }
+        }
         switch change {
         case .noteBodyTextInserted(let insert):
             if mode == .reconstructingDeclaredChain, let baseContentHash = insert.baseContentHash,
@@ -1646,7 +1629,7 @@ private struct SyncConvergenceAppliedRebaseEvent {
 }
 
 private enum SyncOperationReplayMode: Equatable {
-    case legacyPositional
+    case matchingCurrentBase(SyncBatchAnchorlessReplayEligibility)
     case reconstructingDeclaredChain
     case replayingConflictUnion
 }
