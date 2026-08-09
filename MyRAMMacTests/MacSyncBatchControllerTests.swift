@@ -230,7 +230,12 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(noteB.content, "B0")
 
         boundaryContinuation?.resume(returning: .ready)
-        await waitUntil { noteB.content == "B0-once" }
+        await waitUntil {
+            noteB.content == "B0-once" &&
+            receiver.lastSyncAt == batchA.createdAt
+        }
+        XCTAssertEqual(noteB.content, "B0-once")
+        XCTAssertEqual(receiver.lastSyncAt, batchA.createdAt)
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: senderUnsentURL).pendingBatches, [batchB])
 
         sender.flushPendingBatch()
