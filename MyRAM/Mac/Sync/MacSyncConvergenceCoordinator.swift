@@ -41,9 +41,8 @@ final class MacSyncConvergenceCoordinator {
 
     /// Durably persists an incoming batch's raw bytes, independent of whatever
     /// `submitRemoteBatch` later does with them. This is what the transport layer
-    /// checks before acknowledging receipt back to the sender: once this returns
-    /// true, the sender no longer needs to keep the batch around for redelivery,
-    /// even if convergence processing of its contents is deferred or blocked.
+    /// checks before convergence. Durable capture is necessary but does not by
+    /// itself permit acknowledgement; MYR-178 compatibility deferral suppresses it.
     func durablyCaptureIncomingBatch(_ batch: SyncBatch) -> Bool {
         guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(batch)) != nil else {
             return false
@@ -58,11 +57,17 @@ final class MacSyncConvergenceCoordinator {
         }
     }
 
-    func submitRemoteBatch(_ batch: SyncBatch) async {
+    @discardableResult
+    func submitRemoteBatch(_ batch: SyncBatch) async -> SyncConvergenceRemoteBatchDisposition {
         guard (try? SyncBatchAnchoredPayloadPolicy.validateConvergence(batch)) != nil else {
-            return
+            return .acknowledgementPermitted
         }
-        await handle(outcome: runtime.submitRemoteBatch(batch), sourceBatch: batch)
+        let outcome = await runtime.submitRemoteBatch(batch)
+        await handle(outcome: outcome, sourceBatch: batch)
+        return SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+            for: outcome,
+            batchID: batch.id
+        )
     }
 
     func submitLocalObligation(_ obligation: SyncConvergenceLocalObligation) async {

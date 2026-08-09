@@ -463,6 +463,19 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertEqual(transport.sentBatchAcknowledgements, [SyncBatchAcknowledgement(batchID: batch.id)])
     }
 
+    func testIncomingBatchSyncSuppressesAcknowledgementForRecoverableAnchorlessCompatibilityRejection() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(transport: transport)
+        controller.onDurablyCaptureIncomingBatch = { _ in true }
+        controller.onBatchReceived = { _ in .recoverableAnchorlessCompatibilityRejection }
+        let batch = makeBatch(idSuffix: 218)
+
+        await deliverBatchSync(to: controller, batch)
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
+    }
+
     func testIncomingBatchSyncDoesNotAcknowledgeWhenNotDurablyCaptured() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let controller = try makeController(transport: transport)
@@ -528,7 +541,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
             durableCaptureCount += 1
             return true
         }
-        controller.onBatchReceived = { _ in receiveCount += 1 }
+        controller.onBatchReceived = { _ in receiveCount += 1; return .acknowledgementPermitted }
 
         let data = try MultipeerSyncMessageCoding.encode(
             kind: .batchSync,
@@ -621,6 +634,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         }
         controller.onBatchReceived = { _ in
             receiveCount += 1
+            return .acknowledgementPermitted
         }
 
         let beforeQueue = controller.unsentBatchQueueSnapshot()

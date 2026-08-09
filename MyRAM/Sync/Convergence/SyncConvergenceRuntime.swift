@@ -10,6 +10,33 @@ enum SyncConvergenceRuntimeOutcome {
     case blocked(SyncBatchDrainFailure)
 }
 
+
+enum SyncConvergenceRemoteBatchDisposition: Equatable, Sendable {
+    case acknowledgementPermitted
+    case recoverableAnchorlessCompatibilityRejection
+}
+
+enum SyncConvergenceRemoteBatchDispositionPolicy {
+    static func disposition(
+        for outcome: SyncConvergenceRuntimeOutcome,
+        batchID: UUID
+    ) -> SyncConvergenceRemoteBatchDisposition {
+        guard case .deferred(let work) = outcome else {
+            return .acknowledgementPermitted
+        }
+        for item in work.incoming where item.batchID == batchID {
+            guard case .planning(let reason) = item.reason else { continue }
+            switch reason {
+            case .anchorlessMatchingBaseEvidenceUnavailable, .unreconstructableBase:
+                return .recoverableAnchorlessCompatibilityRejection
+            case .unsupportedReconciliation, .historyPressure:
+                continue
+            }
+        }
+        return .acknowledgementPermitted
+    }
+}
+
 protocol SyncConvergenceIncomingLocalBoundaryAdapter: AnyObject {
     @MainActor
     func prepareForIncomingBodyMutation(
@@ -1208,6 +1235,8 @@ final class SyncConvergenceRuntime {
     ) -> SyncBatchDrainFailure {
         let kind: SyncBatchDrainFailureKind
         switch reason {
+        case .anchorlessMatchingBaseEvidenceUnavailable:
+            kind = .anchorlessBaseUnavailable
         case .unreconstructableBase:
             kind = .mismatchedBase
         case .unsupportedReconciliation:

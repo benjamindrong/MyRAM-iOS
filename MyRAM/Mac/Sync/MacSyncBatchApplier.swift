@@ -68,6 +68,16 @@ final class MacSyncBatchApplier {
             return try applyBodyTextInserted(change, rollbackSnapshots: &rollbackSnapshots)
         case .noteBodyTextDeleted(let change):
             return try applyBodyTextDeleted(change, rollbackSnapshots: &rollbackSnapshots)
+        case .noteBodyTextInsertedAnchored(let change):
+            throw SyncBatchAnchoredPayloadPolicyError.anchoredPayloadDisabled(
+                boundary: .apply,
+                noteID: change.noteID
+            )
+        case .noteBodyTextDeletedAnchored(let change):
+            throw SyncBatchAnchoredPayloadPolicyError.anchoredPayloadDisabled(
+                boundary: .apply,
+                noteID: change.noteID
+            )
         case .noteBodyReconciled(let change):
             throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
         case .noteLifecycleChanged(let change):
@@ -115,7 +125,20 @@ final class MacSyncBatchApplier {
         _ change: MacSyncNoteBodyTextInsertedChange,
         rollbackSnapshots: inout [UUID: NoteRollbackSnapshot]
     ) throws -> MacAppliedSyncChange? {
-        guard let note = try loadNote(id: change.noteID), !change.text.isEmpty else { return nil }
+        guard let note = try loadNote(id: change.noteID) else { return nil }
+        // MYR-178 Slice 2: reject before rollback capture or mutation.
+        let authoritativeBody = note.content
+        let anchorlessChange = SyncBatchChange.noteBodyTextInserted(change)
+        let eligibility = try SyncBatchAnchorlessCompatibilityEvaluator.requireEligibility(
+            change: anchorlessChange,
+            authoritativeBody: authoritativeBody
+        )
+        try SyncBatchAnchorlessCompatibilityEvaluator.validate(
+            eligibility: eligibility,
+            for: anchorlessChange,
+            authoritativeBody: authoritativeBody
+        )
+        guard !change.text.isEmpty else { return nil }
 
         captureRollbackSnapshot(for: note, in: &rollbackSnapshots)
         let originalContent = note.content
@@ -144,8 +167,20 @@ final class MacSyncBatchApplier {
         _ change: MacSyncNoteBodyTextDeletedChange,
         rollbackSnapshots: inout [UUID: NoteRollbackSnapshot]
     ) throws -> MacAppliedSyncChange? {
-        guard let note = try loadNote(id: change.noteID),
-              change.utf16Length > 0,
+        guard let note = try loadNote(id: change.noteID) else { return nil }
+        // MYR-178 Slice 2: reject before rollback capture, range handling, or mutation.
+        let authoritativeBody = note.content
+        let anchorlessChange = SyncBatchChange.noteBodyTextDeleted(change)
+        let eligibility = try SyncBatchAnchorlessCompatibilityEvaluator.requireEligibility(
+            change: anchorlessChange,
+            authoritativeBody: authoritativeBody
+        )
+        try SyncBatchAnchorlessCompatibilityEvaluator.validate(
+            eligibility: eligibility,
+            for: anchorlessChange,
+            authoritativeBody: authoritativeBody
+        )
+        guard change.utf16Length > 0,
               let range = note.content.syncBatchSafeUTF16Range(location: change.utf16Offset, length: change.utf16Length) else {
             return nil
         }

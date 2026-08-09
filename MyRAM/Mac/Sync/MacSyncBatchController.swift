@@ -317,10 +317,16 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func receive(_ batch: MacSyncBatch) {
+        Task { _ = await processReceivedBatch(batch) }
+    }
+
+    private func processReceivedBatch(
+        _ batch: MacSyncBatch
+    ) async -> SyncConvergenceRemoteBatchDisposition {
         guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(batch)) != nil else {
-            return
+            return .acknowledgementPermitted
         }
-        Task { await convergenceCoordinator?.submitRemoteBatch(batch) }
+        return await convergenceCoordinator?.submitRemoteBatch(batch) ?? .acknowledgementPermitted
     }
 
     var pendingIncomingBatchCount: Int {
@@ -445,9 +451,11 @@ extension MacSyncBatchController: MCSessionDelegate {
                     return
                 }
                 let captured = convergenceCoordinator?.durablyCaptureIncomingBatch(envelope.batch) ?? false
-                receive(envelope.batch)
                 if captured {
-                    try? sendBatchAcknowledgement(batchID: envelope.batch.id, to: peerID)
+                    let disposition = await processReceivedBatch(envelope.batch)
+                    if disposition == .acknowledgementPermitted {
+                        try? sendBatchAcknowledgement(batchID: envelope.batch.id, to: peerID)
+                    }
                 }
             case .legacySyncEnvelope:
                 guard let envelope = try? JSONDecoder().decode(SyncEnvelope.self, from: message.payload) else { return }

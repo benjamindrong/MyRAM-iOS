@@ -269,7 +269,8 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
             noteID: note.id,
             oldBody: "Hello",
             newBody: "Hello world",
-            modifiedAt: prepared.modifiedAt
+            modifiedAt: prepared.modifiedAt,
+            bodyHashCapabilityEnabled: true
         ).map(\.change))
         XCTAssertTrue(prepared.capturedChanges.allSatisfy { $0.evidence != nil })
     }

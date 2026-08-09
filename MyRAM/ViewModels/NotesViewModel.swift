@@ -121,7 +121,7 @@ final class NotesViewModel: ObservableObject {
         pendingIncomingBatchQueueLimit: Int = 100,
         pendingLocalConvergenceBatchQueueFileURL: URL? = NotesViewModel.pendingLocalConvergenceBatchQueueFileURL(),
         pendingLocalConvergenceBatchQueueLimit: Int = 100,
-        bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
+        bodyHashCapabilityEnabled: Bool = true,
         syncBatchQuietWindow: TimeInterval = 3,
         resumesPendingConvergenceOnInit: Bool = true,
         saveContext: (() throws -> Void)? = nil,
@@ -164,7 +164,7 @@ final class NotesViewModel: ObservableObject {
             await self?.advanceSyncBaselines(forAcknowledgedLocalChanges: changes)
         }
         self.syncController?.onBatchReceived = { [weak self] batch in
-            await self?.applyIncomingSyncBatch(batch)
+            await self?.applyIncomingSyncBatch(batch) ?? .acknowledgementPermitted
         }
         self.syncController?.onDurablyCaptureIncomingBatch = { [weak self] batch in
             self?.durablyCaptureIncomingBatch(batch) ?? false
@@ -1499,7 +1499,8 @@ final class NotesViewModel: ObservableObject {
             noteID: noteID,
             oldBody: oldBody,
             newBody: newBody,
-            modifiedAt: modifiedAt
+            modifiedAt: modifiedAt,
+            bodyHashCapabilityEnabled: bodyHashCapabilityEnabled
         )
 
         return PreparedLocalNoteEdit(titleChange: titleChange, bodyChanges: bodyChanges)
@@ -2145,13 +2146,17 @@ final class NotesViewModel: ObservableObject {
         return try context.fetch(descriptor).first
     }
 
-    func applyIncomingSyncBatch(_ batch: SyncBatch) async {
+    func applyIncomingSyncBatch(_ batch: SyncBatch) async -> SyncConvergenceRemoteBatchDisposition {
         guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(batch)) != nil else {
-            return
+            return .acknowledgementPermitted
         }
-        guard !batch.changes.isEmpty else { return }
+        guard !batch.changes.isEmpty else { return .acknowledgementPermitted }
         let outcome = await syncConvergenceRuntime.submitRemoteBatch(batch)
         await handleConvergenceRuntimeOutcome(outcome)
+        return SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+            for: outcome,
+            batchID: batch.id
+        )
     }
 
     /// Durably persists an incoming batch's raw bytes, independent of whatever
@@ -2330,6 +2335,10 @@ final class NotesViewModel: ObservableObject {
             switch item.reason {
             case .planning(let reason):
                 switch reason {
+            case .anchorlessMatchingBaseEvidenceUnavailable:
+                return SyncBatchDrainFailureClassifier.userMessage(
+                    for: SyncBatchDrainFailure(batchID: item.batchID, kind: .anchorlessBaseUnavailable)
+                )
             case .unreconstructableBase:
                 return SyncBatchDrainFailureClassifier.userMessage(
                     for: SyncBatchDrainFailure(batchID: item.batchID, kind: .mismatchedBase)

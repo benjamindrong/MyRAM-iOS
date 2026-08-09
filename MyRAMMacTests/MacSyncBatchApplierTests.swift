@@ -275,7 +275,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
         try container.mainContext.save()
 
         _ = try apply(
-            changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "x"))],
+            changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "x", baseBody: "abc"))],
             in: container
         )
 
@@ -378,7 +378,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
         )
 
         XCTAssertThrowsError(try applier.apply(batch(id: batchID, changes: [
-            .noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "x"))
+            .noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "x", baseBody: "abc"))
         ])))
 
         XCTAssertEqual(note.content, "abc")
@@ -393,7 +393,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
         let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000210E")!, content: "abc", in: container)
         let batch = batch(
             id: UUID(uuidString: "00000000-0000-0000-0000-00000000220E")!,
-            changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "x"))]
+            changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 1, text: "x", baseBody: "abc"))]
         )
         var saveAttempts = 0
         let applier = MacSyncBatchApplier(
@@ -462,7 +462,7 @@ final class MacSyncBatchApplierTests: XCTestCase {
             id: batchID,
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
             createdAt: Date(timeIntervalSince1970: 1),
-            changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 0, text: "Once"))]
+            changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 0, text: "Once", baseBody: ""))]
         )
 
         let firstApply = try applier.apply(batch)
@@ -504,6 +504,69 @@ final class MacSyncBatchApplierTests: XCTestCase {
                 )
             ]
         )
+    }
+
+    func testHashlessInsertionRejectsBeforeMutationSaveOrSeenMarking() throws {
+        let defaults = makeDefaults()
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-00000000204F")!, content: "local", in: container)
+        let batchID = UUID(uuidString: "00000000-0000-0000-0000-00000000214F")!
+        let seenStore = MacSyncSeenBatchStore(defaults: defaults)
+        var saveCount = 0
+        let applier = MacSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: seenStore,
+            performSave: { saveCount += 1; try container.mainContext.save() }
+        )
+        XCTAssertThrowsError(try applier.apply(MacSyncBatch(
+            id: batchID,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [.noteBodyTextInserted(insertChange(noteID: note.id, offset: 0, text: "remote "))]
+        ))) { error in
+            XCTAssertEqual(
+                error as? SyncBatchApplyPreflightError,
+                .unavailableAnchorlessBaseEvidence(noteID: note.id)
+            )
+        }
+        XCTAssertEqual(note.content, "local")
+        XCTAssertEqual(saveCount, 0)
+        XCTAssertFalse(seenStore.hasSeen(batchID))
+    }
+
+    func testHashlessDeletionRejectsBeforeMutationSaveOrSeenMarking() throws {
+        let defaults = makeDefaults()
+        let container = try makeInMemoryContainer()
+        let note = try insertNote(id: UUID(uuidString: "00000000-0000-0000-0000-000000002050")!, content: "local", in: container)
+        let batchID = UUID(uuidString: "00000000-0000-0000-0000-000000002150")!
+        let seenStore = MacSyncSeenBatchStore(defaults: defaults)
+        var saveCount = 0
+        let applier = MacSyncBatchApplier(
+            context: container.mainContext,
+            seenBatchStore: seenStore,
+            performSave: { saveCount += 1; try container.mainContext.save() }
+        )
+        let change = SyncBatchNoteBodyTextDeletedChange(
+            noteID: note.id,
+            utf16Offset: 0,
+            utf16Length: 1,
+            expectedText: "l",
+            modifiedAt: Date(timeIntervalSince1970: 12)
+        )
+        XCTAssertThrowsError(try applier.apply(MacSyncBatch(
+            id: batchID,
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [.noteBodyTextDeleted(change)]
+        ))) { error in
+            XCTAssertEqual(
+                error as? SyncBatchApplyPreflightError,
+                .unavailableAnchorlessBaseEvidence(noteID: note.id)
+            )
+        }
+        XCTAssertEqual(note.content, "local")
+        XCTAssertEqual(saveCount, 0)
+        XCTAssertFalse(seenStore.hasSeen(batchID))
     }
 
     func testMismatchedHashedInsertionDoesNotApplyOrMarkSeen() throws {
@@ -649,9 +712,65 @@ final class MacSyncBatchApplierTests: XCTestCase {
                 id: UUID(uuidString: batchID)!,
                 originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
                 createdAt: Date(timeIntervalSince1970: 1),
-                changes: changes
+                changes: try changesWithMatchingBaseEvidence(changes, in: container)
             )
         )
+    }
+
+    private func changesWithMatchingBaseEvidence(
+        _ changes: [MacSyncChange],
+        in container: ModelContainer
+    ) throws -> [MacSyncChange] {
+        var bodies: [UUID: String] = [:]
+        var loaded: Set<UUID> = []
+        func body(for noteID: UUID) throws -> String? {
+            if loaded.contains(noteID) { return bodies[noteID] }
+            loaded.insert(noteID)
+            if let current = try fetchNote(id: noteID, in: container)?.content {
+                bodies[noteID] = current
+                return current
+            }
+            return nil
+        }
+        var result: [MacSyncChange] = []
+        for change in changes {
+            switch change {
+            case .noteCreated(let created):
+                if try body(for: created.noteID) == nil { bodies[created.noteID] = created.body }
+                result.append(change)
+            case .noteBodyTextInserted(let insert):
+                guard var current = try body(for: insert.noteID) else { result.append(change); continue }
+                result.append(.noteBodyTextInserted(.init(
+                    noteID: insert.noteID, utf16Offset: insert.utf16Offset, text: insert.text,
+                    modifiedAt: insert.modifiedAt,
+                    baseContentHash: insert.baseContentHash ?? SyncBatchContentHash.sha256Hex(for: current)
+                )))
+                if !insert.text.isEmpty {
+                    let offset = current.syncBatchSafeInsertionOffset(fallingForwardFrom: insert.utf16Offset)
+                    current = current.syncBatchInserting(insert.text, atUTF16Offset: offset)
+                    bodies[insert.noteID] = current
+                }
+            case .noteBodyTextDeleted(let delete):
+                guard var current = try body(for: delete.noteID) else { result.append(change); continue }
+                result.append(.noteBodyTextDeleted(.init(
+                    noteID: delete.noteID, utf16Offset: delete.utf16Offset, utf16Length: delete.utf16Length,
+                    expectedText: delete.expectedText, modifiedAt: delete.modifiedAt,
+                    baseContentHash: delete.baseContentHash ?? SyncBatchContentHash.sha256Hex(for: current)
+                )))
+                if delete.utf16Length > 0,
+                   let range = current.syncBatchSafeUTF16Range(location: delete.utf16Offset, length: delete.utf16Length),
+                   let swiftRange = Range(range, in: current) {
+                    let actual = String(current[swiftRange])
+                    if delete.expectedText == nil || delete.expectedText == actual {
+                        current.removeSubrange(swiftRange)
+                        bodies[delete.noteID] = current
+                    }
+                }
+            default:
+                result.append(change)
+            }
+        }
+        return result
     }
 
     private func batch(id: UUID, changes: [MacSyncChange]) -> MacSyncBatch {
@@ -676,12 +795,18 @@ final class MacSyncBatchApplierTests: XCTestCase {
         )
     }
 
-    private func insertChange(noteID: UUID, offset: Int, text: String) -> MacSyncNoteBodyTextInsertedChange {
+    private func insertChange(
+        noteID: UUID,
+        offset: Int,
+        text: String,
+        baseBody: String? = nil
+    ) -> MacSyncNoteBodyTextInsertedChange {
         MacSyncNoteBodyTextInsertedChange(
             noteID: noteID,
             utf16Offset: offset,
             text: text,
-            modifiedAt: Date(timeIntervalSince1970: 11)
+            modifiedAt: Date(timeIntervalSince1970: 11),
+            baseContentHash: baseBody.map { SyncBatchContentHash.sha256Hex(for: $0) }
         )
     }
 

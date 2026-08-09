@@ -96,10 +96,10 @@ private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
 protocol MyRAMSyncControlling: AnyObject {
     var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])? { get set }
     var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)? { get set }
-    var onBatchReceived: ((SyncBatch) async -> Void)? { get set }
-    /// Durably persists an incoming batch's raw bytes independent of convergence
-    /// processing. Returning true tells the peer it no longer needs to retry
-    /// redelivery, even if applying the batch's contents is deferred or blocked.
+    var onBatchReceived: ((SyncBatch) async -> SyncConvergenceRemoteBatchDisposition)? { get set }
+    /// Durably persists an incoming batch before convergence processing. A true
+    /// result is necessary but not sufficient for transport acknowledgement; the
+    /// convergence disposition must also permit acknowledgement.
     var onDurablyCaptureIncomingBatch: ((SyncBatch) async -> Bool)? { get set }
 
     func recordLocalChange(
@@ -178,7 +178,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     let localPeerName: String
     var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])?
     var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
-    var onBatchReceived: ((SyncBatch) async -> Void)?
+    var onBatchReceived: ((SyncBatch) async -> SyncConvergenceRemoteBatchDisposition)?
     var onDurablyCaptureIncomingBatch: ((SyncBatch) async -> Bool)?
     var onFlushLocalConvergenceRequested: (() async -> Void)?
     var localConvergencePendingCountProvider: (() -> Int)?
@@ -799,10 +799,12 @@ extension MyRAMSyncController: MCSessionDelegate {
                     return
                 }
                 let captured = await onDurablyCaptureIncomingBatch?(envelope.batch) ?? false
-                await onBatchReceived?(envelope.batch)
-                lastSyncAt = envelope.batch.createdAt
                 if captured {
-                    await sendBatchAcknowledgement(batchID: envelope.batch.id, to: peerID)
+                    let disposition = await onBatchReceived?(envelope.batch) ?? .acknowledgementPermitted
+                    lastSyncAt = envelope.batch.createdAt
+                    if disposition == .acknowledgementPermitted {
+                        await sendBatchAcknowledgement(batchID: envelope.batch.id, to: peerID)
+                    }
                 }
 
             case .batchAcknowledgement:

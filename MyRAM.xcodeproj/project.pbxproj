@@ -85,9 +85,11 @@
 		BCA122010000000000000002 /* MacSyncDeviceIdentity.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000002 /* MacSyncDeviceIdentity.swift */; };
 		BCA122010000000000000003 /* MacSyncSeenBatchStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000003 /* MacSyncSeenBatchStore.swift */; };
 		BCA122010000000000000004 /* MacSyncBatchAccumulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000004 /* MacSyncBatchAccumulator.swift */; };
+		BCA122010000000000000005 /* MacSyncBatchApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000005 /* MacSyncBatchApplier.swift */; };
 		BCA122010000000000000006 /* MacSyncDeviceIdentityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000006 /* MacSyncDeviceIdentityTests.swift */; };
 		BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000007 /* MacSyncSeenBatchStoreTests.swift */; };
 		BCA122010000000000000008 /* MacSyncBatchAccumulatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000008 /* MacSyncBatchAccumulatorTests.swift */; };
+		BCA122010000000000000009 /* MacSyncBatchApplierTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA122020000000000000009 /* MacSyncBatchApplierTests.swift */; };
 		BCA12201000000000000000A /* MacAppliedSyncBatch.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA12202000000000000000A /* MacAppliedSyncBatch.swift */; };
 		BCA12201000000000000000B /* MacSyncBatchControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA12202000000000000000B /* MacSyncBatchControllerTests.swift */; };
 		BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA123020000000000000001 /* SyncBatchPayload.swift */; };
@@ -1811,6 +1813,7 @@
 				BCA122010000000000000002 /* MacSyncDeviceIdentity.swift in Sources */,
 				BCA122010000000000000003 /* MacSyncSeenBatchStore.swift in Sources */,
 				BCA122010000000000000004 /* MacSyncBatchAccumulator.swift in Sources */,
+				BCA122010000000000000005 /* MacSyncBatchApplier.swift in Sources */,
 				BCA12201000000000000000A /* MacAppliedSyncBatch.swift in Sources */,
 				BCA123010000000000000019 /* MacSyncBatchController.swift in Sources */,
 				BCA162010000000000000001 /* MacSyncConvergenceCoordinator.swift in Sources */,
@@ -1851,6 +1854,7 @@
 				BCA122010000000000000006 /* MacSyncDeviceIdentityTests.swift in Sources */,
 				BCA122010000000000000007 /* MacSyncSeenBatchStoreTests.swift in Sources */,
 				BCA122010000000000000008 /* MacSyncBatchAccumulatorTests.swift in Sources */,
+				BCA122010000000000000009 /* MacSyncBatchApplierTests.swift in Sources */,
 				BCA153010000000000000008 /* MacExplicitDeleteProvenanceTests.swift in Sources */,
 				BCA12201000000000000000B /* MacSyncBatchControllerTests.swift in Sources */,
 				BCA162010000000000101 /* MacSyncConvergencePresentationAdapterTests.swift in Sources */,

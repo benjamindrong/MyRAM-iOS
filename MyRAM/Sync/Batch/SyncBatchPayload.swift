@@ -134,6 +134,8 @@ enum SyncBatchContentHash {
 }
 
 enum SyncBatchApplyPreflightError: Error, Equatable {
+    case unavailableAnchorlessBaseEvidence(noteID: SyncBatchNoteID)
+    case invalidAnchorlessReplayEligibility(noteID: SyncBatchNoteID)
     case mismatchedBaseContentHash(noteID: SyncBatchNoteID, expected: String, actual: String)
     case unsupportedReconciliation(noteID: SyncBatchNoteID)
 }
@@ -380,6 +382,8 @@ enum SyncBatchQueueFileLocation {
 }
 
 enum SyncBatchDrainFailureKind: Equatable {
+    case anchorlessBaseUnavailable
+    case anchorlessEligibilityInvalid
     case mismatchedBase
     case unsupportedReconciliation
     case persistence
@@ -416,6 +420,10 @@ enum SyncBatchDrainFailureClassifier {
         let kind: SyncBatchDrainFailureKind
         if let preflightError = error as? SyncBatchApplyPreflightError {
             switch preflightError {
+            case .unavailableAnchorlessBaseEvidence:
+                kind = .anchorlessBaseUnavailable
+            case .invalidAnchorlessReplayEligibility:
+                kind = .anchorlessEligibilityInvalid
             case .mismatchedBaseContentHash:
                 kind = .mismatchedBase
             case .unsupportedReconciliation:
@@ -454,6 +462,10 @@ enum SyncBatchDrainFailureClassifier {
 
     static func userMessage(for failure: SyncBatchDrainFailure) -> String {
         switch failure.kind {
+        case .anchorlessBaseUnavailable:
+            "Incoming anchorless changes are waiting for exact matching-base evidence."
+        case .anchorlessEligibilityInvalid:
+            "Incoming anchorless replay eligibility is invalid and requires recovery."
         case .mismatchedBase:
             "Incoming changes are waiting for deterministic merge support."
         case .unsupportedReconciliation:
@@ -564,126 +576,87 @@ final class SyncBatchHashCache {
 struct SyncBatchPreflight {
     typealias BodyProvider = (SyncBatchNoteID) throws -> String?
 
-    let bodyHashCapabilityEnabled: Bool
-    let hashCache: SyncBatchHashCache
+    private let hashCache: SyncBatchHashCache
 
-    init(bodyHashCapabilityEnabled: Bool, hashCache: SyncBatchHashCache = SyncBatchHashCache()) {
-        self.bodyHashCapabilityEnabled = bodyHashCapabilityEnabled
+    init(
+        bodyHashCapabilityEnabled: Bool = SyncBatchBodyHashCapability.defaultEnabled,
+        hashCache: SyncBatchHashCache = SyncBatchHashCache()
+    ) {
+        // MYR-178 Slice 2: exact-base proof is mandatory even when the legacy
+        // optional validation flag is false. Retain the parameter for source compatibility.
+        _ = bodyHashCapabilityEnabled
         self.hashCache = hashCache
     }
 
-    func validate(batch: SyncBatch, bodyProvider: BodyProvider) throws {
+    func validate(batch: SyncBatch, bodyProvider: (UUID) throws -> String?) throws {
         try SyncBatchAnchoredPayloadPolicy.validateApply(batch)
         var workingBodies: [SyncBatchNoteID: String] = [:]
-        var missingNotes: Set<SyncBatchNoteID> = []
+        var loadedNoteIDs: Set<SyncBatchNoteID> = []
+
+        func workingBody(for noteID: SyncBatchNoteID) throws -> String? {
+            if loadedNoteIDs.contains(noteID) {
+                return workingBodies[noteID]
+            }
+            loadedNoteIDs.insert(noteID)
+            if let body = try bodyProvider(noteID) {
+                workingBodies[noteID] = body
+                return body
+            }
+            return nil
+        }
 
         for change in batch.changes {
             switch change {
-            case .noteCreated(let change):
-                if workingBodies[change.noteID] != nil {
-                    continue
+            case .noteCreated(let created):
+                if try workingBody(for: created.noteID) == nil {
+                    workingBodies[created.noteID] = created.body
                 }
-                if let existingBody = try bodyProvider(change.noteID) {
-                    workingBodies[change.noteID] = existingBody
-                } else {
-                    workingBodies[change.noteID] = change.body
-                    missingNotes.remove(change.noteID)
-                }
-
-            case .noteTitleChanged:
+            case .noteTitleChanged, .noteLifecycleChanged:
                 continue
-
-            case .noteLifecycleChanged:
-                continue
-
-            case .noteBodyTextInserted(let change):
-                guard var body = try workingBody(
-                    noteID: change.noteID,
-                    workingBodies: &workingBodies,
-                    missingNotes: &missingNotes,
-                    bodyProvider: bodyProvider
-                ) else { continue }
-
-                guard !change.text.isEmpty else { continue }
-                try validateBaseHash(change.baseContentHash, noteID: change.noteID, body: body)
-                let clampedOffset = body.syncBatchClampedUTF16Offset(change.utf16Offset)
-                let insertionOffset = body.syncBatchSafeInsertionOffset(fallingForwardFrom: clampedOffset)
-                body = body.syncBatchInserting(change.text, atUTF16Offset: insertionOffset)
-                workingBodies[change.noteID] = body
-
-            case .noteBodyTextDeleted(let change):
-                guard var body = try workingBody(
-                    noteID: change.noteID,
-                    workingBodies: &workingBodies,
-                    missingNotes: &missingNotes,
-                    bodyProvider: bodyProvider
-                ) else { continue }
-
-                guard change.utf16Length > 0,
+            case .noteBodyTextInserted(let inserted):
+                guard var body = try workingBody(for: inserted.noteID) else { continue }
+                let anchorlessChange = SyncBatchChange.noteBodyTextInserted(inserted)
+                let bodyHash = hashCache.hashForBody(body, noteID: inserted.noteID)
+                _ = try SyncBatchAnchorlessCompatibilityEvaluator.requireEligibility(
+                    change: anchorlessChange,
+                    authoritativeBodyHash: bodyHash
+                )
+                guard !inserted.text.isEmpty else { continue }
+                let clampedOffset = body.syncBatchClampedUTF16Offset(inserted.utf16Offset)
+                let offset = body.syncBatchSafeInsertionOffset(fallingForwardFrom: clampedOffset)
+                body = body.syncBatchInserting(inserted.text, atUTF16Offset: offset)
+                workingBodies[inserted.noteID] = body
+            case .noteBodyTextDeleted(let deleted):
+                guard var body = try workingBody(for: deleted.noteID) else { continue }
+                let anchorlessChange = SyncBatchChange.noteBodyTextDeleted(deleted)
+                let bodyHash = hashCache.hashForBody(body, noteID: deleted.noteID)
+                _ = try SyncBatchAnchorlessCompatibilityEvaluator.requireEligibility(
+                    change: anchorlessChange,
+                    authoritativeBodyHash: bodyHash
+                )
+                guard deleted.utf16Length > 0,
                       let range = body.syncBatchSafeUTF16Range(
-                        location: change.utf16Offset,
-                        length: change.utf16Length
-                      ) else {
-                    continue
-                }
-
-                try validateBaseHash(change.baseContentHash, noteID: change.noteID, body: body)
-                let targetText = (body as NSString).substring(with: range)
-                if let expectedText = change.expectedText, targetText != expectedText {
-                    continue
-                }
-
-                body = (body as NSString).replacingCharacters(in: range, with: "")
-                workingBodies[change.noteID] = body
-
-            case .noteBodyTextInsertedAnchored(let change):
+                        location: deleted.utf16Offset,
+                        length: deleted.utf16Length
+                      ),
+                      let swiftRange = Range(range, in: body) else { continue }
+                let actual = String(body[swiftRange])
+                if let expectedText = deleted.expectedText, expectedText != actual { continue }
+                body.removeSubrange(swiftRange)
+                workingBodies[deleted.noteID] = body
+            case .noteBodyTextInsertedAnchored(let anchored):
                 throw SyncBatchAnchoredPayloadPolicyError.anchoredPayloadDisabled(
                     boundary: .apply,
-                    noteID: change.noteID
+                    noteID: anchored.noteID
                 )
-
-            case .noteBodyTextDeletedAnchored(let change):
+            case .noteBodyTextDeletedAnchored(let anchored):
                 throw SyncBatchAnchoredPayloadPolicyError.anchoredPayloadDisabled(
                     boundary: .apply,
-                    noteID: change.noteID
+                    noteID: anchored.noteID
                 )
-
-            case .noteBodyReconciled(let change):
-                throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: change.noteID)
+            case .noteBodyReconciled(let reconciled):
+                throw SyncBatchApplyPreflightError.unsupportedReconciliation(noteID: reconciled.noteID)
             }
-        }
-    }
-
-    private func workingBody(
-        noteID: SyncBatchNoteID,
-        workingBodies: inout [SyncBatchNoteID: String],
-        missingNotes: inout Set<SyncBatchNoteID>,
-        bodyProvider: BodyProvider
-    ) throws -> String? {
-        if let body = workingBodies[noteID] {
-            return body
-        }
-        if missingNotes.contains(noteID) {
-            return nil
-        }
-        guard let body = try bodyProvider(noteID) else {
-            missingNotes.insert(noteID)
-            return nil
-        }
-        workingBodies[noteID] = body
-        return body
-    }
-
-    private func validateBaseHash(_ expectedHash: String?, noteID: SyncBatchNoteID, body: String) throws {
-        guard bodyHashCapabilityEnabled, let expectedHash else { return }
-
-        let actualHash = hashCache.hashForBody(body, noteID: noteID)
-        guard actualHash == expectedHash else {
-            throw SyncBatchApplyPreflightError.mismatchedBaseContentHash(
-                noteID: noteID,
-                expected: expectedHash,
-                actual: actualHash
-            )
         }
     }
 }

@@ -207,3 +207,20 @@ None in Slice 1.
 - MYR-178 Slice 2: integrate positive eligibility at every direct anchorless raw-offset production boundary and preserve recoverable failure semantics.
 - MYR-179: production anchored activation.
 - MYR-180: live two-device closure and aggregate alignment evidence.
+
+
+## Slice 2 guarded replay and recovery record
+
+Execution baseline: `bcba06b1d57a705d437f13e6b318d47909f36070`. Blacksmith instruction revision: `5eab9420bf8ef6dd72ae6efc9dae4d7d0182bbea`. Local-work assessment: **local work required and a local completion runner was accepted**.
+
+Production iPhone and native Mac body-edit capture now opt into the existing body-hash capability seam so each emitted insertion/deletion carries the exact SHA-256 of its sequential pre-operation body. `SyncBatchBodyHashCapability.defaultEnabled` remains false and `SyncBatchAnchoredPayloadCapability.isEnabled` remains false.
+
+`SyncBatchAnchorlessCompatibilityEvaluator` remains the single direct-replay classifier. `SyncBatchPreflight`, the iPhone applier, the native Mac applier, and current-body convergence replay all require its positive eligibility before any UTF-16 offset/range mutation. Clamping, Unicode boundary adjustment, `expectedText`, and successful speculative positioning remain secondary checks and cannot establish eligibility.
+
+Hashless/unproven current-body convergence is typed as `anchorlessMatchingBaseEvidenceUnavailable` and remains durably queued. A declared positive divergence is classified at the shared evaluator boundary and routes only through the existing `SyncBaseReconstructor` exact-historical-base path; reconstruction failure never falls back to current-body raw replay. `SyncOperationReplayEngine.planLegacy` is no longer production reachable.
+
+The shared receive disposition maps MYR-178 unavailable-evidence deferral and declared-divergent work whose exact historical base is unreconstructable to `recoverableAnchorlessCompatibilityRejection`. iPhone and native Mac both durably capture first, run convergence second, and suppress the transport batch acknowledgement for that disposition. Because the convergence runtime leaves deferred incoming batches queued and deduplicates by batch ID, rejection has no incorporation/seen/queue-cleanup success effect and redelivery is idempotently retained. Unrelated convergence outcomes retain their prior acknowledgement policy.
+
+Raw-offset reachability is therefore partitioned into exactly two proof domains: (1) current/sequential matching-base replay authorized by `SyncBatchAnchorlessReplayEligibility`; and (2) replay against an independently proven exact historical base through the existing reconstruction/conflict-union path. No new ordering, deletion, tombstone, dependency, bootstrap, anchor reconstruction, or materialization mechanism is introduced.
+
+MYR-175 through MYR-177 structural semantics remain preserved. Anchored capture/replay remains dark for MYR-179. MYR-180 retains ownership of its later migration/cleanup scope. The local completion runner records focused and full proving tests, changed-file scope, final raw-offset reachability, exact reconstruction preservation, anchored-dark state, `NearbySyncCore` pre/post state, and detached exact-candidate verification in its evidence manifest.

@@ -445,7 +445,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         XCTAssertThrowsError(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in "A" })
     }
 
-    func testPreflightUsesPostLegacyBodyForLaterHashedOperation() throws {
+    func testPreflightRejectsHashlessOperationBeforeLaterHashedOperation() throws {
         let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123265")!
         let batch = SyncBatch(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000123266")!,
@@ -472,7 +472,12 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
             ]
         )
 
-        XCTAssertNoThrow(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in "A" })
+        XCTAssertThrowsError(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in "A" }) { error in
+            XCTAssertEqual(
+                error as? SyncBatchApplyPreflightError,
+                .unavailableAnchorlessBaseEvidence(noteID: noteID)
+            )
+        }
     }
 
     func testPreflightUsesNewlyCreatedNoteBodyForLaterHashedOperation() throws {
@@ -507,7 +512,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         XCTAssertNoThrow(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in nil })
     }
 
-    func testPreflightSkipsEmptyInsertBeforeHashValidation() throws {
+    func testPreflightRequiresMatchingBaseBeforeEmptyInsertNoop() throws {
         let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000123284")!
         let batch = SyncBatch(
             id: UUID(uuidString: "00000000-0000-0000-0000-000000123285")!,
@@ -526,7 +531,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
             ]
         )
 
-        XCTAssertNoThrow(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in "A" })
+        XCTAssertThrowsError(try SyncBatchPreflight(bodyHashCapabilityEnabled: true).validate(batch: batch) { _ in "A" })
     }
 
     func testIdempotentlySkippedNoteCreatedDoesNotResetAdvancedWorkingBody() throws {

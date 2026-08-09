@@ -84,7 +84,7 @@ final class MyRAMTests: XCTestCase {
     private final class RecordingSyncController: MyRAMSyncControlling, SyncConvergenceLocalBatchTransportAdapter {
         var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])?
         var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
-        var onBatchReceived: ((SyncBatch) async -> Void)?
+        var onBatchReceived: ((SyncBatch) async -> SyncConvergenceRemoteBatchDisposition)?
         var onDurablyCaptureIncomingBatch: ((SyncBatch) async -> Bool)?
         private(set) var recordedChanges: [SyncChange] = []
         private(set) var recordedBatches: [SyncBatch] = []
@@ -2171,7 +2171,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(change.noteID, note.id)
         XCTAssertEqual(change.utf16Offset, "Hello".utf16.count)
         XCTAssertEqual(change.text, " world")
-        XCTAssertNil(change.baseContentHash)
+        XCTAssertEqual(change.baseContentHash, SyncBatchContentHash.sha256Hex(for: "Hello"))
     }
 
     func testReadyLocalBatchRegistersConvergenceEvidenceBeforeTransport() async throws {
@@ -4003,7 +4003,8 @@ final class MyRAMTests: XCTestCase {
                 noteID: activeNoteID,
                 utf16Offset: "stable body".utf16.count,
                 text: "END",
-                modifiedAt: Date(timeIntervalSince1970: 1)
+                modifiedAt: Date(timeIntervalSince1970: 1),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "stable body")
             ))]
         )
         let startInsertion = SyncBatch(
@@ -4014,7 +4015,8 @@ final class MyRAMTests: XCTestCase {
                 noteID: activeNoteID,
                 utf16Offset: 0,
                 text: "TOP",
-                modifiedAt: Date(timeIntervalSince1970: 2)
+                modifiedAt: Date(timeIntervalSince1970: 2),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "stable bodyEND")
             ))]
         )
         let middleDeletion = SyncBatch(
@@ -4026,7 +4028,8 @@ final class MyRAMTests: XCTestCase {
                 utf16Offset: 3,
                 utf16Length: "stable ".utf16.count,
                 expectedText: "stable ",
-                modifiedAt: Date(timeIntervalSince1970: 3)
+                modifiedAt: Date(timeIntervalSince1970: 3),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "TOPstable bodyEND")
             ))]
         )
 
@@ -4541,7 +4544,7 @@ final class MyRAMTests: XCTestCase {
         let middleOffset = baseBody.utf16.count / 2
         let startOffset = 10
 
-        func insertionBatch(sequence: UInt64, offset: Int, text: String) -> SyncBatch {
+        func insertionBatch(sequence: UInt64, offset: Int, text: String, base: String) -> SyncBatch {
             SyncBatch(
                 id: UUID(),
                 originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000156100")!,
@@ -4552,7 +4555,8 @@ final class MyRAMTests: XCTestCase {
                         noteID: noteID,
                         utf16Offset: offset,
                         text: text,
-                        modifiedAt: Date(timeIntervalSince1970: TimeInterval(sequence))
+                        modifiedAt: Date(timeIntervalSince1970: TimeInterval(sequence)),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: base)
                     ))
                 ]
             )
@@ -4561,9 +4565,12 @@ final class MyRAMTests: XCTestCase {
         // Queued end-to-start so each batch's offset, expressed against the original body,
         // remains valid at application time: every earlier insertion lands strictly after
         // the offset the next queued batch will target.
-        let endBatch = insertionBatch(sequence: 1, offset: endOffset, text: "[END]")
-        let middleBatch = insertionBatch(sequence: 2, offset: middleOffset, text: "[MID]")
-        let startBatch = insertionBatch(sequence: 3, offset: startOffset, text: "[TOP]")
+        var sequentialBase = baseBody
+        let endBatch = insertionBatch(sequence: 1, offset: endOffset, text: "[END]", base: sequentialBase)
+        sequentialBase.insert(contentsOf: "[END]", at: sequentialBase.index(sequentialBase.startIndex, offsetBy: endOffset))
+        let middleBatch = insertionBatch(sequence: 2, offset: middleOffset, text: "[MID]", base: sequentialBase)
+        sequentialBase.insert(contentsOf: "[MID]", at: sequentialBase.index(sequentialBase.startIndex, offsetBy: middleOffset))
+        let startBatch = insertionBatch(sequence: 3, offset: startOffset, text: "[TOP]", base: sequentialBase)
 
         let queue = FileBackedSyncBatchQueue(fileURL: nil)
         try queue.enqueueIncoming(endBatch)
@@ -4984,7 +4991,8 @@ final class MyRAMTests: XCTestCase {
                     noteID: note.id,
                     utf16Offset: "Hello".utf16.count,
                     text: " remote",
-                    modifiedAt: Date(timeIntervalSince1970: 5)
+                    modifiedAt: Date(timeIntervalSince1970: 5),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello")
                 ))
             ]
         ))
@@ -5168,7 +5176,8 @@ final class MyRAMTests: XCTestCase {
                     noteID: fixture.note.id,
                     utf16Offset: "Hello".utf16.count,
                     text: " remote",
-                    modifiedAt: Date(timeIntervalSince1970: 12)
+                    modifiedAt: Date(timeIntervalSince1970: 12),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello")
                 ))
             ]
         ))
@@ -5230,7 +5239,8 @@ final class MyRAMTests: XCTestCase {
                     noteID: fixture.note.id,
                     utf16Offset: 0,
                     text: "remote ",
-                    modifiedAt: Date(timeIntervalSince1970: 22)
+                    modifiedAt: Date(timeIntervalSince1970: 22),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "body")
                 ))
             ]
         ))
@@ -5331,7 +5341,8 @@ final class MyRAMTests: XCTestCase {
                 utf16Offset: 6,
                 utf16Length: 5,
                 expectedText: "world",
-                modifiedAt: Date(timeIntervalSince1970: 1)
+                modifiedAt: Date(timeIntervalSince1970: 1),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "Hello world")
             ))]
         ))
 
@@ -5373,7 +5384,8 @@ final class MyRAMTests: XCTestCase {
                         noteID: noteA.id,
                         utf16Offset: noteA.content.utf16.count,
                         text: " remote-a",
-                        modifiedAt: Date(timeIntervalSince1970: 2)
+                        modifiedAt: Date(timeIntervalSince1970: 2),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "hello")
                     )
                 )
             ]
@@ -5388,7 +5400,8 @@ final class MyRAMTests: XCTestCase {
                         noteID: noteB.id,
                         utf16Offset: noteB.content.utf16.count,
                         text: " remote-b",
-                        modifiedAt: Date(timeIntervalSince1970: 4)
+                        modifiedAt: Date(timeIntervalSince1970: 4),
+                        baseContentHash: SyncBatchContentHash.sha256Hex(for: "world")
                     )
                 )
             ]
