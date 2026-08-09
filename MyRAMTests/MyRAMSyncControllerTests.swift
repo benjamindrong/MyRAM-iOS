@@ -478,7 +478,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertNil(controller.lastSyncAt)
     }
 
-    func testManualResendRetainsDeferredBatchUntilSuccessfulRedeliveryAcknowledgesIt() async throws {
+    func testManualResendRetainsDeferredBatchUntilRealConvergenceRedeliveryAcknowledgesIt() async throws {
         let senderTransport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let sender = try makeController(
             unsentBatchQueueFileURL: temporaryQueueFileURL(),
@@ -486,32 +486,109 @@ final class MyRAMSyncControllerTests: XCTestCase {
         )
         let receiverTransport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let receiver = try makeController(transport: receiverTransport)
-        receiver.onDurablyCaptureIncomingBatch = { _ in true }
-        var dispositions: [SyncConvergenceRemoteBatchDisposition] = [
-            .acknowledgementDeferred,
-            .acknowledgementPermitted
-        ]
-        receiver.onBatchReceived = { _ in dispositions.removeFirst() }
-        let batch = makeBatch(idSuffix: 220)
+        let receiverContainer = try makeContainer()
+        let receiverContext = receiverContainer.mainContext
+        let noteA = Note(title: "Drain holder", content: "A0")
+        noteA.id = UUID(uuidString: "17800000-0000-0000-0000-000000000221")!
+        let noteB = Note(title: "Redelivery target", content: "B0")
+        noteB.id = UUID(uuidString: "17800000-0000-0000-0000-000000000222")!
+        receiverContext.insert(noteA)
+        receiverContext.insert(noteB)
+        try receiverContext.save()
+        let receiverIncomingURL = temporaryQueueFileURL()
+        let viewModel = NotesViewModel(
+            context: receiverContext,
+            syncController: receiver,
+            pendingIncomingBatchQueueFileURL: receiverIncomingURL,
+            pendingLocalConvergenceBatchQueueFileURL: temporaryQueueFileURL(),
+            resumesPendingConvergenceOnInit: false
+        )
+        viewModel.selectNote(noteA)
+        viewModel.registerActiveEditor(noteID: noteA.id)
+        defer { viewModel.unregisterActiveEditor(noteID: noteA.id) }
 
-        try await sender.acceptLocalBatch(batch)
-        XCTAssertEqual(sender.unsentBatchQueueSnapshot().pendingBatches, [batch])
-        XCTAssertEqual(senderTransport.sentBatchEnvelopes.map(\.batch), [batch])
+        let batchA = makeBodyInsertBatch(
+            idSuffix: 221,
+            noteID: noteA.id,
+            base: "A0",
+            inserted: "-hold"
+        )
+        let batchB = makeBodyInsertBatch(
+            idSuffix: 222,
+            noteID: noteB.id,
+            base: "B0",
+            inserted: "-once"
+        )
+        let realReceive = receiver.onBatchReceived
+        var batchBDispositions: [SyncConvergenceRemoteBatchDisposition] = []
+        receiver.onBatchReceived = { batch in
+            let disposition = await realReceive?(batch) ?? .acknowledgementPermitted
+            if batch.id == batchB.id {
+                batchBDispositions.append(disposition)
+            }
+            return disposition
+        }
 
-        await deliverBatchSync(to: receiver, batch)
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertTrue(receiverTransport.sentBatchAcknowledgements.isEmpty)
-        XCTAssertEqual(sender.unsentBatchQueueSnapshot().pendingBatches, [batch])
+        await deliverBatchSync(to: receiver, batchA)
+        await waitUntil { viewModel.activeEditorSyncUpdate?.noteID == noteA.id }
+        let pendingPresentation = try XCTUnwrap(viewModel.activeEditorSyncUpdate)
+        XCTAssertEqual(noteA.content, "A0-hold")
+
+        try await sender.acceptLocalBatch(batchB)
+        await waitUntil { senderTransport.sentBatchEnvelopes.count == 1 }
+        let firstBatchBData = try XCTUnwrap(senderTransport.sentData.last)
+        await deliverRawData(firstBatchBData, to: receiver)
+        await waitUntil { batchBDispositions == [.acknowledgementDeferred] }
+
+        XCTAssertTrue(receiverTransport.sentBatchAcknowledgements.allSatisfy { $0.batchID != batchB.id })
+        XCTAssertNil(receiver.lastSyncAt)
+        XCTAssertEqual(sender.unsentBatchQueueSnapshot().pendingBatches, [batchB])
+        XCTAssertTrue(FileBackedSyncBatchQueue(fileURL: receiverIncomingURL).contains(batchB.id))
+        XCTAssertEqual(noteB.content, "B0")
+
+        viewModel.acknowledgeActiveEditorSyncUpdate(
+            id: pendingPresentation.id,
+            noteID: noteA.id,
+            result: .verifiedComplete
+        )
+        await waitUntil { noteB.content == "B0-once" }
+        XCTAssertEqual(sender.unsentBatchQueueSnapshot().pendingBatches, [batchB])
+        XCTAssertTrue(receiverTransport.sentBatchAcknowledgements.allSatisfy { $0.batchID != batchB.id })
 
         sender.flushPendingChanges()
         await waitUntil { senderTransport.sentBatchEnvelopes.count == 2 }
-        XCTAssertEqual(senderTransport.sentBatchEnvelopes.map(\.batch), [batch, batch])
+        XCTAssertEqual(senderTransport.sentBatchEnvelopes.map(\.batch), [batchB, batchB])
+        let secondBatchBData = try XCTUnwrap(senderTransport.sentData.last)
+        await deliverRawData(secondBatchBData, to: receiver)
+        await waitUntil {
+            batchBDispositions == [.acknowledgementDeferred, .acknowledgementPermitted]
+        }
+        await waitUntil {
+            receiverTransport.sentBatchAcknowledgements.contains { $0.batchID == batchB.id }
+        }
 
-        await deliverBatchSync(to: receiver, batch)
-        await waitUntil { receiverTransport.sentBatchAcknowledgements.count == 1 }
-        let acknowledgement = try XCTUnwrap(receiverTransport.sentBatchAcknowledgements.first)
-        await deliverBatchAcknowledgement(to: sender, batchID: acknowledgement.batchID)
+        let acknowledgementData = try XCTUnwrap(
+            receiverTransport.sentData.first { data in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return false
+                }
+                return acknowledgement.batchID == batchB.id
+            }
+        )
+        await deliverRawData(acknowledgementData, to: sender)
         await waitUntil { sender.unsentBatchQueueSnapshot().pendingBatches.isEmpty }
+
+        XCTAssertEqual(
+            receiverTransport.sentBatchAcknowledgements.filter { $0.batchID == batchB.id }.count,
+            1
+        )
+        XCTAssertEqual(noteB.content, "B0-once")
+        XCTAssertEqual(receiver.lastSyncAt, batchB.createdAt)
     }
 
     func testIncomingBatchSyncSuppressesAcknowledgementForRecoverableAnchorlessCompatibilityRejection() async throws {
@@ -768,9 +845,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
 
     private func deliverBatchSync(to controller: MyRAMSyncController, _ batch: SyncBatch) async {
         let data = try! MultipeerSyncMessageCoding.encodeBatch(batch)
-        let dummySession = MCSession(peer: MCPeerID(displayName: "local|local-device"))
-        controller.session(dummySession, didReceive: data, fromPeer: Self.remotePeerID)
-        await Task.yield()
+        await deliverRawData(data, to: controller)
     }
 
     private func deliverBatchAcknowledgement(to controller: MyRAMSyncController, batchID: SyncBatchID) async {
@@ -778,6 +853,10 @@ final class MyRAMSyncControllerTests: XCTestCase {
             kind: .batchAcknowledgement,
             payload: JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
         )
+        await deliverRawData(data, to: controller)
+    }
+
+    private func deliverRawData(_ data: Data, to controller: MyRAMSyncController) async {
         let dummySession = MCSession(peer: MCPeerID(displayName: "local|local-device"))
         controller.session(dummySession, didReceive: data, fromPeer: Self.remotePeerID)
         await Task.yield()
@@ -800,6 +879,29 @@ final class MyRAMSyncControllerTests: XCTestCase {
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
             createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
             changes: []
+        )
+    }
+
+    private func makeBodyInsertBatch(
+        idSuffix: Int,
+        noteID: UUID,
+        base: String,
+        inserted: String
+    ) -> SyncBatch {
+        let batch = makeBatch(idSuffix: idSuffix)
+        return SyncBatch(
+            id: batch.id,
+            originDeviceID: batch.originDeviceID,
+            createdAt: batch.createdAt,
+            changes: [
+                .noteBodyTextInserted(.init(
+                    noteID: noteID,
+                    utf16Offset: base.utf16.count,
+                    text: inserted,
+                    modifiedAt: batch.createdAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: base)
+                ))
+            ]
         )
     }
 
@@ -833,6 +935,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
 private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     var connectedPeers: [MCPeerID]
     var suspendLegacySends = false
+    private(set) var sentData: [Data] = []
     private(set) var sentLegacyEnvelopes: [SyncEnvelope] = []
     private(set) var sentBatchEnvelopes: [SyncBatchEnvelope] = []
     private(set) var sentBatchAcknowledgements: [SyncBatchAcknowledgement] = []
@@ -859,6 +962,7 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     }
 
     func send(_ data: Data, toPeers peers: [MCPeerID], mode: MCSessionSendDataMode) async throws {
+        sentData.append(data)
         let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
         switch message.kind {
         case .legacySyncEnvelope:

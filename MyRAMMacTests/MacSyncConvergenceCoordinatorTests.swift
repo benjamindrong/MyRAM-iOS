@@ -40,9 +40,9 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         XCTAssertEqual(note.content, "local")
     }
 
-    // Regression coverage for MYR-165: the transport layer must be able to confirm
-    // a batch is durably captured (and thus safe to acknowledge to the sender)
-    // independent of whatever submitRemoteBatch/drain later does with it.
+    // Regression coverage for MYR-165: the transport layer must durably capture a
+    // batch before convergence. Capture is idempotent and necessary for ACK, but it
+    // does not independently authorize ACK; the later convergence disposition does.
     func testDurablyCaptureIncomingBatchPersistsBeforeSubmission() async throws {
         let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
         let container = try makeInMemoryContainer()

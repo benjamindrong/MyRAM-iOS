@@ -124,41 +124,168 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastSyncAt, batch.createdAt)
     }
 
-    func testManualResendRetainsExactBatchUntilSuccessfulRedeliveryAcknowledgement() async throws {
-        let remotePeerID = MCPeerID(displayName: "remote|manual-redelivery")
-        let unsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
-        var recordedSends: [Data] = []
-        let controller = try makeController(
-            unsentBatchQueueFileURL: unsentURL,
-            unsentBatchQueue: nil,
-            connectedPeersProvider: { [remotePeerID] },
-            sendBatchDataOperation: { data, _, _ in recordedSends.append(data) }
+    func testManualResendRetainsExactBatchUntilRealReceiverRedeliveryAcknowledgement() async throws {
+        let senderPeerID = MCPeerID(displayName: "remote|compatible-redelivery-sender")
+        let receiverPeerID = MCPeerID(displayName: "remote|compatible-redelivery-receiver")
+        let senderUnsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
+        let receiverPendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
+        var senderSends: [Data] = []
+        var receiverSends: [Data] = []
+
+        let sender = MacSyncBatchController(
+            context: try makeInMemoryContainer().mainContext,
+            unsentBatchQueueFileURL: senderUnsentURL,
+            startsNetworking: false,
+            connectedPeersProvider: { [receiverPeerID] },
+            sendBatchDataOperation: { data, _, _ in senderSends.append(data) }
         )
-        let batch = makeLegacyBodyBatch(idSuffix: 24)
-
-        try await controller.acceptLocalBatch(batch)
-        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: unsentURL).pendingBatches, [batch])
-
-        controller.flushPendingBatch()
-        await waitUntil { recordedSends.count == 2 }
-        let resentBatches = try recordedSends.map { data in
-            let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
-            return try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload).batch
-        }
-        XCTAssertEqual(resentBatches, [batch, batch])
-        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: unsentURL).pendingBatches, [batch])
-
-        let acknowledgementData = try MultipeerSyncMessageCoding.encode(
-            kind: .batchAcknowledgement,
-            payload: JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batch.id))
+        let receiverContainer = try makeInMemoryContainer()
+        let receiverContext = receiverContainer.mainContext
+        let receiver = MacSyncBatchController(
+            context: receiverContext,
+            unsentBatchQueueFileURL: nil,
+            startsNetworking: false,
+            connectedPeersProvider: { [senderPeerID] },
+            sendBatchDataOperation: { data, _, _ in receiverSends.append(data) }
         )
-        let dummySession = MCSession(
-            peer: MCPeerID(displayName: "local|manual-redelivery"),
+        let noteA = Note(title: "Drain holder", content: "A0")
+        noteA.id = UUID(uuidString: "17800000-0000-0000-0000-000000000241")!
+        let noteB = Note(title: "Redelivery target", content: "B0")
+        noteB.id = UUID(uuidString: "17800000-0000-0000-0000-000000000242")!
+        receiverContext.insert(noteA)
+        receiverContext.insert(noteB)
+        try receiverContext.save()
+
+        let boundaryReached = expectation(description: "Batch A holds the active drain")
+        var boundaryContinuation: CheckedContinuation<MacIncomingBoundaryResult, Never>?
+        var didSuspendBatchA = false
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: receiverContext,
+            syncController: receiver,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { noteIDs in
+                    if noteIDs.contains(noteA.id), !didSuspendBatchA {
+                        didSuspendBatchA = true
+                        return await withCheckedContinuation { continuation in
+                            boundaryContinuation = continuation
+                            boundaryReached.fulfill()
+                        }
+                    }
+                    return .ready
+                }
+            ),
+            pendingIncomingQueueFileURL: receiverPendingURL,
+            localObligationQueueFileURL: nil
+        )
+        let batchA = makeCompatibleBodyBatch(
+            idSuffix: 241,
+            noteID: noteA.id,
+            base: "A0",
+            inserted: "-hold"
+        )
+        let batchB = makeCompatibleBodyBatch(
+            idSuffix: 242,
+            noteID: noteB.id,
+            base: "B0",
+            inserted: "-once"
+        )
+        let receiverSession = MCSession(
+            peer: MCPeerID(displayName: "local|compatible-redelivery-receiver"),
             securityIdentity: nil,
             encryptionPreference: .required
         )
-        controller.session(dummySession, didReceive: acknowledgementData, fromPeer: remotePeerID)
-        await waitUntil { FileBackedSyncBatchQueue(fileURL: unsentURL).pendingBatches.isEmpty }
+        let senderSession = MCSession(
+            peer: MCPeerID(displayName: "local|compatible-redelivery-sender"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+
+        receiver.session(
+            receiverSession,
+            didReceive: try MultipeerSyncMessageCoding.encodeBatch(batchA),
+            fromPeer: senderPeerID
+        )
+        await fulfillment(of: [boundaryReached], timeout: 1)
+
+        try await sender.acceptLocalBatch(batchB)
+        await waitUntil { senderSends.count == 1 }
+        receiver.session(receiverSession, didReceive: senderSends[0], fromPeer: senderPeerID)
+        await waitUntil { FileBackedSyncBatchQueue(fileURL: receiverPendingURL).contains(batchB.id) }
+
+        XCTAssertTrue(
+            receiverSends.allSatisfy { data in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return true
+                }
+                return acknowledgement.batchID != batchB.id
+            }
+        )
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: senderUnsentURL).pendingBatches, [batchB])
+        XCTAssertEqual(noteB.content, "B0")
+
+        boundaryContinuation?.resume(returning: .ready)
+        await waitUntil { noteB.content == "B0-once" }
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: senderUnsentURL).pendingBatches, [batchB])
+
+        sender.flushPendingBatch()
+        await waitUntil { senderSends.count == 2 }
+        let resentBatches = try senderSends.map { data in
+            let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+            return try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload).batch
+        }
+        XCTAssertEqual(resentBatches, [batchB, batchB])
+        receiver.session(receiverSession, didReceive: senderSends[1], fromPeer: senderPeerID)
+        await waitUntil {
+            receiverSends.contains { data in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return false
+                }
+                return acknowledgement.batchID == batchB.id
+            }
+        }
+
+        let acknowledgementData = try XCTUnwrap(
+            receiverSends.first { data in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return false
+                }
+                return acknowledgement.batchID == batchB.id
+            }
+        )
+        sender.session(senderSession, didReceive: acknowledgementData, fromPeer: receiverPeerID)
+        await waitUntil { FileBackedSyncBatchQueue(fileURL: senderUnsentURL).pendingBatches.isEmpty }
+
+        let batchBAcknowledgementCount = receiverSends.reduce(into: 0) { count, data in
+            guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                  message.kind == .batchAcknowledgement,
+                  let acknowledgement = try? JSONDecoder().decode(
+                    SyncBatchAcknowledgement.self,
+                    from: message.payload
+                  ), acknowledgement.batchID == batchB.id else {
+                return
+            }
+            count += 1
+        }
+        XCTAssertEqual(batchBAcknowledgementCount, 1)
+        XCTAssertEqual(noteB.content, "B0-once")
+        XCTAssertEqual(receiver.lastSyncAt, batchB.createdAt)
+        _ = coordinator
     }
 
     func testSessionLevelLegacyBatchAcknowledgesOnlyAfterDurableCapture() async throws {
@@ -684,6 +811,30 @@ final class MacSyncBatchControllerTests: XCTestCase {
                     text: "A",
                     modifiedAt: batch.createdAt,
                     baseContentHash: SyncBatchContentHash.sha256Hex(for: "")
+                ))
+            ]
+        )
+    }
+
+    private func makeCompatibleBodyBatch(
+        idSuffix: Int,
+        noteID: UUID,
+        base: String,
+        inserted: String
+    ) -> SyncBatch {
+        let batch = makeBatch(idSuffix: idSuffix)
+        return SyncBatch(
+            id: batch.id,
+            originDeviceID: batch.originDeviceID,
+            createdAt: batch.createdAt,
+            batchSequence: batch.batchSequence,
+            changes: [
+                .noteBodyTextInserted(.init(
+                    noteID: noteID,
+                    utf16Offset: base.utf16.count,
+                    text: inserted,
+                    modifiedAt: batch.createdAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: base)
                 ))
             ]
         )
