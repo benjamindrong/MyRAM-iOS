@@ -801,8 +801,8 @@ extension MyRAMSyncController: MCSessionDelegate {
                 let captured = await onDurablyCaptureIncomingBatch?(envelope.batch) ?? false
                 if captured {
                     let disposition = await onBatchReceived?(envelope.batch) ?? .acknowledgementPermitted
-                    lastSyncAt = envelope.batch.createdAt
                     if disposition == .acknowledgementPermitted {
+                        lastSyncAt = envelope.batch.createdAt
                         await sendBatchAcknowledgement(batchID: envelope.batch.id, to: peerID)
                     }
                 }

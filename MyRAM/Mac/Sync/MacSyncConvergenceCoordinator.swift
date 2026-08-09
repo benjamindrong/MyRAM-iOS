@@ -42,7 +42,8 @@ final class MacSyncConvergenceCoordinator {
     /// Durably persists an incoming batch's raw bytes, independent of whatever
     /// `submitRemoteBatch` later does with them. This is what the transport layer
     /// checks before convergence. Durable capture is necessary but does not by
-    /// itself permit acknowledgement; MYR-178 compatibility deferral suppresses it.
+    /// itself permit acknowledgement; the convergence disposition controls ACK,
+    /// leaving the sender's durable copy available when work is deferred or rejected.
     func durablyCaptureIncomingBatch(_ batch: SyncBatch) -> Bool {
         guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(batch)) != nil else {
             return false

@@ -2160,10 +2160,11 @@ final class NotesViewModel: ObservableObject {
     }
 
     /// Durably persists an incoming batch's raw bytes, independent of whatever
-    /// `applyIncomingSyncBatch` later does with them. This is what the transport
-    /// layer checks before acknowledging receipt back to the sender: once this
-    /// returns true, the sender no longer needs to keep the batch around for
-    /// redelivery, even if convergence processing of its contents is deferred or blocked.
+    /// `applyIncomingSyncBatch` later does with them. Capture occurs before
+    /// convergence and is necessary but not sufficient for acknowledgement: the
+    /// convergence disposition controls whether acknowledgement is permitted.
+    /// Deferred or rejected work can therefore leave the sender's durable copy
+    /// available for later redelivery.
     func durablyCaptureIncomingBatch(_ batch: SyncBatch) -> Bool {
         guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(batch)) != nil else {
             return false

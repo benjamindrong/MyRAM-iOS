@@ -4530,6 +4530,89 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.content, baseBody + "[presentation]")
     }
 
+    func testReentrantHashlessBatchDefersAcknowledgementWhileActiveDrainClassifiesIt() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let noteID = UUID()
+        let baseBody = "authoritative"
+        let note = Note(title: "Base", content: baseBody)
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+
+        let presentationBatch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [.noteBodyTextInserted(.init(
+                noteID: noteID,
+                utf16Offset: baseBody.utf16.count,
+                text: "!",
+                modifiedAt: Date(timeIntervalSince1970: 2),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: baseBody)
+            ))]
+        )
+        let reentrantBatch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 3),
+            changes: [.noteBodyTextInserted(.init(
+                noteID: noteID,
+                utf16Offset: baseBody.utf16.count,
+                text: " unsafe",
+                modifiedAt: Date(timeIntervalSince1970: 4)
+            ))]
+        )
+        let queue = FileBackedSyncBatchQueue(fileURL: nil)
+        try queue.enqueueIncoming(presentationBatch)
+        let adapter = ReentrantPresentationAdapter()
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: queue,
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: adapter
+        )
+        adapter.onFirstPresentation = {
+            await runtime.submitRemoteBatch(reentrantBatch)
+        }
+
+        let activeDrainOutcome = await runtime.resumePendingWork()
+
+        let reentrantOutcome = try XCTUnwrap(adapter.reentrantOutcome)
+        guard case .alreadyDraining = reentrantOutcome else {
+            return XCTFail("Expected the production runtime seam to return alreadyDraining")
+        }
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: reentrantOutcome,
+                batchID: reentrantBatch.id
+            ),
+            .acknowledgementDeferred,
+            "an undecided reentrant batch must not be acknowledged while the active drain classifies it"
+        )
+        guard case .deferred(let deferred) = activeDrainOutcome else {
+            return XCTFail("Expected the active drain to classify hashless Batch B recoverably")
+        }
+        XCTAssertEqual(queue.pendingBatches, [reentrantBatch])
+        XCTAssertEqual(
+            deferred.incoming.map(\.batchID),
+            [reentrantBatch.id]
+        )
+        XCTAssertEqual(note.content, baseBody + "!")
+
+        let duplicateOutcome = await runtime.submitRemoteBatch(reentrantBatch)
+        XCTAssertEqual(queue.pendingBatches, [reentrantBatch])
+        XCTAssertEqual(note.content, baseBody + "!")
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: duplicateOutcome,
+                batchID: reentrantBatch.id
+            ),
+            .recoverableAnchorlessCompatibilityRejection
+        )
+    }
+
     func testKDelayedBatchDrainAppliesBodyInsertionsExactlyOnceAcrossRegionsAndRejectsDuplicateIncorporation() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
@@ -9327,6 +9410,7 @@ private final class ReentrantPresentationAdapter: SyncConvergencePresentationAda
     var onFirstPresentation: (() async -> SyncConvergenceRuntimeOutcome)?
     private(set) var reentrantOutcomeCount = 0
     private(set) var didObserveAlreadyDraining = false
+    private(set) var reentrantOutcome: SyncConvergenceRuntimeOutcome?
 
     func refreshPresentation(
         for request: SyncConvergencePresentationRequest
@@ -9334,7 +9418,9 @@ private final class ReentrantPresentationAdapter: SyncConvergencePresentationAda
         guard let onFirstPresentation else { return .verifiedComplete }
         self.onFirstPresentation = nil
         reentrantOutcomeCount += 1
-        if case .alreadyDraining = await onFirstPresentation() {
+        let outcome = await onFirstPresentation()
+        reentrantOutcome = outcome
+        if case .alreadyDraining = outcome {
             didObserveAlreadyDraining = true
         }
         return .verifiedComplete

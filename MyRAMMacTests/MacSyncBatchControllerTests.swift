@@ -124,6 +124,43 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastSyncAt, batch.createdAt)
     }
 
+    func testManualResendRetainsExactBatchUntilSuccessfulRedeliveryAcknowledgement() async throws {
+        let remotePeerID = MCPeerID(displayName: "remote|manual-redelivery")
+        let unsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
+        var recordedSends: [Data] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: unsentURL,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [remotePeerID] },
+            sendBatchDataOperation: { data, _, _ in recordedSends.append(data) }
+        )
+        let batch = makeLegacyBodyBatch(idSuffix: 24)
+
+        try await controller.acceptLocalBatch(batch)
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: unsentURL).pendingBatches, [batch])
+
+        controller.flushPendingBatch()
+        await waitUntil { recordedSends.count == 2 }
+        let resentBatches = try recordedSends.map { data in
+            let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+            return try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload).batch
+        }
+        XCTAssertEqual(resentBatches, [batch, batch])
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: unsentURL).pendingBatches, [batch])
+
+        let acknowledgementData = try MultipeerSyncMessageCoding.encode(
+            kind: .batchAcknowledgement,
+            payload: JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batch.id))
+        )
+        let dummySession = MCSession(
+            peer: MCPeerID(displayName: "local|manual-redelivery"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+        controller.session(dummySession, didReceive: acknowledgementData, fromPeer: remotePeerID)
+        await waitUntil { FileBackedSyncBatchQueue(fileURL: unsentURL).pendingBatches.isEmpty }
+    }
+
     func testSessionLevelLegacyBatchAcknowledgesOnlyAfterDurableCapture() async throws {
         let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
         let remotePeerID = MCPeerID(displayName: "remote|legacy-inbound")
@@ -249,6 +286,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches, [batch])
         XCTAssertEqual(coordinator.pendingIncomingBatchCount, 1)
         XCTAssertEqual(note.content, "local")
+        XCTAssertNil(controller.lastSyncAt)
     }
 
     func testConnectedAnchoredLocalBatchRejectsBeforeQueueOrTransportMutation() async throws {
@@ -683,6 +721,17 @@ final class MacSyncBatchControllerTests: XCTestCase {
             return nil
         }
         return try Data(contentsOf: url)
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        condition: @escaping @MainActor () -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition(), clock.now < deadline {
+            await Task.yield()
+        }
     }
 
     private func completingPresentationSurface() -> MacSyncConvergencePresentationSurface {

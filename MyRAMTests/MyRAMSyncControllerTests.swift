@@ -461,6 +461,57 @@ final class MyRAMSyncControllerTests: XCTestCase {
 
         await waitUntil { !transport.sentBatchAcknowledgements.isEmpty }
         XCTAssertEqual(transport.sentBatchAcknowledgements, [SyncBatchAcknowledgement(batchID: batch.id)])
+        XCTAssertEqual(controller.lastSyncAt, batch.createdAt)
+    }
+
+    func testIncomingBatchSyncSuppressesAcknowledgementAndLastSyncForDeferredDisposition() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(transport: transport)
+        controller.onDurablyCaptureIncomingBatch = { _ in true }
+        controller.onBatchReceived = { _ in .acknowledgementDeferred }
+        let batch = makeBatch(idSuffix: 219)
+
+        await deliverBatchSync(to: controller, batch)
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
+        XCTAssertNil(controller.lastSyncAt)
+    }
+
+    func testManualResendRetainsDeferredBatchUntilSuccessfulRedeliveryAcknowledgesIt() async throws {
+        let senderTransport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let sender = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(),
+            transport: senderTransport
+        )
+        let receiverTransport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let receiver = try makeController(transport: receiverTransport)
+        receiver.onDurablyCaptureIncomingBatch = { _ in true }
+        var dispositions: [SyncConvergenceRemoteBatchDisposition] = [
+            .acknowledgementDeferred,
+            .acknowledgementPermitted
+        ]
+        receiver.onBatchReceived = { _ in dispositions.removeFirst() }
+        let batch = makeBatch(idSuffix: 220)
+
+        try await sender.acceptLocalBatch(batch)
+        XCTAssertEqual(sender.unsentBatchQueueSnapshot().pendingBatches, [batch])
+        XCTAssertEqual(senderTransport.sentBatchEnvelopes.map(\.batch), [batch])
+
+        await deliverBatchSync(to: receiver, batch)
+        try await Task.sleep(for: .milliseconds(50))
+        XCTAssertTrue(receiverTransport.sentBatchAcknowledgements.isEmpty)
+        XCTAssertEqual(sender.unsentBatchQueueSnapshot().pendingBatches, [batch])
+
+        sender.flushPendingChanges()
+        await waitUntil { senderTransport.sentBatchEnvelopes.count == 2 }
+        XCTAssertEqual(senderTransport.sentBatchEnvelopes.map(\.batch), [batch, batch])
+
+        await deliverBatchSync(to: receiver, batch)
+        await waitUntil { receiverTransport.sentBatchAcknowledgements.count == 1 }
+        let acknowledgement = try XCTUnwrap(receiverTransport.sentBatchAcknowledgements.first)
+        await deliverBatchAcknowledgement(to: sender, batchID: acknowledgement.batchID)
+        await waitUntil { sender.unsentBatchQueueSnapshot().pendingBatches.isEmpty }
     }
 
     func testIncomingBatchSyncSuppressesAcknowledgementForRecoverableAnchorlessCompatibilityRejection() async throws {
@@ -474,6 +525,10 @@ final class MyRAMSyncControllerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(50))
 
         XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
+        XCTAssertNil(
+            controller.lastSyncAt,
+            "recoverably rejected incoming work is not successfully synchronized"
+        )
     }
 
     func testIncomingBatchSyncDoesNotAcknowledgeWhenNotDurablyCaptured() async throws {

@@ -328,6 +328,27 @@ final class SyncConvergencePlanningTests: XCTestCase {
         )
     }
 
+    func testAlreadyDrainingDefersTransportAcknowledgementWithoutClassifyingCompatibility() {
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: .alreadyDraining,
+                batchID: UUID()
+            ),
+            .acknowledgementDeferred
+        )
+    }
+
+    func testCompletedMatchingCompatibilityBatchPermitsTransportAcknowledgement() {
+        let batchID = UUID()
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: .drained(appliedBatchIDs: [batchID]),
+                batchID: batchID
+            ),
+            .acknowledgementPermitted
+        )
+    }
+
     func testDivergentUnreconstructableBaseSuppressesTransportAcknowledgement() {
         let noteID = UUID(uuidString: "17800000-0000-0000-0000-0000000000D3")!
         let batchID = UUID(uuidString: "17800000-0000-0000-0000-0000000000D4")!

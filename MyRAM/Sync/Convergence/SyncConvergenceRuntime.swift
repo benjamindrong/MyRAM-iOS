@@ -13,6 +13,7 @@ enum SyncConvergenceRuntimeOutcome {
 
 enum SyncConvergenceRemoteBatchDisposition: Equatable, Sendable {
     case acknowledgementPermitted
+    case acknowledgementDeferred
     case recoverableAnchorlessCompatibilityRejection
 }
 
@@ -21,6 +22,9 @@ enum SyncConvergenceRemoteBatchDispositionPolicy {
         for outcome: SyncConvergenceRuntimeOutcome,
         batchID: UUID
     ) -> SyncConvergenceRemoteBatchDisposition {
+        if case .alreadyDraining = outcome {
+            return .acknowledgementDeferred
+        }
         guard case .deferred(let work) = outcome else {
             return .acknowledgementPermitted
         }
