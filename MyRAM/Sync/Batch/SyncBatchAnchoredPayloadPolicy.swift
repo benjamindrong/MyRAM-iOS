@@ -61,6 +61,13 @@ enum SyncBatchAnchoredPayloadPolicy {
         try validate(batch, boundary: .apply, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
+    static func validateDurableAdmissionCore(
+        _ batch: SyncBatch,
+        activationEnabled: Bool
+    ) throws {
+        try validate(batch, boundary: .durableQueue, activationEnabled: activationEnabled)
+    }
+
     static func validateConvergenceCore(_ batch: SyncBatch, activationEnabled: Bool) throws {
         try validate(batch, boundary: .convergence, activationEnabled: activationEnabled)
     }
