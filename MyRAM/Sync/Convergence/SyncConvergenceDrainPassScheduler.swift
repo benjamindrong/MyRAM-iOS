@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import Foundation
 
 struct SyncConvergenceQueueCandidate: Equatable {
@@ -5,6 +6,21 @@ struct SyncConvergenceQueueCandidate: Equatable {
     let originDeviceID: UUID
     let affectedNoteIDs: Set<UUID>
     let queuePosition: Int
+    let anchoredOperationIDs: Set<SyncOperationID>
+
+    init(
+        batchID: UUID,
+        originDeviceID: UUID,
+        affectedNoteIDs: Set<UUID>,
+        queuePosition: Int,
+        anchoredOperationIDs: Set<SyncOperationID> = []
+    ) {
+        self.batchID = batchID
+        self.originDeviceID = originDeviceID
+        self.affectedNoteIDs = affectedNoteIDs
+        self.queuePosition = queuePosition
+        self.anchoredOperationIDs = anchoredOperationIDs
+    }
 }
 
 struct SyncConvergenceDrainPassScheduler {
@@ -12,14 +28,31 @@ struct SyncConvergenceDrainPassScheduler {
         candidates: [SyncConvergenceQueueCandidate],
         attemptedBatchIDs: Set<UUID>,
         blockedNoteIDs: Set<UUID>,
-        blockedOrigins: Set<UUID>
+        blockedOrigins: Set<UUID>,
+        anchoredDependenciesByNoteID: [UUID: Set<SyncOperationID>] = [:]
     ) -> Int? {
         candidates.firstIndex { candidate in
-            guard !attemptedBatchIDs.contains(candidate.batchID),
-                  candidate.affectedNoteIDs.isDisjoint(with: blockedNoteIDs),
-                  !blockedOrigins.contains(candidate.originDeviceID) else {
+            guard !attemptedBatchIDs.contains(candidate.batchID) else {
                 return false
             }
+
+            let blockedNotes = candidate.affectedNoteIDs.intersection(blockedNoteIDs)
+            let originIsBlocked = blockedOrigins.contains(candidate.originDeviceID)
+            guard !blockedNotes.isEmpty || originIsBlocked else {
+                return true
+            }
+
+            guard !blockedNotes.isEmpty,
+                  blockedNotes.allSatisfy({ noteID in
+                      guard let dependencies = anchoredDependenciesByNoteID[noteID],
+                            !dependencies.isEmpty else {
+                          return false
+                      }
+                      return !candidate.anchoredOperationIDs.isDisjoint(with: dependencies)
+                  }) else {
+                return false
+            }
+
             return true
         }
     }
