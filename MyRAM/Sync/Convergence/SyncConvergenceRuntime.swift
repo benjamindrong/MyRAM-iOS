@@ -194,7 +194,10 @@ final class SyncConvergenceRuntime {
         guard !batch.changes.isEmpty else { return .drained(appliedBatchIDs: []) }
         if !convergenceQueue.contains(batch.id) {
             do {
-                try convergenceQueue.enqueueIncoming(batch)
+                try convergenceQueue.enqueueIncomingCore(
+                    batch,
+                    activationEnabled: activationEnabled
+                )
             } catch {
                 return .blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id))
             }
@@ -328,7 +331,10 @@ final class SyncConvergenceRuntime {
             ) {
                 let batch = convergenceQueue.pendingBatches[candidateIndex]
                 do {
-                    try SyncBatchAnchoredPayloadPolicy.validateConvergence(batch)
+                    try SyncBatchAnchoredPayloadPolicy.validateConvergenceCore(
+                        batch,
+                        activationEnabled: activationEnabled
+                    )
                 } catch {
                     return .blocked(SyncBatchDrainFailure(
                         batchID: batch.id,
@@ -1322,7 +1328,7 @@ final class SyncConvergenceRuntime {
         roots: [IncorporatedSyncBatch],
         noteEffects: [IncorporatedBatchNoteEffect],
         operationIdentities: [IncorporatedBatchOperationIdentity],
-        resultEvidence: [IncorporatedBatchResultEvidence]
+        resultEvidence: [SyncConvergenceResultEvidence]
     ) -> Int {
         roots.reduce(0) {
             $0
