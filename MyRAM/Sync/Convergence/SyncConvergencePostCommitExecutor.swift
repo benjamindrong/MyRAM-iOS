@@ -4,6 +4,7 @@ actor SyncConvergencePostCommitExecutor {
     private let store: SyncConvergencePostCommitStateStore & SyncConvergencePendingPostCommitSource
     private let queueCleanupAdapter: SyncConvergenceQueueCleanupAdapter
     private let legacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapter?
+    private let anchoredRecoveryAdapter: SyncConvergenceAnchoredRecoveryAdapter?
     private let presentationAdapter: SyncConvergencePresentationAdapter
     private var activeRun: (id: UUID, task: Task<SyncConvergencePostCommitOutcome, Never>)?
     private var acknowledgedPresentations: Set<AcknowledgedPresentation> = []
@@ -12,22 +13,27 @@ actor SyncConvergencePostCommitExecutor {
         store: SyncConvergencePostCommitStateStore & SyncConvergencePendingPostCommitSource,
         queueCleanupAdapter: SyncConvergenceQueueCleanupAdapter,
         legacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapter? = nil,
+        anchoredRecoveryAdapter: SyncConvergenceAnchoredRecoveryAdapter? = nil,
         presentationAdapter: SyncConvergencePresentationAdapter
     ) {
         self.store = store
         self.queueCleanupAdapter = queueCleanupAdapter
         self.legacyCleanupAdapter = legacyCleanupAdapter
+        self.anchoredRecoveryAdapter = anchoredRecoveryAdapter
         self.presentationAdapter = presentationAdapter
     }
 
-    func execute(_ request: SyncConvergencePostCommitRequest) async -> SyncConvergencePostCommitOutcome {
+    func execute(
+        _ request: SyncConvergencePostCommitRequest,
+        activationEnabled: Bool = SyncBatchAnchoredPayloadCapability.isEnabled
+    ) async -> SyncConvergencePostCommitOutcome {
         let predecessor = activeRun?.task
         let runID = UUID()
         let run = Task { [self] in
             if let predecessor {
                 _ = await predecessor.value
             }
-            return await executeSerialized(request)
+            return await executeSerialized(request, activationEnabled: activationEnabled)
         }
         activeRun = (runID, run)
         let outcome = await run.value
@@ -37,11 +43,18 @@ actor SyncConvergencePostCommitExecutor {
         return outcome
     }
 
-    private func executeSerialized(_ request: SyncConvergencePostCommitRequest) async -> SyncConvergencePostCommitOutcome {
+    private func executeSerialized(
+        _ request: SyncConvergencePostCommitRequest,
+        activationEnabled: Bool
+    ) async -> SyncConvergencePostCommitOutcome {
         do {
             switch try store.loadState(matching: request.persistedIncorporationIdentity) {
             case .fullRoot(let loaded):
-                return await executeFullRoot(request, loaded: loaded)
+                return await executeFullRoot(
+                    request,
+                    loaded: loaded,
+                    activationEnabled: activationEnabled
+                )
             case .tombstone:
                 return executeTombstone(request)
             case .missing:
@@ -58,12 +71,30 @@ actor SyncConvergencePostCommitExecutor {
 
     private func executeFullRoot(
         _ request: SyncConvergencePostCommitRequest,
-        loaded: SyncConvergencePostCommitFullRootState
+        loaded: SyncConvergencePostCommitFullRootState,
+        activationEnabled: Bool
     ) async -> SyncConvergencePostCommitOutcome {
         var current = loaded
         guard current.postCommitState != .none else { return .complete }
         guard let workPayload = current.postCommitWorkPayload else {
             return .failedBeforeWork(.missingPostCommitWorkPayload(batchID: request.sourceBatchID))
+        }
+
+        if current.postCommitState.anchoredRecoveryPending {
+            let outcome = executeAnchoredRecoveryIfNeeded(
+                request,
+                loaded: current,
+                activationEnabled: activationEnabled
+            )
+            switch outcome {
+            case .complete:
+                guard case .fullRoot(let reloaded) = reloadState(for: request) else {
+                    return .failedBeforeWork(.missingAuthoritativeIncorporation(batchID: request.sourceBatchID))
+                }
+                current = reloaded
+            case .pending, .failedBeforeWork:
+                return outcome
+            }
         }
 
         if current.postCommitState.presentationRefreshPending {
@@ -106,6 +137,46 @@ actor SyncConvergencePostCommitExecutor {
         }
 
         return .complete
+    }
+
+    private func executeAnchoredRecoveryIfNeeded(
+        _ request: SyncConvergencePostCommitRequest,
+        loaded: SyncConvergencePostCommitFullRootState,
+        activationEnabled: Bool
+    ) -> SyncConvergencePostCommitOutcome {
+        guard activationEnabled else {
+            return pendingOutcome(
+                blocking: .anchoredRecoveryPersistence,
+                for: loaded.postCommitState
+            )
+        }
+        guard let anchoredRecoveryAdapter else {
+            return pendingOutcome(
+                blocking: .anchoredRecoveryPersistence,
+                for: loaded.postCommitState
+            )
+        }
+        guard !loaded.anchoredRecoveryTransitions.isEmpty else {
+            return .failedBeforeWork(
+                .contradictoryPostCommitWorkPayload(batchID: request.sourceBatchID)
+            )
+        }
+
+        switch anchoredRecoveryAdapter.applyAnchoredRecoveryTransitions(
+            loaded.anchoredRecoveryTransitions
+        ) {
+        case .verifiedComplete:
+            return persistCompletedWork(
+                .anchoredRecoveryPersistence,
+                request: request,
+                loaded: loaded
+            )
+        case .stillPending, .failed:
+            return pendingOutcome(
+                blocking: .anchoredRecoveryPersistence,
+                for: loaded.postCommitState
+            )
+        }
     }
 
     private func executePresentationIfNeeded(
@@ -169,7 +240,10 @@ actor SyncConvergencePostCommitExecutor {
         let updated = SyncConvergencePostCommitState(
             queueCleanupPending: work == .queueCleanup ? false : original.queueCleanupPending,
             legacyCleanupPending: work == .legacyCleanup ? false : original.legacyCleanupPending,
-            presentationRefreshPending: work == .presentationRefresh ? false : original.presentationRefreshPending
+            presentationRefreshPending: work == .presentationRefresh ? false : original.presentationRefreshPending,
+            anchoredRecoveryPending: work == .anchoredRecoveryPersistence
+                ? false
+                : original.anchoredRecoveryPending
         )
 
         do {

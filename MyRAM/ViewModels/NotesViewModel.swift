@@ -190,7 +190,8 @@ final class NotesViewModel: ObservableObject {
             localBatchTransportAdapter: syncController as? SyncConvergenceLocalBatchTransportAdapter,
             presentationAdapter: NotesViewModelConvergencePresentationAdapter(viewModel: self),
             incomingLocalBoundaryAdapter: self,
-            conflictStore: syncConflictStore
+            conflictStore: syncConflictStore,
+            anchoredRecoveryPlatform: .iPhone
         )
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
@@ -2465,7 +2466,8 @@ final class NotesViewModel: ObservableObject {
             case .unsupportedReconciliation, .historyPressure:
                 continue
                 }
-            case .legacyLocalEvidenceStale, .transportUnavailable, .postCommitPending:
+            case .anchoredDependency(_), .legacyLocalEvidenceStale,
+                 .transportUnavailable, .postCommitPending:
                 continue
             }
         }

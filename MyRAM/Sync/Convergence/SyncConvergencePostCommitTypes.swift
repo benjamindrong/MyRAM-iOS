@@ -52,6 +52,7 @@ enum SyncConvergencePostCommitOutcome: Equatable, Sendable {
 }
 
 enum SyncConvergencePostCommitPendingWork: Hashable, Sendable {
+    case anchoredRecoveryPersistence
     case queueCleanup
     case legacyCleanup
     case presentationRefresh
@@ -134,6 +135,23 @@ struct SyncConvergencePostCommitFullRootState: Equatable {
     let postCommitStatePayloadData: Data
     let postCommitWorkPayload: SyncConvergencePostCommitWorkPayloadV1?
     let postCommitWorkPayloadData: Data?
+    let anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition]
+
+    init(
+        root: SyncConvergenceIncorporatedRootProjection,
+        postCommitState: SyncConvergencePostCommitState,
+        postCommitStatePayloadData: Data,
+        postCommitWorkPayload: SyncConvergencePostCommitWorkPayloadV1?,
+        postCommitWorkPayloadData: Data?,
+        anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition] = []
+    ) {
+        self.root = root
+        self.postCommitState = postCommitState
+        self.postCommitStatePayloadData = postCommitStatePayloadData
+        self.postCommitWorkPayload = postCommitWorkPayload
+        self.postCommitWorkPayloadData = postCommitWorkPayloadData
+        self.anchoredRecoveryTransitions = anchoredRecoveryTransitions
+    }
 }
 
 protocol SyncConvergencePostCommitStateStore {
@@ -164,6 +182,12 @@ protocol SyncConvergenceLegacyCleanupAdapter {
     func performLegacyCleanup(for request: SyncConvergencePostCommitRequest) async -> SyncConvergencePostCommitAdapterResult
 }
 
+protocol SyncConvergenceAnchoredRecoveryAdapter {
+    func applyAnchoredRecoveryTransitions(
+        _ transitions: [SyncBatchAnchoredRecoveryStoreTransition]
+    ) -> SyncConvergencePostCommitAdapterResult
+}
+
 protocol SyncConvergencePresentationAdapter {
     func refreshPresentation(for request: SyncConvergencePresentationRequest) async -> SyncConvergencePostCommitAdapterResult
 }
@@ -175,6 +199,9 @@ extension SyncConvergencePostCommitState {
 
     var pendingWork: Set<SyncConvergencePostCommitPendingWork> {
         var work: Set<SyncConvergencePostCommitPendingWork> = []
+        if anchoredRecoveryPending {
+            work.insert(.anchoredRecoveryPersistence)
+        }
         if queueCleanupPending {
             work.insert(.queueCleanup)
         }
@@ -298,6 +325,12 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
                       receipt.candidateBodyHash == committedPostBodyHash else {
                     throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
                 }
+            case .structuralRefresh:
+                guard incrementalOperations.isEmpty,
+                      rewriteSafetyReceipt == nil,
+                      expectedPreBodyHash != nil else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
+                }
             case .noteRemoved:
                 guard incrementalOperations.isEmpty else {
                     throw SyncConvergencePostCommitWorkPayloadError.contradictoryPresentationEntry
@@ -390,9 +423,198 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
     }
 }
 
+
+struct SyncConvergencePostCommitWorkPayloadV2: Codable, Equatable, Sendable {
+    static let supportedFormatVersion = 2
+
+    let formatVersion: Int
+    let legacyWorkPayload: SyncConvergencePostCommitWorkPayloadV1
+    let anchoredRecoveryTransitions: [AnchoredRecoveryTransitionPayload]
+
+    init(
+        legacyWorkPayload: SyncConvergencePostCommitWorkPayloadV1,
+        anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition]
+    ) throws {
+        self.formatVersion = Self.supportedFormatVersion
+        self.legacyWorkPayload = legacyWorkPayload
+        self.anchoredRecoveryTransitions = try anchoredRecoveryTransitions
+            .map(AnchoredRecoveryTransitionPayload.init)
+            .sorted { $0.key < $1.key }
+        try validate()
+    }
+
+    func encodedPayloadData() throws -> Data {
+        try validate()
+        return try SyncConvergenceStableEncoding.encode(self)
+    }
+
+    static func decodePayloadData(_ data: Data) throws -> Self {
+        let payload = try SyncConvergenceStableEncoding.decode(Self.self, from: data)
+        try payload.validate()
+        return payload
+    }
+
+    func decodedRecoveryTransitions() throws -> [SyncBatchAnchoredRecoveryStoreTransition] {
+        try anchoredRecoveryTransitions.map { try $0.decodedTransition() }
+    }
+
+    func validate() throws {
+        guard formatVersion == Self.supportedFormatVersion else {
+            throw SyncConvergencePostCommitWorkPayloadError.unsupportedVersion
+        }
+        try legacyWorkPayload.validate()
+        let keys = anchoredRecoveryTransitions.map(\.key)
+        guard keys.count == Set(keys).count else {
+            throw SyncConvergencePostCommitWorkPayloadError.duplicateAnchoredRecoveryTransitionKeys
+        }
+        for transition in anchoredRecoveryTransitions {
+            try transition.validate()
+        }
+    }
+
+    struct AnchoredRecoveryTransitionPayload: Codable, Equatable, Sendable {
+        enum Kind: String, Codable, Equatable, Sendable {
+            case insertExpectedAbsent
+            case replace
+            case removeCommitted
+        }
+
+        let kind: Kind
+        let expected: SyncBatchAnchoredRecoveryRecord?
+        let replacement: SyncBatchAnchoredRecoveryRecord?
+
+        init(_ transition: SyncBatchAnchoredRecoveryStoreTransition) throws {
+            switch transition {
+            case .insertExpectedAbsent(let proposed):
+                kind = .insertExpectedAbsent
+                expected = nil
+                replacement = proposed
+            case .replace(let expected, let replacement):
+                kind = .replace
+                self.expected = expected
+                self.replacement = replacement
+            case .removeCommitted(let expected):
+                kind = .removeCommitted
+                self.expected = expected
+                replacement = nil
+            }
+            try validate()
+        }
+
+        var key: SyncBatchAnchoredRecoveryRecordKey {
+            switch kind {
+            case .insertExpectedAbsent:
+                return replacement!.key
+            case .replace, .removeCommitted:
+                return expected!.key
+            }
+        }
+
+        func validate() throws {
+            switch kind {
+            case .insertExpectedAbsent:
+                guard expected == nil, replacement != nil else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryAnchoredRecoveryTransition
+                }
+            case .replace:
+                guard let expected, let replacement,
+                      expected.key == replacement.key,
+                      expected.change == replacement.change else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryAnchoredRecoveryTransition
+                }
+            case .removeCommitted:
+                guard expected != nil, replacement == nil else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryAnchoredRecoveryTransition
+                }
+            }
+        }
+
+        func decodedTransition() throws -> SyncBatchAnchoredRecoveryStoreTransition {
+            try validate()
+            switch kind {
+            case .insertExpectedAbsent:
+                guard let replacement else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryAnchoredRecoveryTransition
+                }
+                return .insertExpectedAbsent(replacement)
+            case .replace:
+                guard let expected, let replacement else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryAnchoredRecoveryTransition
+                }
+                return .replace(expected: expected, replacement: replacement)
+            case .removeCommitted:
+                guard let expected else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryAnchoredRecoveryTransition
+                }
+                return .removeCommitted(expected: expected)
+            }
+        }
+    }
+}
+
+enum SyncConvergenceVersionedPostCommitWorkPayload {
+    struct Decoded: Equatable, Sendable {
+        let legacyWorkPayload: SyncConvergencePostCommitWorkPayloadV1
+        let anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition]
+
+        func derivedInitialState() -> SyncConvergencePostCommitState {
+            SyncConvergencePostCommitState(
+                queueCleanupPending: !legacyWorkPayload.queueCleanupBatchIDs.isEmpty,
+                legacyCleanupPending: legacyWorkPayload.legacyCleanupRequired,
+                presentationRefreshPending: !legacyWorkPayload.presentationEntries.isEmpty,
+                anchoredRecoveryPending: !anchoredRecoveryTransitions.isEmpty
+            )
+        }
+
+        func validateCurrentState(_ state: SyncConvergencePostCommitState) throws {
+            try legacyWorkPayload.validateCurrentState(state)
+            if state.anchoredRecoveryPending && anchoredRecoveryTransitions.isEmpty {
+                throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+            }
+        }
+    }
+
+    private struct VersionProbe: Decodable {
+        let formatVersion: Int
+    }
+
+    static func encodedPayloadData(
+        legacyWorkPayload: SyncConvergencePostCommitWorkPayloadV1,
+        anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition]
+    ) throws -> Data {
+        guard !anchoredRecoveryTransitions.isEmpty else {
+            return try legacyWorkPayload.encodedPayloadData()
+        }
+        return try SyncConvergencePostCommitWorkPayloadV2(
+            legacyWorkPayload: legacyWorkPayload,
+            anchoredRecoveryTransitions: anchoredRecoveryTransitions
+        ).encodedPayloadData()
+    }
+
+    static func decodePayloadData(_ data: Data) throws -> Decoded {
+        let probe = try SyncConvergenceStableEncoding.decode(VersionProbe.self, from: data)
+        switch probe.formatVersion {
+        case SyncConvergencePostCommitWorkPayloadV1.supportedFormatVersion:
+            return Decoded(
+                legacyWorkPayload: try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(data),
+                anchoredRecoveryTransitions: []
+            )
+        case SyncConvergencePostCommitWorkPayloadV2.supportedFormatVersion:
+            let payload = try SyncConvergencePostCommitWorkPayloadV2.decodePayloadData(data)
+            return Decoded(
+                legacyWorkPayload: payload.legacyWorkPayload,
+                anchoredRecoveryTransitions: try payload.decodedRecoveryTransitions()
+            )
+        default:
+            throw SyncConvergencePostCommitWorkPayloadError.unsupportedVersion
+        }
+    }
+}
+
 enum SyncConvergencePostCommitPresentationRoutingPayload: String, Codable, Equatable, Sendable {
     case incremental
     case wholeNoteFallback
+    case structuralRefresh
     case noteRemoved
     case none
 
@@ -402,6 +624,8 @@ enum SyncConvergencePostCommitPresentationRoutingPayload: String, Codable, Equat
             return .incremental
         case .wholeNoteFallback:
             return .wholeNoteFallback
+        case .structuralRefresh:
+            return .structuralRefresh
         case .noteRemoved:
             return .noteRemoved
         case .none:
@@ -415,6 +639,8 @@ enum SyncConvergencePostCommitPresentationRoutingPayload: String, Codable, Equat
             self = .incremental
         case .wholeNoteFallback:
             self = .wholeNoteFallback
+        case .structuralRefresh:
+            self = .structuralRefresh
         case .noteRemoved:
             self = .noteRemoved
         case .none:
@@ -426,6 +652,8 @@ enum SyncConvergencePostCommitPresentationRoutingPayload: String, Codable, Equat
 enum SyncConvergencePostCommitWorkPayloadError: Error, Equatable {
     case unsupportedVersion
     case duplicateCleanupIDs
+    case duplicateAnchoredRecoveryTransitionKeys
+    case contradictoryAnchoredRecoveryTransition
     case duplicatePresentationNoteIDs
     case duplicateOperationIndices
     case contradictoryState

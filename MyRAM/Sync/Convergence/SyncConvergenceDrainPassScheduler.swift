@@ -56,6 +56,8 @@ enum SyncConvergenceQuarantineReason: Equatable {
     case localEvidenceIndexMismatch
     case localEvidenceInvalidOperation
     case localEvidenceBaseHashMismatch
+    case anchoredTerminalStructuralFailure(SyncBatchAnchoredStructuralFailure)
+    case anchoredBootstrapConflict(SyncBatchAnchoredBootstrapConflict)
 }
 
 struct SyncConvergenceDeferredItem: Equatable {
@@ -73,6 +75,7 @@ struct SyncConvergenceDeferredItem: Equatable {
 
 enum SyncConvergenceRuntimeDeferredReason: Equatable {
     case planning(SyncConvergenceDeferredReason)
+    case anchoredDependency(SyncBatchAnchoredMissingDependency)
     case legacyLocalEvidenceStale
     case transportUnavailable
     case postCommitPending(Set<SyncConvergencePostCommitPendingWork>)

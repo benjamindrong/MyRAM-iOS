@@ -15,6 +15,7 @@ enum SyncConvergenceRemoteBatchDisposition: Equatable, Sendable {
     case acknowledgementPermitted
     case acknowledgementDeferred
     case recoverableAnchorlessCompatibilityRejection
+    case recoverableAnchoredStructuralRejection
 }
 
 enum SyncConvergenceRemoteBatchDispositionPolicy {
@@ -27,7 +28,18 @@ enum SyncConvergenceRemoteBatchDispositionPolicy {
             return appliedBatchIDs.contains(batchID)
                 ? .acknowledgementPermitted
                 : .acknowledgementDeferred
-        case .alreadyDraining, .pending, .blocked, .quarantined:
+        case .alreadyDraining, .pending, .blocked:
+            return .acknowledgementDeferred
+        case .quarantined(let work):
+            for item in work.items where item.domain == .incoming && item.batchID == batchID {
+                switch item.reason {
+                case .anchoredTerminalStructuralFailure, .anchoredBootstrapConflict:
+                    return .recoverableAnchoredStructuralRejection
+                case .localEvidenceContinuityViolation, .localEvidenceIndexMismatch,
+                     .localEvidenceInvalidOperation, .localEvidenceBaseHashMismatch:
+                    continue
+                }
+            }
             return .acknowledgementDeferred
         case .deferred(let work):
             for item in work.incoming where item.batchID == batchID {
@@ -106,6 +118,7 @@ final class SyncConvergenceRuntime {
     private lazy var postCommitExecutor = SyncConvergencePostCommitExecutor(
         store: SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container)),
         queueCleanupAdapter: convergenceQueue,
+        anchoredRecoveryAdapter: anchoredRecoveryStore,
         presentationAdapter: presentationAdapter
     )
     private lazy var pendingPostCommitSource = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
@@ -114,6 +127,7 @@ final class SyncConvergenceRuntime {
     private let localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics?
     private weak var incomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter?
     private let conflictStore: SyncConflictStoring
+    private let anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore?
 
     init(
         context: ModelContext,
@@ -123,7 +137,9 @@ final class SyncConvergenceRuntime {
         presentationAdapter: SyncConvergencePresentationAdapter,
         incomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter? = nil,
         conflictStore: SyncConflictStoring = SyncConflictStore(),
-        localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics? = nil
+        localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics? = nil,
+        anchoredRecoveryPlatform: SyncBatchPlatform? = nil,
+        anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore? = nil
     ) {
         self.context = context
         container = context.container
@@ -134,11 +150,43 @@ final class SyncConvergenceRuntime {
         self.incomingLocalBoundaryAdapter = incomingLocalBoundaryAdapter
         self.conflictStore = conflictStore
         self.localEvidenceMetrics = localEvidenceMetrics
+        if let anchoredRecoveryStore {
+            self.anchoredRecoveryStore = anchoredRecoveryStore
+        } else if let anchoredRecoveryPlatform,
+                  let fileURL = try? SyncBatchAnchoredRecoveryStoreFileLocation.fileURL(
+                    for: anchoredRecoveryPlatform
+                  ) {
+            self.anchoredRecoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
+        } else {
+            self.anchoredRecoveryStore = nil
+        }
     }
 
     func submitRemoteBatch(_ batch: SyncBatch) async -> SyncConvergenceRuntimeOutcome {
+        await submitRemoteBatchCore(
+            batch,
+            activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
+        )
+    }
+
+#if DEBUG
+    func submitRemoteBatchForTesting(
+        _ batch: SyncBatch,
+        activationEnabled: Bool
+    ) async -> SyncConvergenceRuntimeOutcome {
+        await submitRemoteBatchCore(batch, activationEnabled: activationEnabled)
+    }
+#endif
+
+    private func submitRemoteBatchCore(
+        _ batch: SyncBatch,
+        activationEnabled: Bool
+    ) async -> SyncConvergenceRuntimeOutcome {
         do {
-            try SyncBatchAnchoredPayloadPolicy.validateConvergence(batch)
+            try SyncBatchAnchoredPayloadPolicy.validateConvergenceCore(
+                batch,
+                activationEnabled: activationEnabled
+            )
         } catch {
             return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .invalidMergePlan))
         }
@@ -150,7 +198,7 @@ final class SyncConvergenceRuntime {
                 return .blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: batch.id))
             }
         }
-        return await drain()
+        return await drain(activationEnabled: activationEnabled)
     }
 
     func submitLocalBatch(_ batch: SyncBatch) async -> SyncConvergenceRuntimeOutcome {
@@ -205,10 +253,18 @@ final class SyncConvergenceRuntime {
     }
 
     func resumePendingWork() async -> SyncConvergenceRuntimeOutcome {
-        await drain()
+        await drain(activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
-    private func drain() async -> SyncConvergenceRuntimeOutcome {
+#if DEBUG
+    func resumePendingWorkForTesting(
+        activationEnabled: Bool
+    ) async -> SyncConvergenceRuntimeOutcome {
+        await drain(activationEnabled: activationEnabled)
+    }
+#endif
+
+    private func drain(activationEnabled: Bool) async -> SyncConvergenceRuntimeOutcome {
         guard !isDraining else {
             drainRequestedWhileActive = true
             return .alreadyDraining
@@ -247,7 +303,7 @@ final class SyncConvergenceRuntime {
             var deferredItems: [SyncConvergenceDeferredItem] = []
             for request in pendingRequests {
                 guard request.affectedNoteIDs.isDisjoint(with: blockedNoteIDs) else { continue }
-                let outcome = await postCommitExecutor.execute(request)
+                let outcome = await postCommitExecutor.execute(request, activationEnabled: activationEnabled)
                 if let terminal = Self.handlePostCommitOutcome(
                     outcome,
                     for: request,
@@ -297,7 +353,10 @@ final class SyncConvergenceRuntime {
                 } catch {
                     return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .unexpected))
                 }
-                let planning = planner.plan(input: input)
+                let planning = planner.planCore(
+                    input: input,
+                    activationEnabled: activationEnabled
+                )
                 switch planning {
                 case .planned(let incorporationInput):
                     preserveLifecycleConflicts(in: incorporationInput.plan)
@@ -310,7 +369,10 @@ final class SyncConvergenceRuntime {
                     case .incorporated(let result):
                         appliedBatchIDs.insert(result.batchID)
                         madeIncomingProgress = true
-                        let postCommit = await postCommitExecutor.execute(SyncConvergencePostCommitRequest(result: result))
+                        let postCommit = await postCommitExecutor.execute(
+                            SyncConvergencePostCommitRequest(result: result),
+                            activationEnabled: activationEnabled
+                        )
                         if let terminal = Self.handlePostCommitOutcome(
                             postCommit,
                             for: SyncConvergencePostCommitRequest(result: result),
@@ -321,7 +383,10 @@ final class SyncConvergenceRuntime {
                         }
                     case .alreadyIncorporated(let result):
                         madeIncomingProgress = true
-                        let postCommit = await postCommitExecutor.execute(SyncConvergencePostCommitRequest(result: result))
+                        let postCommit = await postCommitExecutor.execute(
+                            SyncConvergencePostCommitRequest(result: result),
+                            activationEnabled: activationEnabled
+                        )
                         if let terminal = Self.handlePostCommitOutcome(
                             postCommit,
                             for: SyncConvergencePostCommitRequest(result: result),
@@ -339,7 +404,7 @@ final class SyncConvergenceRuntime {
                         for cleanupBatchID in cleanupBatchIDs {
                             switch try pendingPostCommitSource.loadPostCommitStatus(forBatchID: cleanupBatchID) {
                             case .pending(let request), .tombstone(let request):
-                                let outcome = await postCommitExecutor.execute(request)
+                                let outcome = await postCommitExecutor.execute(request, activationEnabled: activationEnabled)
                                 if let terminal = Self.handlePostCommitOutcome(
                                     outcome,
                                     for: request,
@@ -371,6 +436,49 @@ final class SyncConvergenceRuntime {
                         affectedNoteIDs: affectedNoteIDs,
                         reason: .planning(reason)
                     ))
+                case .anchoredDeferred(let anchoredDeferred):
+                    guard persistAnchoredRecoveryTransitions(
+                        anchoredDeferred.recoveryTransitions
+                    ) else {
+                        return .blocked(SyncBatchDrainFailure(
+                            batchID: batch.id,
+                            kind: .persistence
+                        ))
+                    }
+                    let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
+                    blockedNoteIDs.formUnion(affectedNoteIDs)
+                    blockedOrigins.insert(batch.originDeviceID)
+                    deferredItems.append(SyncConvergenceDeferredItem(
+                        domain: .incoming,
+                        batchID: batch.id,
+                        affectedNoteIDs: affectedNoteIDs,
+                        reason: .anchoredDependency(anchoredDeferred.dependency)
+                    ))
+                case .anchoredQuarantined(let anchoredQuarantined):
+                    guard persistAnchoredRecoveryTransitions(
+                        anchoredQuarantined.recoveryTransitions
+                    ) else {
+                        return .blocked(SyncBatchDrainFailure(
+                            batchID: batch.id,
+                            kind: .persistence
+                        ))
+                    }
+                    let reason: SyncConvergenceQuarantineReason
+                    switch anchoredQuarantined.evidence {
+                    case .terminal(let failure):
+                        reason = .anchoredTerminalStructuralFailure(failure)
+                    case .bootstrapConflict(let conflict):
+                        reason = .anchoredBootstrapConflict(conflict)
+                    }
+                    return .quarantined(SyncConvergenceQuarantinedWork(items: [
+                        SyncConvergenceQuarantinedItem(
+                            domain: .incoming,
+                            batchID: batch.id,
+                            affectedNoteIDs: Self.affectedNoteIDs(in: batch),
+                            originDeviceID: batch.originDeviceID,
+                            reason: reason
+                        )
+                    ]))
                 case .failedBeforeCommit(let failure):
                     return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
                 }
@@ -588,6 +696,26 @@ final class SyncConvergenceRuntime {
             SyncConvergenceQueuedBatch(batch: $0.element, queuePosition: $0.offset)
         }
         let noteIDs = Self.affectedNoteIDs(in: [batch] + convergenceQueue.pendingBatches)
+        let anchoredNoteIDs = Set(batch.changes.compactMap { change -> UUID? in
+            switch change {
+            case .noteBodyTextInsertedAnchored(let inserted):
+                return inserted.noteID
+            case .noteBodyTextDeletedAnchored(let deleted):
+                return deleted.noteID
+            default:
+                return nil
+            }
+        })
+        let anchoredSequenceSnapshots = try loadAnchoredSequenceSnapshots(
+            noteIDs: anchoredNoteIDs
+        )
+        let anchoredRecoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot?
+        if anchoredNoteIDs.isEmpty {
+            anchoredRecoverySnapshot = nil
+        } else {
+            anchoredRecoverySnapshot = anchoredRecoveryStore?.snapshot()
+        }
+
         return SyncConvergencePlanningInput(
             incomingBatch: batch,
             currentNotes: try loadCurrentNotes(noteIDs: noteIDs),
@@ -599,8 +727,40 @@ final class SyncConvergenceRuntime {
             incorporatedBatches: try loadIncorporatedBatches(batchIDs: Set(queued.map(\.batch.id)).union([batch.id])),
             incorporatedTombstones: try loadIncorporatedTombstones(batchIDs: Set(queued.map(\.batch.id)).union([batch.id])),
             historyStates: try loadHistoryStates(noteIDs: noteIDs),
+            anchoredSequenceSnapshots: anchoredSequenceSnapshots,
+            anchoredRecoverySnapshot: anchoredRecoverySnapshot,
             candidateQueuePosition: queued.first(where: { $0.batch.id == batch.id })?.queuePosition
         )
+    }
+
+    private func loadAnchoredSequenceSnapshots(
+        noteIDs: Set<UUID>
+    ) throws -> [NoteSequenceStateMutationSnapshot] {
+        var snapshots: [NoteSequenceStateMutationSnapshot] = []
+        for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            var descriptor = FetchDescriptor<Note>(
+                predicate: #Predicate { $0.id == noteID }
+            )
+            descriptor.fetchLimit = 1
+            guard let note = try context.fetch(descriptor).first else {
+                continue
+            }
+            snapshots.append(
+                try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+                    for: note,
+                    in: context
+                )
+            )
+        }
+        return snapshots
+    }
+
+    private func persistAnchoredRecoveryTransitions(
+        _ transitions: [SyncBatchAnchoredRecoveryStoreTransition]
+    ) -> Bool {
+        guard let anchoredRecoveryStore else { return false }
+        return anchoredRecoveryStore.applyAnchoredRecoveryTransitions(transitions)
+            == .verifiedComplete
     }
 
     private func incomingCandidates() -> [SyncConvergenceQueueCandidate] {
@@ -1317,6 +1477,8 @@ final class NotesViewModelConvergencePresentationAdapter: SyncConvergencePresent
                 mutations: mutations,
                 authoritativeBody: request.committedNote.body
             ))
+        case .structuralRefresh:
+            disposition = .reload(.authoritativeConvergencePresentation)
         case .wholeNoteFallback:
             guard let receipt = request.rewriteSafetyReceipt,
                   receipt.noteID == request.noteID,

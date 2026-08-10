@@ -41,6 +41,8 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
             return refreshIncrementalPresentation(for: request)
         case .wholeNoteFallback:
             return refreshWholeNotePresentation(for: request)
+        case .structuralRefresh:
+            return refreshStructuralPresentation(for: request)
         }
     }
 
@@ -65,6 +67,15 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
             guard surface.currentEditorBody() == request.committedNote.body else { return .failed }
             return .verifiedComplete
         }
+    }
+
+    private func refreshStructuralPresentation(
+        for request: SyncConvergencePresentationRequest
+    ) -> SyncConvergencePostCommitAdapterResult {
+        guard !surface.hasUnsavedChanges() else { return .stillPending }
+        guard surface.reloadSelectedEditor(request.noteID, request.committedNote.body) else { return .stillPending }
+        guard surface.currentEditorBody() == request.committedNote.body else { return .failed }
+        return .verifiedComplete
     }
 
     private func refreshWholeNotePresentation(

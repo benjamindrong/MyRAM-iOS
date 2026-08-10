@@ -633,11 +633,53 @@ struct SyncConvergencePostCommitState: Codable, Equatable, Sendable {
     let queueCleanupPending: Bool
     let legacyCleanupPending: Bool
     let presentationRefreshPending: Bool
+    let anchoredRecoveryPending: Bool
+
+    init(
+        queueCleanupPending: Bool,
+        legacyCleanupPending: Bool,
+        presentationRefreshPending: Bool,
+        anchoredRecoveryPending: Bool = false
+    ) {
+        self.queueCleanupPending = queueCleanupPending
+        self.legacyCleanupPending = legacyCleanupPending
+        self.presentationRefreshPending = presentationRefreshPending
+        self.anchoredRecoveryPending = anchoredRecoveryPending
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case queueCleanupPending
+        case legacyCleanupPending
+        case presentationRefreshPending
+        case anchoredRecoveryPending
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            queueCleanupPending: try container.decode(Bool.self, forKey: .queueCleanupPending),
+            legacyCleanupPending: try container.decode(Bool.self, forKey: .legacyCleanupPending),
+            presentationRefreshPending: try container.decode(Bool.self, forKey: .presentationRefreshPending),
+            anchoredRecoveryPending: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .anchoredRecoveryPending
+            ) ?? false
+        )
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(queueCleanupPending, forKey: .queueCleanupPending)
+        try container.encode(legacyCleanupPending, forKey: .legacyCleanupPending)
+        try container.encode(presentationRefreshPending, forKey: .presentationRefreshPending)
+        try container.encode(anchoredRecoveryPending, forKey: .anchoredRecoveryPending)
+    }
 
     static let none = SyncConvergencePostCommitState(
         queueCleanupPending: false,
         legacyCleanupPending: false,
-        presentationRefreshPending: false
+        presentationRefreshPending: false,
+        anchoredRecoveryPending: false
     )
 }
 

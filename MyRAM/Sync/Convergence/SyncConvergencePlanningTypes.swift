@@ -4,6 +4,8 @@ enum SyncConvergencePlanningOutcome: Equatable {
     case planned(ValidatedSyncConvergenceIncorporationInput)
     case alreadyIncorporated(SyncConvergenceCleanupPlan)
     case deferred(SyncConvergenceDeferredReason)
+    case anchoredDeferred(SyncConvergenceAnchoredDeferredPlan)
+    case anchoredQuarantined(SyncConvergenceAnchoredQuarantinedPlan)
     case failedBeforeCommit(SyncConvergenceTransactionFailure)
 }
 
@@ -68,6 +70,8 @@ struct SyncConvergencePlanningInput: Equatable {
     let incorporatedTombstones: [SyncConvergenceIncorporatedBatchProjection]
     let historyStates: [SyncConvergenceHistoryAccountingProjection]
     let supportedDigestFormatVersions: Set<Int>
+    let anchoredSequenceSnapshots: [NoteSequenceStateMutationSnapshot]
+    let anchoredRecoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot?
     // nil means the candidate is a live newest arrival that follows every durable queue entry;
     // a queued-drain caller must pass the candidate's durable queue position explicitly.
     let candidateQueuePosition: Int?
@@ -84,6 +88,8 @@ struct SyncConvergencePlanningInput: Equatable {
         incorporatedTombstones: [SyncConvergenceIncorporatedBatchProjection] = [],
         historyStates: [SyncConvergenceHistoryAccountingProjection] = [],
         supportedDigestFormatVersions: Set<Int> = [SyncConvergenceCanonicalBatchDigest.supportedFormatVersion],
+        anchoredSequenceSnapshots: [NoteSequenceStateMutationSnapshot] = [],
+        anchoredRecoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot? = nil,
         candidateQueuePosition: Int? = nil
     ) {
         self.incomingBatch = incomingBatch
@@ -97,6 +103,8 @@ struct SyncConvergencePlanningInput: Equatable {
         self.incorporatedTombstones = incorporatedTombstones
         self.historyStates = historyStates
         self.supportedDigestFormatVersions = supportedDigestFormatVersions
+        self.anchoredSequenceSnapshots = anchoredSequenceSnapshots
+        self.anchoredRecoverySnapshot = anchoredRecoverySnapshot
         self.candidateQueuePosition = candidateQueuePosition
     }
 }
@@ -193,6 +201,7 @@ enum SyncConvergenceBodyEffect: Equatable {
     case matchingBaseIncremental(MatchingBaseBodyPlan)
     case reconstructedConflict(ReconstructedConflictBodyPlan)
     case legacyPositional(LegacyBodyPlan)
+    case anchoredStructural(SyncConvergenceAnchoredStructuralBodyPlan)
     case compatibilityNoopMissingNote(MissingNoteBodyNoopPlan)
 }
 
@@ -314,6 +323,7 @@ struct SyncConvergencePresentationPlan: Equatable {
 enum SyncConvergencePresentationRouting: Equatable {
     case incremental
     case wholeNoteFallback
+    case structuralRefresh
     /// A soft deletion must close any editor still showing the removed note.
     case noteRemoved
     case none
@@ -622,6 +632,7 @@ protocol SyncConvergencePersistenceTransaction {
     func loadNote(id: UUID) throws -> SyncConvergenceMutableNoteRecord?
     func insertNote(_ record: SyncConvergenceNewNoteRecord) throws
     func updateNote(_ record: SyncConvergenceUpdatedNoteRecord) throws
+    func updateAnchoredNote(_ record: SyncConvergenceAnchoredUpdatedNoteRecord) throws
     func loadTitleWinner(noteID: UUID) throws -> SyncConvergenceTitleWinnerProjection?
     func insertOrUpdateTitleWinner(_ record: SyncConvergenceTitleWinnerRecord) throws
     func loadIncorporatedBatch(batchID: UUID) throws -> SyncConvergenceIncorporatedRootProjection?
@@ -646,6 +657,12 @@ protocol SyncConvergencePersistenceTransaction {
     func insertSnapshot(_ record: SyncConvergenceSnapshotRecord) throws
     func save() throws
     func rollback()
+}
+
+extension SyncConvergencePersistenceTransaction {
+    func updateAnchoredNote(_ record: SyncConvergenceAnchoredUpdatedNoteRecord) throws {
+        throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: record.noteID)
+    }
 }
 
 struct SyncConvergenceHistoryAccountingProjection: Equatable {
