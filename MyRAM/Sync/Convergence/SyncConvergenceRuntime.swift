@@ -1328,7 +1328,7 @@ final class SyncConvergenceRuntime {
         roots: [IncorporatedSyncBatch],
         noteEffects: [IncorporatedBatchNoteEffect],
         operationIdentities: [IncorporatedBatchOperationIdentity],
-        resultEvidence: [SyncConvergenceResultEvidence]
+        resultEvidence: [IncorporatedBatchResultEvidence]
     ) -> Int {
         roots.reduce(0) {
             $0
