@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import Foundation
 import SwiftData
 
@@ -300,6 +301,7 @@ final class SyncConvergenceRuntime {
             }
             var blockedNoteIDs: Set<UUID> = []
             var blockedOrigins: Set<UUID> = []
+            var anchoredDependenciesByNoteID: [UUID: Set<SyncOperationID>] = [:]
             var deferredItems: [SyncConvergenceDeferredItem] = []
             for request in pendingRequests {
                 guard request.affectedNoteIDs.isDisjoint(with: blockedNoteIDs) else { continue }
@@ -321,7 +323,8 @@ final class SyncConvergenceRuntime {
                 candidates: incomingCandidates(),
                 attemptedBatchIDs: attemptedBatchIDs,
                 blockedNoteIDs: blockedNoteIDs,
-                blockedOrigins: blockedOrigins
+                blockedOrigins: blockedOrigins,
+                anchoredDependenciesByNoteID: anchoredDependenciesByNoteID
             ) {
                 let batch = convergenceQueue.pendingBatches[candidateIndex]
                 do {
@@ -448,6 +451,8 @@ final class SyncConvergenceRuntime {
                     let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
                     blockedNoteIDs.formUnion(affectedNoteIDs)
                     blockedOrigins.insert(batch.originDeviceID)
+                    anchoredDependenciesByNoteID[anchoredDeferred.noteID, default: []]
+                        .insert(anchoredDeferred.dependency.operationID)
                     deferredItems.append(SyncConvergenceDeferredItem(
                         domain: .incoming,
                         batchID: batch.id,
@@ -769,7 +774,8 @@ final class SyncConvergenceRuntime {
                 batchID: batch.id,
                 originDeviceID: batch.originDeviceID,
                 affectedNoteIDs: Self.affectedNoteIDs(in: batch),
-                queuePosition: index
+                queuePosition: index,
+                anchoredOperationIDs: Self.anchoredOperationIDs(in: batch)
             )
         }
     }
@@ -1340,6 +1346,20 @@ final class SyncConvergenceRuntime {
 
     private static func affectedNoteIDs(in batches: [SyncBatch]) -> Set<UUID> {
         Set(batches.flatMap { $0.changes.map(\.noteID) })
+    }
+
+    private static func anchoredOperationIDs(in batch: SyncBatch) -> Set<SyncOperationID> {
+        Set(batch.changes.compactMap { change -> SyncOperationID? in
+            switch change {
+            case .noteBodyTextInsertedAnchored(let inserted):
+                return inserted.payload.operationID
+            case .noteBodyTextDeletedAnchored(let deleted):
+                return deleted.payload.operationID
+            case .noteCreated, .noteTitleChanged, .noteBodyTextInserted,
+                 .noteBodyTextDeleted, .noteBodyReconciled, .noteLifecycleChanged:
+                return nil
+            }
+        })
     }
 
     private static func bodyMutationNoteIDs(in batch: SyncBatch) -> Set<UUID> {
