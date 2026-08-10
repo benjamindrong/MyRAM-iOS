@@ -376,7 +376,6 @@ final class SyncConvergenceRuntime {
                     )
                     switch incorporation {
                     case .incorporated(let result):
-                        appliedBatchIDs.insert(result.batchID)
                         madeIncomingProgress = true
                         let postCommit = await postCommitExecutor.execute(
                             SyncConvergencePostCommitRequest(result: result),
@@ -389,6 +388,9 @@ final class SyncConvergenceRuntime {
                             deferredItems: &deferredItems
                         ) {
                             return terminal
+                        }
+                        if case .complete = postCommit {
+                            appliedBatchIDs.insert(result.batchID)
                         }
                     case .alreadyIncorporated(let result):
                         madeIncomingProgress = true
@@ -403,6 +405,9 @@ final class SyncConvergenceRuntime {
                             deferredItems: &deferredItems
                         ) {
                             return terminal
+                        }
+                        if case .complete = postCommit {
+                            appliedBatchIDs.insert(result.batchID)
                         }
                     case .failedBeforeCommit(let failure), .failedAndRolledBack(let failure):
                         return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
@@ -422,12 +427,16 @@ final class SyncConvergenceRuntime {
                                 ) {
                                     return terminal
                                 }
+                                if case .complete = outcome {
+                                    appliedBatchIDs.insert(cleanupBatchID)
+                                }
                             case .completed:
                                 try convergenceQueue.removeBatches(withIDs: [cleanupBatchID])
                                 guard !convergenceQueue.contains(cleanupBatchID) else {
                                     return .blocked(SyncBatchDrainFailure(batchID: cleanupBatchID, kind: .persistence))
                                 }
                                 madeIncomingProgress = true
+                                appliedBatchIDs.insert(cleanupBatchID)
                             case .missing:
                                 return .blocked(SyncBatchDrainFailure(batchID: cleanupBatchID, kind: .persistence))
                             }
