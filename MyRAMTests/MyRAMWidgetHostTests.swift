@@ -217,6 +217,7 @@ final class MyRAMWidgetHostTests: XCTestCase {
         let root = temporaryDirectory()
         let snapshotStore = MyRAMWidgetSnapshotStore(containerURLProvider: { root })
         let selectionStore = MyRAMWidgetNoteSelectionStore(defaults: try makeDefaults())
+        var pinnedHighlightColorRaw = "yellow"
         var reloadedKinds: [String] = []
         let coordinator = MyRAMWidgetHostCoordinator(
             container: container,
@@ -224,17 +225,27 @@ final class MyRAMWidgetHostTests: XCTestCase {
             platform: .iOS,
             selectionStore: selectionStore,
             snapshotStore: snapshotStore,
+            pinnedHighlightColorRawProvider: { pinnedHighlightColorRaw },
             reloadTimelines: { reloadedKinds.append($0) }
         )
 
         coordinator.select(noteID: note.id)
-        let snapshot = try XCTUnwrap(snapshotStore.read().snapshot)
+        var snapshot = try XCTUnwrap(snapshotStore.read().snapshot)
         XCTAssertEqual(snapshot.note?.orderedPinnedTexts, ["First", "Second"])
         XCTAssertEqual(snapshot.note?.bodyPreviewSource, "Body")
+        XCTAssertEqual(snapshot.note?.pinnedHighlightColorRaw, "yellow")
         XCTAssertEqual(reloadedKinds, ["com.northsignalstudio.myram.priority-widget"])
 
+        pinnedHighlightColorRaw = "slate"
+        XCTAssertEqual(coordinator.publishNow(), .published)
+        snapshot = try XCTUnwrap(snapshotStore.read().snapshot)
+        XCTAssertEqual(snapshot.note?.orderedPinnedTexts, ["First", "Second"])
+        XCTAssertEqual(snapshot.note?.bodyPreviewSource, "Body")
+        XCTAssertEqual(snapshot.note?.pinnedHighlightColorRaw, "slate")
+        XCTAssertEqual(reloadedKinds.count, 2)
+
         XCTAssertEqual(coordinator.publishNow(), .unchanged)
-        XCTAssertEqual(reloadedKinds.count, 1)
+        XCTAssertEqual(reloadedKinds.count, 2)
     }
 
     func testSelectionPublishesPendingCurrentContextNoteImmediately() throws {

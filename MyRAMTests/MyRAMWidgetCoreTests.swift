@@ -42,6 +42,96 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         XCTAssertEqual(try codec.decode(first), envelope)
     }
 
+    func testSchemaV1SnapshotWithoutColorDecodesWithYellowFallback() throws {
+        let generatedAtBits = fixedDate.timeIntervalSinceReferenceDate.bitPattern
+        let legacyData = Data(
+            """
+            {"generatedAt":\(generatedAtBits),"note":{"bodyPreviewSource":"Body","id":"8F59F206-8C0B-42D2-A52C-151F6D5EFB2B","orderedPinnedTexts":["First","Second"],"title":"Title"},"schemaVersion":1}
+            """.utf8
+        )
+
+        let decoded = try MyRAMWidgetSnapshotCodec().decode(legacyData)
+        XCTAssertEqual(decoded.schemaVersion, 1)
+        XCTAssertNil(decoded.note?.pinnedHighlightColorRaw)
+        XCTAssertEqual(decoded.note?.resolvedPinnedHighlightColorRaw, "yellow")
+        XCTAssertEqual(decoded.note?.title, "Title")
+        XCTAssertEqual(decoded.note?.orderedPinnedTexts, ["First", "Second"])
+        XCTAssertEqual(decoded.note?.bodyPreviewSource, "Body")
+    }
+
+    func testSupportedPinnedHighlightColorsSurviveCodecRoundTrip() throws {
+        let codec = MyRAMWidgetSnapshotCodec()
+        let supported = ["yellow", "mint", "blue", "purple", "slate"]
+
+        for rawValue in supported {
+            let envelope = MyRAMWidgetSnapshotEnvelope(
+                generatedAt: fixedDate,
+                note: MyRAMWidgetSnapshotBounds.makeNoteSnapshot(
+                    id: UUID(),
+                    title: "Title",
+                    orderedPinnedTexts: ["Pin"],
+                    bodyPreviewSource: "Body",
+                    pinnedHighlightColorRaw: rawValue
+                )
+            )
+
+            let decoded = try codec.decode(codec.encode(envelope))
+            XCTAssertEqual(decoded.note?.pinnedHighlightColorRaw, rawValue)
+            XCTAssertEqual(decoded.note?.resolvedPinnedHighlightColorRaw, rawValue)
+        }
+    }
+
+    func testUnsupportedPinnedHighlightColorFallsBackAndFactoryNormalizesToNil() {
+        let unknownSnapshot = MyRAMWidgetNoteSnapshot(
+            id: UUID(),
+            title: "Title",
+            orderedPinnedTexts: ["Pin"],
+            bodyPreviewSource: "Body",
+            pinnedHighlightColorRaw: "orange"
+        )
+        XCTAssertEqual(unknownSnapshot.resolvedPinnedHighlightColorRaw, "yellow")
+
+        let normalizedSnapshot = MyRAMWidgetSnapshotBounds.makeNoteSnapshot(
+            id: UUID(),
+            title: "Title",
+            orderedPinnedTexts: ["Pin"],
+            bodyPreviewSource: "Body",
+            pinnedHighlightColorRaw: "orange"
+        )
+        XCTAssertNil(normalizedSnapshot.pinnedHighlightColorRaw)
+        XCTAssertEqual(normalizedSnapshot.resolvedPinnedHighlightColorRaw, "yellow")
+    }
+
+    func testColorOnlySnapshotChangePublishes() {
+        let root = temporaryDirectory()
+        let store = MyRAMWidgetSnapshotStore(containerURLProvider: { root })
+        let noteID = UUID()
+        let yellow = MyRAMWidgetSnapshotEnvelope(
+            generatedAt: fixedDate,
+            note: MyRAMWidgetSnapshotBounds.makeNoteSnapshot(
+                id: noteID,
+                title: "Title",
+                orderedPinnedTexts: ["Pin"],
+                bodyPreviewSource: "Body",
+                pinnedHighlightColorRaw: "yellow"
+            )
+        )
+        let slate = MyRAMWidgetSnapshotEnvelope(
+            generatedAt: fixedDate.addingTimeInterval(60),
+            note: MyRAMWidgetSnapshotBounds.makeNoteSnapshot(
+                id: noteID,
+                title: "Title",
+                orderedPinnedTexts: ["Pin"],
+                bodyPreviewSource: "Body",
+                pinnedHighlightColorRaw: "slate"
+            )
+        )
+
+        XCTAssertEqual(store.publish(yellow), .published)
+        XCTAssertEqual(store.publish(slate), .published)
+        XCTAssertEqual(store.read(), .snapshot(slate))
+    }
+
     func testFractionalSecondDateSurvivesExactCodecAndStoreRoundTrip() throws {
         let envelope = MyRAMWidgetSnapshotEnvelope(
             generatedAt: Date(timeIntervalSince1970: 1_700_000_000.123456),

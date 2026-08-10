@@ -53,6 +53,7 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
     private let snapshotStore: MyRAMWidgetSnapshotStore?
     private let platform: Platform
     private let notificationCenter: NotificationCenter
+    private let pinnedHighlightColorRawProvider: @MainActor () -> String?
     private let reloadTimelines: @MainActor (String) -> Void
     private let debounceNanoseconds: UInt64
 
@@ -69,6 +70,9 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
         bundle: Bundle = .main,
         notificationCenter: NotificationCenter = .default,
         debounceNanoseconds: UInt64 = 150_000_000,
+        pinnedHighlightColorRawProvider: @escaping @MainActor () -> String? = {
+            UserDefaults.standard.string(forKey: "pinnedHighlightColor")
+        },
         reloadTimelines: @escaping @MainActor (String) -> Void = { kind in
             WidgetCenter.shared.reloadTimelines(ofKind: kind)
         }
@@ -80,6 +84,7 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
         self.selectionStore = resolvedSelectionStore
         self.notificationCenter = notificationCenter
         self.debounceNanoseconds = debounceNanoseconds
+        self.pinnedHighlightColorRawProvider = pinnedHighlightColorRawProvider
         self.reloadTimelines = reloadTimelines
         selectedNoteID = resolvedSelectionStore.selectedNoteID
 
@@ -172,7 +177,8 @@ final class MyRAMWidgetHostCoordinator: ObservableObject {
                     id: note.id,
                     title: note.title,
                     orderedPinnedTexts: orderedPinnedTexts,
-                    bodyPreviewSource: note.content
+                    bodyPreviewSource: note.content,
+                    pinnedHighlightColorRaw: pinnedHighlightColorRawProvider()
                 )
             )
         } else {
