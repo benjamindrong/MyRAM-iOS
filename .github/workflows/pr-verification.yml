@@ -1,0 +1,140 @@
+name: PR Verification
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - '**/*.md'
+      - 'docs/**'
+  workflow_dispatch:
+    inputs:
+      profile:
+        description: Verification profile
+        required: true
+        default: auto
+        type: choice
+        options:
+          - auto
+          - build-only
+          - widget
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-verification-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    runs-on: macos-26
+    timeout-minutes: 25
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+      DERIVED_DATA: ${{ runner.temp }}/MyRAMDerivedData
+
+    steps:
+      - name: Check out candidate
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve verification profile
+        id: scope
+        env:
+          REQUESTED_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'auto' }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            base="$PR_BASE_SHA"
+          else
+            git fetch --no-tags origin main
+            base="$(git rev-parse origin/main)"
+          fi
+
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          git diff --check "$base...HEAD"
+
+          profile="$REQUESTED_PROFILE"
+          if [[ "$profile" == "auto" ]]; then
+            changed_files="$(git diff --name-only "$base...HEAD")"
+            printf '%s\n' "$changed_files"
+
+            if printf '%s\n' "$changed_files" | grep -Eq '^(MyRAM/WidgetShared/|MyRAM/WidgetHost/|MyRAMWidget/|MyRAMTests/MyRAMWidget(Core|Host)Tests\.swift$)'; then
+              profile="widget"
+            else
+              profile="build-only"
+            fi
+          fi
+
+          echo "profile=$profile" >> "$GITHUB_OUTPUT"
+          echo "Selected verification profile: $profile"
+
+      - name: Show Xcode version
+        run: xcodebuild -version
+
+      - name: Build iOS app
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project MyRAM.xcodeproj \
+            -scheme MyRAM \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Build iOS widget extension
+        if: steps.scope.outputs.profile == 'widget'
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project MyRAM.xcodeproj \
+            -target MyRAMWidgetExtension \
+            -sdk iphonesimulator \
+            -configuration Debug \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Select iOS simulator
+        if: steps.scope.outputs.profile == 'widget'
+        run: |
+          set -euo pipefail
+          simulator_udid="$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          devices = [
+              device
+              for runtime, runtime_devices in data["devices"].items()
+              if "iOS" in runtime
+              for device in runtime_devices
+              if device.get("isAvailable") and device.get("name", "").startswith("iPhone")
+          ]
+          preferred = next((device for device in devices if device["name"] == "iPhone Air"), None)
+          selected = preferred or (devices[0] if devices else None)
+          if selected is None:
+              raise SystemExit("No available iPhone simulator")
+          print(selected["udid"])
+          ')"
+          echo "SIMULATOR_UDID=$simulator_udid" >> "$GITHUB_ENV"
+          echo "Selected simulator: $simulator_udid"
+
+      - name: Run focused widget tests
+        if: steps.scope.outputs.profile == 'widget'
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -project MyRAM.xcodeproj \
+            -scheme MyRAM \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -parallel-testing-enabled NO \
+            -derivedDataPath "$DERIVED_DATA" \
+            CODE_SIGNING_ALLOWED=NO \
+            test \
+            -only-testing:MyRAMTests/MyRAMWidgetCoreTests \
+            -only-testing:MyRAMTests/MyRAMWidgetHostTests
