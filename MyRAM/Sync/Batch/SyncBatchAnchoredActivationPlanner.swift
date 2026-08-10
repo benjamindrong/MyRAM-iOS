@@ -40,20 +40,29 @@ enum SyncBatchAnchoredActivationPlanner {
         sequenceState: SyncTextSequenceState,
         recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot
     ) throws -> SyncBatchAnchoredActivationRoute {
-        let recoveryChange: SyncBatchAnchoredRecoveryChange
-        switch change {
-        case .noteBodyTextInsertedAnchored(let inserted):
-            recoveryChange = .insertion(inserted)
-        case .noteBodyTextDeletedAnchored(let deleted):
-            recoveryChange = .deletion(deleted)
-        default:
-            throw SyncBatchAnchoredActivationPlannerError.nonAnchoredChange
-        }
+        let recoveryChange = try recoveryChange(for: change)
         let existing = recoverySnapshot.record(for: recoveryChange.recordKey)
         let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
             change: recoveryChange,
             sequenceState: sequenceState,
             recoverySnapshot: recoverySnapshot
+        )
+        return try route(plan: plan, source: recoveryChange, existing: existing)
+    }
+
+    static func planRetry(
+        change: SyncBatchChange,
+        sequenceState: SyncTextSequenceState,
+        recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot,
+        trigger: SyncBatchAnchoredRecoveryRetryTrigger
+    ) throws -> SyncBatchAnchoredActivationRoute {
+        let recoveryChange = try recoveryChange(for: change)
+        let existing = recoverySnapshot.record(for: recoveryChange.recordKey)
+        let plan = try SyncBatchAnchoredRecoveryPlanner.planRetry(
+            noteID: recoveryChange.noteID,
+            sequenceState: sequenceState,
+            recoverySnapshot: recoverySnapshot,
+            trigger: trigger
         )
         return try route(plan: plan, source: recoveryChange, existing: existing)
     }
@@ -75,6 +84,19 @@ enum SyncBatchAnchoredActivationPlanner {
         }
         let existing = recoverySnapshot.record(for: source.recordKey)
         return [try route(plan: plan, source: source, existing: existing)]
+    }
+
+    private static func recoveryChange(
+        for change: SyncBatchChange
+    ) throws -> SyncBatchAnchoredRecoveryChange {
+        switch change {
+        case .noteBodyTextInsertedAnchored(let inserted):
+            return .insertion(inserted)
+        case .noteBodyTextDeletedAnchored(let deleted):
+            return .deletion(deleted)
+        default:
+            throw SyncBatchAnchoredActivationPlannerError.nonAnchoredChange
+        }
     }
 
     private static func route(
@@ -204,29 +226,86 @@ struct SyncConvergenceAnchoredBatchPlanner {
             throw SyncConvergenceAnchoredBatchPlannerError.invalidChange
         }
 
-        let originalRecovery = recoverySnapshot
         var speculativeRecovery = recoverySnapshot
         var speculativeState = expectedSnapshot.state
         var identities: [OperationIdentityPayload] = []
+        var successfulRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition] = []
         var sawAppliedEquivalent = false
 
         for indexed in indexedChanges.sorted(by: { $0.operationIndex < $1.operationIndex }) {
-            identities.append(try operationIdentity(for: indexed.change, batch: batch, operationIndex: indexed.operationIndex))
-            let route = try SyncBatchAnchoredActivationPlanner.planInitialDelivery(
-                change: indexed.change,
-                sequenceState: speculativeState,
-                recoverySnapshot: speculativeRecovery
+            identities.append(
+                try operationIdentity(
+                    for: indexed.change,
+                    batch: batch,
+                    operationIndex: indexed.operationIndex
+                )
             )
+
+            let key = try recoveryKey(for: indexed.change)
+            let operationRecoverySnapshot = SyncBatchAnchoredRecoveryStoreSnapshot(
+                records: speculativeRecovery.records.filter { $0.key == key },
+                health: speculativeRecovery.health
+            )
+            let route: SyncBatchAnchoredActivationRoute
+            if let existing = operationRecoverySnapshot.record(for: key),
+               case .waiting = existing.lifecycle {
+                route = try SyncBatchAnchoredActivationPlanner.planRetry(
+                    change: indexed.change,
+                    sequenceState: speculativeState,
+                    recoverySnapshot: operationRecoverySnapshot,
+                    trigger: .restartRecovery
+                )
+            } else {
+                route = try SyncBatchAnchoredActivationPlanner.planInitialDelivery(
+                    change: indexed.change,
+                    sequenceState: speculativeState,
+                    recoverySnapshot: operationRecoverySnapshot
+                )
+            }
+
             switch route {
             case .applicationChange(let plan):
                 speculativeState = plan.finalSequenceState
-                speculativeRecovery = try applying(plan.recoveryStoreTransitions, to: speculativeRecovery)
+                speculativeRecovery = try applying(
+                    plan.recoveryStoreTransitions,
+                    to: speculativeRecovery
+                )
+                successfulRecoveryTransitions.append(contentsOf: plan.recoveryStoreTransitions)
+
             case .completedWithoutApplicationChange(let plan, let reason):
                 speculativeState = plan.finalSequenceState
-                speculativeRecovery = try applying(plan.recoveryStoreTransitions, to: speculativeRecovery)
-                if reason == .appliedEquivalentRecovery { sawAppliedEquivalent = true }
-            case .waiting, .terminal, .bootstrapConflict:
-                return try isolatedNonSuccess(indexed, batch: batch, expectedSnapshot: expectedSnapshot, recoverySnapshot: originalRecovery)
+                speculativeRecovery = try applying(
+                    plan.recoveryStoreTransitions,
+                    to: speculativeRecovery
+                )
+                successfulRecoveryTransitions.append(contentsOf: plan.recoveryStoreTransitions)
+                if reason == .appliedEquivalentRecovery {
+                    sawAppliedEquivalent = true
+                }
+
+            case .waiting(let plan, let dependency):
+                return .deferred(.init(
+                    batchID: batch.id,
+                    noteID: expectedSnapshot.noteID,
+                    dependency: dependency,
+                    recoveryTransitions: plan.recoveryStoreTransitions
+                ))
+
+            case .terminal(let plan, let failure):
+                return .quarantined(.init(
+                    batchID: batch.id,
+                    noteID: expectedSnapshot.noteID,
+                    evidence: .terminal(failure),
+                    recoveryTransitions: plan.recoveryStoreTransitions
+                ))
+
+            case .bootstrapConflict(let plan, let conflict):
+                return .quarantined(.init(
+                    batchID: batch.id,
+                    noteID: expectedSnapshot.noteID,
+                    evidence: .bootstrapConflict(conflict),
+                    recoveryTransitions: plan.recoveryStoreTransitions
+                ))
             }
         }
 
@@ -245,39 +324,41 @@ struct SyncConvergenceAnchoredBatchPlanner {
             expectedSnapshot: expectedSnapshot,
             finalState: speculativeState,
             operationIdentities: identities,
-            recoveryTransitions: collapse(original: originalRecovery, final: speculativeRecovery),
+            recoveryTransitions: successfulRecoveryTransitions,
             finalBody: finalBody,
             latestModifiedAt: indexedChanges.map({ $0.change.modifiedAtForAnchoredPlanning }).max() ?? batch.createdAt,
             didChangeApplicationState: changed,
-            reviewedNoApplicationChangeReason: changed ? nil : (sawAppliedEquivalent ? .appliedEquivalentRecovery : .idempotentReplay),
+            reviewedNoApplicationChangeReason: changed
+                ? nil
+                : (sawAppliedEquivalent ? .appliedEquivalentRecovery : .idempotentReplay),
             resultEvidence: evidence
         ))
     }
 
-    private func isolatedNonSuccess(
-        _ indexed: (operationIndex: Int, change: SyncBatchChange),
-        batch: SyncBatch,
-        expectedSnapshot: NoteSequenceStateMutationSnapshot,
-        recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot
-    ) throws -> SyncConvergenceAnchoredBatchPlanningOutcome {
-        let route = try SyncBatchAnchoredActivationPlanner.planInitialDelivery(
-            change: indexed.change,
-            sequenceState: expectedSnapshot.state,
-            recoverySnapshot: recoverySnapshot
-        )
-        switch route {
-        case .waiting(let plan, let dependency):
-            return .deferred(.init(batchID: batch.id, noteID: expectedSnapshot.noteID, dependency: dependency, recoveryTransitions: plan.recoveryStoreTransitions))
-        case .terminal(let plan, let failure):
-            return .quarantined(.init(batchID: batch.id, noteID: expectedSnapshot.noteID, evidence: .terminal(failure), recoveryTransitions: plan.recoveryStoreTransitions))
-        case .bootstrapConflict(let plan, let conflict):
-            return .quarantined(.init(batchID: batch.id, noteID: expectedSnapshot.noteID, evidence: .bootstrapConflict(conflict), recoveryTransitions: plan.recoveryStoreTransitions))
-        case .applicationChange, .completedWithoutApplicationChange:
-            throw SyncConvergenceAnchoredBatchPlannerError.atomicityReplanMismatch
+    private func recoveryKey(
+        for change: SyncBatchChange
+    ) throws -> SyncBatchAnchoredRecoveryRecordKey {
+        switch change {
+        case .noteBodyTextInsertedAnchored(let inserted):
+            return SyncBatchAnchoredRecoveryRecordKey(
+                noteID: inserted.noteID,
+                operationID: inserted.payload.operationID
+            )
+        case .noteBodyTextDeletedAnchored(let deleted):
+            return SyncBatchAnchoredRecoveryRecordKey(
+                noteID: deleted.noteID,
+                operationID: deleted.payload.operationID
+            )
+        default:
+            throw SyncConvergenceAnchoredBatchPlannerError.invalidChange
         }
     }
 
-    private func operationIdentity(for change: SyncBatchChange, batch: SyncBatch, operationIndex: Int) throws -> OperationIdentityPayload {
+    private func operationIdentity(
+        for change: SyncBatchChange,
+        batch: SyncBatch,
+        operationIndex: Int
+    ) throws -> OperationIdentityPayload {
         let kind: String
         switch change {
         case .noteBodyTextInsertedAnchored: kind = "anchoredInsert"
@@ -289,7 +370,13 @@ struct SyncConvergenceAnchoredBatchPlanner {
             originDeviceID: batch.originDeviceID,
             operationIndex: operationIndex,
             operationKind: kind,
-            canonicalReplayKey: .init(replayKey: SyncBatchReplayKey(batch: batch, change: change, operationIndex: operationIndex))
+            canonicalReplayKey: .init(
+                replayKey: SyncBatchReplayKey(
+                    batch: batch,
+                    change: change,
+                    operationIndex: operationIndex
+                )
+            )
         )
     }
 
@@ -298,15 +385,23 @@ struct SyncConvergenceAnchoredBatchPlanner {
         to snapshot: SyncBatchAnchoredRecoveryStoreSnapshot
     ) throws -> SyncBatchAnchoredRecoveryStoreSnapshot {
         var records = snapshot.records
-        func index(_ key: SyncBatchAnchoredRecoveryRecordKey) -> Int? { records.firstIndex { $0.key == key } }
+        func index(_ key: SyncBatchAnchoredRecoveryRecordKey) -> Int? {
+            records.firstIndex { $0.key == key }
+        }
         for transition in transitions {
             switch transition {
             case .insertExpectedAbsent(let proposed):
                 if let i = index(proposed.key) {
-                    guard records[i] == proposed else { throw SyncConvergenceAnchoredBatchPlannerError.invalidRecoveryTransition }
-                } else { records.append(proposed) }
+                    guard records[i] == proposed else {
+                        throw SyncConvergenceAnchoredBatchPlannerError.invalidRecoveryTransition
+                    }
+                } else {
+                    records.append(proposed)
+                }
             case .replace(let expected, let replacement):
-                guard expected.key == replacement.key, let i = index(expected.key), records[i] == expected else {
+                guard expected.key == replacement.key,
+                      let i = index(expected.key),
+                      records[i] == expected else {
                     throw SyncConvergenceAnchoredBatchPlannerError.invalidRecoveryTransition
                 }
                 records[i] = replacement
@@ -318,22 +413,6 @@ struct SyncConvergenceAnchoredBatchPlanner {
             }
         }
         return .init(records: records, health: snapshot.health)
-    }
-
-    private func collapse(
-        original: SyncBatchAnchoredRecoveryStoreSnapshot,
-        final: SyncBatchAnchoredRecoveryStoreSnapshot
-    ) -> [SyncBatchAnchoredRecoveryStoreTransition] {
-        var result: [SyncBatchAnchoredRecoveryStoreTransition] = []
-        for new in final.records {
-            if let old = original.records.first(where: { $0.key == new.key }) {
-                if old != new { result.append(.replace(expected: old, replacement: new)) }
-            } else { result.append(.insertExpectedAbsent(new)) }
-        }
-        for old in original.records where !final.records.contains(where: { $0.key == old.key }) {
-            result.append(.removeCommitted(expected: old))
-        }
-        return result.sorted { String(describing: $0.key) < String(describing: $1.key) }
     }
 }
 
