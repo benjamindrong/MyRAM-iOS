@@ -1453,3 +1453,80 @@ extension SyncBatchAnchoredRecoveryPlannerTests {
     )
   }
 }
+
+extension SyncBatchAnchoredRecoveryPlannerTests {
+  func testConvergenceBatchPlannerKeepsWaitingRecoveryOwnedBySourceBatch() throws {
+    let fixture = try insertionDependencyFixture()
+    guard case .insertion(let parentChange) = fixture.parent,
+          case .insertion(let childChange) = fixture.child else {
+      return XCTFail("Expected insertion fixture")
+    }
+    let waitingPlan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: fixture.child,
+      sequenceState: .empty,
+      recoverySnapshot: emptySnapshot()
+    )
+    let waitingRecord = try insertedRecord(from: waitingPlan)
+    let recoverySnapshot = SyncBatchAnchoredRecoveryStoreSnapshot(
+      records: [waitingRecord],
+      health: .healthy
+    )
+    let noteID = SyncBatchAnchoredRecoveryTestFactory.noteID
+    let originID = UUID(uuidString: "00000000-0000-0000-0000-000000179401")!
+    let parentBatch = SyncBatch(
+      id: UUID(uuidString: "00000000-0000-0000-0000-000000179402")!,
+      originDeviceID: originID,
+      createdAt: Date(timeIntervalSince1970: 1_794),
+      batchSequence: 1,
+      changes: [.noteBodyTextInsertedAnchored(parentChange)]
+    )
+    let emptySnapshot = NoteSequenceStateMutationSnapshot(
+      noteID: noteID,
+      body: "",
+      revision: 0,
+      state: .empty
+    )
+
+    let parentOutcome = try SyncConvergenceAnchoredBatchPlanner().plan(
+      indexedChanges: [(0, .noteBodyTextInsertedAnchored(parentChange))],
+      batch: parentBatch,
+      expectedSnapshot: emptySnapshot,
+      recoverySnapshot: recoverySnapshot
+    )
+    guard case .success(let parentPlan) = parentOutcome else {
+      return XCTFail("Expected parent source batch to succeed")
+    }
+    XCTAssertEqual(parentPlan.finalBody, "A")
+    XCTAssertTrue(parentPlan.recoveryTransitions.isEmpty)
+
+    let childBatch = SyncBatch(
+      id: UUID(uuidString: "00000000-0000-0000-0000-000000179403")!,
+      originDeviceID: originID,
+      createdAt: Date(timeIntervalSince1970: 1_795),
+      batchSequence: 2,
+      changes: [.noteBodyTextInsertedAnchored(childChange)]
+    )
+    let parentSnapshot = NoteSequenceStateMutationSnapshot(
+      noteID: noteID,
+      body: parentPlan.finalBody,
+      revision: 1,
+      state: parentPlan.finalState
+    )
+
+    let childOutcome = try SyncConvergenceAnchoredBatchPlanner().plan(
+      indexedChanges: [(0, .noteBodyTextInsertedAnchored(childChange))],
+      batch: childBatch,
+      expectedSnapshot: parentSnapshot,
+      recoverySnapshot: recoverySnapshot
+    )
+    guard case .success(let childPlan) = childOutcome else {
+      return XCTFail("Expected retained child source batch retry to succeed")
+    }
+    XCTAssertEqual(childPlan.finalBody, "AB")
+    XCTAssertTrue(childPlan.didChangeApplicationState)
+    XCTAssertEqual(
+      childPlan.recoveryTransitions,
+      [.removeCommitted(expected: waitingRecord)]
+    )
+  }
+}
