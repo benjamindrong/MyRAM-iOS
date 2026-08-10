@@ -45,11 +45,34 @@ final class FileBackedSyncBatchQueue {
     }
 
     func enqueueIncoming(_ batch: SyncBatch) throws {
-        try enqueueDurably(batch)
+        try enqueueIncomingCore(
+            batch,
+            activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
+        )
+    }
+
+    func enqueueIncomingCore(
+        _ batch: SyncBatch,
+        activationEnabled: Bool
+    ) throws {
+        try enqueueDurablyCore(batch, activationEnabled: activationEnabled)
     }
 
     func enqueueDurably(_ batch: SyncBatch) throws {
-        try SyncBatchAnchoredPayloadPolicy.validateDurableAdmission(batch)
+        try enqueueDurablyCore(
+            batch,
+            activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
+        )
+    }
+
+    func enqueueDurablyCore(
+        _ batch: SyncBatch,
+        activationEnabled: Bool
+    ) throws {
+        try SyncBatchAnchoredPayloadPolicy.validateDurableAdmissionCore(
+            batch,
+            activationEnabled: activationEnabled
+        )
         guard canPersistCurrentQueue else { throw QueueError.unhealthyPersistence }
         let originalBatches = queue.pendingBatches
         do {
