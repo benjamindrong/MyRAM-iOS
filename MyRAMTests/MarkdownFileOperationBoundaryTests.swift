@@ -4,14 +4,14 @@ import XCTest
 
 @MainActor
 final class MarkdownFileOperationBoundaryTests: XCTestCase {
-    func testExpectedNoneWithoutRegistrationReturnsNoActiveEditor() {
-        XCTAssertEqual(
-            NoteEditorFileOperationBridge().flushEditor(expected: .none),
+    func testExpectedNoneWithoutRegistrationReturnsNoActiveEditor() async {
+        await assertEqualAsync(
+            await NoteEditorFileOperationBridge().flushEditor(expected: .none),
             .noActiveEditor
         )
     }
 
-    func testExpectedNoneWithRegistrationRejectsMismatchWithoutInvokingClosure() {
+    func testExpectedNoneWithRegistrationRejectsMismatchWithoutInvokingClosure() async {
         let bridge = NoteEditorFileOperationBridge()
         let noteID = UUID()
         var didFlush = false
@@ -20,34 +20,34 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
             return .succeeded
         }
 
-        XCTAssertEqual(
-            bridge.flushEditor(expected: .none),
+        await assertEqualAsync(
+            await bridge.flushEditor(expected: .none),
             .editorMismatch(expected: .none, actualNoteID: noteID)
         )
         XCTAssertFalse(didFlush)
     }
 
-    func testMatchingExpectedEditorReturnsBridgeOwnedIdentity() {
+    func testMatchingExpectedEditorReturnsBridgeOwnedIdentity() async {
         let bridge = NoteEditorFileOperationBridge()
         let noteID = UUID()
         bridge.register(noteID: noteID) { .succeeded }
 
-        XCTAssertEqual(
-            bridge.flushEditor(expected: .note(noteID)),
+        await assertEqualAsync(
+            await bridge.flushEditor(expected: .note(noteID)),
             .succeeded(noteID: noteID)
         )
     }
 
-    func testExpectedEditorWithoutRegistrationReturnsUnavailableWithoutFlush() {
+    func testExpectedEditorWithoutRegistrationReturnsUnavailableWithoutFlush() async {
         let noteID = UUID()
 
-        XCTAssertEqual(
-            NoteEditorFileOperationBridge().flushEditor(expected: .note(noteID)),
+        await assertEqualAsync(
+            await NoteEditorFileOperationBridge().flushEditor(expected: .note(noteID)),
             .expectedEditorUnavailable(noteID: noteID)
         )
     }
 
-    func testExpectedEditorMismatchDoesNotInvokeWrongClosure() {
+    func testExpectedEditorMismatchDoesNotInvokeWrongClosure() async {
         let bridge = NoteEditorFileOperationBridge()
         let expectedID = UUID()
         let registeredID = UUID()
@@ -57,8 +57,8 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
             return .succeeded
         }
 
-        XCTAssertEqual(
-            bridge.flushEditor(expected: .note(expectedID)),
+        await assertEqualAsync(
+            await bridge.flushEditor(expected: .note(expectedID)),
             .editorMismatch(
                 expected: .note(expectedID),
                 actualNoteID: registeredID
@@ -67,20 +67,20 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
         XCTAssertFalse(didFlush)
     }
 
-    func testBridgeAttachesIdentityToLocalFailure() {
+    func testBridgeAttachesIdentityToLocalFailure() async {
         let bridge = NoteEditorFileOperationBridge()
         let noteID = UUID()
         bridge.register(noteID: noteID) {
             .failed(message: "Injected failure")
         }
 
-        XCTAssertEqual(
-            bridge.flushEditor(expected: .note(noteID)),
+        await assertEqualAsync(
+            await bridge.flushEditor(expected: .note(noteID)),
             .failed(noteID: noteID, message: "Injected failure")
         )
     }
 
-    func testStaleUnregisterCannotClearNewerEditor() {
+    func testStaleUnregisterCannotClearNewerEditor() async {
         let bridge = NoteEditorFileOperationBridge()
         let oldID = UUID()
         let currentID = UUID()
@@ -89,13 +89,13 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
 
         bridge.unregister(noteID: oldID)
 
-        XCTAssertEqual(
-            bridge.flushEditor(expected: .note(currentID)),
+        await assertEqualAsync(
+            await bridge.flushEditor(expected: .note(currentID)),
             .succeeded(noteID: currentID)
         )
     }
 
-    func testFlushFailurePreventsReadAndConsumptionAndPreservesDiagnosticResult() {
+    func testFlushFailurePreventsReadAndConsumptionAndPreservesDiagnosticResult() async {
         let noteID = UUID()
         let bridge = NoteEditorFileOperationBridge()
         bridge.register(noteID: noteID) {
@@ -108,7 +108,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
             return Data()
         }
 
-        XCTAssertThrowsError(try coordinator.perform(
+        await assertThrowsErrorAsync(try await coordinator.perform(
             url: URL(fileURLWithPath: "/tmp/Blocked.md"),
             expectedEditor: .note(noteID),
             flushBridge: bridge,
@@ -131,7 +131,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
         XCTAssertFalse(didConsume)
     }
 
-    func testSuccessfulFlushPrecedesReadAndConsumption() throws {
+    func testSuccessfulFlushPrecedesReadAndConsumption() async throws {
         var events: [String] = []
         let noteID = UUID()
         let bridge = NoteEditorFileOperationBridge()
@@ -144,7 +144,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
             return Data("body".utf8)
         }
 
-        let source = try coordinator.perform(
+        let source = try await coordinator.perform(
             url: URL(fileURLWithPath: "/tmp/Allowed.md"),
             expectedEditor: .note(noteID),
             flushBridge: bridge,
@@ -158,7 +158,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
         XCTAssertEqual(events, ["flush", "read", "consume"])
     }
 
-    func testProductionRouterMarkdownSuccessOrdersAuthorizationBeforeBodyAndCommitEffects() throws {
+    func testProductionRouterMarkdownSuccessOrdersAuthorizationBeforeBodyAndCommitEffects() async throws {
         var events: [String] = []
         let noteID = UUID()
         let bridge = NoteEditorFileOperationBridge()
@@ -177,7 +177,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
             }
         ))
 
-        let result: ExternalImportRoutingResult<String, Void> = try router.route(
+        let result: ExternalImportRoutingResult<String, Void> = try await router.route(
             url: URL(fileURLWithPath: "/tmp/External.data"),
             expectedEditor: .note(noteID),
             markdownCoordinator: coordinator,
@@ -211,18 +211,18 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
         ])
     }
 
-    func testProductionRouterMarkdownFlushFailureHasZeroDownstreamEffects() {
+    func testProductionRouterMarkdownFlushFailureHasZeroDownstreamEffects() async {
         let noteID = UUID()
         let bridge = NoteEditorFileOperationBridge()
         bridge.register(noteID: noteID) { .failed(message: "Injected") }
-        assertMarkdownRouteBlocked(
+        await assertMarkdownRouteBlocked(
             expectedEditor: .note(noteID),
             bridge: bridge,
             expectedResult: .failed(noteID: noteID, message: "Injected")
         )
     }
 
-    func testProductionRouterMarkdownMismatchDoesNotInvokeWrongEditorOrDownstreamEffects() {
+    func testProductionRouterMarkdownMismatchDoesNotInvokeWrongEditorOrDownstreamEffects() async {
         let expectedID = UUID()
         let actualID = UUID()
         let bridge = NoteEditorFileOperationBridge()
@@ -232,7 +232,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
             return .succeeded
         }
 
-        assertMarkdownRouteBlocked(
+        await assertMarkdownRouteBlocked(
             expectedEditor: .note(expectedID),
             bridge: bridge,
             expectedResult: .editorMismatch(
@@ -243,16 +243,16 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
         XCTAssertFalse(didFlush)
     }
 
-    func testProductionRouterMarkdownUnavailableHasZeroDownstreamEffects() {
+    func testProductionRouterMarkdownUnavailableHasZeroDownstreamEffects() async {
         let expectedID = UUID()
-        assertMarkdownRouteBlocked(
+        await assertMarkdownRouteBlocked(
             expectedEditor: .note(expectedID),
             bridge: NoteEditorFileOperationBridge(),
             expectedResult: .expectedEditorUnavailable(noteID: expectedID)
         )
     }
 
-    func testProductionRouterKeepsMyRAMOnExistingImporterPath() throws {
+    func testProductionRouterKeepsMyRAMOnExistingImporterPath() async throws {
         var didReadMarkdown = false
         var didImportMarkdown = false
         var importedMyRAMURL: URL?
@@ -261,7 +261,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
             contentTypeProvider: { _ in nil }
         ))
 
-        let result: ExternalImportRoutingResult<Void, String> = try router.route(
+        let result: ExternalImportRoutingResult<Void, String> = try await router.route(
             url: url,
             expectedEditor: .none,
             markdownCoordinator: makeMarkdownCoordinator { _ in
@@ -285,7 +285,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
         XCTAssertFalse(didImportMarkdown)
     }
 
-    func testProductionRouterUnsupportedInvokesNeitherImporter() {
+    func testProductionRouterUnsupportedInvokesNeitherImporter() async {
         var didReadMarkdown = false
         var didImportMarkdown = false
         var didImportMyRAM = false
@@ -293,7 +293,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
             contentTypeProvider: { _ in nil }
         ))
 
-        XCTAssertThrowsError(try router.route(
+        await assertThrowsErrorAsync(try await router.route(
             url: URL(fileURLWithPath: "/tmp/Archive.txt"),
             expectedEditor: .none,
             markdownCoordinator: makeMarkdownCoordinator { _ in
@@ -314,11 +314,11 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
         XCTAssertFalse(didImportMyRAM)
     }
 
-    func testExportFlushFailurePreventsSourceCapture() {
+    func testExportFlushFailurePreventsSourceCapture() async {
         var didCaptureSource = false
 
-        XCTAssertThrowsError(
-            try MarkdownExportPreparationCoordinator().prepare(
+        await assertThrowsErrorAsync(
+            try await MarkdownExportPreparationCoordinator().prepare(
                 flush: {
                     .failed(message: "Injected failure")
                 },
@@ -333,11 +333,11 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
         XCTAssertFalse(didCaptureSource)
     }
 
-    func testExportCapturesLatestRawSourceOnlyAfterSuccessfulLocalFlush() throws {
+    func testExportCapturesLatestRawSourceOnlyAfterSuccessfulLocalFlush() async throws {
         var rawSource = "Before"
         var events: [String] = []
 
-        let prepared = try MarkdownExportPreparationCoordinator().prepare(
+        let prepared = try await MarkdownExportPreparationCoordinator().prepare(
             flush: {
                 events.append("local-flush")
                 rawSource = "Latest\r\n**literal**"
@@ -354,7 +354,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
         XCTAssertEqual(prepared.data, Data("Latest\r\n**literal**".utf8))
     }
 
-    func testExportDoesNotConsultAnotherEditorsBridgeRegistration() throws {
+    func testExportDoesNotConsultAnotherEditorsBridgeRegistration() async throws {
         let bridge = NoteEditorFileOperationBridge()
         var didInvokeBridge = false
         bridge.register(noteID: UUID()) {
@@ -362,7 +362,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
             return .failed(message: "Wrong editor")
         }
 
-        let prepared = try MarkdownExportPreparationCoordinator().prepare(
+        let prepared = try await MarkdownExportPreparationCoordinator().prepare(
             flush: { .succeeded },
             snapshot: { (title: "Local", source: "Editor-owned") }
         )
@@ -377,7 +377,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
         expectedResult: EditorFlushResult,
         file: StaticString = #filePath,
         line: UInt = #line
-    ) {
+    ) async {
         var bodyReadCount = 0
         var persistenceCount = 0
         var publicationCount = 0
@@ -388,7 +388,7 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
             contentTypeProvider: { _ in MarkdownFileClassifier.markdownContentType }
         ))
 
-        XCTAssertThrowsError(try router.route(
+        await assertThrowsErrorAsync(try await router.route(
             url: URL(fileURLWithPath: "/tmp/Blocked.md"),
             expectedEditor: expectedEditor,
             markdownCoordinator: makeMarkdownCoordinator { _ in
@@ -418,6 +418,30 @@ final class MarkdownFileOperationBoundaryTests: XCTestCase {
         XCTAssertEqual(undoCount, 0, file: file, line: line)
         XCTAssertEqual(refreshCount, 0, file: file, line: line)
         XCTAssertEqual(selectionCount, 0, file: file, line: line)
+    }
+
+    private func assertEqualAsync<T: Equatable>(
+        _ expression: @autoclosure () async -> T,
+        _ expected: T,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        let actual = await expression()
+        XCTAssertEqual(actual, expected, file: file, line: line)
+    }
+
+    private func assertThrowsErrorAsync<T>(
+        _ expression: @autoclosure () async throws -> T,
+        _ errorHandler: (Error) -> Void,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) async {
+        do {
+            _ = try await expression()
+            XCTFail("Expected expression to throw", file: file, line: line)
+        } catch {
+            errorHandler(error)
+        }
     }
 
     private func makeMarkdownCoordinator(

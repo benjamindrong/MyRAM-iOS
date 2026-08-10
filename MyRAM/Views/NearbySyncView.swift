@@ -12,7 +12,7 @@ struct NearbySyncView: View {
     @ObservedObject var notesViewModel: NotesViewModel
     let style: EditorChromeStyle
     let resetAvailability: ResetAvailability
-    let prepareEditorState: () throws -> Void
+    let prepareEditorState: () async throws -> Void
     @State private var showingResetConfirmation = false
 
     var body: some View {

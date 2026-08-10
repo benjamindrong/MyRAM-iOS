@@ -2325,7 +2325,7 @@ final class NotesViewModel: ObservableObject {
 
     func resetPendingSync(
         syncController: MyRAMSyncController,
-        prepareEditorState: @escaping () throws -> Void
+        prepareEditorState: @escaping () async throws -> Void
     ) async {
         guard !pendingSyncRecoveryStatus.isRunning else { return }
         pendingSyncRecoveryStatus = .running
@@ -2346,7 +2346,7 @@ final class NotesViewModel: ObservableObject {
         do {
             try await coordinator.resetPendingSync(
                 prepareDurableState: {
-                    try prepareEditorState()
+                    try await prepareEditorState()
                     try context.save()
                 },
                 buildReplacement: { legacy, unsent, local, recoveryTimestamp in

@@ -212,7 +212,9 @@ struct NotesListView: View {
             switch result {
             case .success(let urls):
                 guard let url = urls.first else { return }
-                importMarkdownFile(from: url)
+                Task { @MainActor in
+                    await importMarkdownFile(from: url)
+                }
             case .failure(let error):
                 guard !isFilePanelCancellation(error) else { return }
                 markdownImportErrorMessage = "The selected Markdown file could not be opened."
@@ -224,27 +226,39 @@ struct NotesListView: View {
 #else
             _ = externalOpenDispatcher.enqueue(url: url, platform: .iOS)
 #endif
-            drainPendingOpenURLsIfReady()
+            Task { @MainActor in
+                await drainPendingOpenURLsIfReady()
+            }
         }
         .onChange(of: state.bootstrapState) { _, bootstrapState in
             guard bootstrapState == .ready else { return }
-            drainPendingOpenURLsIfReady()
+            Task { @MainActor in
+                await drainPendingOpenURLsIfReady()
+            }
         }
 #if !targetEnvironment(macCatalyst)
         .onChange(of: editorFileOperationBridge.externalOpenRetryRevision) { _, _ in
-            drainPendingOpenURLsIfReady()
+            Task { @MainActor in
+                await drainPendingOpenURLsIfReady()
+            }
         }
         .onChange(of: markdownImportCoordinator.isProcessing) { _, isProcessing in
             guard !isProcessing else { return }
-            drainPendingOpenURLsIfReady()
+            Task { @MainActor in
+                await drainPendingOpenURLsIfReady()
+            }
         }
         .onChange(of: markdownImportErrorMessage) { _, errorMessage in
             guard errorMessage == nil else { return }
-            drainPendingOpenURLsIfReady()
+            Task { @MainActor in
+                await drainPendingOpenURLsIfReady()
+            }
         }
         .onChange(of: importErrorMessage) { _, errorMessage in
             guard errorMessage == nil else { return }
-            drainPendingOpenURLsIfReady()
+            Task { @MainActor in
+                await drainPendingOpenURLsIfReady()
+            }
         }
 #endif
         .alert("Unable to Import Markdown", isPresented: Binding(
@@ -1694,9 +1708,9 @@ struct NotesListView: View {
         }
     }
 
-    private func importMarkdownFile(from url: URL) {
+    private func importMarkdownFile(from url: URL) async {
         do {
-            let importedNote = try markdownImportCoordinator.perform(
+            let importedNote = try await markdownImportCoordinator.perform(
                 url: url,
                 expectedEditor: expectedEditor,
                 flushBridge: editorFileOperationBridge,
@@ -1730,9 +1744,9 @@ struct NotesListView: View {
     }
 #endif
 
-    private func routeExternalImport(from url: URL) {
+    private func routeExternalImport(from url: URL) async {
         do {
-            let result = try externalImportRouter.route(
+            let result = try await externalImportRouter.route(
                 url: url,
                 expectedEditor: expectedEditor,
                 markdownCoordinator: markdownImportCoordinator,
@@ -1756,7 +1770,7 @@ struct NotesListView: View {
         }
     }
 
-    private func drainPendingOpenURLsIfReady() {
+    private func drainPendingOpenURLsIfReady() async {
 #if targetEnvironment(macCatalyst)
         guard state.bootstrapState == .ready,
               !markdownImportCoordinator.isProcessing else {
@@ -1765,7 +1779,7 @@ struct NotesListView: View {
 
         while !pendingOpenURLs.isEmpty {
             let url = pendingOpenURLs.removeFirst()
-            routeExternalImport(from: url)
+            await routeExternalImport(from: url)
         }
 #else
         guard let request = externalOpenDispatcher.claimNextIfReady(
@@ -1779,12 +1793,12 @@ struct NotesListView: View {
 
         switch request.kind {
         case .file(let url):
-            routeExternalImport(from: url)
+            await routeExternalImport(from: url)
             externalOpenDispatcher.complete(requestID: request.id)
-            drainPendingOpenURLsIfReady()
+            await drainPendingOpenURLsIfReady()
 
         case .widgetNote(let noteID):
-            let outcome = MyRAMWidgetIOSNoteRouter().route(
+            let outcome = await MyRAMWidgetIOSNoteRouter().route(
                 noteID: noteID,
                 expectedEditor: expectedEditor,
                 flushBridge: editorFileOperationBridge,
@@ -1803,7 +1817,7 @@ struct NotesListView: View {
             switch outcome {
             case .completed:
                 externalOpenDispatcher.complete(requestID: request.id)
-                drainPendingOpenURLsIfReady()
+                await drainPendingOpenURLsIfReady()
             case .retainedForRetry:
                 externalOpenDispatcher.retainForRetry(requestID: request.id)
             }
