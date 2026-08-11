@@ -23,6 +23,12 @@ struct MyRAMWidgetNoteSnapshot: Codable, Equatable, Sendable {
     let title: String
     let orderedPinnedTexts: [String]
     let bodyPreviewSource: String
+    let pinnedHighlightColorRaw: String?
+
+    var resolvedPinnedHighlightColorRaw: String {
+        MyRAMWidgetSnapshotBounds.normalizedPinnedHighlightColorRaw(pinnedHighlightColorRaw)
+            ?? MyRAMWidgetSnapshotBounds.defaultPinnedHighlightColorRaw
+    }
 }
 
 enum MyRAMWidgetSnapshotBounds {
@@ -30,12 +36,29 @@ enum MyRAMWidgetSnapshotBounds {
     static let maximumPinnedTextRecords = 64
     static let maximumPinnedTextUnicodeScalars = 512
     static let maximumBodyPreviewUnicodeScalars = 8_192
+    static let defaultPinnedHighlightColorRaw = "yellow"
+    static let supportedPinnedHighlightColorRawValues: Set<String> = [
+        "yellow",
+        "mint",
+        "blue",
+        "purple",
+        "slate"
+    ]
+
+    static func normalizedPinnedHighlightColorRaw(_ value: String?) -> String? {
+        guard let value,
+              supportedPinnedHighlightColorRawValues.contains(value) else {
+            return nil
+        }
+        return value
+    }
 
     static func makeNoteSnapshot(
         id: UUID,
         title: String,
         orderedPinnedTexts: [String],
-        bodyPreviewSource: String
+        bodyPreviewSource: String,
+        pinnedHighlightColorRaw: String? = nil
     ) -> MyRAMWidgetNoteSnapshot {
         let resolvedTitle = boundedDisplayTitle(title)
         let boundedPins = orderedPinnedTexts
@@ -57,7 +80,8 @@ enum MyRAMWidgetSnapshotBounds {
             id: id,
             title: resolvedTitle,
             orderedPinnedTexts: boundedPins,
-            bodyPreviewSource: boundedBody
+            bodyPreviewSource: boundedBody,
+            pinnedHighlightColorRaw: normalizedPinnedHighlightColorRaw(pinnedHighlightColorRaw)
         )
     }
 

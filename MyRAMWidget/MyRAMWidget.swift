@@ -14,9 +14,63 @@ private extension MyRAMWidgetFamily {
     }
 }
 
+private struct MyRAMWidgetPinnedHighlightPresentation {
+    let background: Color
+    let foreground: Color
+
+    init(rawValue: String) {
+        let darkForeground = Color(
+            red: 28.0 / 255.0,
+            green: 28.0 / 255.0,
+            blue: 30.0 / 255.0
+        )
+
+        switch rawValue {
+        case "mint":
+            background = Color(
+                red: 122.0 / 255.0,
+                green: 225.0 / 255.0,
+                blue: 191.0 / 255.0
+            )
+            foreground = darkForeground
+        case "blue":
+            background = Color(
+                red: 85.0 / 255.0,
+                green: 161.0 / 255.0,
+                blue: 238.0 / 255.0
+            )
+            foreground = darkForeground
+        case "purple":
+            background = Color(
+                red: 173.0 / 255.0,
+                green: 136.0 / 255.0,
+                blue: 232.0 / 255.0
+            )
+            foreground = darkForeground
+        case "slate":
+            background = Color(
+                red: 65.0 / 255.0,
+                green: 78.0 / 255.0,
+                blue: 96.0 / 255.0
+            )
+            foreground = .white
+        case "yellow":
+            fallthrough
+        default:
+            background = Color(
+                red: 250.0 / 255.0,
+                green: 185.0 / 255.0,
+                blue: 66.0 / 255.0
+            )
+            foreground = darkForeground
+        }
+    }
+}
+
 private struct MyRAMWidgetEntry: TimelineEntry {
     let date: Date
     let model: MyRAMWidgetRenderModel
+    let pinnedHighlightColorRaw: String
 }
 
 private struct MyRAMWidgetProvider: TimelineProvider {
@@ -29,7 +83,8 @@ private struct MyRAMWidgetProvider: TimelineProvider {
                 bodyText: "Additional note text appears when space remains.",
                 state: .content,
                 noteURL: nil
-            )
+            ),
+            pinnedHighlightColorRaw: MyRAMWidgetSnapshotBounds.defaultPinnedHighlightColorRaw
         )
     }
 
@@ -62,7 +117,19 @@ private struct MyRAMWidgetProvider: TimelineProvider {
             family: MyRAMWidgetFamily(widgetFamily: family),
             platform: .iOS
         )
-        return MyRAMWidgetEntry(date: .now, model: model)
+        let pinnedHighlightColorRaw: String
+        if case .snapshot(let envelope) = readResult,
+           let note = envelope.note {
+            pinnedHighlightColorRaw = note.resolvedPinnedHighlightColorRaw
+        } else {
+            pinnedHighlightColorRaw = MyRAMWidgetSnapshotBounds.defaultPinnedHighlightColorRaw
+        }
+
+        return MyRAMWidgetEntry(
+            date: .now,
+            model: model,
+            pinnedHighlightColorRaw: pinnedHighlightColorRaw
+        )
     }
 }
 
@@ -76,6 +143,10 @@ private struct MyRAMWidgetEntryView: View {
             family: MyRAMWidgetFamily(widgetFamily: widgetFamily),
             platform: .iOS
         )
+    }
+
+    private var pinnedHighlightPresentation: MyRAMWidgetPinnedHighlightPresentation {
+        MyRAMWidgetPinnedHighlightPresentation(rawValue: entry.pinnedHighlightColorRaw)
     }
 
     private var contentInsets: EdgeInsets {
@@ -101,11 +172,16 @@ private struct MyRAMWidgetEntryView: View {
                 HStack(spacing: layoutPolicy.pinSpacing) {
                     Image(systemName: "pin.fill")
                         .font(.caption2)
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(pinnedHighlightPresentation.foreground)
                     Text(text)
                         .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(pinnedHighlightPresentation.foreground)
                         .lineLimit(1)
                         .truncationMode(.tail)
+                }
+                .background {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(pinnedHighlightPresentation.background)
                 }
                 .layoutPriority(1)
             }
@@ -155,6 +231,7 @@ struct MyRAMWidget: Widget {
             bodyText: "Confirm the remaining verification items before publishing.",
             state: .content,
             noteURL: nil
-        )
+        ),
+        pinnedHighlightColorRaw: MyRAMWidgetSnapshotBounds.defaultPinnedHighlightColorRaw
     )
 }

@@ -260,6 +260,9 @@ struct NotesListView: View {
                 await drainPendingOpenURLsIfReady()
             }
         }
+        .onChange(of: pinnedHighlightColorRaw) { _, _ in
+            widgetCoordinator.publishNow()
+        }
 #endif
         .alert("Unable to Import Markdown", isPresented: Binding(
             get: { markdownImportErrorMessage != nil },
