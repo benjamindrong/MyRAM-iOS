@@ -439,7 +439,7 @@ struct SyncConvergencePostCommitWorkPayloadV2: Codable, Equatable, Sendable {
         self.legacyWorkPayload = legacyWorkPayload
         self.anchoredRecoveryTransitions = try anchoredRecoveryTransitions
             .map(AnchoredRecoveryTransitionPayload.init)
-            .sorted { $0.key < $1.key }
+            .sorted { try $0.validatedKey() < $1.validatedKey() }
         try validate()
     }
 
@@ -463,12 +463,9 @@ struct SyncConvergencePostCommitWorkPayloadV2: Codable, Equatable, Sendable {
             throw SyncConvergencePostCommitWorkPayloadError.unsupportedVersion
         }
         try legacyWorkPayload.validate()
-        let keys = anchoredRecoveryTransitions.map(\.key)
+        let keys = try anchoredRecoveryTransitions.map { try $0.validatedKey() }
         guard keys.count == Set(keys).count else {
             throw SyncConvergencePostCommitWorkPayloadError.duplicateAnchoredRecoveryTransitionKeys
-        }
-        for transition in anchoredRecoveryTransitions {
-            try transition.validate()
         }
     }
 
@@ -501,12 +498,19 @@ struct SyncConvergencePostCommitWorkPayloadV2: Codable, Equatable, Sendable {
             try validate()
         }
 
-        var key: SyncBatchAnchoredRecoveryRecordKey {
+        func validatedKey() throws -> SyncBatchAnchoredRecoveryRecordKey {
+            try validate()
             switch kind {
             case .insertExpectedAbsent:
-                return replacement!.key
+                guard let replacement else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryAnchoredRecoveryTransition
+                }
+                return replacement.key
             case .replace, .removeCommitted:
-                return expected!.key
+                guard let expected else {
+                    throw SyncConvergencePostCommitWorkPayloadError.contradictoryAnchoredRecoveryTransition
+                }
+                return expected.key
             }
         }
 
