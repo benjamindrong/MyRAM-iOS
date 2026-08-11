@@ -67,3 +67,60 @@ Revalidation verdict: **VALID — implementation authorized.** The named product
 - Recovery transitions that establish waiting/terminal/conflict lifecycle are disjoint from success-dependent post-commit cleanup.
 - Persisted V1 post-commit work, SwiftData schema, transport schema, acknowledgement schema, and exactly-one-compatible-peer V2 routing remain compatible.
 - No activation-driven structural divergence is currently required. Any evidence to the contrary is a review stop before implementation.
+
+## PR #133 remediation revalidation — 2026-08-11
+
+- `validated_handoff_revision`: `sha256:758493ff1fa9c54f0eda0f64c5b57f98134ca183c44ef335e399e776ca93340b`
+- `instruction_repository_sha`: `7c390b32193c4852a3edc5c2192ee6391f4b268b`
+- `prior_starting_head_sha`: `c17829434af1ec825809455d3bfa52b608a74a19`
+- `merged_origin_main_sha`: `312f443a21416d925db457ef4d5cb33411631105`
+- `post_merge_starting_head_sha`: `515d564111da72a54f06e678224fcee04d26b900`
+- merge method: normal two-parent merge commit; first parent `c17829434af1ec825809455d3bfa52b608a74a19`, second parent `312f443a21416d925db457ef4d5cb33411631105`; no rebase, amend, force-push, or history rewrite.
+- overlap reconciliation: `MyRAM/Views/NotesListView.swift` preserves MYR-179 asynchronous external-open/import draining and MYR-208 pinned-highlight widget republishing; `MyRAMTests/MyRAMWidgetHostTests.swift` preserves MYR-179 async widget routing tests and MYR-208 pinned-highlight snapshot/republication coverage.
+- exact `base_sha..post_merge_starting_head_sha` changed-file set (sorted):
+  - `MyRAM.xcodeproj/project.pbxproj`
+  - `MyRAM/Mac/MacNotePersistenceAdapter.swift`
+  - `MyRAM/Mac/MyRAMMacRootView.swift`
+  - `MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift`
+  - `MyRAM/Mac/Sync/MacSyncConvergencePresentationAdapter.swift`
+  - `MyRAM/Sync/AnchoredSequence/NoteSequenceStateFullBodyIntegration.swift`
+  - `MyRAM/Sync/Batch/FileBackedSyncBatchAnchoredRecoveryStore.swift`
+  - `MyRAM/Sync/Batch/FileBackedSyncBatchQueue.swift`
+  - `MyRAM/Sync/Batch/SyncBatchAnchoredActivationPlanner.swift`
+  - `MyRAM/Sync/Batch/SyncBatchAnchoredLocalCapture.swift`
+  - `MyRAM/Sync/Batch/SyncBatchAnchoredPayloadPolicy.swift`
+  - `MyRAM/Sync/Convergence/SwiftDataSyncConvergencePersistenceTransaction.swift`
+  - `MyRAM/Sync/Convergence/SwiftDataSyncConvergencePostCommitStore.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergenceDrainPassScheduler.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergenceLocalObligation.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergencePlanner.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergencePlanningTypes.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergencePostCommitExecutor.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergencePostCommitTypes.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergenceTypes.swift`
+  - `MyRAM/Sync/Recovery/PendingSyncRecoveryCoordinator.swift`
+  - `MyRAM/ViewModels/NotesViewModel.swift`
+  - `MyRAM/Views/NearbySyncView.swift`
+  - `MyRAM/Views/NoteEditorFileOperationBridge.swift`
+  - `MyRAM/Views/NoteEditorView.swift`
+  - `MyRAM/Views/NotesListView.swift`
+  - `MyRAM/WidgetHost/MyRAMWidgetHostCoordinator.swift`
+  - `MyRAM/WidgetHost/MyRAMWidgetNoteRouting.swift`
+  - `MyRAM/WidgetShared/MyRAMWidgetSnapshot.swift`
+  - `MyRAMTests/MarkdownFileOperationBoundaryTests.swift`
+  - `MyRAMTests/MarkdownImportIntegrationTests.swift`
+  - `MyRAMTests/MyRAMWidgetCoreTests.swift`
+  - `MyRAMTests/MyRAMWidgetHostTests.swift`
+  - `MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift`
+  - `MyRAMTests/SyncBatchAnchoredPayloadTests.swift`
+  - `MyRAMTests/SyncBatchAnchoredRecoveryPlannerTests.swift`
+  - `MyRAMTests/SyncBatchUnsentQueueTests.swift`
+  - `MyRAMTests/SyncConvergenceIncorporationTests.swift`
+  - `MyRAMTests/SyncConvergencePlanningTests.swift`
+  - `MyRAMWidget/MyRAMWidget.swift`
+  - `docs/MYR-179-activation-alignment.md`
+- review finding revalidation: all four findings remain applicable at the same named seams. `NoteEditorView` still schedules teardown persistence asynchronously before unregistering; `SyncConvergencePostCommitExecutor` already orders anchored recovery before presentation/cleanup but lacks the required real persisted-store durability/restart proof; malformed V2 transition validation still reads a force-unwrapped key before validating shape; prior `c178294…` exact-head evidence is historical after the merge.
+- preservation revalidation: the single disabled capability remains the production activation source; the MYR-175 insertion, MYR-176 identity/tombstone deletion, MYR-177 recovery/retry/bootstrap/applied-equivalence, and MYR-178 anchorless contracts remain intact; no new SwiftData, transport, or acknowledgement schema requirement was introduced by MYR-208.
+
+Remediation revalidation verdict: **VALID — proceed with the named remediation seams only.**
