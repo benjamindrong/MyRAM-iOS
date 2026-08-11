@@ -3,34 +3,75 @@
 set -euo pipefail
 
 usage() {
-    cat <<'EOF'
-Usage: Scripts/reset-myram-mac-local-storage.sh [--dry-run] [--yes]
+    cat <<'USAGE'
+Usage: Scripts/reset-myram-mac-local-storage.sh <debug|release> [--dry-run] [--yes]
 
-Stops MyRAMMac and removes its local SwiftData store, sync state, and external
-blob storage. The default mode asks for confirmation; --yes skips the prompt.
-EOF
+Stops MyRAMMac and removes only the selected build configuration's local
+SwiftData store and external blob storage.
+
+Required parameter:
+  debug       Reset only the Debug app-group data.
+  release     Reset only the Release app-group data.
+
+Options:
+  --dry-run   Print the selected paths without stopping the app or deleting data.
+  --yes       Skip the interactive confirmation.
+  -h, --help  Show this help text.
+
+The shared sync-state directory at ~/Library/Application Support/MyRAM is not
+removed because it is not separated by Debug and Release configuration.
+USAGE
 }
 
-dry_run=false
-assume_yes=false
+if (($# == 0)); then
+    printf 'Missing required configuration parameter.\n\n' >&2
+    usage >&2
+    exit 2
+fi
 
-while (($# > 0)); do
-    case "$1" in
-    --dry-run)
-        dry_run=true
+configuration="$1"
+shift
+
+case "$configuration" in
+    debug)
+        app_group_identifier="group.com.northsignalstudio.myram.mac.dev.widget"
+        expected_confirmation="RESET DEBUG"
         ;;
-    --yes)
-        assume_yes=true
+    release)
+        app_group_identifier="group.com.northsignalstudio.myram.mac.widget"
+        expected_confirmation="RESET RELEASE"
         ;;
     -h | --help)
         usage
         exit 0
         ;;
     *)
-        printf 'Unknown option: %s\n' "$1" >&2
+        printf 'Invalid configuration: %s\n\n' "$configuration" >&2
         usage >&2
         exit 2
         ;;
+esac
+
+dry_run=false
+assume_yes=false
+
+while (($# > 0)); do
+    case "$1" in
+        --dry-run)
+            dry_run=true
+            ;;
+        --yes)
+            assume_yes=true
+            ;;
+        -h | --help)
+            usage
+            exit 0
+            ;;
+        *)
+            printf 'Unknown option: %s\n\n' "$1" >&2
+            usage >&2
+            exit 2
+            ;;
     esac
     shift
 done
@@ -41,27 +82,32 @@ if [[ "$user_home" != /* || "$user_home" == "/" ]]; then
     exit 1
 fi
 
-application_support="$user_home/Library/Application Support"
-expected_application_support_suffix="/Library/Application Support"
-if [[ "$application_support" != *"$expected_application_support_suffix" ]]; then
-    printf 'Refusing unexpected Application Support path: %s\n' "$application_support" >&2
-    exit 1
-fi
+group_containers="$user_home/Library/Group Containers"
+group_container="$group_containers/$app_group_identifier"
+application_support="$group_container/Library/Application Support"
+
+case "$group_container" in
+    "$group_containers/group.com.northsignalstudio.myram.mac.dev.widget" | \
+    "$group_containers/group.com.northsignalstudio.myram.mac.widget")
+        ;;
+    *)
+        printf 'Refusing unexpected app-group container: %s\n' "$group_container" >&2
+        exit 1
+        ;;
+esac
 
 store="$application_support/MyRAM_Main.store"
 store_wal="$application_support/MyRAM_Main.store-wal"
 store_shm="$application_support/MyRAM_Main.store-shm"
-sync_state="$application_support/MyRAM"
 external_storage="$application_support/.MyRAM_Main_SUPPORT"
 targets=(
     "$store"
     "$store_wal"
     "$store_shm"
-    "$sync_state"
     "$external_storage"
 )
 
-printf 'MyRAMMac local data reset will remove:\n'
+printf 'MyRAMMac %s local data reset will remove:\n' "$configuration"
 printf '  %s\n' "${targets[@]}"
 
 if "$dry_run"; then
@@ -70,19 +116,19 @@ if "$dry_run"; then
 fi
 
 if ! "$assume_yes"; then
-    printf 'Type RESET to continue: '
+    printf 'Type %s to continue: ' "$expected_confirmation"
     read -r confirmation
-    if [[ "$confirmation" != "RESET" ]]; then
+    if [[ "$confirmation" != "$expected_confirmation" ]]; then
         printf 'Cancelled.\n'
         exit 1
     fi
 fi
 
-# Terminating the exact executable releases SwiftData and external-storage files.
+# Closing the executable releases SwiftData and external-storage files.
 pkill -9 -x MyRAMMac 2>/dev/null || true
 
-rm -f "$store" "$store_wal" "$store_shm"
-rm -rf "$sync_state" "$external_storage"
+rm -f -- "$store" "$store_wal" "$store_shm"
+rm -rf -- "$external_storage"
 
 remaining=()
 for target in "${targets[@]}"; do
@@ -97,4 +143,4 @@ if ((${#remaining[@]} > 0)); then
     exit 1
 fi
 
-printf 'MyRAMMac local storage is clean.\n'
+printf 'MyRAMMac %s local storage is clean.\n' "$configuration"
