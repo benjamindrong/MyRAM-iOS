@@ -26,8 +26,6 @@ jobs:
     if: ${{ github.actor == github.repository_owner }}
     runs-on: myram-trusted-heavy
     timeout-minutes: 45
-    env:
-      DERIVED_DATA: ${{ runner.temp }}/MyRAMHeavyDerivedData
     steps:
       - name: Assert trusted dispatch context
         env:
@@ -63,8 +61,10 @@ jobs:
       - name: Prepare deterministic build state
         run: |
           set -euo pipefail
-          rm -rf "$DERIVED_DATA"
-          mkdir -p "$DERIVED_DATA"
+          derived_data="$RUNNER_TEMP/MyRAMHeavyDerivedData"
+          echo "DERIVED_DATA=$derived_data" >> "$GITHUB_ENV"
+          rm -rf "$derived_data"
+          mkdir -p "$derived_data"
 
       - name: Verify Xcode 26.6
         working-directory: MyRAM-iOS
