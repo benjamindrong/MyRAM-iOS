@@ -20,14 +20,11 @@ concurrency:
   group: myram-heavy-${{ github.ref }}-${{ inputs.profile }}
   cancel-in-progress: true
 
-env:
-  DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
-
 jobs:
   verify:
     name: Heavy ${{ inputs.profile }} verification
     if: ${{ github.actor == github.repository_owner }}
-    runs-on: [self-hosted, macOS, ARM64, myram-trusted-heavy]
+    runs-on: myram-trusted-heavy
     timeout-minutes: 45
     env:
       DERIVED_DATA: ${{ runner.temp }}/MyRAMHeavyDerivedData
@@ -69,9 +66,14 @@ jobs:
           rm -rf "$DERIVED_DATA"
           mkdir -p "$DERIVED_DATA"
 
-      - name: Show Xcode version
+      - name: Verify Xcode 26.6
         working-directory: MyRAM-iOS
-        run: xcodebuild -version
+        run: |
+          set -euo pipefail
+          xcode-select -p
+          version_line="$(xcodebuild -version | head -n 1)"
+          echo "$version_line"
+          [[ "$version_line" == "Xcode 26.6" ]]
 
       - name: Select iOS simulator
         if: ${{ inputs.profile == 'ios' || inputs.profile == 'ui' }}
