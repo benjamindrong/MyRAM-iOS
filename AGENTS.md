@@ -20,3 +20,4 @@
     * The current repository, branch, or PR state.
 6. Report the instruction-repository commit SHA used.
 7. Follow the required scope, Git safety, verification, severity, evidence, traceability, and readiness standards from the selected workflow.
+8. In MyRAM, call any feature or code named **pinned thought** by the approved term **pinned text**.
