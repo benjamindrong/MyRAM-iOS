@@ -1,15 +1,9 @@
-name: PR Verification
+name: PR verification
 
 "on":
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
-    inputs:
-      profile:
-        description: Verification profile (auto, build-only, or widget)
-        required: true
-        default: 'auto'
-        type: string
 
 permissions:
   contents: read
@@ -22,86 +16,52 @@ env:
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 
 jobs:
-  diff_audit:
+  diff-audit:
     name: Diff audit
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      xcode_required: ${{ steps.scope.outputs.xcode_required }}
-      profile: ${{ steps.scope.outputs.profile }}
+      xcode-required: ${{ steps.changes.outputs.xcode-required }}
     steps:
       - name: Check out candidate
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           path: MyRAM-iOS
-          persist-credentials: false
 
-      - name: Resolve verification scope
-        id: scope
+      - name: Run git diff check
         working-directory: MyRAM-iOS
-        env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          REQUESTED_PROFILE: ${{ github.event.inputs.profile || 'auto' }}
         run: |
           set -euo pipefail
+          git fetch --no-tags origin main
+          git diff --check origin/main...HEAD
 
-          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
-            base="$PR_BASE_SHA"
-          else
-            git fetch --no-tags origin main
-            base="$(git rev-parse origin/main)"
-          fi
-
-          git diff --check "$base...HEAD"
-          changed_files="$(git diff --name-only "$base...HEAD")"
-          printf '%s\n' "$changed_files"
-
+      - name: Detect documentation-only changes
+        id: changes
+        working-directory: MyRAM-iOS
+        run: |
+          set -euo pipefail
           xcode_required=false
           while IFS= read -r path; do
-            [[ -z "$path" ]] && continue
             case "$path" in
               *.md|docs/*) ;;
               *) xcode_required=true; break ;;
             esac
-          done <<< "$changed_files"
+          done < <(git diff --name-only origin/main...HEAD)
+          echo "xcode-required=$xcode_required" >> "$GITHUB_OUTPUT"
 
-          profile="$REQUESTED_PROFILE"
-          case "$profile" in
-            auto|build-only|widget) ;;
-            *)
-              echo "Invalid verification profile: $profile" >&2
-              exit 2
-              ;;
-          esac
-
-          if [[ "$profile" == "auto" ]]; then
-            if printf '%s\n' "$changed_files" | grep -Eq '^(MyRAM/WidgetShared/|MyRAM/WidgetHost/|MyRAMWidget/|MyRAMTests/MyRAMWidget(Core|Host)Tests\.swift$)'; then
-              profile="widget"
-            else
-              profile="build-only"
-            fi
-          fi
-
-          echo "xcode_required=$xcode_required" >> "$GITHUB_OUTPUT"
-          echo "profile=$profile" >> "$GITHUB_OUTPUT"
-          echo "Selected verification profile: $profile"
-
-  verify:
-    name: iOS verification
-    needs: diff_audit
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && needs.diff_audit.outputs.xcode_required == 'true') }}
+  ios-tests:
+    name: iOS application tests
+    needs: diff-audit
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && needs.diff-audit.outputs.xcode-required == 'true')
     runs-on: macos-26
-    timeout-minutes: 25
-    env:
-      DERIVED_DATA: ${{ runner.temp }}/MyRAMDerivedData
+    timeout-minutes: 35
     steps:
       - name: Check out MyRAM candidate
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           path: MyRAM-iOS
-          persist-credentials: false
 
       - name: Check out NearbySyncCore sibling
         uses: actions/checkout@v7
@@ -109,41 +69,13 @@ jobs:
           repository: benjamindrong/NearbySyncCore
           ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
           path: NearbySyncCore
-          persist-credentials: false
 
       - name: Show Xcode version
         working-directory: MyRAM-iOS
         run: xcodebuild -version
 
-      - name: Build iOS app
+      - name: Run complete iOS application suite
         working-directory: MyRAM-iOS
-        run: |
-          set -euo pipefail
-          xcodebuild \
-            -project MyRAM.xcodeproj \
-            -scheme MyRAM \
-            -destination 'generic/platform=iOS Simulator' \
-            -configuration Debug \
-            -derivedDataPath "$DERIVED_DATA" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-
-      - name: Build iOS widget extension
-        if: ${{ needs.diff_audit.outputs.profile == 'widget' }}
-        working-directory: MyRAM-iOS
-        run: |
-          set -euo pipefail
-          xcodebuild \
-            -project MyRAM.xcodeproj \
-            -target MyRAMWidgetExtension \
-            -sdk iphonesimulator \
-            -configuration Debug \
-            -derivedDataPath "$DERIVED_DATA" \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-
-      - name: Select iOS simulator
-        if: ${{ needs.diff_audit.outputs.profile == 'widget' }}
         run: |
           set -euo pipefail
           simulator_udid="$(xcrun simctl list devices available -j | python3 -c '
@@ -156,35 +88,24 @@ jobs:
               for device in runtime_devices
               if device.get("isAvailable") and device.get("name", "").startswith("iPhone")
           ]
-          preferred = next((device for device in devices if device["name"] == "iPhone Air"), None)
-          selected = preferred or (devices[0] if devices else None)
-          if selected is None:
+          if not devices:
               raise SystemExit("No available iPhone simulator")
-          print(selected["udid"])
+          print(devices[0]["udid"])
           ')"
-          echo "SIMULATOR_UDID=$simulator_udid" >> "$GITHUB_ENV"
           echo "Selected simulator: $simulator_udid"
-
-      - name: Run focused widget tests
-        if: ${{ needs.diff_audit.outputs.profile == 'widget' }}
-        working-directory: MyRAM-iOS
-        run: |
-          set -euo pipefail
           xcodebuild \
             -project MyRAM.xcodeproj \
             -scheme MyRAM \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_UDID" \
+            -destination "platform=iOS Simulator,id=$simulator_udid" \
             -parallel-testing-enabled NO \
-            -derivedDataPath "$DERIVED_DATA" \
             CODE_SIGNING_ALLOWED=NO \
-            test \
-            -only-testing:MyRAMTests/MyRAMWidgetCoreTests \
-            -only-testing:MyRAMTests/MyRAMWidgetHostTests
+            -only-testing:MyRAMTests \
+            test
 
-  mac_tests:
+  mac-tests:
     name: Mac application tests
-    needs: diff_audit
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && needs.diff_audit.outputs.xcode_required == 'true') }}
+    needs: diff-audit
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && needs.diff-audit.outputs.xcode-required == 'true')
     runs-on: macos-26
     timeout-minutes: 35
     steps:
@@ -193,7 +114,6 @@ jobs:
         with:
           fetch-depth: 0
           path: MyRAM-iOS
-          persist-credentials: false
 
       - name: Check out NearbySyncCore sibling
         uses: actions/checkout@v7
@@ -201,7 +121,6 @@ jobs:
           repository: benjamindrong/NearbySyncCore
           ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
           path: NearbySyncCore
-          persist-credentials: false
 
       - name: Show Xcode version
         working-directory: MyRAM-iOS
@@ -218,4 +137,55 @@ jobs:
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:MyRAMMacTests \
+            test
+
+  ui-tests:
+    name: iOS UI tests (manual only)
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - name: Check out MyRAM candidate
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          path: MyRAM-iOS
+
+      - name: Check out NearbySyncCore sibling
+        uses: actions/checkout@v7
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+
+      - name: Show Xcode version
+        working-directory: MyRAM-iOS
+        run: xcodebuild -version
+
+      - name: Run iOS UI suite
+        working-directory: MyRAM-iOS
+        run: |
+          set -euo pipefail
+          simulator_udid="$(xcrun simctl list devices available -j | python3 -c '
+          import json, sys
+          data = json.load(sys.stdin)
+          devices = [
+              device
+              for runtime, runtime_devices in data["devices"].items()
+              if "iOS" in runtime
+              for device in runtime_devices
+              if device.get("isAvailable") and device.get("name", "").startswith("iPhone")
+          ]
+          if not devices:
+              raise SystemExit("No available iPhone simulator")
+          print(devices[0]["udid"])
+          ')"
+          echo "Selected simulator: $simulator_udid"
+          xcodebuild \
+            -project MyRAM.xcodeproj \
+            -scheme MyRAM \
+            -destination "platform=iOS Simulator,id=$simulator_udid" \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:MyRAMUITests \
             test
