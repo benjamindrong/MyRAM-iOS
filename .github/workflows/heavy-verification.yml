@@ -71,8 +71,9 @@ jobs:
         run: |
           set -euo pipefail
           xcode-select -p
-          version_line="$(xcodebuild -version | head -n 1)"
-          echo "$version_line"
+          xcode_version="$(xcodebuild -version)"
+          printf '%s\n' "$xcode_version"
+          version_line="${xcode_version%%$'\n'*}"
           [[ "$version_line" == "Xcode 26.6" ]]
 
       - name: Select iOS simulator
