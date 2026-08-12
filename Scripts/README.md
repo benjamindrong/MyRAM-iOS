@@ -2,7 +2,7 @@
 
 ## Reset macOS local storage
 
-`reset-myram-mac-local-storage.sh` stops `MyRAMMac` and removes the local SwiftData store and external blob storage for exactly one build configuration.
+`reset-myram-mac-local-storage.sh` resets exactly one MyRAMMac build configuration. It stops only the selected Debug or Release app, waits for that app to exit, then removes that configuration's SwiftData store, external blob storage, and widget snapshot.
 
 Run from the repository root:
 
@@ -11,7 +11,7 @@ Scripts/reset-myram-mac-local-storage.sh debug
 Scripts/reset-myram-mac-local-storage.sh release
 ```
 
-Preview the selected paths without deleting anything:
+Preview the selected paths without stopping the app or deleting anything:
 
 ```bash
 Scripts/reset-myram-mac-local-storage.sh debug --dry-run
@@ -25,6 +25,8 @@ Scripts/reset-myram-mac-local-storage.sh debug --yes
 
 Without `--yes`, enter `RESET DEBUG` or `RESET RELEASE` when prompted.
 
-The script does not remove `~/Library/Application Support/MyRAM` because that sync-state directory is shared between Debug and Release.
+The reset preserves the other build configuration and does not remove `~/Library/Application Support/MyRAM`, because that sync-state directory is shared between Debug and Release.
 
-> Warning: A reset permanently deletes the selected configuration's local note data.
+If the selected app cannot be stopped, the script aborts before deleting local data.
+
+> Warning: A reset permanently deletes the selected configuration's local note data and widget snapshot.
