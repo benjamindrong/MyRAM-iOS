@@ -61,6 +61,33 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(browsingCalls, 0)
     }
 
+    func testMacControllerBootstrapsWithBoundedMultibytePeerIdentityBeforeNetworking() throws {
+        var advertisingCalls = 0
+        var browsingCalls = 0
+        let id = UUID(uuidString: "00000000-0000-0000-0000-000000000210")!
+        let identity = MacSyncDeviceIdentity(
+            id: id,
+            displayName: String(repeating: "é", count: 100)
+        )
+
+        _ = MacSyncBatchController(
+            context: try makeInMemoryContainer().mainContext,
+            unsentBatchQueueFileURL: nil,
+            startsNetworking: false,
+            identityProvider: { identity },
+            startAdvertisingOperation: { advertisingCalls += 1 },
+            startBrowsingOperation: { browsingCalls += 1 }
+        )
+
+        XCTAssertLessThanOrEqual(
+            identity.peerDisplayName.utf8.count,
+            MacSyncDeviceIdentity.maximumPeerDisplayNameUTF8ByteCount
+        )
+        XCTAssertTrue(identity.peerDisplayName.hasSuffix("|\(id.uuidString)"))
+        XCTAssertEqual(advertisingCalls, 0)
+        XCTAssertEqual(browsingCalls, 0)
+    }
+
     func testMacControllerAdvertisingAndBrowsingEachStartExactlyOnce() throws {
         var advertisingCalls = 0
         var browsingCalls = 0
