@@ -49,6 +49,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         unsentBatchQueueFileURL: URL? = MacSyncBatchController.unsentBatchQueueFileURL(),
         unsentBatchQueue: FileBackedSyncBatchQueue? = nil,
         startsNetworking: Bool = true,
+        identityProvider: () -> MacSyncDeviceIdentity = {
+            MacSyncDeviceIdentityProvider().currentIdentity()
+        },
         legacyReceiver: MacLegacySyncReceiver? = nil,
         startAdvertisingOperation: (() -> Void)? = nil,
         startBrowsingOperation: (() -> Void)? = nil,
@@ -58,10 +61,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         invitePeerOperation:
             ((MCPeerID, Data, TimeInterval) -> Void)? = nil
     ) {
-        let identity = MacSyncDeviceIdentityProvider().currentIdentity()
-        let retainedPeerID = MCPeerID(
-            displayName: "\(identity.displayName)|\(identity.id.uuidString)"
-        )
+        let identity = identityProvider()
+        let retainedPeerID = MCPeerID(displayName: identity.peerDisplayName)
         let retainedSession = MCSession(
             peer: retainedPeerID,
             securityIdentity: nil,
