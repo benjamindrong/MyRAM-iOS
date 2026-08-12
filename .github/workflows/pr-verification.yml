@@ -6,14 +6,10 @@ name: PR Verification
   workflow_dispatch:
     inputs:
       profile:
-        description: Verification profile
+        description: Verification profile (auto, build-only, or widget)
         required: true
         default: 'auto'
-        type: choice
-        options:
-          - auto
-          - build-only
-          - widget
+        type: string
 
 permissions:
   contents: read
@@ -71,6 +67,14 @@ jobs:
           done <<< "$changed_files"
 
           profile="$REQUESTED_PROFILE"
+          case "$profile" in
+            auto|build-only|widget) ;;
+            *)
+              echo "Invalid verification profile: $profile" >&2
+              exit 2
+              ;;
+          esac
+
           if [[ "$profile" == "auto" ]]; then
             if printf '%s\n' "$changed_files" | grep -Eq '^(MyRAM/WidgetShared/|MyRAM/WidgetHost/|MyRAMWidget/|MyRAMTests/MyRAMWidget(Core|Host)Tests\.swift$)'; then
               profile="widget"
