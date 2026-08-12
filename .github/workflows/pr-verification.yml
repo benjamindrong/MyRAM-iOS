@@ -1,15 +1,15 @@
-name: CI Reality Check
+name: PR verification
 
 "on":
   pull_request:
-    types: [opened, synchronize, reopened]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-reality-${{ github.event.pull_request.number || github.ref }}
+  group: pr-verification-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 env:
@@ -20,9 +20,11 @@ jobs:
     name: Diff audit
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    outputs:
+      xcode-required: ${{ steps.changes.outputs.xcode-required }}
     steps:
       - name: Check out candidate
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           path: MyRAM-iOS
@@ -34,19 +36,35 @@ jobs:
           git fetch --no-tags origin main
           git diff --check origin/main...HEAD
 
+      - name: Detect documentation-only changes
+        id: changes
+        working-directory: MyRAM-iOS
+        run: |
+          set -euo pipefail
+          xcode_required=false
+          while IFS= read -r path; do
+            case "$path" in
+              *.md|docs/*) ;;
+              *) xcode_required=true; break ;;
+            esac
+          done < <(git diff --name-only origin/main...HEAD)
+          echo "xcode-required=$xcode_required" >> "$GITHUB_OUTPUT"
+
   ios-tests:
     name: iOS application tests
+    needs: diff-audit
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && needs.diff-audit.outputs.xcode-required == 'true')
     runs-on: macos-26
     timeout-minutes: 35
     steps:
       - name: Check out MyRAM candidate
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           path: MyRAM-iOS
 
       - name: Check out NearbySyncCore sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: benjamindrong/NearbySyncCore
           ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
@@ -86,17 +104,19 @@ jobs:
 
   mac-tests:
     name: Mac application tests
+    needs: diff-audit
+    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && needs.diff-audit.outputs.xcode-required == 'true')
     runs-on: macos-26
     timeout-minutes: 35
     steps:
       - name: Check out MyRAM candidate
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           path: MyRAM-iOS
 
       - name: Check out NearbySyncCore sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: benjamindrong/NearbySyncCore
           ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
@@ -120,18 +140,19 @@ jobs:
             test
 
   ui-tests:
-    name: iOS UI tests
+    name: iOS UI tests (manual only)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: macos-26
     timeout-minutes: 35
     steps:
       - name: Check out MyRAM candidate
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           path: MyRAM-iOS
 
       - name: Check out NearbySyncCore sibling
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: benjamindrong/NearbySyncCore
           ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
