@@ -8,7 +8,7 @@ name: PR Verification
       profile:
         description: Verification profile
         required: true
-        default: auto
+        default: 'auto'
         type: choice
         options:
           - auto
@@ -26,12 +26,12 @@ env:
   DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
 
 jobs:
-  diff-audit:
+  diff_audit:
     name: Diff audit
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      xcode-required: ${{ steps.scope.outputs.xcode-required }}
+      xcode_required: ${{ steps.scope.outputs.xcode_required }}
       profile: ${{ steps.scope.outputs.profile }}
     steps:
       - name: Check out candidate
@@ -46,7 +46,7 @@ jobs:
         working-directory: MyRAM-iOS
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          REQUESTED_PROFILE: ${{ github.event_name == 'workflow_dispatch' && inputs.profile || 'auto' }}
+          REQUESTED_PROFILE: ${{ github.event.inputs.profile || 'auto' }}
         run: |
           set -euo pipefail
 
@@ -79,14 +79,14 @@ jobs:
             fi
           fi
 
-          echo "xcode-required=$xcode_required" >> "$GITHUB_OUTPUT"
+          echo "xcode_required=$xcode_required" >> "$GITHUB_OUTPUT"
           echo "profile=$profile" >> "$GITHUB_OUTPUT"
           echo "Selected verification profile: $profile"
 
   verify:
     name: iOS verification
-    needs: diff-audit
-    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && needs.diff-audit.outputs.xcode-required == 'true')
+    needs: diff_audit
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && needs.diff_audit.outputs.xcode_required == 'true') }}
     runs-on: macos-26
     timeout-minutes: 25
     env:
@@ -125,7 +125,7 @@ jobs:
             build
 
       - name: Build iOS widget extension
-        if: needs.diff-audit.outputs.profile == 'widget'
+        if: ${{ needs.diff_audit.outputs.profile == 'widget' }}
         working-directory: MyRAM-iOS
         run: |
           set -euo pipefail
@@ -139,7 +139,7 @@ jobs:
             build
 
       - name: Select iOS simulator
-        if: needs.diff-audit.outputs.profile == 'widget'
+        if: ${{ needs.diff_audit.outputs.profile == 'widget' }}
         run: |
           set -euo pipefail
           simulator_udid="$(xcrun simctl list devices available -j | python3 -c '
@@ -162,7 +162,7 @@ jobs:
           echo "Selected simulator: $simulator_udid"
 
       - name: Run focused widget tests
-        if: needs.diff-audit.outputs.profile == 'widget'
+        if: ${{ needs.diff_audit.outputs.profile == 'widget' }}
         working-directory: MyRAM-iOS
         run: |
           set -euo pipefail
