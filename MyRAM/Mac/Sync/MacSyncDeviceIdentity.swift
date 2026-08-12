@@ -20,7 +20,7 @@ struct MacSyncDeviceIdentity: Equatable {
         let prefix = boundedDisplayName.nilIfEmpty
             ?? "Mac".prefixFittingUTF8ByteCount(prefixByteBudget)
 
-        return (prefix ?? "") + suffix
+        return prefix + suffix
     }
 }
 
