@@ -38,7 +38,10 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
         let identity = MacSyncDeviceIdentity(id: id, displayName: "Test Mac")
 
         XCTAssertEqual(identity.peerDisplayName, "Test Mac|\(id.uuidString)")
-        XCTAssertEqual(identity.peerDisplayName.split(separator: "|", maxSplits: 1).last, Substring(id.uuidString))
+        XCTAssertEqual(
+            String(identity.peerDisplayName.split(separator: "|", maxSplits: 1).last ?? ""),
+            id.uuidString
+        )
     }
 
     func testPeerDisplayNameAcceptsExactUTF8BoundaryWithoutShortening() {
@@ -102,15 +105,16 @@ final class MacSyncDeviceIdentityTests: XCTestCase {
 
     func testPeerDisplayNameFallsBackWhenFirstHostCharacterCannotFit() {
         let id = UUID(uuidString: "00000000-0000-0000-0000-000000000123")!
-        let oversizedCharacter = String(repeating: "👩🏽‍💻", count: 2)
+        let oversizedCharacter = "a" + String(repeating: "\u{0301}", count: 20)
         let identity = MacSyncDeviceIdentity(id: id, displayName: oversizedCharacter)
 
-        XCTAssertTrue(identity.peerDisplayName.hasSuffix("|\(id.uuidString)"))
+        XCTAssertEqual(oversizedCharacter.count, 1)
+        XCTAssertGreaterThan(oversizedCharacter.utf8.count, 26)
+        XCTAssertEqual(identity.peerDisplayName, "Mac|\(id.uuidString)")
         XCTAssertLessThanOrEqual(
             identity.peerDisplayName.utf8.count,
             MacSyncDeviceIdentity.maximumPeerDisplayNameUTF8ByteCount
         )
-        XCTAssertFalse(identity.peerDisplayName.split(separator: "|", maxSplits: 1)[0].isEmpty)
     }
 
     private func makeDefaults() -> UserDefaults {
