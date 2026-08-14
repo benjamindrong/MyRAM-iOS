@@ -1,8 +1,48 @@
 import XCTest
+import SwiftData
 @testable import MyRAM
 
 @MainActor
 final class NoteEditorLifecyclePersistenceTests: XCTestCase {
+    func testActivationOffLifecycleBoundaryCommitsSynchronously() throws {
+        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR179Lifecycle-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
+        let context = container.mainContext
+        let note = Note(title: "Before", content: "Before")
+        context.insert(note)
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        let completed = viewModel.acceptEditorLifecycleSnapshot(
+            note,
+            title: "After",
+            content: "After",
+            richTextContentData: Data("After".utf8),
+            generation: UUID()
+        )
+
+        XCTAssertTrue(completed)
+        XCTAssertEqual(note.title, "After")
+        XCTAssertEqual(note.content, "After")
+        XCTAssertEqual(note.richTextContentData, Data("After".utf8))
+    }
+
     func testLifecyclePersistenceOwnershipTransfersBeforeEditorUnregisters() async {
         let noteID = UUID()
         let bridge = NoteEditorFileOperationBridge()
