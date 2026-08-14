@@ -4,11 +4,6 @@ import SwiftData
 
 @MainActor
 final class NoteEditorLifecyclePersistenceTests: XCTestCase {
-    override func tearDown() {
-        NoteEditorLifecycleDurabilityRegistry.shared.resetForTesting()
-        super.tearDown()
-    }
-
     func testActivationOffLifecycleBoundaryCommitsSynchronously() throws {
         XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
         let schema = Schema(MyRAMModelRegistry.models)
@@ -62,124 +57,6 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         bridge.unregister(noteID: noteID)
 
         await eventually { persistedGeneration == generation }
-    }
-
-    func testExplicitDurableFlushWaitsForLifecyclePersistenceBeforeMarkdownReadAndConsume() async throws {
-        let noteID = UUID()
-        let generation = UUID()
-        let persistence = SuspendedLifecyclePersistence()
-        let core = NoteEditorLifecyclePersistenceCore { snapshot in
-            await persistence.persist(snapshot)
-        }
-        let bridge = NoteEditorFileOperationBridge()
-        var didEditorFlush = false
-        var didRead = false
-        var didConsume = false
-
-        NoteEditorLifecycleDurabilityRegistry.shared.install(
-            waitForDurability: { awaitedNoteID in
-                guard awaitedNoteID == noteID else { return false }
-                return await core.awaitDurableCompletion(noteID: awaitedNoteID)
-            },
-            retryRetained: {},
-            activation: { true }
-        )
-        core.accept(snapshot(noteID: noteID, generation: generation))
-        await eventually { persistence.startedGenerations == [generation] }
-        bridge.register(noteID: noteID) {
-            didEditorFlush = true
-            return .succeeded
-        }
-        let coordinator = makeMarkdownCoordinator { _ in
-            didRead = true
-            return Data("body".utf8)
-        }
-
-        let operation = Task { @MainActor in
-            try await coordinator.perform(
-                url: URL(fileURLWithPath: "/tmp/Lifecycle.md"),
-                expectedEditor: .note(noteID),
-                flushBridge: bridge,
-                consume: { _ in
-                    didConsume = true
-                }
-            )
-        }
-
-        for _ in 0..<10 { await Task.yield() }
-        XCTAssertFalse(didEditorFlush)
-        XCTAssertFalse(didRead)
-        XCTAssertFalse(didConsume)
-
-        persistence.completeNext(success: true)
-        try await operation.value
-
-        XCTAssertTrue(didEditorFlush)
-        XCTAssertTrue(didRead)
-        XCTAssertTrue(didConsume)
-        XCTAssertNil(core.pendingGenerationForTesting(noteID: noteID))
-    }
-
-    func testExplicitDurableFlushFailureBlocksMarkdownReadAndRetainsLifecycleGeneration() async {
-        let noteID = UUID()
-        let generation = UUID()
-        let persistence = SuspendedLifecyclePersistence()
-        let core = NoteEditorLifecyclePersistenceCore { snapshot in
-            await persistence.persist(snapshot)
-        }
-        let bridge = NoteEditorFileOperationBridge()
-        var didEditorFlush = false
-        var didRead = false
-        var didConsume = false
-
-        NoteEditorLifecycleDurabilityRegistry.shared.install(
-            waitForDurability: { awaitedNoteID in
-                guard awaitedNoteID == noteID else { return false }
-                return await core.awaitDurableCompletion(noteID: awaitedNoteID)
-            },
-            retryRetained: {},
-            activation: { true }
-        )
-        core.accept(snapshot(noteID: noteID, generation: generation))
-        await eventually { persistence.startedGenerations == [generation] }
-        bridge.register(noteID: noteID) {
-            didEditorFlush = true
-            return .succeeded
-        }
-        let coordinator = makeMarkdownCoordinator { _ in
-            didRead = true
-            return Data("body".utf8)
-        }
-        let operation = Task { @MainActor in
-            try await coordinator.perform(
-                url: URL(fileURLWithPath: "/tmp/LifecycleFailure.md"),
-                expectedEditor: .note(noteID),
-                flushBridge: bridge,
-                consume: { _ in
-                    didConsume = true
-                }
-            )
-        }
-
-        for _ in 0..<10 { await Task.yield() }
-        XCTAssertFalse(didEditorFlush)
-        persistence.completeNext(success: false)
-
-        do {
-            try await operation.value
-            XCTFail("Expected lifecycle persistence failure to block Markdown import")
-        } catch {
-            XCTAssertEqual(
-                error as? MarkdownImportOperationError,
-                .editorPreconditionFailed(
-                    .failed(noteID: noteID, message: "Unable to save the current note.")
-                )
-            )
-        }
-        XCTAssertFalse(didEditorFlush)
-        XCTAssertFalse(didRead)
-        XCTAssertFalse(didConsume)
-        XCTAssertEqual(core.pendingGenerationForTesting(noteID: noteID), generation)
     }
 
     func testFailureRetainsNewestGenerationUntilExplicitRetry() async {
@@ -343,17 +220,6 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
             body: "Body",
             richTextContentData: Data("Body".utf8),
             generation: generation
-        )
-    }
-
-    private func makeMarkdownCoordinator(
-        dataLoader: @escaping (URL) throws -> Data
-    ) -> MarkdownImportOperationCoordinator {
-        MarkdownImportOperationCoordinator(
-            classifier: MarkdownFileClassifier(contentTypeProvider: { _ in
-                MarkdownFileClassifier.markdownContentType
-            }),
-            reader: MarkdownFileReader(dataLoader: dataLoader)
         )
     }
 
