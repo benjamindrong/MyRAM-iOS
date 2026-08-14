@@ -241,8 +241,8 @@ private final class SuspendedLifecyclePersistence {
     private var continuations: [CheckedContinuation<Bool, Never>] = []
 
     func persist(_ snapshot: NoteEditorLifecycleSnapshot) async -> Bool {
-        startedGenerations.append(snapshot.generation)
         return await withCheckedContinuation { continuation in
+            startedGenerations.append(snapshot.generation)
             continuations.append(continuation)
         }
     }
