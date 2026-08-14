@@ -1497,6 +1497,9 @@ struct NoteEditorView: View {
 
     @discardableResult
     private func commitPendingNoteEdit() async -> Bool {
+        guard await vm.awaitEditorLifecyclePersistence(noteID: note.id) else {
+            return false
+        }
         guard hasPendingNoteCommit else { return true }
         pendingNoteCommitTask?.cancel()
         pendingNoteCommitTask = nil

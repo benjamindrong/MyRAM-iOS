@@ -84,6 +84,7 @@ final class NoteEditorLifecyclePersistenceCore {
 
     private var pendingByNoteID: [UUID: NoteEditorLifecycleSnapshot] = [:]
     private var drainingNoteIDs: Set<UUID> = []
+    private var durabilityWaitersByNoteID: [UUID: [CheckedContinuation<Bool, Never>]] = [:]
     private let persist: Persistence
     private let didPersist: Success
 
@@ -110,6 +111,15 @@ final class NoteEditorLifecyclePersistenceCore {
         }
     }
 
+    func awaitDurableCompletion(noteID: UUID) async -> Bool {
+        if !drainingNoteIDs.contains(noteID) {
+            return pendingByNoteID[noteID] == nil
+        }
+        return await withCheckedContinuation { continuation in
+            durabilityWaitersByNoteID[noteID, default: []].append(continuation)
+        }
+    }
+
 #if DEBUG
     func pendingGenerationForTesting(noteID: UUID) -> UUID? {
         pendingByNoteID[noteID]?.generation
@@ -129,7 +139,14 @@ final class NoteEditorLifecyclePersistenceCore {
     }
 
     private func drain(noteID: UUID) async {
-        defer { drainingNoteIDs.remove(noteID) }
+        defer {
+            drainingNoteIDs.remove(noteID)
+            let durable = pendingByNoteID[noteID] == nil
+            let waiters = durabilityWaitersByNoteID.removeValue(forKey: noteID) ?? []
+            for waiter in waiters {
+                waiter.resume(returning: durable)
+            }
+        }
         while let snapshot = pendingByNoteID[noteID] {
             guard await persist(snapshot) else { return }
             didPersist(snapshot)
@@ -827,6 +844,11 @@ final class NotesViewModel: ObservableObject {
 
     func retryAllEditorLifecyclePersistence() {
         editorLifecyclePersistence.retryAll()
+    }
+
+    func awaitEditorLifecyclePersistence(noteID: UUID) async -> Bool {
+        guard SyncBatchAnchoredPayloadCapability.isEnabled else { return true }
+        return await editorLifecyclePersistence.awaitDurableCompletion(noteID: noteID)
     }
 
     @discardableResult
