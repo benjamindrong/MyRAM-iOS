@@ -262,10 +262,10 @@ struct NoteEditorView: View {
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase != .active {
                     commitActivePinnedThoughtEdit()
-                    Task { @MainActor in
-                        _ = await commitPendingNoteEdit()
-                    }
+                    _ = transferPendingNoteEditToLifecycleOwner()
                     dismissCurrentNoteSearchKeyboard()
+                } else {
+                    vm.retryAllEditorLifecyclePersistence()
                 }
             }
             .onDisappear {
@@ -274,11 +274,11 @@ struct NoteEditorView: View {
                 markdownEditorMode = .edit
                 clearCurrentNoteSearch()
                 commitActivePinnedThoughtEdit()
-                Task { @MainActor in
-                    _ = await commitPendingNoteEdit()
+                let lifecycleOwnershipAccepted = transferPendingNoteEditToLifecycleOwner()
+                if lifecycleOwnershipAccepted {
+                    fileOperationBridge?.unregister(noteID: note.id)
+                    vm.unregisterActiveEditor(noteID: note.id)
                 }
-                fileOperationBridge?.unregister(noteID: note.id)
-                vm.unregisterActiveEditor(noteID: note.id)
             }
             .onChange(of: note.id) { _, newID in
                 pendingPreviewFocusRequest = nil
@@ -1463,6 +1463,36 @@ struct NoteEditorView: View {
         pendingNoteCommitTask?.cancel()
         pendingNoteCommitTask = nil
         hasPendingNoteCommit = false
+    }
+
+    @discardableResult
+    private func transferPendingNoteEditToLifecycleOwner() -> Bool {
+        guard hasPendingNoteCommit else { return true }
+        pendingNoteCommitTask?.cancel()
+        pendingNoteCommitTask = nil
+        let committedRichTextContentData = EditorRichTextCommitPolicy.committedRichTextContentData(
+            currentData: richTextContentData,
+            pendingEncoder: pendingRichTextContentEncoder
+        )
+        pendingRichTextContentEncoder = nil
+        richTextContentData = committedRichTextContentData
+        let accepted = vm.acceptEditorLifecycleSnapshot(
+            note,
+            title: title,
+            content: content,
+            richTextContentData: committedRichTextContentData,
+            generation: UUID()
+        )
+        guard accepted else { return false }
+        hasPendingNoteCommit = false
+        if editorBufferOwner == .localEditing {
+            editorBufferOwner = .idle
+        }
+        lastSnapshot = currentNoteSnapshot()
+        if !SyncBatchAnchoredPayloadCapability.isEnabled {
+            fileOperationBridge?.notifyPersistenceSucceeded(noteID: note.id)
+        }
+        return true
     }
 
     @discardableResult

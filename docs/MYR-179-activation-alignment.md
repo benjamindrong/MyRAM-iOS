@@ -124,3 +124,72 @@ Revalidation verdict: **VALID — implementation authorized.** The named product
 - preservation revalidation: the single disabled capability remains the production activation source; the MYR-175 insertion, MYR-176 identity/tombstone deletion, MYR-177 recovery/retry/bootstrap/applied-equivalence, and MYR-178 anchorless contracts remain intact; no new SwiftData, transport, or acknowledgement schema requirement was introduced by MYR-208.
 
 Remediation revalidation verdict: **VALID — proceed with the named remediation seams only.**
+
+## PR #133 local remediation continuation revalidation — 2026-08-13
+
+- `validated_handoff_revision`: `sha256:cd939971abb0c300400b5b250aff59cca4d651f4724cd47361bf5883ccf69d89`
+- `prior_starting_head_sha`: `a5fa748cdc4b4505510f74028a708388813ee1d8`
+- `MERGED_MAIN_SHA`: `6800ac4b4914d8522d99e5698eefba975594a791`
+- `post_merge_starting_head_sha`: `b22e2cfed94748a718c893e0bb4980ff9d166763`
+- `EFFECTIVE_BLACKSMITH_SHA`: `766eaa69ca96ba341fd21b24234e7cdf1c6df0d7` (matches the reviewed baseline; no instruction-drift substitution required)
+- merge method: normal two-parent merge; parents `a5fa748cdc4b4505510f74028a708388813ee1d8` and `6800ac4b4914d8522d99e5698eefba975594a791`; no rebase or history rewrite.
+- current ticket: `MYR-179`, In Progress, updated `2026-08-10T22:59:43.422-0500`; Slice 1 scope, acceptance criteria, dependencies, disabled-capability invariant, and completion conditions remain compatible.
+- PR review state: PR #133 head `a5fa748cdc4b4505510f74028a708388813ee1d8`, inspected 2026-08-13; zero top-level comments, reviews, or review threads, so no newly applicable unresolved finding was incorporated.
+- current-main drift: CI verification ownership, repository instructions, documentation/tooling, and bounded Mac peer-display identity/controller changes. The Mac changes preserve controller routing/acknowledgement behavior and add injectable identity construction plus UTF-8-safe display-name bounding; the named Mac controller and identity suites remain the required focused preservation selectors.
+- preservation: the capability-off, acknowledgement, lifecycle, post-commit, MYR-175 insertion, MYR-176 deletion/tombstone, MYR-177 recovery, and MYR-178 anchorless contracts remain valid. `SyncBatchAnchoredPayloadCapability.isEnabled` remains the sole production activation source and remains `false`.
+- authoritative replacement `approved_preexisting_changed_files` is the exact sorted `9ecd3df3f428b3d8fb5afbb00daf8ba49d97114f..b22e2cfed94748a718c893e0bb4980ff9d166763` set:
+  - `.github/workflows/heavy-verification.yml`
+  - `.github/workflows/pr-verification.yml`
+  - `AGENTS.md`
+  - `MyRAM.xcodeproj/project.pbxproj`
+  - `MyRAM/Mac/MacNotePersistenceAdapter.swift`
+  - `MyRAM/Mac/MyRAMMacRootView.swift`
+  - `MyRAM/Mac/Sync/MacSyncBatchController.swift`
+  - `MyRAM/Mac/Sync/MacSyncConvergenceCoordinator.swift`
+  - `MyRAM/Mac/Sync/MacSyncConvergencePresentationAdapter.swift`
+  - `MyRAM/Mac/Sync/MacSyncDeviceIdentity.swift`
+  - `MyRAM/Sync/AnchoredSequence/NoteSequenceStateFullBodyIntegration.swift`
+  - `MyRAM/Sync/Batch/FileBackedSyncBatchAnchoredRecoveryStore.swift`
+  - `MyRAM/Sync/Batch/FileBackedSyncBatchQueue.swift`
+  - `MyRAM/Sync/Batch/SyncBatchAnchoredActivationPlanner.swift`
+  - `MyRAM/Sync/Batch/SyncBatchAnchoredLocalCapture.swift`
+  - `MyRAM/Sync/Batch/SyncBatchAnchoredPayloadPolicy.swift`
+  - `MyRAM/Sync/Convergence/SwiftDataSyncConvergencePersistenceTransaction.swift`
+  - `MyRAM/Sync/Convergence/SwiftDataSyncConvergencePostCommitStore.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergenceDrainPassScheduler.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergenceLocalObligation.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergencePlanner.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergencePlanningTypes.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergencePostCommitExecutor.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergencePostCommitTypes.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergenceRuntime.swift`
+  - `MyRAM/Sync/Convergence/SyncConvergenceTypes.swift`
+  - `MyRAM/Sync/Recovery/PendingSyncRecoveryCoordinator.swift`
+  - `MyRAM/ViewModels/NotesViewModel.swift`
+  - `MyRAM/Views/NearbySyncView.swift`
+  - `MyRAM/Views/NoteEditorFileOperationBridge.swift`
+  - `MyRAM/Views/NoteEditorView.swift`
+  - `MyRAM/Views/NotesListView.swift`
+  - `MyRAM/WidgetHost/MyRAMWidgetHostCoordinator.swift`
+  - `MyRAM/WidgetHost/MyRAMWidgetNoteRouting.swift`
+  - `MyRAM/WidgetShared/MyRAMWidgetSnapshot.swift`
+  - `MyRAMMacTests/MacSyncBatchControllerTests.swift`
+  - `MyRAMMacTests/MacSyncDeviceIdentityTests.swift`
+  - `MyRAMTests/MarkdownFileOperationBoundaryTests.swift`
+  - `MyRAMTests/MarkdownImportIntegrationTests.swift`
+  - `MyRAMTests/MyRAMWidgetCoreTests.swift`
+  - `MyRAMTests/MyRAMWidgetHostTests.swift`
+  - `MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift`
+  - `MyRAMTests/SyncBatchAnchoredPayloadTests.swift`
+  - `MyRAMTests/SyncBatchAnchoredRecoveryPlannerTests.swift`
+  - `MyRAMTests/SyncBatchUnsentQueueTests.swift`
+  - `MyRAMTests/SyncConvergenceIncorporationTests.swift`
+  - `MyRAMTests/SyncConvergencePlanningTests.swift`
+  - `MyRAMWidget/MyRAMWidget.swift`
+  - `README.md`
+  - `Scripts/README.md`
+  - `Scripts/reset-myram-mac-local-storage.sh`
+  - `docs/MYR-179-activation-alignment.md`
+  - `docs/self-hosted-mac-runner.md`
+
+Continuation revalidation verdict: **VALID — the post-merge identities and scope above supersede the pre-merge execution-packet identities.**
