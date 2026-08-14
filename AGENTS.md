@@ -20,3 +20,10 @@
     * The current repository, branch, or PR state.
 6. Report the instruction-repository commit SHA used.
 7. Follow the required scope, Git safety, verification, severity, evidence, traceability, and readiness standards from the selected workflow.
+8. In MyRAM, call any feature or code named **pinned thought** by the approved term **pinned text**.
+9. MyRAM completion verification ownership:
+    * After the focused implementation gate passes and a stable candidate exists, treat the PR GitHub Actions workflow as the authoritative owner of the broad `MyRAMTests` and `MyRAMMacTests` suites when those lanes are applicable.
+    * Start required independent local-only verification concurrently with CI-owned verification rather than waiting for one environment to finish before starting the other.
+    * Do not duplicate an equivalent CI-owned broad suite locally merely to reproduce completion evidence. Run it locally only for diagnosis, candidate-related remediation, CI unavailability, or an explicit execution contract.
+    * Continue to run any required verification that GitHub Actions does not own or cannot perform reliably, including ticket-specific focused checks, device/manual verification, and other local-only evidence.
+    * If the candidate changes, rerun only the evidence invalidated by that change.
