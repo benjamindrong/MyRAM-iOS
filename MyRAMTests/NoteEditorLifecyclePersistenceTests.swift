@@ -4,6 +4,11 @@ import SwiftData
 
 @MainActor
 final class NoteEditorLifecyclePersistenceTests: XCTestCase {
+    override func tearDown() {
+        NoteEditorLifecycleDurabilityRegistry.shared.resetForTesting()
+        super.tearDown()
+    }
+
     func testActivationOffLifecycleBoundaryCommitsSynchronously() throws {
         XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
         let schema = Schema(MyRAMModelRegistry.models)
@@ -71,12 +76,17 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         var didRead = false
         var didConsume = false
 
+        NoteEditorLifecycleDurabilityRegistry.shared.install(
+            waitForDurability: { awaitedNoteID in
+                guard awaitedNoteID == noteID else { return false }
+                return await core.awaitDurableCompletion(noteID: awaitedNoteID)
+            },
+            retryRetained: {},
+            activation: { true }
+        )
         core.accept(snapshot(noteID: noteID, generation: generation))
         await eventually { persistence.startedGenerations == [generation] }
         bridge.register(noteID: noteID) {
-            guard await core.awaitDurableCompletion(noteID: noteID) else {
-                return .failed(message: "Unable to save the current note.")
-            }
             didEditorFlush = true
             return .succeeded
         }
@@ -122,12 +132,17 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         var didRead = false
         var didConsume = false
 
+        NoteEditorLifecycleDurabilityRegistry.shared.install(
+            waitForDurability: { awaitedNoteID in
+                guard awaitedNoteID == noteID else { return false }
+                return await core.awaitDurableCompletion(noteID: awaitedNoteID)
+            },
+            retryRetained: {},
+            activation: { true }
+        )
         core.accept(snapshot(noteID: noteID, generation: generation))
         await eventually { persistence.startedGenerations == [generation] }
         bridge.register(noteID: noteID) {
-            guard await core.awaitDurableCompletion(noteID: noteID) else {
-                return .failed(message: "Unable to save the current note.")
-            }
             didEditorFlush = true
             return .succeeded
         }
