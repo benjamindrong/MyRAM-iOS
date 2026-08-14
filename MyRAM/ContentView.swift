@@ -5,6 +5,7 @@ struct ContentView: View {
     @StateObject private var state: NotesListState
     @Environment(\.scenePhase) private var scenePhase
 
+    @MainActor
     init(state: NotesListState) {
         _state = StateObject(wrappedValue: state)
         let viewModel = state.viewModel
