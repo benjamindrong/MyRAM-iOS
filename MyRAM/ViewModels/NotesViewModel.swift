@@ -84,7 +84,6 @@ final class NoteEditorLifecyclePersistenceCore {
 
     private var pendingByNoteID: [UUID: NoteEditorLifecycleSnapshot] = [:]
     private var drainingNoteIDs: Set<UUID> = []
-    private var durabilityWaitersByNoteID: [UUID: [CheckedContinuation<Bool, Never>]] = [:]
     private let persist: Persistence
     private let didPersist: Success
 
@@ -111,15 +110,6 @@ final class NoteEditorLifecyclePersistenceCore {
         }
     }
 
-    func awaitDurableCompletion(noteID: UUID) async -> Bool {
-        if !drainingNoteIDs.contains(noteID) {
-            return pendingByNoteID[noteID] == nil
-        }
-        return await withCheckedContinuation { continuation in
-            durabilityWaitersByNoteID[noteID, default: []].append(continuation)
-        }
-    }
-
 #if DEBUG
     func pendingGenerationForTesting(noteID: UUID) -> UUID? {
         pendingByNoteID[noteID]?.generation
@@ -139,14 +129,7 @@ final class NoteEditorLifecyclePersistenceCore {
     }
 
     private func drain(noteID: UUID) async {
-        defer {
-            drainingNoteIDs.remove(noteID)
-            let durable = pendingByNoteID[noteID] == nil
-            let waiters = durabilityWaitersByNoteID.removeValue(forKey: noteID) ?? []
-            for waiter in waiters {
-                waiter.resume(returning: durable)
-            }
-        }
+        defer { drainingNoteIDs.remove(noteID) }
         while let snapshot = pendingByNoteID[noteID] {
             guard await persist(snapshot) else { return }
             didPersist(snapshot)
@@ -544,7 +527,7 @@ final class NotesViewModel: ObservableObject {
             folderID: note.folder?.id
         )))
         refreshCurrentFolderContent()
-        selectNote(importedNotes[0])
+        selectNote(note)
         return note
     }
 
@@ -576,7 +559,6 @@ final class NotesViewModel: ObservableObject {
         guard !trimmedName.isEmpty else { return }
         folder.name = trimmedName
         folder.modifiedAt = .now
-        note.folder?.modifiedAt = .now
         try? context.save()
         recordFolderSyncChange(folder)
         refreshCurrentFolderContent()
@@ -845,11 +827,6 @@ final class NotesViewModel: ObservableObject {
 
     func retryAllEditorLifecyclePersistence() {
         editorLifecyclePersistence.retryAll()
-    }
-
-    func awaitEditorLifecyclePersistence(noteID: UUID) async -> Bool {
-        guard SyncBatchAnchoredPayloadCapability.isEnabled else { return true }
-        return await editorLifecyclePersistence.awaitDurableCompletion(noteID: noteID)
     }
 
     @discardableResult
@@ -1122,6 +1099,8 @@ final class NotesViewModel: ObservableObject {
     }
 
     func markSyncConflictReviewed(_ conflict: SyncConflictVersion) {
+        // Terminal conflict action: keep the local model, remove the saved
+        // remote version, and publish the kept local value as the winner.
         guard let result = syncConflictService.keepLocal(conflict, activeNoteID: currentNote?.id) else { return }
         let resolution = result.resolution
         syncConflicts = result.conflicts
@@ -1140,6 +1119,8 @@ final class NotesViewModel: ObservableObject {
     }
 
     func restoreSyncConflict(_ conflict: SyncConflictVersion) {
+        // Restore is local and terminal for this preserved conflict. It does not
+        // bounce the restored value back as a fresh sync edit.
         guard let result = syncConflictService.acceptIncoming(conflict, activeNoteID: currentNote?.id) else { return }
         let resolution = result.resolution
         syncConflicts = result.conflicts
@@ -1180,6 +1161,8 @@ final class NotesViewModel: ObservableObject {
     }
 
     func discardSyncConflict(_ conflict: SyncConflictVersion) {
+        // Discard keeps the local model and publishes that local value as the
+        // winner so peers do not keep replaying the discarded remote version.
         guard let result = syncConflictService.keepLocal(conflict, activeNoteID: currentNote?.id) else { return }
         let resolution = result.resolution
         syncConflicts = result.conflicts
@@ -1927,6 +1910,9 @@ final class NotesViewModel: ObservableObject {
         resolvedText: String,
         result: SyncConflictRestoreResult
     ) {
+        // Conflict resolution establishes the chosen text as the next shared
+        // baseline; otherwise the first normal edit after resolution is
+        // compared against the stale pre-conflict text.
         switch conflict.field {
         case .noteTitle:
             guard let note = result.note else { return }
@@ -2056,6 +2042,9 @@ final class NotesViewModel: ObservableObject {
             }
             let committedSyncConflicts = syncConflictStore.activeConflicts()
 
+            // Only after durable persistence succeeds do any observable side
+            // effects fire: conflict publication, current note/folder state,
+            // UserDefaults, folder refresh, and the editor reload.
             syncConflicts = committedSyncConflicts
             applyResult.preservedConflicts.forEach(recordSyncConflictPreserved)
 
@@ -2106,6 +2095,9 @@ final class NotesViewModel: ObservableObject {
         var noteSnapshot = try legacyIncomingNoteSnapshot(for: change, in: isolatedContext)
         if let cleanBaseSnapshot = try cleanBaseLegacyIncomingNoteSnapshot(for: change),
            result.preservedConflicts.isEmpty {
+            // Some SwiftData contexts keep a stale row after boundary admission.
+            // When the clean main note exactly matches the incoming base, this is
+            // the same apply decision the isolated applier would make from fresh state.
             noteSnapshot = cleanBaseSnapshot
             try applyLegacyIncomingNoteSnapshot(cleanBaseSnapshot, in: isolatedContext, savesContext: false)
             bufferedConflictStore.saveNoteTitleBaseline(
@@ -2412,6 +2404,12 @@ final class NotesViewModel: ObservableObject {
         )
     }
 
+    /// Durably persists an incoming batch's raw bytes, independent of whatever
+    /// `applyIncomingSyncBatch` later does with them. Capture occurs before
+    /// convergence and is necessary but not sufficient for acknowledgement: the
+    /// convergence disposition controls whether acknowledgement is permitted.
+    /// Deferred or rejected work can therefore leave the sender's durable copy
+    /// available for later redelivery.
     func durablyCaptureIncomingBatch(_ batch: SyncBatch) -> Bool {
         guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(batch)) != nil else {
             return false
@@ -2583,16 +2581,16 @@ final class NotesViewModel: ObservableObject {
             switch item.reason {
             case .planning(let reason):
                 switch reason {
-                case .anchorlessMatchingBaseEvidenceUnavailable:
-                    return SyncBatchDrainFailureClassifier.userMessage(
-                        for: SyncBatchDrainFailure(batchID: item.batchID, kind: .anchorlessBaseUnavailable)
-                    )
-                case .unreconstructableBase:
-                    return SyncBatchDrainFailureClassifier.userMessage(
-                        for: SyncBatchDrainFailure(batchID: item.batchID, kind: .mismatchedBase)
-                    )
-                case .unsupportedReconciliation, .historyPressure:
-                    continue
+            case .anchorlessMatchingBaseEvidenceUnavailable:
+                return SyncBatchDrainFailureClassifier.userMessage(
+                    for: SyncBatchDrainFailure(batchID: item.batchID, kind: .anchorlessBaseUnavailable)
+                )
+            case .unreconstructableBase:
+                return SyncBatchDrainFailureClassifier.userMessage(
+                    for: SyncBatchDrainFailure(batchID: item.batchID, kind: .mismatchedBase)
+                )
+            case .unsupportedReconciliation, .historyPressure:
+                continue
                 }
             case .anchoredDependency(_), .legacyLocalEvidenceStale,
                  .transportUnavailable, .postCommitPending:
