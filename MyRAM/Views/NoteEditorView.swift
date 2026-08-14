@@ -1,18 +1,18 @@
+// NoteEditorView.swift
 import SwiftUI
-import SwiftData
 import UIKit
-import VisionKit
 import PhotosUI
 import UniformTypeIdentifiers
-import ObjectiveC
-import OSLog
+import VisionKit
+import os
 
-private enum NativeUndoCompletionResume {
+@MainActor
+enum NativeUndoCompletionResume {
     static func perform(
-        body: () -> Void,
+        clearUnsafeState: () -> Void,
         resumePendingPresentation: () -> Void
     ) {
-        body()
+        clearUnsafeState()
         resumePendingPresentation()
     }
 }
@@ -24,45 +24,31 @@ private enum NoteEditorAsyncCommitError: Error {
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
-    @ObservedObject var note: Note
+    @Environment(\.scenePhase) private var scenePhase
     @ObservedObject var vm: NotesViewModel
-    let syncController: MyRAMSyncController?
-    var onNewNote: (Note) -> Void = { _ in }
-    var onCreateFolder: (String) -> Void = { _ in }
-    var toolbarBridge: NoteEditorToolbarBridge? = nil
-    var fileOperationBridge: NoteEditorFileOperationBridge? = nil
-    var style: EditorChromeStyle = .mobilePlain
-
-    @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
+    let note: Note
+    let onNewNote: (Note) -> Void
+    var showsTopBar = true
+    var toolbarBridge: NoteEditorToolbarBridge?
+    var fileOperationBridge: NoteEditorFileOperationBridge?
+    var syncController: MyRAMSyncController? = nil
+    var syncConflicts: [SyncConflictVersion] = []
+    var currentNoteSearchText: Binding<String>? = nil
+    var currentNoteSearchFocusToken = 0
+    var onOpenSyncConflicts: (() -> Void)?
+    @StateObject private var formattingController = TextFormattingController()
+    @StateObject private var editorSyncBridge = UIKitEditorSyncBridge()
+    
     @State private var title: String = ""
     @State private var content: String = ""
     @State private var richTextContentData: Data?
-    @State private var searchSession = CurrentNoteSearchSession()
-    @State private var currentNoteSearchQuery: String = ""
-    @State private var currentNoteSearchUpdateTask: Task<Void, Never>?
-    @State private var currentNoteSearchFocusToken: Int = 0
-    @State private var shouldFocusCurrentNoteSearchField = false
-    @State private var selectedSearchMatchRange: NSRange?
-    @State private var undoHistory: [NoteSnapshot] = []
-    @State private var redoHistory: [NoteSnapshot] = []
-    @State private var lastSnapshot = NoteSnapshot()
-    @State private var isApplyingUndo = false
-    @State private var selectedPhotoItem: PhotosPickerItem?
-    @State private var selectedAttachment: NotePhotoAttachment?
-    @State private var areAttachmentsExpanded = false
-    @State private var showingPhotoPicker = false
-    @State private var showingFileImporter = false
-    @State private var activeUndoManager: UndoManager?
-    @State private var canUndo = false
-    @State private var canRedo = false
-    @State private var keyboardFocusToggleToken = 0
-    @State private var captureSelectionToggleToken = 0
     @State private var selectAllToggleToken = 0
     @State private var pinSelectionToggleToken = 0
     @State private var lookupSelectionToggleToken = 0
     @State private var appendUnpinnedThoughtToggleToken = 0
     @State private var pendingUnpinnedThoughtText = ""
     @State private var restoreContentToggleToken = 0
+    @State private var captureSelectionToggleToken = 0
     @State private var boldToggleToken = 0
     @State private var italicToggleToken = 0
     @State private var underlineToggleToken = 0
@@ -76,194 +62,202 @@ struct NoteEditorView: View {
     @State private var pendingTextColorUsesDefault = false
     @State private var selectedTextUIColor: UIColor?
     @State private var formattingState = EditorFormattingState()
-    @StateObject private var formattingController = TextFormattingController()
-    @State private var keyboardToast: KeyboardToast?
-    @State private var keyboardToastTask: Task<Void, Never>?
-    @State private var lookupRequest: LookupRequest?
     @State private var showingFormattingControls = false
-    @State private var editingPinnedThoughtID: UUID?
-    @State private var editingPinnedTextDraftText = ""
-    @State private var focusedPinnedThoughtID: UUID?
-    @State private var pendingPinnedThoughtFocusID: UUID?
-    @State private var pinnedThoughtFocusRequestToken = 0
-    @State private var draggedPinnedThoughtID: UUID?
-    @State private var draggedPinnedThoughtAnchorRect: CGRect?
-    @State private var draggedPinnedThoughtTranslation: CGSize = .zero
-    @State private var draggedPinnedThoughtCurrentLocation: CGPoint?
-    @State private var pendingPinnedThoughtInsertionIndex: Int?
-    @State private var pinnedThoughtDragFrames: [String: CGRect] = [:]
-    @State private var isKeyboardVisible = false
     @State private var showingUndoRedoActions = false
-    @State private var showingNearbySync = false
-    @State private var nearbySyncFallbackMessage: String?
-    @State private var topBarWidth: CGFloat = 0
-    @State private var topBarActionWidths: [String: CGFloat] = [:]
-    @State private var showingCreateFolderPrompt = false
-    @State private var newFolderName = ""
+    @State private var isKeyboardVisible = false
+    @State private var keyboardFocusToggleToken = 0
+    @State private var activeUndoManager: UndoManager?
+    @State private var canUndo = false
+    @State private var canRedo = false
+    @State private var undoHistory: [NoteSnapshot] = []
+    @State private var redoHistory: [NoteSnapshot] = []
+    @State private var lastSnapshot = NoteSnapshot()
+    @State private var isApplyingUndo = false
+    @State private var selectedPickerItems: [PhotosPickerItem] = []
+    @State private var showingPhotoPicker = false
+    @State private var showingFileImporter = false
+    @State private var expandedAttachment: NotePhotoAttachment?
+    @State private var areAttachmentsExpanded = false
+    @State private var lookupRequest: LookupRequest?
     @State private var sharePayload: NoteSharePayload?
     @State private var exportErrorMessage: String?
+    @State private var markdownExportErrorMessage: String?
     @State private var markdownExportDocument: MarkdownExportDocument?
     @State private var markdownExportFilename = "Untitled.md"
     @State private var showingMarkdownExporter = false
-    @State private var markdownExportErrorMessage: String?
+    @State private var showingNearbySync = false
+    @State private var selectedSyncConflict: SyncConflictVersion?
+    @State private var isLocalCurrentNoteSearchPresented = false
+    @State private var localCurrentNoteSearchText = ""
+    @State private var searchSession = EditorSearchSession()
+    @State private var currentNoteSearchDebounceTask: Task<Void, Never>?
+    @State private var currentNoteSearchFocusRequest = 0
+    @State private var showingCreateFolderPrompt = false
+    @State private var newFolderName = ""
+    @State private var showingTitleEditor = false
+    @State private var titleDraft = ""
+    @State private var arePinnedThoughtsExpanded = false
+    @State private var editingPinnedThoughtID: UUID?
+    @State private var editingPinnedTextDraftText = ""
+    @State private var activeReorderPayload: String?
+    @State private var activeReorderOffset: CGSize = .zero
+    @State private var pendingReorderInsertionIndex: Int?
+    @State private var reorderItemFrames: [String: CGRect] = [:]
+    @State private var keyboardToast: KeyboardToast?
+    @State private var keyboardToastTask: Task<Void, Never>?
+    @State private var pendingNoteCommitTask: Task<Void, Never>?
+    @State private var hasPendingNoteCommit = false
+    @State private var editorBufferOwner: EditorBufferOwner = .idle
+    @State private var pendingRemoteTitlePublication: PendingRemoteTitlePublication?
+    @State private var pendingRichTextContentEncoder: DeferredRichTextContentEncoder?
+    @FocusState private var isCurrentNoteSearchFocused: Bool
+    @FocusState private var focusedPinnedThoughtID: UUID?
+    @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
+    @AppStorage("pinnedHighlightColor") private var pinnedHighlightColorRaw = PinnedHighlightColor.yellow.rawValue
+
+    // MYR-195 Slice 2: Markdown Preview mode state.
+    // Not persisted, not Codable, not added to Note.
     @State private var markdownEditorMode: MarkdownEditorMode = .edit
     @State private var requestedMarkdownEditorMode: MarkdownEditorMode = .edit
     @State private var pendingPreviewFocusRequest: MarkdownPreviewFocusRequest?
-    @State private var editorIsFirstResponder = false
-    @State private var markdownPreviewState: MarkdownPreviewState = .source
-    @State private var editorBufferOwner: EditorBufferOwner = .idle
-    @State private var pendingNoteCommitTask: Task<Void, Never>?
-    @State private var hasPendingNoteCommit = false
-    @State private var pendingRichTextContentEncoder: DeferredRichTextContentEncoder?
-    @State private var pendingRemoteTitlePublication: PendingRemoteTitlePublication?
-    @State private var activeEditorSyncUpdateHandlerState = ActiveEditorSyncUpdateHandler.State()
-    @StateObject private var editorSyncBridge = UIKitEditorSyncBridge()
-    @State private var showingRenamePrompt = false
-    @State private var renameTitleDraft = ""
-    @State private var showingEditorInspector = false
 
-    private let initialSnapshot: NoteSnapshot
-
-    init(
-        note: Note,
-        vm: NotesViewModel,
-        syncController: MyRAMSyncController?,
-        onNewNote: @escaping (Note) -> Void = { _ in },
-        onCreateFolder: @escaping (String) -> Void = { _ in },
-        toolbarBridge: NoteEditorToolbarBridge? = nil,
-        fileOperationBridge: NoteEditorFileOperationBridge? = nil,
-        style: EditorChromeStyle = .mobilePlain
-    ) {
-        self.note = note
-        self.vm = vm
-        self.syncController = syncController
-        self.onNewNote = onNewNote
-        self.onCreateFolder = onCreateFolder
-        self.toolbarBridge = toolbarBridge
-        self.fileOperationBridge = fileOperationBridge
-        self.style = style
-        let initialSnapshot = NoteSnapshot(
-            title: note.title,
-            content: note.content,
-            richTextContentData: note.richTextContentData,
-            pinnedThoughts: note.pinnedThoughts
-                .sorted {
-                    if $0.order != $1.order {
-                        return $0.order < $1.order
-                    }
-                    return $0.createdAt < $1.createdAt
-                }
-                .map {
-                    PinnedThoughtSnapshot(
-                        text: $0.text,
-                        order: $0.order,
-                        isCollapsed: $0.isCollapsed
-                    )
-                }
+    private var interactionState: MarkdownPreviewInteractionState {
+        MarkdownPreviewInteractionPolicy.state(
+            requestedMode: requestedMarkdownEditorMode,
+            committedMode: markdownEditorMode,
+            hasPendingFocusRequest: pendingPreviewFocusRequest != nil
         )
-        self.initialSnapshot = initialSnapshot
-        _title = State(initialValue: note.title)
-        _content = State(initialValue: note.content)
-        _richTextContentData = State(initialValue: note.richTextContentData)
-        _lastSnapshot = State(initialValue: initialSnapshot)
     }
-
-    private var pinnedHighlightColor: PinnedHighlightColor {
-        PinnedHighlightColor(rawValue: pinnedHighlightColorRaw) ?? .yellow
-    }
-
-    private var editorChromeStyle: EditorChromeStyle {
-        style
-    }
-
-    private var sortedPinnedThoughts: [PinnedThought] {
-        vm.sortedPinnedThoughts(for: note)
-    }
-
-    private var sortedPinnedTextSearchSignature: [PinnedTextSearchSignatureItem] {
-        sortedPinnedThoughts.map {
-            PinnedTextSearchSignatureItem(
-                id: $0.id,
-                text: $0.text,
-                order: $0.order,
-                isCollapsed: $0.isCollapsed
-            )
+    @State private var resignEditorFocusToggleToken = 0
+    
+    var body: some View {
+        NavigationStack {
+            configuredEditorContent
         }
     }
 
-    private var isShowingCurrentNoteSearch: Bool {
-        searchSession.isPresenting
+    private var configuredEditorContent: some View {
+        editorPresentationContent
+            .confirmationDialog("Edit History", isPresented: $showingUndoRedoActions, titleVisibility: .visible) {
+                Button("Undo") {
+                    performUndo()
+                }
+                .disabled(!canPerformUndo)
+
+                Button("Redo") {
+                    performRedo()
+                }
+                .disabled(!canPerformRedo)
+            }
+            .alert("Unable to Export Note", isPresented: Binding(
+                get: { exportErrorMessage != nil },
+                set: { if !$0 { exportErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(exportErrorMessage ?? "An unknown export error occurred.")
+            }
+            .alert("New Folder", isPresented: $showingCreateFolderPrompt) {
+                TextField("Folder Name", text: $newFolderName)
+                Button("Cancel", role: .cancel) {
+                    newFolderName = ""
+                }
+                Button("Create") {
+                    vm.createFolder(named: newFolderName)
+                    newFolderName = ""
+                }
+            } message: {
+                Text("Enter a name for the new folder.")
+            }
+            .alert("Edit Title", isPresented: $showingTitleEditor) {
+                TextField("Title", text: $titleDraft)
+                Button("Cancel", role: .cancel) {}
+                Button("Save") {
+                    let trimmed = titleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
+                    title = trimmed
+                }
+            } message: {
+                Text("Update the note title.")
+            }
     }
 
-    var body: some View {
-        editorScaffold
-            .navigationBarBackButtonHidden(false)
-            .navigationTitle("")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-#if targetEnvironment(macCatalyst)
-                // Legacy Catalyst keeps its top navigation toolbar; native macOS uses MyRAMMacRootView.
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    Button {
-                        undoLastEdit()
-                    } label: {
-                        Image(systemName: "arrow.uturn.backward")
-                    }
-                    .disabled(!canPerformUndo)
-                    .accessibilityLabel("Undo")
-                    .accessibilityIdentifier("note-editor-undo")
-
-                    Button {
-                        redoLastEdit()
-                    } label: {
-                        Image(systemName: "arrow.uturn.forward")
-                    }
-                    .disabled(!canPerformRedo)
-                    .accessibilityLabel("Redo")
-                    .accessibilityIdentifier("note-editor-redo")
-
-                    Menu {
-                        ForEach(NoteEditorOverflowAction.priorityOrder, id: \.rawValue) { action in
-                            overflowMenuItem(for: action)
-                        }
-                    } label: {
-                        Image(systemName: "ellipsis.circle")
-                    }
-                    .accessibilityLabel("More")
-                    .accessibilityIdentifier("note-editor-more")
-                }
-#endif
+    private var editorPresentationContent: some View {
+        editorLifecycleContent
+            .photosPicker(
+                isPresented: $showingPhotoPicker,
+                selection: $selectedPickerItems,
+                matching: .images,
+                preferredItemEncoding: .automatic
+            )
+            .fileImporter(
+                isPresented: $showingFileImporter,
+                allowedContentTypes: [.image],
+                allowsMultipleSelection: true
+            ) { result in
+                guard case let .success(urls) = result else { return }
+                importImageFiles(from: urls)
             }
+            .fileExporter(
+                isPresented: $showingMarkdownExporter,
+                document: markdownExportDocument,
+                contentType: MarkdownFileClassifier.markdownContentType,
+                defaultFilename: markdownExportFilename
+            ) { result in
+                if case .failure(let error) = result,
+                   (error as? CocoaError)?.code != .userCancelled {
+                    markdownExportErrorMessage = "The Markdown file could not be written."
+                }
+                markdownExportDocument = nil
+            }
+            .sheet(item: $lookupRequest) { request in
+                ReferenceLookupView(term: request.term)
+            }
+            .sheet(item: $sharePayload) { payload in
+                ActivityShareSheet(activityItems: payload.urls)
+            }
+            .sheet(isPresented: $showingNearbySync) {
+                nearbySyncSheet
+            }
+            .sheet(item: $selectedSyncConflict) { conflict in
+                syncConflictSheet(for: conflict)
+            }
+            .alert("Unable to Export Markdown", isPresented: Binding(
+                get: { markdownExportErrorMessage != nil },
+                set: { if !$0 { markdownExportErrorMessage = nil } }
+            )) {
+                Button("OK", role: .cancel) {}
+            } message: {
+                Text(markdownExportErrorMessage ?? "An unknown Markdown export error occurred.")
+            }
+    }
+
+    private var editorLifecycleContent: some View {
+        editorChromeContent
             .onAppear {
                 vm.registerActiveEditor(noteID: note.id)
                 initializeEditor()
                 fileOperationBridge?.register(noteID: note.id) {
-                    guard await vm.awaitEditorLifecyclePersistence(noteID: note.id) else {
-                        return .failed(message: "Unable to save the current note.")
-                    }
-                    return await flushPendingNoteEditForFileOperation()
+                    await flushPendingNoteEditForFileOperation()
                 }
             }
             .onChange(of: title) { _, newTitle in
                 handleObservedTitleChange(newTitle)
             }
-            .onChange(of: vm.activeEditorSyncUpdate) { _, update in
-                handleActiveEditorSyncUpdate(update)
+            .onChange(of: currentNoteSearchQuery) {
+                scheduleCurrentNoteSearchUpdate()
             }
-            .onChange(of: selectedPhotoItem) { _, newItem in
-                guard let newItem else { return }
-                Task {
-                    await importSelectedPickerItems([newItem])
-                    await MainActor.run {
-                        selectedPhotoItem = nil
-                    }
-                }
+            .onChange(of: content) {
+                scheduleCurrentNoteSearchUpdate()
             }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
-                isKeyboardVisible = true
+            .onChange(of: sortedPinnedTextSearchSignature) {
+                scheduleCurrentNoteSearchUpdate()
             }
-            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
-                isKeyboardVisible = false
+            .onChange(of: currentNoteSearchFocusToken) {
+                presentCurrentNoteSearch(focusesField: false)
+            }
+            .onChange(of: searchSession) { oldSession, newSession in
+                guard oldSession.selectedMatchID != newSession.selectedMatchID else { return }
+                handleSelectedCurrentNoteMatchChanged()
             }
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase != .active {
@@ -272,12 +266,6 @@ struct NoteEditorView: View {
                     dismissCurrentNoteSearchKeyboard()
                 } else {
                     vm.retryAllEditorLifecyclePersistence()
-                    if SyncBatchAnchoredPayloadCapability.isEnabled {
-                        Task { @MainActor in
-                            guard await vm.awaitEditorLifecyclePersistence(noteID: note.id) else { return }
-                            fileOperationBridge?.notifyPersistenceSucceeded(noteID: note.id)
-                        }
-                    }
                 }
             }
             .onDisappear {
@@ -300,474 +288,231 @@ struct NoteEditorView: View {
             .onChange(of: focusedPinnedThoughtID) { oldValue, newValue in
                 guard oldValue != newValue else { return }
                 if let oldValue {
-                    commitPinnedThoughtEdit(oldValue)
-                }
-                if let newValue,
-                   let thought = sortedPinnedThoughts.first(where: { $0.id == newValue }) {
-                    beginPinnedThoughtEditing(thought)
+                    commitPinnedThoughtEdit(withID: oldValue)
                 }
             }
-            .onChange(of: currentNoteSearchQuery) {
-                scheduleCurrentNoteSearchUpdate()
+            .onChange(of: vm.activeEditorSyncUpdate) { _, update in
+                handleActiveEditorSyncUpdate(update)
             }
-            .onChange(of: content) {
-                scheduleCurrentNoteSearchUpdate()
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillShowNotification)) { _ in
+                isKeyboardVisible = true
             }
-            .onChange(of: sortedPinnedTextSearchSignature) {
-                scheduleCurrentNoteSearchUpdate()
+            .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardWillHideNotification)) { _ in
+                isKeyboardVisible = false
             }
-            .onChange(of: currentNoteSearchFocusToken) {
-                presentCurrentNoteSearch(focusesField: false)
-            }
-            .onChange(of: searchSession) { oldSession, newSession in
-                guard oldSession.selectedMatchID != newSession.selectedMatchID else { return }
-                handleSelectedCurrentNoteMatchChanged()
-            }
-            .onChange(of: note.id) { _, _ in
-                clearCurrentNoteSearch()
-            }
-            .sheet(isPresented: $showingNearbySync) {
-                if let syncController {
-                    NearbySyncView(
-                        syncController: syncController,
-                        notesViewModel: vm,
-                        style: editorChromeStyle,
-                        resetAvailability: .available,
-                        prepareEditorState: {
-                            commitActivePinnedThoughtEdit()
-                            guard await commitPendingNoteEdit() else {
-                                throw NoteEditorAsyncCommitError.persistenceFailed
-                            }
-                        }
-                    )
-                    .navigationTitle("Nearby Sync")
-                    .presentationDetents([.medium, .large])
+            .onChange(of: selectedPickerItems) { _, newItems in
+                guard !newItems.isEmpty else { return }
+                Task {
+                    await importSelectedPickerItems(newItems)
+                    selectedPickerItems = []
                 }
-            }
-            .fileImporter(
-                isPresented: $showingFileImporter,
-                allowedContentTypes: [.image],
-                allowsMultipleSelection: true
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    importImageFiles(from: urls)
-                case .failure:
-                    break
-                }
-            }
-            .sheet(item: $selectedAttachment) { attachment in
-                ExpandedPhotoView(
-                    attachment: attachment,
-                    onDismiss: { selectedAttachment = nil }
-                )
-            }
-            .sheet(item: $lookupRequest) { request in
-                ReferenceLookupView(term: request.term)
-            }
-            .sheet(item: $sharePayload) { payload in
-                ActivityViewController(activityItems: payload.urls)
-            }
-            .fileExporter(
-                isPresented: $showingMarkdownExporter,
-                document: markdownExportDocument,
-                contentType: MarkdownFileClassifier.markdownContentType,
-                defaultFilename: markdownExportFilename
-            ) { result in
-                switch result {
-                case .success:
-                    markdownExportErrorMessage = nil
-                case .failure(let error):
-                    if !isFilePanelCancellation(error) {
-                        markdownExportErrorMessage = "The Markdown file could not be saved."
-                    }
-                }
-            }
-            .alert("Create Folder", isPresented: $showingCreateFolderPrompt) {
-                TextField("Folder name", text: $newFolderName)
-                Button("Cancel", role: .cancel) {}
-                Button("Create") {
-                    let trimmed = newFolderName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    onCreateFolder(trimmed.isEmpty ? "New Folder" : trimmed)
-                }
-            } message: {
-                Text("Create a folder in the current location.")
-            }
-            .alert("Export Failed", isPresented: Binding(
-                get: { exportErrorMessage != nil },
-                set: { if !$0 { exportErrorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(exportErrorMessage ?? "The note could not be exported.")
-            }
-            .alert("Markdown Export Failed", isPresented: Binding(
-                get: { markdownExportErrorMessage != nil },
-                set: { if !$0 { markdownExportErrorMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(markdownExportErrorMessage ?? "The Markdown file could not be saved.")
-            }
-            .alert("Nearby Sync", isPresented: Binding(
-                get: { nearbySyncFallbackMessage != nil },
-                set: { if !$0 { nearbySyncFallbackMessage = nil } }
-            )) {
-                Button("OK", role: .cancel) {}
-            } message: {
-                Text(nearbySyncFallbackMessage ?? "Nearby Sync is unavailable.")
-            }
-            .alert("Rename Note", isPresented: $showingRenamePrompt) {
-                TextField("Title", text: $renameTitleDraft)
-                Button("Cancel", role: .cancel) {}
-                Button("Save") {
-                    let trimmed = renameTitleDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-                    title = trimmed
-                    toolbarBridge?.title = trimmed.isEmpty ? "Untitled" : trimmed
-                }
-            }
-            .sheet(isPresented: $showingEditorInspector) {
-                NoteEditorInspectorView(note: note, vm: vm)
             }
     }
 
-    @Environment(\.scenePhase) private var scenePhase
-
-    private var editorScaffold: some View {
-        VStack(spacing: 0) {
-            editorTopBar
-            editorContentArea
-        }
-        .background(editorChromeStyle.editorSurfaceColor)
-    }
-
-    private var editorTopBar: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                editorTitleButton
-                Spacer(minLength: 8)
-                topBarActions
+    private var editorChromeContent: some View {
+        editorContent
+            .padding()
+            .background(editorChromeStyle.editorBackgroundColor.ignoresSafeArea())
+            .toolbar(.hidden, for: .navigationBar)
+            .overlay(alignment: .top) {
+                syncStatusOverlay
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background {
-                if editorChromeStyle.isChromeAccent {
-                    chromeAccentGradient(for: colorScheme)
-                } else {
-                    editorChromeStyle.toolbarFillColor
-                }
-            }
-            .overlay(alignment: .bottom) {
-                Rectangle()
-                    .fill(editorChromeStyle.toolbarStrokeColor)
-                    .frame(height: 1)
-            }
-        }
-    }
-
-    private var editorTitleButton: some View {
-        Button {
-            renameTitleDraft = title
-            showingRenamePrompt = true
-        } label: {
-            HStack(spacing: 8) {
-                Text(title.isEmpty ? "Untitled" : title)
-                    .font(.headline)
-                    .lineLimit(1)
-                Image(systemName: "pencil")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .foregroundStyle(.primary)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityIdentifier("note-editor-title-button")
-    }
-
-    private var topBarActions: some View {
-        let layout = topBarActionLayout
-        return HStack(spacing: 6) {
-            ForEach(layout.visibleActions, id: \.rawValue) { action in
-                topBarActionView(for: action)
-                    .background {
-                        GeometryReader { proxy in
-                            Color.clear.preference(
-                                key: TopBarActionWidthPreferenceKey.self,
-                                value: [action.rawValue: proxy.size.width]
-                            )
-                        }
-                    }
-            }
-
-            if !layout.overflowActions.isEmpty {
-                Menu {
-                    ForEach(layout.overflowActions, id: \.rawValue) { action in
-                        overflowMenuItem(for: action)
-                    }
-                } label: {
-                    Image(systemName: "ellipsis.circle")
-                        .font(.system(size: 16, weight: .semibold))
-                        .frame(width: 30, height: 30)
-                        .modifier(ChromeControlPlate(style: editorChromeStyle))
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.primary)
-                .accessibilityIdentifier("note-editor-overflow")
-            }
-        }
-        .background {
-            GeometryReader { proxy in
-                Color.clear.preference(key: TopBarWidthPreferenceKey.self, value: proxy.size.width)
-            }
-        }
-        .onPreferenceChange(TopBarWidthPreferenceKey.self) { topBarWidth = $0 }
-        .onPreferenceChange(TopBarActionWidthPreferenceKey.self) { topBarActionWidths = $0 }
+            .presentationDragIndicator(.visible)
     }
 
     @ViewBuilder
-    private func topBarActionView(for action: NoteEditorOverflowAction) -> some View {
-        switch action {
-        case .search:
-            topBarActionButton(systemImage: "magnifyingglass", identifier: "topbar-search") {
-                presentCurrentNoteSearch()
+    private var syncStatusOverlay: some View {
+        if let syncController {
+            SyncStatusIndicator(syncController: syncController) {
+                openNearbySync(onFallback: onOpenSyncConflicts)
             }
-        case .newNote:
-            topBarActionButton(systemImage: "square.and.pencil", identifier: "topbar-new-note") {
-                commitActivePinnedThoughtEdit()
-                Task { @MainActor in
-                    guard await commitPendingNoteEdit() else { return }
-                    if let newNote = vm.createNewNote() {
-                        onNewNote(newNote)
+            .padding(.top, showsTopBar ? 58 : 14)
+            .frame(maxWidth: 180)
+        }
+    }
+
+    private func initializeEditor() {
+        pendingPreviewFocusRequest = nil
+        requestedMarkdownEditorMode = .edit
+        markdownEditorMode = .edit
+
+        title = note.title
+        content = note.content
+        richTextContentData = note.richTextContentData
+        lastSnapshot = currentNoteSnapshot()
+        vm.recordNoteOpened(note)
+        arePinnedThoughtsExpanded = vm.isPinnedThoughtsSectionExpanded(for: note)
+        configureToolbarBridge()
+    }
+
+    @ViewBuilder
+    private var nearbySyncSheet: some View {
+        NavigationStack {
+            if let syncController {
+                NearbySyncView(
+                    syncController: syncController,
+                    notesViewModel: vm,
+                    style: editorChromeStyle,
+                    resetAvailability: .available,
+                    prepareEditorState: {
+                        commitActivePinnedThoughtEdit()
+                        guard await commitPendingNoteEdit() else {
+                            throw NoteEditorAsyncCommitError.persistenceFailed
+                        }
+                    }
+                )
+                .navigationTitle("Nearby Sync")
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") {
+                            showingNearbySync = false
+                        }
                     }
                 }
-            }
-        case .newFolder:
-            topBarActionButton(systemImage: "folder.badge.plus", identifier: "topbar-new-folder") {
-                newFolderName = ""
-                showingCreateFolderPrompt = true
-            }
-        case .exportMarkdown:
-            topBarActionButton(systemImage: "doc.badge.arrow.up", identifier: "topbar-export-markdown") {
-                prepareMarkdownExport()
-            }
-        case .exportNote:
-            topBarActionButton(systemImage: "square.and.arrow.up", identifier: "topbar-export-note") {
-                commitActivePinnedThoughtEdit()
-                Task { @MainActor in
-                    guard await commitPendingNoteEdit() else { return }
-                    exportCurrentNote()
-                }
-            }
-        case .attachments:
-            Menu {
-                attachmentImportMenuItems
-            } label: {
-                Image(systemName: "paperclip")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 30, height: 30)
-                    .modifier(ChromeControlPlate(style: editorChromeStyle))
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier("topbar-attachments")
-        case .deleteNote:
-            topBarActionButton(systemImage: "trash", identifier: "topbar-delete") {
-                vm.deleteNote(note)
-                dismiss()
             }
         }
     }
 
-    private var editorContentArea: some View {
-        ZStack(alignment: .bottom) {
-            VStack(spacing: 0) {
-                currentNoteSearchBar
-                pinnedThoughtSection
-                attachmentsSection
+    private func syncConflictSheet(for conflict: SyncConflictVersion) -> some View {
+        SyncConflictDetailView(
+            conflict: conflict,
+            localText: vm.localText(forSyncConflict: conflict),
+            onClose: {
+                selectedSyncConflict = nil
+            },
+            onCopy: {
+                copySyncConflict(conflict)
+            },
+            onRestore: {
+                selectedSyncConflict = nil
+                vm.restoreSyncConflict(conflict)
+            },
+            onReview: {
+                selectedSyncConflict = nil
+                vm.markSyncConflictReviewed(conflict)
+            },
+            onSaveMerged: { mergedText in
+                selectedSyncConflict = nil
+                vm.saveMergedSyncConflict(conflict, mergedText: mergedText)
+            }
+        )
+        .syncConflictPresentationSizing()
+    }
+
+    private var editorContent: some View {
+        ZStack {
+            editorMainColumn
+
+            if let expandedAttachment {
+                ExpandedPhotoView(attachment: expandedAttachment) {
+                    self.expandedAttachment = nil
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .ignoresSafeArea()
+                .zIndex(10)
+            }
+        }
+    }
+
+    private var editorMainColumn: some View {
+        VStack(spacing: 12) {
+            if showsTopBar {
+                editorTopBar
+            }
+
+            if isCurrentNoteSearchPresented {
+                currentNoteSearchControls
+            }
+
+            VStack(spacing: 8) {
                 editorSurface
+                editorControlStrip
             }
-            if let keyboardToast {
-                Text(keyboardToast.message)
-                    .font(.caption.weight(.semibold))
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 7)
-                    .background(.ultraThinMaterial)
-                    .clipShape(Capsule())
-                    .padding(.bottom, isKeyboardVisible ? 54 : 14)
-                    .transition(.opacity.combined(with: .scale(scale: 0.95)))
-                    .allowsHitTesting(false)
-            }
-        }
-    }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
 
-    @ViewBuilder
-    private var currentNoteSearchBar: some View {
-        if isShowingCurrentNoteSearch {
-            CurrentNoteSearchBar(
-                query: $currentNoteSearchQuery,
-                shouldFocus: shouldFocusCurrentNoteSearchField,
-                focusToken: currentNoteSearchFocusToken,
-                currentMatchIndex: searchSession.selectedMatchIndex,
-                matchCount: searchSession.matches.count,
-                onPrevious: selectPreviousSearchMatch,
-                onNext: selectNextSearchMatch,
-                onClose: clearCurrentNoteSearch
-            )
-            .padding(.horizontal, 12)
-            .padding(.top, 8)
-        }
-    }
-
-    private var pinnedThoughtSection: some View {
-        VStack(spacing: 0) {
-            if !sortedPinnedThoughts.isEmpty {
-                Divider()
-                pinnedThoughtList
-            }
-        }
-    }
-
-    private var pinnedThoughtList: some View {
-        let thoughts = sortedPinnedThoughts
-        return VStack(spacing: 6) {
-            ForEach(Array(thoughts.enumerated()), id: \.element.id) { index, thought in
-                if pendingPinnedThoughtInsertionIndex == index,
-                   draggedPinnedThoughtID != thought.id {
-                    ReorderInsertionIndicator()
-                }
-                pinnedThoughtRow(thought, index: index, thoughts: thoughts)
-            }
-            if pendingPinnedThoughtInsertionIndex == thoughts.count {
-                ReorderInsertionIndicator()
-            }
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .modifier(ChromePinnedPanel(style: editorChromeStyle))
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .onPreferenceChange(ReorderItemFramePreferenceKey.self) { pinnedThoughtDragFrames = $0 }
-    }
-
-    private func pinnedThoughtRow(
-        _ thought: PinnedThought,
-        index: Int,
-        thoughts: [PinnedThought]
-    ) -> some View {
-        let isEditing = editingPinnedThoughtID == thought.id
-        let isDragging = draggedPinnedThoughtID == thought.id
-        return HStack(alignment: .top, spacing: 8) {
-            ReorderDragHandle(
-                payload: thought.id.uuidString,
-                activePayload: Binding(
-                    get: { draggedPinnedThoughtID?.uuidString },
-                    set: { draggedPinnedThoughtID = $0.flatMap(UUID.init(uuidString:)) }
-                ),
-                accessibilityIdentifier: "pinned-thought-reorder-\(thought.id.uuidString)",
-                onChanged: { location, translation in
-                    updatePinnedThoughtDrag(
-                        thought,
-                        index: index,
-                        thoughts: thoughts,
-                        location: location,
-                        translation: translation
-                    )
-                },
-                onEnded: {
-                    finishPinnedThoughtDrag(thought, thoughts: thoughts)
-                }
-            )
-
-            VStack(alignment: .leading, spacing: 4) {
-                if isEditing {
-                    TextField(
-                        "Pinned text",
-                        text: $editingPinnedTextDraftText,
-                        axis: .vertical
-                    )
-                    .focused($focusedPinnedThoughtID, equals: thought.id)
-                    .textFieldStyle(.plain)
-                    .foregroundStyle(PinnedHighlightPalette.text(for: pinnedHighlightColor))
-                    .lineLimit(1...6)
-                    .submitLabel(.done)
-                    .onSubmit {
-                        commitPinnedThoughtEdit(thought.id)
-                        focusedPinnedThoughtID = nil
-                    }
-                    .accessibilityIdentifier("pinned-thought-editor-\(thought.id.uuidString)")
-                } else {
-                    Text(thought.text.isEmpty ? "Pinned text" : thought.text)
-                        .font(.subheadline)
-                        .foregroundStyle(
-                            thought.text.isEmpty
-                                ? PinnedHighlightPalette.placeholderText(for: pinnedHighlightColor)
-                                : PinnedHighlightPalette.text(for: pinnedHighlightColor)
-                        )
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .onTapGesture {
-                            beginPinnedThoughtEditing(thought)
-                        }
-                        .accessibilityIdentifier("pinned-thought-text-\(thought.id.uuidString)")
-                }
-            }
-
-            Menu {
-                Button {
-                    beginPinnedThoughtEditing(thought)
-                } label: {
-                    Label("Edit", systemImage: "pencil")
-                }
-                Button(role: .destructive) {
-                    vm.unpinThought(thought)
-                } label: {
-                    Label("Unpin", systemImage: "pin.slash")
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-                    .font(.subheadline)
-                    .foregroundStyle(PinnedHighlightPalette.text(for: pinnedHighlightColor))
-                    .padding(4)
-            }
-            .buttonStyle(.plain)
-        }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .modifier(ChromePinnedSurface(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
-        .opacity(isDragging ? 0.72 : 1)
-        .offset(isDragging ? draggedPinnedThoughtTranslation : .zero)
-        .scaleEffect(isDragging ? 1.015 : 1)
-        .zIndex(isDragging ? 5 : 0)
-        .animation(.easeInOut(duration: 0.12), value: isDragging)
-        .reorderItemFrame(payload: thought.id.uuidString)
-    }
-
-    private var attachmentsSection: some View {
-        Group {
-            if !note.photoAttachments.isEmpty {
-                AttachmentStrip(
-                    attachments: note.photoAttachments.sorted { $0.createdAt < $1.createdAt },
-                    isExpanded: $areAttachmentsExpanded,
-                    backgroundColor: editorChromeStyle.toolbarFillColor,
-                    onOpen: { selectedAttachment = $0 },
-                    onDelete: { vm.removePhotoAttachment($0, from: note) }
-                )
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-            }
+            attachmentStrip
         }
     }
 
     private var editorSurface: some View {
-        ZStack(alignment: .topLeading) {
+        VStack(spacing: 12) {
+            if !showsTitleInTopBar {
+                editorTitleHeader
+            }
+
+            syncConflictNotice
+            pinnedThoughtsSection
+
+            // MYR-195 Slice 2: mode picker above the body surface.
+            Picker("Editor Mode", selection: modeSelection) {
+                Text("Edit").tag(MarkdownEditorMode.edit)
+                    .accessibilityIdentifier("markdown-edit-mode")
+                Text("Preview").tag(MarkdownEditorMode.preview)
+                    .accessibilityIdentifier("markdown-preview-mode")
+            }
+            .pickerStyle(.segmented)
+            .accessibilityIdentifier("markdown-mode-picker")
+
+            editorBodySurface
+        }
+        .padding(.top, editorChromeStyle.isChromeAccent ? 6 : 0)
+        .padding(.horizontal, editorChromeStyle.isChromeAccent ? 6 : 0)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .modifier(ChromeEditorTrim(style: editorChromeStyle))
+    }
+
+    /// ZStack body: keeps the native UITextView alive across mode switches so its undo manager
+    /// and selection are preserved. The hidden editor is invisible and non-interactive but stays
+    /// in the hierarchy, allowing updateUIView to keep its state current (§9.5).
+    private var editorBodySurface: some View {
+        ZStack {
+            editorTextView
+                .accessibilityIdentifier("note-editor-body")
+                .opacity(markdownEditorMode == .edit ? 1 : 0)
+                .allowsHitTesting(markdownEditorMode == .edit)
+                .accessibilityHidden(markdownEditorMode != .edit)
+
             if markdownEditorMode == .preview {
-                markdownPreview
-            } else {
-                editorTextView
+                MarkdownPreviewView(source: content)
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.bottom, 8)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Mode transition helpers
+
+    private func enterMarkdownPreview() {
+        isCurrentNoteSearchFocused = false
+        let request = MarkdownPreviewFocusRequest(id: UUID())
+        pendingPreviewFocusRequest = request
+        requestedMarkdownEditorMode = .preview
+        resignEditorFocusToggleToken &+= 1
+    }
+
+    private func enterMarkdownEdit() {
+        pendingPreviewFocusRequest = nil
+        requestedMarkdownEditorMode = .edit
+        markdownEditorMode = .edit
+    }
+
+    private func handlePreviewFocusResignationAcknowledged(requestID: UUID) {
+        guard pendingPreviewFocusRequest?.id == requestID, requestedMarkdownEditorMode == .preview else { return }
+        markdownEditorMode = .preview
+        pendingPreviewFocusRequest = nil
+    }
+
+    private var modeSelection: Binding<MarkdownEditorMode> {
+        Binding(
+            get: { requestedMarkdownEditorMode },
+            set: { requested in
+                if requested == .preview {
+                    enterMarkdownPreview()
+                } else {
+                    enterMarkdownEdit()
+                }
+            }
+        )
     }
 
     private var editorTextView: some View {
@@ -777,7 +522,7 @@ struct NoteEditorView: View {
             syncBridge: editorSyncBridge,
             markdownEditorMode: markdownEditorMode,
             pendingPreviewFocusRequest: pendingPreviewFocusRequest,
-            onFocusResignationAcknowledged: handleMarkdownFocusResignationAcknowledged,
+            onFocusResignationAcknowledged: handlePreviewFocusResignationAcknowledged,
             keyboardFocusToggleToken: keyboardFocusToggleToken,
             captureSelectionToggleToken: captureSelectionToggleToken,
             selectAllToggleToken: selectAllToggleToken,
@@ -797,33 +542,219 @@ struct NoteEditorView: View {
             textColorToggleToken: textColorToggleToken,
             pendingTextUIColor: pendingTextUIColor,
             pendingTextColorUsesDefault: pendingTextColorUsesDefault,
-            searchHighlightRange: selectedSearchMatchRange,
+            searchHighlightRange: selectedBodySearchRange,
             formattingController: formattingController,
-            backgroundColor: UIColor(editorChromeStyle.editorSurfaceColor),
-            textColor: UIColor(editorChromeStyle.editorTextColor),
-            tintColor: UIColor(editorChromeStyle.accentColor),
+            backgroundColor: editorChromeStyle.editorSurfaceUIColor,
+            textColor: editorChromeStyle.editorTextUIColor,
+            tintColor: editorChromeStyle.editorTintUIColor,
             onContentChanged: handleContentChanged,
             onRemoteAttributedTextPublished: publishRemoteAttributedText,
-            onMarkedTextEnded: { vm.resumePendingConvergencePresentationIfNeeded() },
+            onMarkedTextEnded: vm.resumePendingConvergencePresentationIfNeeded,
             onUndoManagerChanged: updateActiveUndoManager,
             onFormattingStateChanged: handleFormattingStateChanged,
-            onEditingFocusChanged: { editorIsFirstResponder = $0 },
-            onEditorScrolled: dismissKeyboard,
-            onPinSelection: pinSelection,
+            onEditingFocusChanged: handleEditorFocusChanged,
+            onEditorScrolled: dismissCurrentNoteSearchKeyboard,
+            onPinSelection: pinSelectedText,
             onLookupSelection: presentLookup
         )
-        .modifier(ChromeEditorTrim(style: editorChromeStyle))
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    private var markdownPreview: some View {
-        MarkdownPreviewView(
-            source: content,
-            state: $markdownPreviewState,
-            onLinkTap: { url in
-                UIApplication.shared.open(url)
+    private var currentNoteSearchControls: some View {
+        HStack(spacing: 8) {
+            if !usesExternalCurrentNoteSearch {
+                Image(systemName: "magnifyingglass")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                TextField("Search Note", text: currentNoteSearchBinding)
+                    .textInputAutocapitalization(.never)
+                    .disableAutocorrection(true)
+                    .submitLabel(.search)
+                    .focused($isCurrentNoteSearchFocused)
+                    .onSubmit {
+                        dismissCurrentNoteSearchKeyboard()
+                        selectFirstCurrentNoteMatchIfNeeded()
+                    }
+                    .accessibilityIdentifier("current-note-search-field")
             }
+
+            Text(currentNoteSearchSummary)
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.75)
+                .frame(minWidth: 56, alignment: .trailing)
+                .accessibilityIdentifier("current-note-search-count")
+
+            Button {
+                selectPreviousCurrentNoteMatch()
+            } label: {
+                Image(systemName: "chevron.up")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .disabled(searchSession.matches.isEmpty)
+            .accessibilityLabel("Previous match")
+            .accessibilityIdentifier("current-note-search-previous")
+
+            Button {
+                selectNextCurrentNoteMatch()
+            } label: {
+                Image(systemName: "chevron.down")
+                    .font(.subheadline.weight(.semibold))
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .disabled(searchSession.matches.isEmpty)
+            .accessibilityLabel("Next match")
+            .accessibilityIdentifier("current-note-search-next")
+
+            Button {
+                clearCurrentNoteSearch()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 28, height: 28)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Close search")
+            .accessibilityIdentifier("current-note-search-close")
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 38)
+        .background(editorChromeStyle.toolbarFillColor)
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(editorChromeStyle.toolbarStrokeColor, lineWidth: 1)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .onChange(of: currentNoteSearchFocusRequest) {
+            guard interactionState == .editInteractive else { return }
+            guard !usesExternalCurrentNoteSearch else { return }
+            isCurrentNoteSearchFocused = true
+        }
+        .padding(.horizontal, showsTopBar ? 0 : 12)
+    }
+
+    private var currentNoteSearchBinding: Binding<String> {
+        Binding(
+            get: { currentNoteSearchQuery },
+            set: { setCurrentNoteSearchQuery($0) }
         )
-        .modifier(ChromeEditorTrim(style: editorChromeStyle))
+    }
+
+    private var usesExternalCurrentNoteSearch: Bool {
+        currentNoteSearchText != nil
+    }
+
+    private var isCurrentNoteSearchPresented: Bool {
+        let isPresentedInState = usesExternalCurrentNoteSearch
+            ? !currentNoteSearchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            : isLocalCurrentNoteSearchPresented
+        return MarkdownPreviewSearchInteractionPolicy.isSearchPresented(
+            state: interactionState,
+            isSearchActiveInState: isPresentedInState
+        )
+    }
+
+    private var currentNoteSearchQuery: String {
+        currentNoteSearchText?.wrappedValue ?? localCurrentNoteSearchText
+    }
+
+    private var selectedCurrentNoteMatch: NoteSearchMatch? {
+        guard interactionState == .editInteractive else { return nil }
+        return searchSession.selectedMatch
+    }
+
+    private var selectedBodySearchRange: NSRange? {
+        MarkdownPreviewSearchInteractionPolicy.bodyHighlightRange(
+            state: interactionState,
+            highlightRange: searchSession.selectedBodyHighlightRange(textLength: content.utf16.count)
+        )
+    }
+
+    private var selectedPinnedTextSearchID: UUID? {
+        searchSession.selectedPinnedTextID
+    }
+
+    private var sortedPinnedTextSearchSignature: [String] {
+        sortedPinnedThoughts.map { "\($0.id.uuidString):\($0.text)" }
+    }
+
+    private var currentNoteSearchSummary: String {
+        searchSession.summaryText
+    }
+
+    @ViewBuilder
+    private var syncConflictNotice: some View {
+        if !syncConflicts.isEmpty, let onOpenSyncConflicts {
+            SyncConflictNotice(
+                conflictCount: syncConflicts.count,
+                onOpen: {
+                    if let firstConflict = syncConflicts.first {
+                        selectedSyncConflict = firstConflict
+                    } else {
+                        onOpenSyncConflicts()
+                    }
+                }
+            )
+        }
+    }
+
+    private var editorControlStrip: some View {
+        // MYR-195 Slice 2: hide body-editing controls while Preview is active.
+        // showingFormattingControls is not mutated; state is preserved for Edit return.
+        if markdownEditorMode == .preview {
+            return AnyView(EmptyView())
+        }
+        return AnyView(
+            VStack(spacing: 8) {
+                if showingFormattingControls {
+                    overflowFormattingControls
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                }
+
+                if let keyboardToast {
+                    Text(keyboardToast.message)
+                        .font(.caption.weight(.semibold))
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(.ultraThinMaterial, in: Capsule())
+                        .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+
+                collapsedEditorControls
+            }
+            .frame(maxWidth: .infinity, alignment: .trailing)
+        )
+    }
+
+    private var sortedAttachments: [NotePhotoAttachment] {
+        note.photoAttachments.sorted { $0.createdAt < $1.createdAt }
+    }
+
+    @ViewBuilder
+    private var attachmentStrip: some View {
+        if !sortedAttachments.isEmpty {
+            AttachmentStrip(
+                attachments: sortedAttachments,
+                isExpanded: $areAttachmentsExpanded,
+                backgroundColor: editorChromeStyle.editorSurfaceColor,
+                onOpen: { attachment in
+                    expandedAttachment = attachment
+                },
+                onDelete: { attachment in
+                    vm.removePhotoAttachment(attachment, from: note)
+                }
+            )
+        }
+    }
+
+    private var sortedPinnedThoughts: [PinnedThought] {
+        vm.sortedPinnedThoughts(for: note)
     }
 
     private var canPerformUndo: Bool {
@@ -831,44 +762,305 @@ struct NoteEditorView: View {
     }
 
     private var canPerformRedo: Bool {
-        canRedo || vm.hasRedoableAction
+        canRedo
     }
 
-    private var topBarActionLayout: TopBarActionLayout {
-        let actions = NoteEditorOverflowAction.priorityOrder
-        guard topBarWidth > 0 else {
-            return TopBarActionLayout(visibleActions: [], overflowActions: actions)
-        }
-        let availableWidth = max(topBarWidth - 110, 0)
-        let overflowWidth: CGFloat = 36
-        var used: CGFloat = 0
-        var visible: [NoteEditorOverflowAction] = []
-        var overflow: [NoteEditorOverflowAction] = []
+    @ViewBuilder
+    private var pinnedThoughtsSection: some View {
+        if sortedPinnedThoughts.isEmpty {
+            HStack {
+                Spacer()
+                Button {
+                    addPinnedThoughtFromSection()
+                } label: {
+                    Text("Pinned (0)")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(pinnedHighlightText)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .modifier(ChromePinnedBadge(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("pinned-thoughts-add")
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.18)) {
+                            arePinnedThoughtsExpanded.toggle()
+                            vm.setPinnedThoughtsSectionExpanded(arePinnedThoughtsExpanded, for: note)
+                        }
+                    } label: {
+                        HStack(spacing: 6) {
+                            Image(systemName: arePinnedThoughtsExpanded ? "chevron.down" : "chevron.right")
+                                .font(.caption.weight(.semibold))
+                            Text("Pinned")
+                                .font(.subheadline.weight(.semibold))
+                            Text("\(sortedPinnedThoughts.count)")
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 3)
+                                .modifier(ChromeCountBadge(style: editorChromeStyle))
+                        }
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+                    .modifier(ChromeControlPlate(style: editorChromeStyle, cornerRadius: 8))
+                    .accessibilityIdentifier("pinned-thoughts-toggle")
 
-        for (index, action) in actions.enumerated() {
-            let width = topBarActionWidths[action.rawValue] ?? 36
-            let remaining = actions.count - index - 1
-            let reserveOverflow = remaining > 0 ? overflowWidth : 0
-            if used + width + reserveOverflow <= availableWidth {
-                visible.append(action)
-                used += width + 6
-            } else {
-                overflow.append(action)
+                    Spacer()
+
+                    Button("Add") {
+                        addPinnedThoughtFromSection()
+                    }
+                    .font(.subheadline.weight(.semibold))
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.primary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 5)
+                    .modifier(ChromeControlPlate(style: editorChromeStyle, cornerRadius: 8))
+                    .accessibilityIdentifier("pinned-thoughts-add")
+                }
+
+                if arePinnedThoughtsExpanded {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(Array(sortedPinnedThoughts.enumerated()), id: \.element.id) { index, thought in
+                                    if shouldShowReorderIndicator(at: index) {
+                                        ReorderInsertionIndicator()
+                                    }
+                                    pinnedThoughtRow(thought, index: index, count: sortedPinnedThoughts.count)
+                                        .id(thought.id)
+                                }
+                                if shouldShowReorderIndicator(at: sortedPinnedThoughts.count) {
+                                    ReorderInsertionIndicator()
+                                }
+                            }
+                        }
+                        .scrollIndicators(.visible)
+                        .frame(maxHeight: 180)
+                        .onChange(of: selectedPinnedTextSearchID) { _, pinnedTextID in
+                            guard let pinnedTextID else { return }
+                            withAnimation(.easeInOut(duration: 0.18)) {
+                                proxy.scrollTo(pinnedTextID, anchor: .center)
+                            }
+                        }
+                        .onAppear {
+                            guard let selectedPinnedTextSearchID else { return }
+                            proxy.scrollTo(selectedPinnedTextSearchID, anchor: .center)
+                        }
+                    }
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(sortedPinnedThoughts.prefix(1), id: \.id) { thought in
+                            Text(thought.text.isEmpty ? "Pinned" : thought.text)
+                                .font(.body)
+                                .foregroundStyle(pinnedHighlightText)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .modifier(ChromePinnedSurface(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
+                }
+            }
+            .padding(10)
+            .modifier(ChromePinnedPanel(style: editorChromeStyle))
+            .accessibilityIdentifier("pinned-thoughts-section")
+            .onPreferenceChange(ReorderItemFramePreferenceKey.self) { frames in
+                reorderItemFrames = frames
             }
         }
-        return TopBarActionLayout(visibleActions: visible, overflowActions: overflow)
     }
 
-    private func initializeEditor() {
-        title = note.title
-        content = note.content
-        richTextContentData = note.richTextContentData
-        lastSnapshot = currentNoteSnapshot()
-        toolbarBridge?.title = title.isEmpty ? "Untitled" : title
-        configureToolbarBridge()
-        vm.recordNoteOpened(note)
+    private func pinnedThoughtRow(_ thought: PinnedThought, index: Int, count: Int) -> some View {
+        let isSelectedSearchMatch = selectedPinnedTextSearchID == thought.id
+        return HStack(alignment: .top, spacing: 8) {
+            ReorderDragHandle(
+                payload: thought.id.uuidString,
+                activePayload: $activeReorderPayload,
+                accessibilityIdentifier: "pinned-thought-drag-handle",
+                onChanged: { location, translation in
+                    activeReorderOffset = translation
+                    if let insertionIndex = reorderInsertionIndex(for: location) {
+                        pendingReorderInsertionIndex = insertionIndex
+                    }
+                },
+                onEnded: {
+                    commitPendingPinnedThoughtMove()
+                    activeReorderPayload = nil
+                    activeReorderOffset = .zero
+                    pendingReorderInsertionIndex = nil
+                }
+            )
+
+            if editingPinnedThoughtID == thought.id {
+                TextField("Pinned", text: $editingPinnedTextDraftText, axis: .vertical)
+                .lineLimit(1...4)
+                .textFieldStyle(.plain)
+                .font(.subheadline)
+                .foregroundStyle(pinnedHighlightText)
+                .tint(pinnedHighlightText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .focused($focusedPinnedThoughtID, equals: thought.id)
+                .onSubmit {
+                    commitPinnedThoughtEdit(thought)
+                }
+                .onAppear {
+                    focusedPinnedThoughtID = thought.id
+                }
+                .accessibilityIdentifier("pinned-thought-text")
+            } else {
+                Text(thought.text.isEmpty ? "Pinned" : thought.text)
+                    .font(.subheadline)
+                    .foregroundStyle(thought.text.isEmpty ? pinnedHighlightPlaceholderText : pinnedHighlightText)
+                    .lineLimit(3)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+
+                Image(systemName: "pencil")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.top, 6)
+                    .accessibilityIdentifier("pinned-thought-edit-hint")
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .modifier(ChromePinnedSurface(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
+        .overlay {
+            if isSelectedSearchMatch {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(Color.accentColor, lineWidth: 2)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            beginPinnedThoughtEditing(thought)
+        }
+        .contextMenu {
+            Button("Unpin") {
+                unpinThoughtToBody(thought)
+            }
+
+            Button("Delete", role: .destructive) {
+                deletePinnedParagraph(thought)
+            }
+        }
+        .reorderItemFrame(payload: thought.id.uuidString)
+        .offset(activeReorderPayload == thought.id.uuidString ? activeReorderOffset : .zero)
+        .zIndex(activeReorderPayload == thought.id.uuidString ? 1 : 0)
+        .accessibilityElement(children: .contain)
+    }
+
+    private func reorderInsertionIndex(for location: CGPoint) -> Int? {
+        let orderedThoughts = sortedPinnedThoughts
+        guard !orderedThoughts.isEmpty,
+              let activeReorderPayload,
+              orderedThoughts.contains(where: { $0.id.uuidString == activeReorderPayload }) else { return nil }
+
+        for (index, thought) in orderedThoughts.enumerated() {
+            let payload = thought.id.uuidString
+            guard payload != activeReorderPayload,
+                  let frame = reorderItemFrames[payload] else { continue }
+            if location.y <= frame.midY {
+                return index
+            }
+        }
+
+        return orderedThoughts.count
+    }
+
+    private func shouldShowReorderIndicator(at insertionIndex: Int) -> Bool {
+        guard let activeReorderPayload,
+              let pendingReorderInsertionIndex,
+              let currentIndex = sortedPinnedThoughts.firstIndex(where: { $0.id.uuidString == activeReorderPayload }) else {
+            return false
+        }
+
+        return pendingReorderInsertionIndex == insertionIndex
+            && insertionIndex != currentIndex
+            && insertionIndex != currentIndex + 1
+    }
+
+    private func commitPendingPinnedThoughtMove() {
+        guard let activeReorderPayload,
+              let pendingReorderInsertionIndex,
+              shouldShowReorderIndicator(at: pendingReorderInsertionIndex),
+              let draggedID = UUID(uuidString: activeReorderPayload),
+              let draggedThought = note.pinnedThoughts.first(where: { $0.id == draggedID }) else {
+            return
+        }
+
+        vm.movePinnedThought(draggedThought, toIndex: pendingReorderInsertionIndex)
+    }
+
+    private func beginPinnedThoughtEditing(_ thought: PinnedThought) {
+        if let editingPinnedThoughtID, editingPinnedThoughtID != thought.id {
+            commitPinnedThoughtEdit(withID: editingPinnedThoughtID)
+        }
+        editingPinnedTextDraftText = thought.text
+        editingPinnedThoughtID = thought.id
+        focusedPinnedThoughtID = thought.id
+    }
+
+    private func commitActivePinnedThoughtEdit() {
+        guard let editingPinnedThoughtID else { return }
+        commitPinnedThoughtEdit(withID: editingPinnedThoughtID)
+    }
+
+    private var hasActivePinnedThoughtEdit: Bool {
+        editingPinnedThoughtID != nil
+    }
+
+    private func commitPinnedThoughtEdit(_ thought: PinnedThought) {
+        commitPinnedThoughtEdit(withID: thought.id)
+    }
+
+    private func commitPinnedThoughtEdit(withID thoughtID: UUID) {
+        guard editingPinnedThoughtID == thoughtID else { return }
+        let draft = editingPinnedTextDraftText
+        guard let thought = note.pinnedThoughts.first(where: { $0.id == thoughtID }) else {
+            editingPinnedThoughtID = nil
+            editingPinnedTextDraftText = ""
+            if focusedPinnedThoughtID == thoughtID {
+                focusedPinnedThoughtID = nil
+            }
+            vm.resumePendingConvergencePresentationIfNeeded()
+            return
+        }
+
+        vm.updatePinnedThought(thought, text: draft)
+        editingPinnedThoughtID = nil
+        editingPinnedTextDraftText = ""
+        if focusedPinnedThoughtID == thoughtID {
+            focusedPinnedThoughtID = nil
+        }
         vm.resumePendingConvergencePresentationIfNeeded()
-        scheduleCurrentNoteSearchUpdate()
+    }
+
+    private func pinSelectedText(_ selectedText: String) -> Bool {
+        let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            showKeyboardToast(KeyboardToast(message: "Select text to pin"))
+            return false
+        }
+        arePinnedThoughtsExpanded = true
+        vm.setPinnedThoughtsSectionExpanded(true, for: note)
+        guard let pinnedThought = vm.addPinnedThought(to: note, text: trimmed) else { return false }
+        beginPinnedThoughtEditing(pinnedThought)
+        return true
+    }
+
+    private func addPinnedThoughtFromSection() {
+        commitActivePinnedThoughtEdit()
+        arePinnedThoughtsExpanded = true
+        vm.setPinnedThoughtsSectionExpanded(true, for: note)
+        guard let pinnedThought = vm.addPinnedThought(to: note) else { return }
+        beginPinnedThoughtEditing(pinnedThought)
     }
 
     private func configureToolbarBridge() {
@@ -876,8 +1068,8 @@ struct NoteEditorView: View {
         toolbarBridge?.canUndo = canPerformUndo
         toolbarBridge?.canRedo = canPerformRedo
         toolbarBridge?.editTitle = {
-            renameTitleDraft = title
-            showingRenamePrompt = true
+            titleDraft = title
+            showingTitleEditor = true
         }
         toolbarBridge?.undo = { performUndo() }
         toolbarBridge?.redo = { performRedo() }
@@ -904,198 +1096,309 @@ struct NoteEditorView: View {
         toolbarBridge?.exportMarkdown = {
             prepareMarkdownExport()
         }
-        toolbarBridge?.importFromPhotoLibrary = {
-            showingPhotoPicker = true
-        }
-        toolbarBridge?.importImageFile = {
-            showingFileImporter = true
-        }
+        toolbarBridge?.importFromPhotoLibrary = { showingPhotoPicker = true }
+        toolbarBridge?.importImageFile = { showingFileImporter = true }
         toolbarBridge?.deleteNote = {
             vm.deleteNote(note)
             dismiss()
         }
     }
 
-    private func beginPinnedThoughtEditing(_ thought: PinnedThought) {
-        editingPinnedThoughtID = thought.id
-        editingPinnedTextDraftText = thought.text
-        pendingPinnedThoughtFocusID = thought.id
-        pinnedThoughtFocusRequestToken += 1
-        DispatchQueue.main.async {
-            if pendingPinnedThoughtFocusID == thought.id {
-                focusedPinnedThoughtID = thought.id
-                pendingPinnedThoughtFocusID = nil
-            }
-        }
-    }
-
-    private func commitActivePinnedThoughtEdit() {
-        guard let editingPinnedThoughtID else { return }
-        commitPinnedThoughtEdit(editingPinnedThoughtID)
-    }
-
-    private func commitPinnedThoughtEdit(_ thoughtID: UUID) {
-        guard let thought = sortedPinnedThoughts.first(where: { $0.id == thoughtID }) else {
-            editingPinnedThoughtID = nil
-            editingPinnedTextDraftText = ""
-            return
-        }
-        let draft = editingPinnedTextDraftText
-        editingPinnedThoughtID = nil
-        editingPinnedTextDraftText = ""
-        vm.updatePinnedThought(thought, text: draft)
-    }
-
-    private func updatePinnedThoughtDrag(
-        _ thought: PinnedThought,
-        index: Int,
-        thoughts: [PinnedThought],
-        location: CGPoint,
-        translation: CGSize
-    ) {
-        if draggedPinnedThoughtID == nil {
-            draggedPinnedThoughtID = thought.id
-            draggedPinnedThoughtAnchorRect = pinnedThoughtDragFrames[thought.id.uuidString]
-        }
-        guard draggedPinnedThoughtID == thought.id else { return }
-        draggedPinnedThoughtTranslation = translation
-        draggedPinnedThoughtCurrentLocation = location
-        pendingPinnedThoughtInsertionIndex = insertionIndex(
-            for: location.y,
-            excluding: thought.id,
-            thoughts: thoughts
-        )
-    }
-
-    private func finishPinnedThoughtDrag(_ thought: PinnedThought, thoughts: [PinnedThought]) {
-        defer {
-            draggedPinnedThoughtID = nil
-            draggedPinnedThoughtAnchorRect = nil
-            draggedPinnedThoughtTranslation = .zero
-            draggedPinnedThoughtCurrentLocation = nil
-            pendingPinnedThoughtInsertionIndex = nil
-        }
-        guard draggedPinnedThoughtID == thought.id,
-              let targetIndex = pendingPinnedThoughtInsertionIndex else { return }
-        vm.movePinnedThought(thought, toIndex: targetIndex)
-    }
-
-    private func insertionIndex(
-        for y: CGFloat,
-        excluding draggedID: UUID,
-        thoughts: [PinnedThought]
-    ) -> Int {
-        let candidates = thoughts.filter { $0.id != draggedID }
-        for (index, candidate) in candidates.enumerated() {
-            guard let frame = pinnedThoughtDragFrames[candidate.id.uuidString] else { continue }
-            if y < frame.midY {
-                return index
-            }
-        }
-        return candidates.count
-    }
-
-    private func pinSelection(_ selectedText: String) -> Bool {
-        let trimmed = selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            showKeyboardToast(KeyboardToast(message: "Select text to pin"))
-            return false
-        }
-        guard vm.addPinnedThought(to: note, text: trimmed) != nil else {
-            return false
-        }
-        showKeyboardToast(KeyboardToast(message: "Pinned"))
-        return true
-    }
-
     private func presentCurrentNoteSearch(focusesField: Bool = true) {
-        searchSession.present()
-        shouldFocusCurrentNoteSearchField = focusesField
-        currentNoteSearchFocusToken += 1
+        guard interactionState == .editInteractive else { return }
+        isLocalCurrentNoteSearchPresented = true
         scheduleCurrentNoteSearchUpdate()
+        selectFirstCurrentNoteMatchIfNeeded()
+        if focusesField {
+            isCurrentNoteSearchFocused = true
+            if !usesExternalCurrentNoteSearch {
+                currentNoteSearchFocusRequest += 1
+            }
+        }
     }
 
     private func clearCurrentNoteSearch() {
-        currentNoteSearchUpdateTask?.cancel()
-        currentNoteSearchUpdateTask = nil
-        currentNoteSearchQuery = ""
-        searchSession.dismiss()
-        selectedSearchMatchRange = nil
-        shouldFocusCurrentNoteSearchField = false
+        currentNoteSearchDebounceTask?.cancel()
+        isLocalCurrentNoteSearchPresented = false
+        dismissCurrentNoteSearchKeyboard()
+        if let currentNoteSearchText {
+            currentNoteSearchText.wrappedValue = ""
+        } else {
+            localCurrentNoteSearchText = ""
+        }
+        searchSession = searchSession.cleared()
     }
 
     private func dismissCurrentNoteSearchKeyboard() {
-        shouldFocusCurrentNoteSearchField = false
+        isCurrentNoteSearchFocused = false
+    }
+
+    private func setCurrentNoteSearchQuery(_ query: String) {
+        if let currentNoteSearchText {
+            currentNoteSearchText.wrappedValue = query
+        } else {
+            localCurrentNoteSearchText = query
+            isLocalCurrentNoteSearchPresented = true
+        }
     }
 
     private func scheduleCurrentNoteSearchUpdate() {
-        currentNoteSearchUpdateTask?.cancel()
+        currentNoteSearchDebounceTask?.cancel()
         let query = currentNoteSearchQuery
-        let body = content
-        let pinned = sortedPinnedThoughts.map {
-            CurrentNoteSearchPinnedText(id: $0.id, text: $0.text, order: $0.order)
-        }
-        currentNoteSearchUpdateTask = Task { @MainActor in
-            await Task.yield()
+        let bodyText = content
+        let pinnedTexts = sortedPinnedThoughts.map { NoteSearchPinnedText(id: $0.id, text: $0.text) }
+        currentNoteSearchDebounceTask = Task {
+            try? await Task.sleep(nanoseconds: 180_000_000)
             guard !Task.isCancelled else { return }
-            searchSession.update(query: query, body: body, pinnedTexts: pinned)
-            updateSelectedSearchMatch()
-        }
-    }
-
-    private func selectPreviousSearchMatch() {
-        searchSession.selectPrevious()
-        updateSelectedSearchMatch()
-    }
-
-    private func selectNextSearchMatch() {
-        searchSession.selectNext()
-        updateSelectedSearchMatch()
-    }
-
-    private func handleSelectedCurrentNoteMatchChanged() {
-        updateSelectedSearchMatch()
-    }
-
-    private func updateSelectedSearchMatch() {
-        guard let match = searchSession.selectedMatch else {
-            selectedSearchMatchRange = nil
-            return
-        }
-        switch match.source {
-        case .body(let range):
-            selectedSearchMatchRange = range
-        case .pinnedText(let id, _):
-            selectedSearchMatchRange = nil
-            if let thought = sortedPinnedThoughts.first(where: { $0.id == id }) {
-                beginPinnedThoughtEditing(thought)
+            await MainActor.run {
+                searchSession = searchSession.rebuilt(
+                    bodyText: bodyText,
+                    pinnedTexts: pinnedTexts,
+                    query: query
+                )
             }
         }
     }
 
-    private func requestMarkdownEditorMode(_ mode: MarkdownEditorMode) {
-        guard mode != requestedMarkdownEditorMode else { return }
-        requestedMarkdownEditorMode = mode
-        guard mode == .preview else {
-            pendingPreviewFocusRequest = nil
-            markdownEditorMode = .edit
-            return
-        }
+    private func selectFirstCurrentNoteMatchIfNeeded() {
+        searchSession = searchSession.selectingFirstIfNeeded()
+    }
 
-        let request = MarkdownPreviewFocusRequest()
-        pendingPreviewFocusRequest = request
-        if editorIsFirstResponder {
-            editorSyncBridge.requestFocusResignation(requestID: request.id)
+    private func dismissCurrentNoteSearch() {
+        if usesExternalCurrentNoteSearch {
+            currentNoteSearchText?.wrappedValue = ""
         } else {
-            handleMarkdownFocusResignationAcknowledged(request.id)
+            localCurrentNoteSearchText = ""
+            isLocalCurrentNoteSearchPresented = false
+        }
+        isCurrentNoteSearchFocused = false
+    }
+
+    private func selectPreviousCurrentNoteMatch() {
+        guard interactionState == .editInteractive else { return }
+        searchSession = searchSession.selectingPrevious()
+    }
+
+    private func selectNextCurrentNoteMatch() {
+        guard interactionState == .editInteractive else { return }
+        searchSession = searchSession.selectingNext()
+    }
+
+    private func handleSelectedCurrentNoteMatchChanged() {
+        guard interactionState == .editInteractive else { return }
+        guard let selectedCurrentNoteMatch else { return }
+        if case .pinnedText = selectedCurrentNoteMatch.region, !arePinnedThoughtsExpanded {
+            arePinnedThoughtsExpanded = true
+            vm.setPinnedThoughtsSectionExpanded(true, for: note)
         }
     }
 
-    private func handleMarkdownFocusResignationAcknowledged(_ requestID: UUID) {
-        guard pendingPreviewFocusRequest?.id == requestID else { return }
-        pendingPreviewFocusRequest = nil
-        markdownEditorMode = .preview
-        markdownPreviewState = .source
+    private func handleEditorFocusChanged(_ isFocused: Bool) {
+        toolbarBridge?.isEditorFocused = isFocused
+        if isFocused {
+            dismissCurrentNoteSearchKeyboard()
+        }
+    }
+
+    private func unpinThoughtToBody(_ thought: PinnedThought) {
+        commitPinnedThoughtEdit(thought)
+        let unpinnedText = thought.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        vm.unpinThought(thought)
+        guard !unpinnedText.isEmpty else { return }
+        pendingUnpinnedThoughtText = unpinnedText
+        appendUnpinnedThoughtToggleToken += 1
+    }
+
+    private func deletePinnedParagraph(_ thought: PinnedThought) {
+        if editingPinnedThoughtID == thought.id {
+            editingPinnedThoughtID = nil
+            editingPinnedTextDraftText = ""
+        }
+        if focusedPinnedThoughtID == thought.id {
+            focusedPinnedThoughtID = nil
+        }
+        vm.deletePinnedParagraph(thought)
+    }
+
+    private var editorTopBar: some View {
+        GeometryReader { proxy in
+            let layout = topBarActionLayout(totalWidth: proxy.size.width)
+            ChromeActionBar(style: editorChromeStyle) {
+                if showsTitleInTopBar {
+                    titleEditorButton
+                        .frame(maxWidth: max(130, estimatedTitleWidth), alignment: .leading)
+                }
+
+                Spacer(minLength: 0)
+
+                ForEach(layout.visibleActions, id: \.self) { action in
+                    topBarVisibleAction(for: action)
+                }
+
+                Menu {
+                    ForEach(layout.overflowActions, id: \.self) { action in
+                        overflowMenuItem(for: action)
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 17, weight: .semibold))
+                        .frame(width: 28, height: 28)
+                        .modifier(ChromeControlPlate(style: editorChromeStyle))
+                        .symbolRenderingMode(.monochrome)
+                        .foregroundStyle(.primary)
+                }
+                .tint(.primary)
+                .accessibilityIdentifier("note-editor-more")
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .leading)
+        }
+        .frame(height: 42)
+    }
+
+    private var showsTitleInTopBar: Bool {
+        // Legacy Catalyst desktop chrome keeps the note title out of the embedded top bar.
+        !MyRAMPlatform.isMacCatalyst && showsTopBar
+    }
+
+    private var editorTitleHeader: some View {
+        HStack {
+            titleEditorButton
+            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var titleEditorButton: some View {
+        Button {
+            titleDraft = title
+            showingTitleEditor = true
+        } label: {
+            HStack(spacing: 6) {
+                Text(title.isEmpty ? "Untitled" : title)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(title.isEmpty ? .secondary : .primary)
+                    .italic(title.isEmpty)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.45)
+                    .allowsTightening(true)
+                Image(systemName: "pencil")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("edit-note-title")
+        .layoutPriority(1)
+    }
+
+    private var editorChromeStyle: EditorChromeStyle {
+        EditorChromeStyle(rawValue: editorChromeStyleRaw) ?? .standard
+    }
+
+    private var pinnedHighlightColor: PinnedHighlightColor {
+        PinnedHighlightColor(rawValue: pinnedHighlightColorRaw) ?? .yellow
+    }
+
+    private var pinnedHighlightText: Color {
+        PinnedHighlightPalette.text(for: pinnedHighlightColor)
+    }
+
+    private var pinnedHighlightPlaceholderText: Color {
+        PinnedHighlightPalette.placeholderText(for: pinnedHighlightColor)
+    }
+
+    private func topBarActionLayout(totalWidth: CGFloat) -> TopBarActionLayout {
+        let promotableActions = NoteEditorOverflowAction.priorityOrder.filter { $0 != .deleteNote }
+        let minimumTitleWidth: CGFloat = 130
+        let titleWidth = max(minimumTitleWidth, estimatedTitleWidth)
+        let overflowButtonWidth: CGFloat = 28
+        let actionButtonWidth: CGFloat = 28
+        let interItemSpacing: CGFloat = 8
+        let horizontalPadding: CGFloat = 20
+
+        let usableWidth = max(0, totalWidth - horizontalPadding)
+        let titleAvailableWidth = max(0, usableWidth - overflowButtonWidth - interItemSpacing)
+        var remainingWidth = titleWidth > titleAvailableWidth
+            ? 0
+            : max(0, titleAvailableWidth - titleWidth)
+        var visibleActions: [NoteEditorOverflowAction] = []
+        var overflowActions: [NoteEditorOverflowAction] = []
+
+        for action in promotableActions {
+            let neededWidth = actionButtonWidth + (visibleActions.isEmpty ? 0 : interItemSpacing)
+            if remainingWidth >= neededWidth {
+                visibleActions.append(action)
+                remainingWidth -= neededWidth
+            } else {
+                overflowActions.append(action)
+            }
+        }
+
+        overflowActions.append(.deleteNote)
+        return TopBarActionLayout(visibleActions: visibleActions, overflowActions: overflowActions)
+    }
+
+    private var estimatedTitleWidth: CGFloat {
+        let displayTitle = title.isEmpty ? "Untitled" : title
+        let titleFont = UIFont.preferredFont(forTextStyle: .headline)
+        let textWidth = (displayTitle as NSString).size(withAttributes: [.font: titleFont]).width
+        return ceil(textWidth) + 26
+    }
+
+    @ViewBuilder
+    private func topBarVisibleAction(for action: NoteEditorOverflowAction) -> some View {
+        switch action {
+        case .newNote:
+            topBarActionButton(systemImage: "square.and.pencil", identifier: "topbar-new-note") {
+                commitActivePinnedThoughtEdit()
+                Task { @MainActor in
+                    guard await commitPendingNoteEdit() else { return }
+                    if let newNote = vm.createNewNote() {
+                        onNewNote(newNote)
+                    }
+                }
+            }
+        case .newFolder:
+            topBarActionButton(systemImage: "folder.badge.plus", identifier: "topbar-new-folder") {
+                newFolderName = ""
+                showingCreateFolderPrompt = true
+            }
+        case .exportNote:
+            topBarActionButton(systemImage: "square.and.arrow.up", identifier: "topbar-export-note") {
+                commitActivePinnedThoughtEdit()
+                Task { @MainActor in
+                    guard await commitPendingNoteEdit() else { return }
+                    exportCurrentNote()
+                }
+            }
+        case .exportMarkdown:
+            topBarActionButton(systemImage: "doc.badge.arrow.up", identifier: "topbar-export-markdown") {
+                prepareMarkdownExport()
+            }
+        case .attachments:
+            Menu {
+                attachmentImportMenuItems
+            } label: {
+                Image(systemName: "paperclip")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 28, height: 28)
+                    .modifier(ChromeControlPlate(style: editorChromeStyle))
+                    .symbolRenderingMode(.monochrome)
+                    .foregroundStyle(.primary)
+            }
+            .tint(.primary)
+            .accessibilityIdentifier("topbar-attachments")
+        case .search:
+            topBarActionButton(
+                systemImage: "magnifyingglass",
+                identifier: "topbar-search-note",
+                isDisabled: interactionState.isPreviewOrPending
+            ) {
+                presentCurrentNoteSearch()
+            }
+        case .deleteNote:
+            EmptyView()
+        }
     }
 
     private func topBarActionButton(
@@ -2494,6 +2797,7 @@ private extension View {
 
 private struct ReorderItemFramePreferenceKey: PreferenceKey {
     static var defaultValue: [String: CGRect] = [:]
+
     static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
         value.merge(nextValue(), uniquingKeysWith: { _, new in new })
     }
