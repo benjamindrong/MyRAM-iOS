@@ -202,7 +202,7 @@ final class NotesViewModel: ObservableObject {
                 title: snapshot.title,
                 content: snapshot.body,
                 richTextContentData: snapshot.richTextContentData,
-                activationEnabled: true,
+                activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
                 operationIDReserver: MyRAMSyncOperationIDAllocator.shared
             )
         },
@@ -819,6 +819,13 @@ final class NotesViewModel: ObservableObject {
         richTextContentData: Data?,
         generation: UUID
     ) -> Bool {
+        let snapshot = NoteEditorLifecycleSnapshot(
+            noteID: note.id,
+            title: title,
+            body: content,
+            richTextContentData: richTextContentData,
+            generation: generation
+        )
         guard SyncBatchAnchoredPayloadCapability.isEnabled else {
             let committed = commitNoteEdit(
                 note,
@@ -829,16 +836,12 @@ final class NotesViewModel: ObservableObject {
             if committed {
                 recordNoteEdited(note)
                 resumePendingConvergencePresentationIfNeeded()
+                return true
             }
-            return committed
+            editorLifecyclePersistence.accept(snapshot)
+            return true
         }
-        editorLifecyclePersistence.accept(NoteEditorLifecycleSnapshot(
-            noteID: note.id,
-            title: title,
-            body: content,
-            richTextContentData: richTextContentData,
-            generation: generation
-        ))
+        editorLifecyclePersistence.accept(snapshot)
         return true
     }
 
@@ -847,7 +850,6 @@ final class NotesViewModel: ObservableObject {
     }
 
     func awaitEditorLifecyclePersistence(noteID: UUID) async -> Bool {
-        guard SyncBatchAnchoredPayloadCapability.isEnabled else { return true }
         return await editorLifecyclePersistence.awaitDurableCompletion(noteID: noteID)
     }
 

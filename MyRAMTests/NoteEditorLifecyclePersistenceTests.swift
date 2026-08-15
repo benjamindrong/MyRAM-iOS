@@ -43,6 +43,70 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertEqual(note.richTextContentData, Data("After".utf8))
     }
 
+    func testActivationOffFailedSynchronousLifecycleSaveRetainsOwnershipAndAllowsEditorTeardown() async throws {
+        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR179LifecycleFailure-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
+        let context = container.mainContext
+        let note = Note(title: "Before", content: "Before")
+        context.insert(note)
+        try context.save()
+        var shouldFailSave = true
+        let viewModel = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveContext: {
+                if shouldFailSave {
+                    throw MYR179LifecycleTestError.injectedSaveFailure
+                }
+                try context.save()
+            }
+        )
+        let bridge = NoteEditorFileOperationBridge()
+        bridge.register(noteID: note.id) { .succeeded }
+        viewModel.registerActiveEditor(noteID: note.id)
+
+        let accepted = viewModel.acceptEditorLifecycleSnapshot(
+            note,
+            title: "After",
+            content: "After",
+            richTextContentData: Data("After".utf8),
+            generation: UUID()
+        )
+
+        XCTAssertTrue(accepted)
+        XCTAssertEqual(note.title, "Before")
+        XCTAssertEqual(note.content, "Before")
+        let durableAfterFailure = await viewModel.awaitEditorLifecyclePersistence(noteID: note.id)
+        XCTAssertFalse(durableAfterFailure)
+
+        bridge.unregister(noteID: note.id)
+        viewModel.unregisterActiveEditor(noteID: note.id)
+        XCTAssertFalse(viewModel.hasMountedActiveEditor)
+        let flushAfterTeardown = await bridge.flushEditor(expected: .none)
+        XCTAssertEqual(flushAfterTeardown, .noActiveEditor)
+
+        shouldFailSave = false
+        viewModel.retryAllEditorLifecyclePersistence()
+        let durableAfterRetry = await viewModel.awaitEditorLifecyclePersistence(noteID: note.id)
+        XCTAssertTrue(durableAfterRetry)
+        XCTAssertEqual(note.title, "After")
+        XCTAssertEqual(note.content, "After")
+        XCTAssertEqual(note.richTextContentData, Data("After".utf8))
+    }
+
     func testLifecyclePersistenceOwnershipTransfersBeforeEditorUnregisters() async {
         let noteID = UUID()
         let bridge = NoteEditorFileOperationBridge()
@@ -352,6 +416,10 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         }
         XCTAssertTrue(condition(), file: file, line: line)
     }
+}
+
+private enum MYR179LifecycleTestError: Error {
+    case injectedSaveFailure
 }
 
 @MainActor
