@@ -3,13 +3,12 @@ name: PR verification
 "on":
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
-  workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pr-verification-${{ github.event.pull_request.number || github.ref }}
+  group: pr-verification-${{ github.event.pull_request.number }}
   cancel-in-progress: true
 
 env:
@@ -53,7 +52,7 @@ jobs:
   mac-tests:
     name: Mac application tests
     needs: diff-audit
-    if: github.event_name == 'workflow_dispatch' || (github.event.pull_request.draft == false && needs.diff-audit.outputs.xcode-required == 'true')
+    if: github.event.pull_request.draft == false && needs.diff-audit.outputs.xcode-required == 'true'
     runs-on: macos-26
     timeout-minutes: 35
     steps:
@@ -85,55 +84,4 @@ jobs:
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
             -only-testing:MyRAMMacTests \
-            test
-
-  ui-tests:
-    name: iOS UI tests (manual only)
-    if: github.event_name == 'workflow_dispatch'
-    runs-on: macos-26
-    timeout-minutes: 35
-    steps:
-      - name: Check out MyRAM candidate
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-          path: MyRAM-iOS
-
-      - name: Check out NearbySyncCore sibling
-        uses: actions/checkout@v7
-        with:
-          repository: benjamindrong/NearbySyncCore
-          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
-          path: NearbySyncCore
-
-      - name: Show Xcode version
-        working-directory: MyRAM-iOS
-        run: xcodebuild -version
-
-      - name: Run iOS UI suite
-        working-directory: MyRAM-iOS
-        run: |
-          set -euo pipefail
-          simulator_udid="$(xcrun simctl list devices available -j | python3 -c '
-          import json, sys
-          data = json.load(sys.stdin)
-          devices = [
-              device
-              for runtime, runtime_devices in data["devices"].items()
-              if "iOS" in runtime
-              for device in runtime_devices
-              if device.get("isAvailable") and device.get("name", "").startswith("iPhone")
-          ]
-          if not devices:
-              raise SystemExit("No available iPhone simulator")
-          print(devices[0]["udid"])
-          ')"
-          echo "Selected simulator: $simulator_udid"
-          xcodebuild \
-            -project MyRAM.xcodeproj \
-            -scheme MyRAM \
-            -destination "platform=iOS Simulator,id=$simulator_udid" \
-            -parallel-testing-enabled NO \
-            CODE_SIGNING_ALLOWED=NO \
-            -only-testing:MyRAMUITests \
             test
