@@ -1,5 +1,6 @@
 // NotesViewModel.swift
 import NearbySyncCore
+import AnchoredSequenceCore
 import SwiftUI
 import SwiftData
 
@@ -34,6 +35,8 @@ enum PendingSyncRecoveryStatus: Equatable {
 private struct PreparedLocalNoteEdit {
     let titleChange: SyncConvergenceCapturedLocalChange?
     let bodyChanges: [SyncConvergenceCapturedLocalChange]
+    let structuralSnapshot: NoteSequenceStateMutationSnapshot?
+    let finalStructuralState: SyncTextSequenceState?
 
     var capturedChanges: [SyncConvergenceCapturedLocalChange] {
         (titleChange.map { [$0] } ?? []) + bodyChanges
@@ -64,6 +67,106 @@ private struct LegacyIncomingIsolatedApplyResult {
 
 private enum LegacyIncomingIsolatedApplyFailure: Error {
     case nonAcknowledgeableOutcome
+}
+
+struct NoteEditorLifecycleSnapshot: Equatable {
+    let noteID: UUID
+    let title: String
+    let body: String
+    let richTextContentData: Data?
+    let generation: UUID
+}
+
+@MainActor
+final class NoteEditorLifecyclePersistenceCore {
+    typealias Persistence = @MainActor (NoteEditorLifecycleSnapshot) async -> Bool
+    typealias Success = @MainActor (NoteEditorLifecycleSnapshot) -> Void
+
+    private var pendingByNoteID: [UUID: NoteEditorLifecycleSnapshot] = [:]
+    private var drainingNoteIDs: Set<UUID> = []
+    private var durabilityWaitersByNoteID: [UUID: [CheckedContinuation<Bool, Never>]] = [:]
+    private let persist: Persistence
+    private let didPersist: Success
+
+    init(
+        persist: @escaping Persistence,
+        didPersist: @escaping Success = { _ in }
+    ) {
+        self.persist = persist
+        self.didPersist = didPersist
+    }
+
+    func accept(_ snapshot: NoteEditorLifecycleSnapshot) {
+        pendingByNoteID[snapshot.noteID] = snapshot
+        startDrainIfNeeded(noteID: snapshot.noteID)
+    }
+
+    @discardableResult
+    func acceptIfOwned(_ snapshot: NoteEditorLifecycleSnapshot) -> Bool {
+        guard pendingByNoteID[snapshot.noteID] != nil else { return false }
+        accept(snapshot)
+        return true
+    }
+
+    func retry(noteID: UUID) {
+        startDrainIfNeeded(noteID: noteID)
+    }
+
+    func retryAll() {
+        for noteID in pendingByNoteID.keys {
+            startDrainIfNeeded(noteID: noteID)
+        }
+    }
+
+    func awaitDurableCompletion(noteID: UUID) async -> Bool {
+        if !drainingNoteIDs.contains(noteID) {
+            return pendingByNoteID[noteID] == nil
+        }
+        return await withCheckedContinuation { continuation in
+            durabilityWaitersByNoteID[noteID, default: []].append(continuation)
+        }
+    }
+
+#if DEBUG
+    func pendingGenerationForTesting(noteID: UUID) -> UUID? {
+        pendingByNoteID[noteID]?.generation
+    }
+
+    func isDrainingForTesting(noteID: UUID) -> Bool {
+        drainingNoteIDs.contains(noteID)
+    }
+#endif
+
+    private func startDrainIfNeeded(noteID: UUID) {
+        guard pendingByNoteID[noteID] != nil,
+              drainingNoteIDs.insert(noteID).inserted else { return }
+        Task { @MainActor [weak self] in
+            await self?.drain(noteID: noteID)
+        }
+    }
+
+    private func drain(noteID: UUID) async {
+        defer {
+            drainingNoteIDs.remove(noteID)
+            let durable = pendingByNoteID[noteID] == nil
+            let waiters = durabilityWaitersByNoteID.removeValue(forKey: noteID) ?? []
+            for waiter in waiters {
+                waiter.resume(returning: durable)
+            }
+        }
+        while let snapshot = pendingByNoteID[noteID] {
+            guard await persist(snapshot) else {
+                if pendingByNoteID[noteID]?.generation != snapshot.generation {
+                    continue
+                }
+                return
+            }
+            didPersist(snapshot)
+            if pendingByNoteID[noteID]?.generation == snapshot.generation {
+                pendingByNoteID.removeValue(forKey: noteID)
+            }
+        }
+    }
 }
 
 @MainActor
@@ -102,6 +205,26 @@ final class NotesViewModel: ObservableObject {
     private var recentTextEditByNoteID: [UUID: Date] = [:]
     private var syncBatchReadyTask: Task<Void, Never>?
     private var pendingConvergenceResumeTask: Task<Void, Never>?
+    private lazy var editorLifecyclePersistence = NoteEditorLifecyclePersistenceCore(
+        persist: { [weak self] snapshot in
+            guard let self,
+                  let note = self.fetchNote(withID: snapshot.noteID) else { return false }
+            return await self.commitNoteEditCore(
+                note,
+                title: snapshot.title,
+                content: snapshot.body,
+                richTextContentData: snapshot.richTextContentData,
+                activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
+                operationIDReserver: MyRAMSyncOperationIDAllocator.shared
+            )
+        },
+        didPersist: { [weak self] snapshot in
+            guard let self,
+                  let note = self.fetchNote(withID: snapshot.noteID) else { return }
+            self.recordNoteEdited(note)
+            self.resumePendingConvergencePresentationIfNeeded()
+        }
+    )
     private var undoStack: [UndoAction] = [] {
         didSet {
             hasUndoableAction = !undoStack.isEmpty
@@ -187,7 +310,8 @@ final class NotesViewModel: ObservableObject {
             localBatchTransportAdapter: syncController as? SyncConvergenceLocalBatchTransportAdapter,
             presentationAdapter: NotesViewModelConvergencePresentationAdapter(viewModel: self),
             incomingLocalBoundaryAdapter: self,
-            conflictStore: syncConflictStore
+            conflictStore: syncConflictStore,
+            anchoredRecoveryPlatform: .iPhone
         )
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
@@ -679,6 +803,128 @@ final class NotesViewModel: ObservableObject {
         }
         recordActiveNoteTextEdited(note)
         recordPreparedLocalNoteEdit(preparedEdit)
+        return true
+    }
+
+    @discardableResult
+    func commitNoteEditForProduction(
+        _ note: Note,
+        title: String,
+        content: String,
+        richTextContentData: Data? = nil
+    ) async -> Bool {
+        await commitNoteEditCore(
+            note,
+            title: title,
+            content: content,
+            richTextContentData: richTextContentData,
+            activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
+            operationIDReserver: MyRAMSyncOperationIDAllocator.shared
+        )
+    }
+
+    @discardableResult
+    func acceptEditorLifecycleSnapshot(
+        _ note: Note,
+        title: String,
+        content: String,
+        richTextContentData: Data?,
+        generation: UUID
+    ) -> Bool {
+        let snapshot = NoteEditorLifecycleSnapshot(
+            noteID: note.id,
+            title: title,
+            body: content,
+            richTextContentData: richTextContentData,
+            generation: generation
+        )
+        guard SyncBatchAnchoredPayloadCapability.isEnabled else {
+            if editorLifecyclePersistence.acceptIfOwned(snapshot) {
+                return true
+            }
+            let committed = commitNoteEdit(
+                note,
+                title: title,
+                content: content,
+                richTextContentData: richTextContentData
+            )
+            if committed {
+                recordNoteEdited(note)
+                resumePendingConvergencePresentationIfNeeded()
+                return true
+            }
+            editorLifecyclePersistence.accept(snapshot)
+            return true
+        }
+        editorLifecyclePersistence.accept(snapshot)
+        return true
+    }
+
+    func retryAllEditorLifecyclePersistence() {
+        editorLifecyclePersistence.retryAll()
+    }
+
+    func awaitEditorLifecyclePersistence(noteID: UUID) async -> Bool {
+        return await editorLifecyclePersistence.awaitDurableCompletion(noteID: noteID)
+    }
+
+    @discardableResult
+    func commitNoteEditCore(
+        _ note: Note,
+        title: String,
+        content: String,
+        richTextContentData: Data? = nil,
+        activationEnabled: Bool,
+        operationIDReserver: any SyncOperationIDReserving
+    ) async -> Bool {
+        guard activationEnabled else {
+            return commitNoteEdit(
+                note,
+                title: title,
+                content: content,
+                richTextContentData: richTextContentData
+            )
+        }
+        guard note.deletedAt == nil else { return false }
+        let oldTitle = note.title
+        let oldContent = note.content
+        let oldRichTextContentData = note.richTextContentData
+        let oldModifiedAt = note.modifiedAt
+        let modifiedAt = Date.now
+        let prepared: PreparedLocalNoteEdit
+        do {
+            prepared = try await prepareAnchoredLocalNoteEdit(
+                note: note,
+                newTitle: title,
+                newBody: content,
+                modifiedAt: modifiedAt,
+                operationIDReserver: operationIDReserver
+            )
+            note.title = title
+            note.richTextContentData = richTextContentData
+            note.modifiedAt = modifiedAt
+            if let snapshot = prepared.structuralSnapshot,
+               let finalState = prepared.finalStructuralState {
+                _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+                    of: note,
+                    expected: snapshot,
+                    newBody: content,
+                    finalState: finalState,
+                    in: context
+                )
+            }
+            try saveContext()
+        } catch {
+            context.rollback()
+            note.title = oldTitle
+            note.content = oldContent
+            note.richTextContentData = oldRichTextContentData
+            note.modifiedAt = oldModifiedAt
+            syncBatchErrorMessage = "Unable to save the latest edit."
+            return false
+        }
+        recordActiveNoteTextEdited(note)
+        recordPreparedLocalNoteEdit(prepared)
         return true
     }
 
@@ -1503,7 +1749,45 @@ final class NotesViewModel: ObservableObject {
             bodyHashCapabilityEnabled: bodyHashCapabilityEnabled
         )
 
-        return PreparedLocalNoteEdit(titleChange: titleChange, bodyChanges: bodyChanges)
+        return PreparedLocalNoteEdit(
+            titleChange: titleChange,
+            bodyChanges: bodyChanges,
+            structuralSnapshot: nil,
+            finalStructuralState: nil
+        )
+    }
+
+    private func prepareAnchoredLocalNoteEdit(
+        note: Note,
+        newTitle: String,
+        newBody: String,
+        modifiedAt: Date,
+        operationIDReserver: any SyncOperationIDReserving
+    ) async throws -> PreparedLocalNoteEdit {
+        let snapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        )
+        let titleChange = IPhoneSyncBatchCaptureHook.titleChanged(
+            noteID: note.id,
+            oldTitle: note.title,
+            newTitle: newTitle,
+            modifiedAt: modifiedAt
+        ).map { SyncConvergenceCapturedLocalChange(change: $0, evidence: nil) }
+        let capture = try await SyncBatchAnchoredLocalCapture.capture(
+            noteID: note.id,
+            oldBody: snapshot.body,
+            newBody: newBody,
+            modifiedAt: modifiedAt,
+            initialState: snapshot.state,
+            operationIDReserver: operationIDReserver
+        )
+        return PreparedLocalNoteEdit(
+            titleChange: titleChange,
+            bodyChanges: capture.capturedChanges,
+            structuralSnapshot: snapshot,
+            finalStructuralState: capture.finalState
+        )
     }
 
     private func recordPreparedLocalNoteEdit(_ edit: PreparedLocalNoteEdit) {
@@ -2206,7 +2490,7 @@ final class NotesViewModel: ObservableObject {
 
     func resetPendingSync(
         syncController: MyRAMSyncController,
-        prepareEditorState: @escaping () throws -> Void
+        prepareEditorState: @escaping () async throws -> Void
     ) async {
         guard !pendingSyncRecoveryStatus.isRunning else { return }
         pendingSyncRecoveryStatus = .running
@@ -2227,7 +2511,7 @@ final class NotesViewModel: ObservableObject {
         do {
             try await coordinator.resetPendingSync(
                 prepareDurableState: {
-                    try prepareEditorState()
+                    try await prepareEditorState()
                     try context.save()
                 },
                 buildReplacement: { legacy, unsent, local, recoveryTimestamp in
@@ -2347,7 +2631,8 @@ final class NotesViewModel: ObservableObject {
             case .unsupportedReconciliation, .historyPressure:
                 continue
                 }
-            case .legacyLocalEvidenceStale, .transportUnavailable, .postCommitPending:
+            case .anchoredDependency(_), .legacyLocalEvidenceStale,
+                 .transportUnavailable, .postCommitPending:
                 continue
             }
         }
@@ -2372,6 +2657,7 @@ final class NotesViewModel: ObservableObject {
 
     func registerActiveEditor(noteID: UUID) {
         mountedActiveEditorNoteID = noteID
+        editorLifecyclePersistence.retry(noteID: noteID)
         resumePendingConvergencePresentationIfNeeded()
     }
 

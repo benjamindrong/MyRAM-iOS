@@ -8,6 +8,26 @@ import XCTest
 #endif
 
 final class SyncConvergencePlanningTests: XCTestCase {
+    func testMYR179FailureFirstEveryNonSuccessRuntimeOutcomeIsFailClosedForAcknowledgement() {
+        let batchID = UUID()
+        let outcomes: [SyncConvergenceRuntimeOutcome] = [
+            .alreadyDraining,
+            .pending([.queueCleanup]),
+            .blocked(.init(batchID: batchID, kind: .persistence)),
+            .quarantined(.init(items: [])),
+            .deferred(.init(incoming: [], localObligations: [], postCommit: []))
+        ]
+
+        for outcome in outcomes {
+            XCTAssertNotEqual(
+                SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                    for: outcome,
+                    batchID: batchID
+                ),
+                .acknowledgementPermitted
+            )
+        }
+    }
     func testAnchoredBatchFailsPlanningBeforeCanonicalWork() throws {
         let batch = try makeAnchoredInsertBatchForTest()
 
@@ -21,17 +41,16 @@ final class SyncConvergencePlanningTests: XCTestCase {
         )
     }
 
-    func testCanonicalDigestExplicitlyRejectsAnchoredBatch() throws {
+    func testCanonicalDigestDeterministicallySupportsAnchoredBatchForFutureEnabledPlanning() throws {
         let batch = try makeAnchoredInsertBatchForTest()
-
-        XCTAssertThrowsError(
-            try SyncConvergenceCanonicalBatchDigest.canonicalBytes(for: batch)
-        ) {
-            XCTAssertEqual(
-                $0 as? SyncConvergenceCanonicalBatchDigest.Error,
-                .invalidPayload("anchoredBodyOperation")
-            )
-        }
+        let first = try SyncConvergenceCanonicalBatchDigest.canonicalBytes(for: batch)
+        let second = try SyncConvergenceCanonicalBatchDigest.canonicalBytes(for: batch)
+        XCTAssertEqual(first, second)
+        XCTAssertFalse(first.isEmpty)
+        XCTAssertEqual(
+            try SyncConvergenceCanonicalBatchDigest.digest(for: batch),
+            try SyncConvergenceCanonicalBatchDigest.digest(for: batch)
+        )
     }
 
     func testLifecycleDivergencePreservesLiveNoteWithoutBlockingPlan() {

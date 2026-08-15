@@ -108,7 +108,7 @@ final class MarkdownImportIntegrationTests: XCTestCase {
         )
     }
 
-    func testExternalRouteEditorMismatchLeavesNoRowsUndoSelectionOrBodyRead() throws {
+    func testExternalRouteEditorMismatchLeavesNoRowsUndoSelectionOrBodyRead() async throws {
         let expectedID = UUID()
         let actualID = UUID()
         let bridge = NoteEditorFileOperationBridge()
@@ -118,7 +118,7 @@ final class MarkdownImportIntegrationTests: XCTestCase {
             return .succeeded
         }
 
-        try assertExternalRouteBlocked(
+        try await assertExternalRouteBlocked(
             expectedEditor: .note(expectedID),
             bridge: bridge,
             expectedResult: .editorMismatch(
@@ -129,10 +129,10 @@ final class MarkdownImportIntegrationTests: XCTestCase {
         XCTAssertFalse(didInvokeWrongEditor)
     }
 
-    func testExternalRouteUnavailableEditorLeavesNoRowsUndoSelectionOrBodyRead() throws {
+    func testExternalRouteUnavailableEditorLeavesNoRowsUndoSelectionOrBodyRead() async throws {
         let expectedID = UUID()
 
-        try assertExternalRouteBlocked(
+        try await assertExternalRouteBlocked(
             expectedEditor: .note(expectedID),
             bridge: NoteEditorFileOperationBridge(),
             expectedResult: .expectedEditorUnavailable(noteID: expectedID)
@@ -145,7 +145,7 @@ final class MarkdownImportIntegrationTests: XCTestCase {
         expectedResult: EditorFlushResult,
         file: StaticString = #filePath,
         line: UInt = #line
-    ) throws {
+    ) async throws {
         let container = try makeContainer()
         let context = container.mainContext
         let viewModel = makeViewModel(context: context)
@@ -162,8 +162,8 @@ final class MarkdownImportIntegrationTests: XCTestCase {
         let router = ExternalImportURLRouter(classifier: MarkdownFileClassifier(
             contentTypeProvider: { _ in MarkdownFileClassifier.markdownContentType }
         ))
-        let route: () throws -> ExternalImportRoutingResult<Note, Note?> = {
-            try router.route(
+        let route: () async throws -> ExternalImportRoutingResult<Note, Note?> = {
+            try await router.route(
                 url: URL(fileURLWithPath: "/tmp/Blocked.md"),
                 expectedEditor: expectedEditor,
                 markdownCoordinator: coordinator,
@@ -176,9 +176,12 @@ final class MarkdownImportIntegrationTests: XCTestCase {
             )
         }
 
-        XCTAssertThrowsError(try route(), file: file, line: line) {
+        do {
+            _ = try await route()
+            XCTFail("Expected editor precondition failure", file: file, line: line)
+        } catch {
             XCTAssertEqual(
-                $0 as? MarkdownImportOperationError,
+                error as? MarkdownImportOperationError,
                 .editorPreconditionFailed(expectedResult),
                 file: file,
                 line: line

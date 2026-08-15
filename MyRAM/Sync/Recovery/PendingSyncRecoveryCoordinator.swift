@@ -123,7 +123,7 @@ final class PendingSyncRecoveryCoordinator {
     }
 
     func resetPendingSync(
-        prepareDurableState: () throws -> Void,
+        prepareDurableState: () async throws -> Void,
         buildReplacement: (
             _ legacy: SyncQueueSnapshot,
             _ unsent: [SyncBatch],
@@ -142,7 +142,7 @@ final class PendingSyncRecoveryCoordinator {
         let recoveryTimestamp: Date
 
         do {
-            try prepareDurableState()
+            try await prepareDurableState()
             original = try await prepareSnapshots()
             recoveryTimestamp = now()
             replacement = try buildReplacement(

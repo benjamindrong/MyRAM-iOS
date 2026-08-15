@@ -91,7 +91,7 @@ final class MyRAMWidgetHostTests: XCTestCase {
         XCTAssertEqual(dispatcher.pendingCount, 0)
     }
 
-    func testIOSRouterFlushesBeforePresentationAndRetainsFailure() {
+    func testIOSRouterFlushesBeforePresentationAndRetainsFailure() async {
         let note = Note(title: "Selected", content: "Body")
         let bridge = NoteEditorFileOperationBridge()
         var events: [String] = []
@@ -100,7 +100,7 @@ final class MyRAMWidgetHostTests: XCTestCase {
             return .succeeded
         }
 
-        let success = MyRAMWidgetIOSNoteRouter().route(
+        let success = await MyRAMWidgetIOSNoteRouter().route(
             noteID: note.id,
             expectedEditor: .note(note.id),
             flushBridge: bridge,
@@ -121,7 +121,7 @@ final class MyRAMWidgetHostTests: XCTestCase {
         var didFetch = false
         var didPresent = false
 
-        let failure = MyRAMWidgetIOSNoteRouter().route(
+        let failure = await MyRAMWidgetIOSNoteRouter().route(
             noteID: note.id,
             expectedEditor: .note(note.id),
             flushBridge: failingBridge,
@@ -137,11 +137,11 @@ final class MyRAMWidgetHostTests: XCTestCase {
         XCTAssertFalse(didPresent)
     }
 
-    func testIOSRouterRejectsUnavailableOrMismatchedEditorWithoutMutation() {
+    func testIOSRouterRejectsUnavailableOrMismatchedEditorWithoutMutation() async {
         let note = Note(title: "Selected", content: "Body")
         var didPresent = false
 
-        let unavailable = MyRAMWidgetIOSNoteRouter().route(
+        let unavailable = await MyRAMWidgetIOSNoteRouter().route(
             noteID: note.id,
             expectedEditor: .note(note.id),
             flushBridge: NoteEditorFileOperationBridge(),
@@ -153,7 +153,7 @@ final class MyRAMWidgetHostTests: XCTestCase {
 
         let mismatchBridge = NoteEditorFileOperationBridge()
         mismatchBridge.register(noteID: UUID()) { .succeeded }
-        let mismatched = MyRAMWidgetIOSNoteRouter().route(
+        let mismatched = await MyRAMWidgetIOSNoteRouter().route(
             noteID: note.id,
             expectedEditor: .note(note.id),
             flushBridge: mismatchBridge,

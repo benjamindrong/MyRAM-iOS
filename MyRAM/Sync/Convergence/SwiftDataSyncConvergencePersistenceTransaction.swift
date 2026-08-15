@@ -63,6 +63,43 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
         }
     }
 
+    func updateAnchoredNote(_ record: SyncConvergenceAnchoredUpdatedNoteRecord) throws {
+        let noteID = record.noteID
+        guard let note = try fetchOne(Note.self, #Predicate { $0.id == noteID }),
+              note.content == record.expectedSnapshot.body else {
+            throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: noteID)
+        }
+        if record.didChangeApplicationState {
+            let clearsRichText = note.content != record.finalBody
+            do {
+                _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+                    of: note,
+                    expected: record.expectedSnapshot,
+                    newBody: record.finalBody,
+                    finalState: record.finalState,
+                    in: context
+                )
+            } catch {
+                throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: noteID)
+            }
+            if clearsRichText { note.richTextContentData = nil }
+        } else {
+            guard record.finalState == record.expectedSnapshot.state,
+                  record.finalBody == record.expectedSnapshot.body else {
+                throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: noteID)
+            }
+            do {
+                guard try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(for: note, in: context) == record.expectedSnapshot else {
+                    throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: noteID)
+                }
+            } catch let e as SyncConvergenceTransactionFailure { throw e }
+            catch { throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: noteID) }
+        }
+        note.title = record.title
+        note.modifiedAt = record.modifiedAt
+        if let deletedAt = record.deletedAt { note.deletedAt = deletedAt }
+    }
+
     func loadTitleWinner(noteID: UUID) throws -> SyncConvergenceTitleWinnerProjection? {
         try fetchOne(NoteTitleWinner.self, #Predicate { $0.noteID == noteID }).map {
             SyncConvergenceTitleWinnerProjection(

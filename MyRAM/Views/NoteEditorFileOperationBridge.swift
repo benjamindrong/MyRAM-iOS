@@ -25,7 +25,7 @@ enum EditorFlushResult: Equatable {
 final class NoteEditorFileOperationBridge: ObservableObject {
     private struct Registration {
         let noteID: UUID
-        let flush: @MainActor () -> EditorLocalFlushOutcome
+        let flush: @MainActor () async -> EditorLocalFlushOutcome
     }
 
     @Published private(set) var externalOpenRetryRevision = 0
@@ -34,7 +34,7 @@ final class NoteEditorFileOperationBridge: ObservableObject {
 
     func register(
         noteID: UUID,
-        flush: @escaping @MainActor () -> EditorLocalFlushOutcome
+        flush: @escaping @MainActor () async -> EditorLocalFlushOutcome
     ) {
         registration = Registration(noteID: noteID, flush: flush)
         externalOpenRetryRevision &+= 1
@@ -52,7 +52,7 @@ final class NoteEditorFileOperationBridge: ObservableObject {
     }
 
     /// Authorizes the registered editor identity before invoking editor-owned persistence.
-    func flushEditor(expected: ExpectedEditor) -> EditorFlushResult {
+    func flushEditor(expected: ExpectedEditor) async -> EditorFlushResult {
         switch (expected, registration) {
         case (.none, nil):
             return .noActiveEditor
@@ -74,7 +74,7 @@ final class NoteEditorFileOperationBridge: ObservableObject {
                 )
             }
 
-            switch registration.flush() {
+            switch await registration.flush() {
             case .succeeded:
                 return .succeeded(noteID: registration.noteID)
             case .failed(let message):
@@ -121,7 +121,7 @@ final class MarkdownImportOperationCoordinator: ObservableObject {
         expectedEditor: ExpectedEditor,
         flushBridge: NoteEditorFileOperationBridge,
         consume: (ImportedMarkdownDocument) throws -> Result
-    ) throws -> Result {
+    ) async throws -> Result {
         guard !isProcessing else {
             throw MarkdownImportOperationError.operationInProgress
         }
@@ -129,7 +129,7 @@ final class MarkdownImportOperationCoordinator: ObservableObject {
         isProcessing = true
         defer { isProcessing = false }
 
-        let flushResult = flushBridge.flushEditor(expected: expectedEditor)
+        let flushResult = await flushBridge.flushEditor(expected: expectedEditor)
         switch flushResult {
         case .noActiveEditor, .succeeded:
             break
@@ -185,7 +185,7 @@ struct ExternalImportURLRouter {
         flushBridge: NoteEditorFileOperationBridge,
         importMarkdown: (ImportedMarkdownDocument) throws -> MarkdownResult,
         importMyRAM: (URL) throws -> MyRAMResult
-    ) throws -> ExternalImportRoutingResult<MarkdownResult, MyRAMResult> {
+    ) async throws -> ExternalImportRoutingResult<MarkdownResult, MyRAMResult> {
         let didStartAccessing = url.startAccessingSecurityScopedResource()
         let kind = classifier.kind(for: url)
         if didStartAccessing {
@@ -194,7 +194,7 @@ struct ExternalImportURLRouter {
 
         switch kind {
         case .markdown:
-            return try .markdown(markdownCoordinator.perform(
+            return .markdown(try await markdownCoordinator.perform(
                 url: url,
                 expectedEditor: expectedEditor,
                 flushBridge: flushBridge,
@@ -244,10 +244,10 @@ enum MarkdownExportPreparationError: Error, Equatable {
 struct MarkdownExportPreparationCoordinator {
     /// Captures editor-owned source only after the current editor reports a durable flush.
     func prepare(
-        flush: () -> EditorLocalFlushOutcome,
+        flush: () async -> EditorLocalFlushOutcome,
         snapshot: () -> (title: String, source: String)
-    ) throws -> PreparedMarkdownExport {
-        switch flush() {
+    ) async throws -> PreparedMarkdownExport {
+        switch await flush() {
         case .succeeded:
             break
         case .failed:

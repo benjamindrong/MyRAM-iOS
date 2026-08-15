@@ -22,8 +22,21 @@ struct SyncConvergencePlanner {
     }
 
     func plan(input: SyncConvergencePlanningInput) -> SyncConvergencePlanningOutcome {
+        planCore(
+            input: input,
+            activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
+        )
+    }
+
+    func planCore(
+        input: SyncConvergencePlanningInput,
+        activationEnabled: Bool
+    ) -> SyncConvergencePlanningOutcome {
         do {
-            try SyncBatchAnchoredPayloadPolicy.validateConvergence(input.incomingBatch)
+            try SyncBatchAnchoredPayloadPolicy.validateConvergenceCore(
+                input.incomingBatch,
+                activationEnabled: activationEnabled
+            )
         } catch SyncBatchAnchoredPayloadPolicyError.anchoredPayloadDisabled(_, let noteID) {
             return .failedBeforeCommit(.invalidMergePlan(noteID: noteID))
         } catch {
@@ -203,7 +216,62 @@ struct SyncConvergencePlanner {
                 }
 
             case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
-                return .failedBeforeCommit(.invalidMergePlan(noteID: change.noteID))
+                let noteID = change.noteID
+                guard !processedBodyNoteIDs.contains(noteID) else { continue }
+                processedBodyNoteIDs.insert(noteID)
+                let indexedChanges = input.incomingBatch.changes.enumerated()
+                    .filter { _, candidate in
+                        guard candidate.noteID == noteID else { return false }
+                        switch candidate {
+                        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored: return true
+                        default: return false
+                        }
+                    }
+                    .map { (operationIndex: $0.offset, change: $0.element) }
+
+                let expectedSnapshot: NoteSequenceStateMutationSnapshot
+                if let persisted = input.anchoredSequenceSnapshots.first(where: { $0.noteID == noteID }) {
+                    expectedSnapshot = persisted
+                } else if let creation = notePlans[noteID]?.creationEffect, creation.verdict == .create {
+                    do {
+                        let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(noteID: noteID, body: creation.body)
+                        expectedSnapshot = .init(noteID: noteID, body: creation.body, revision: 0, state: prepared.state)
+                    } catch { return .failedBeforeCommit(.invalidMergePlan(noteID: noteID)) }
+                } else {
+                    return .failedBeforeCommit(.staleAuthoritativeState(noteID: noteID))
+                }
+                guard let recoverySnapshot = input.anchoredRecoverySnapshot else {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: noteID))
+                }
+                do {
+                    switch try SyncConvergenceAnchoredBatchPlanner().plan(
+                        indexedChanges: indexedChanges,
+                        batch: input.incomingBatch,
+                        expectedSnapshot: expectedSnapshot,
+                        recoverySnapshot: recoverySnapshot
+                    ) {
+                    case .success(let anchoredPlan):
+                        let current = noteStates[noteID]
+                        noteStates[noteID] = .init(
+                            noteID: noteID,
+                            folderID: current?.folderID,
+                            title: current?.title ?? "",
+                            body: anchoredPlan.finalBody,
+                            createdAt: current?.createdAt ?? input.incomingBatch.createdAt,
+                            modifiedAt: anchoredPlan.latestModifiedAt
+                        )
+                        notePlans[noteID, default: PartialNotePlan(noteID: noteID)].bodyEffect = .anchoredStructural(anchoredPlan)
+                        operationIdentities.append(contentsOf: anchoredPlan.operationIdentities)
+                        resultEvidence.append(anchoredPlan.resultEvidence)
+                        let routing: SyncConvergencePresentationRouting =
+                            anchoredPlan.finalBody == expectedSnapshot.body
+                                ? .none
+                                : .structuralRefresh
+                        routings[noteID] = routing
+                    case .deferred(let deferred): return .anchoredDeferred(deferred)
+                    case .quarantined(let quarantined): return .anchoredQuarantined(quarantined)
+                    }
+                } catch { return .failedBeforeCommit(.invalidMergePlan(noteID: noteID)) }
 
             case .noteBodyReconciled:
                 break
@@ -772,6 +840,8 @@ struct CanonicalPayloadDigestFormatV1 {
         static let delete: UInt32 = 0x00000004
         static let reconciliation: UInt32 = 0x00000005
         static let lifecycle: UInt32 = 0x00000006
+        static let anchoredInsert: UInt32 = 0x00000007
+        static let anchoredDelete: UInt32 = 0x00000008
         static let committedResultSchemaVersion: UInt32 = 0x00000001
         static let committedBodyResult: UInt32 = 0x00000001
         static let committedTitleResult: UInt32 = 0x00000002
@@ -820,10 +890,12 @@ struct CanonicalPayloadDigestFormatV1 {
                 appendOptionalString(delete.expectedText)
                 appendOptionalString(delete.baseContentHash)
                 appendUInt64(SyncConvergenceDateBits.bitPattern(for: delete.modifiedAt))
-            case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
-                throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload(
-                    "anchoredBodyOperation"
-                )
+            case .noteBodyTextInsertedAnchored(let anchoredInsert):
+                appendUInt32(Domain.anchoredInsert)
+                appendString(try SyncConvergenceStableEncoding.encode(anchoredInsert).base64EncodedString())
+            case .noteBodyTextDeletedAnchored(let anchoredDelete):
+                appendUInt32(Domain.anchoredDelete)
+                appendString(try SyncConvergenceStableEncoding.encode(anchoredDelete).base64EncodedString())
             case .noteBodyReconciled(let reconciliation):
                 appendUInt32(Domain.reconciliation)
                 try appendUUID(reconciliation.noteID)
@@ -996,6 +1068,10 @@ struct CanonicalPayloadDigestFormatV1 {
             appendUInt32(0x00000004)
         case "creation":
             appendUInt32(0x00000005)
+        case "anchoredInsert":
+            appendUInt32(0x00000006)
+        case "anchoredDelete":
+            appendUInt32(0x00000007)
         default:
             throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload("operationIdentity.operationKind")
         }
@@ -1150,7 +1226,8 @@ struct SyncConvergenceEvidenceSelector {
                 // must incorporate as its own candidate; splicing part of it out would
                 // be partial incorporation, so it blocks instead.
                 let fullyConsumable = noteIDs.isSubset(of: candidateNoteIDs)
-                    && queued.batch.changes.allSatisfy(\.isBodyTextOperation)
+                    && candidateBatch.changes.filter(\.isBodyTextOperation).allSatisfy(\.isAnchorlessBodyTextOperation)
+                    && queued.batch.changes.allSatisfy(\.isAnchorlessBodyTextOperation)
                 if fullyConsumable {
                     eligibleEvidence.append(queued)
                 } else {
@@ -2207,6 +2284,10 @@ struct SyncConvergencePlanValidator {
                         guard SyncBatchContentHash.sha256Hex(for: bodyPlan.initialBody) == creationEffect.initialBodyHash else {
                             return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                         }
+                    case .anchoredStructural(let bodyPlan):
+                        guard SyncBatchContentHash.sha256Hex(for: bodyPlan.expectedSnapshot.body) == creationEffect.initialBodyHash else {
+                            return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                        }
                     case .reconstructedConflict, .compatibilityNoopMissingNote, nil:
                         break
                     }
@@ -2281,6 +2362,37 @@ struct SyncConvergencePlanValidator {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
                 expectedRetainedAdditions.append(contentsOf: bodyPlan.operations)
+                expectedResultEvidence.append(bodyPlan.resultEvidence)
+            case .anchoredStructural(let bodyPlan):
+                let expectedPreHash = SyncBatchContentHash.sha256Hex(for: bodyPlan.expectedSnapshot.body)
+                let expectedPostHash = SyncBatchContentHash.sha256Hex(for: bodyPlan.finalBody)
+                let expectedRouting: SyncConvergencePresentationRouting =
+                    bodyPlan.finalBody == bodyPlan.expectedSnapshot.body ? .none : .structuralRefresh
+                guard bodyPlan.noteID == notePlan.noteID,
+                      bodyPlan.expectedSnapshot.noteID == notePlan.noteID,
+                      bodyPlan.expectedSnapshot.state.visibleText == bodyPlan.expectedSnapshot.body,
+                      bodyPlan.finalState.visibleText == bodyPlan.finalBody,
+                      bodyPlan.resultEvidence.kind == .body,
+                      bodyPlan.resultEvidence.noteID == notePlan.noteID,
+                      bodyPlan.resultEvidence.batchID == plan.batchID,
+                      bodyPlan.resultEvidence.preHash == expectedPreHash,
+                      bodyPlan.resultEvidence.postHash == expectedPostHash,
+                      routing == expectedRouting || (lifecycleAppliesDelete && routing == .noteRemoved),
+                      !bodyPlan.operationIdentities.isEmpty,
+                      bodyPlan.operationIdentities.allSatisfy({ plannedIdentityKeys.contains($0.planIdentityKey) }) else {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+                if bodyPlan.didChangeApplicationState {
+                    guard bodyPlan.reviewedNoApplicationChangeReason == nil,
+                          bodyPlan.finalState != bodyPlan.expectedSnapshot.state else {
+                        return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                    }
+                } else {
+                    guard bodyPlan.finalState == bodyPlan.expectedSnapshot.state,
+                          bodyPlan.reviewedNoApplicationChangeReason != nil else {
+                        return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                    }
+                }
                 expectedResultEvidence.append(bodyPlan.resultEvidence)
             case .compatibilityNoopMissingNote(let bodyPlan):
                 guard bodyPlan.noteID == notePlan.noteID,
@@ -2619,11 +2731,18 @@ private extension SyncBatchChange {
 
     var isBodyTextOperation: Bool {
         switch self {
-        case .noteBodyTextInserted, .noteBodyTextDeleted:
+        case .noteBodyTextInserted, .noteBodyTextDeleted,
+             .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
             return true
-        case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
-             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
             return false
+        }
+    }
+
+    var isAnchorlessBodyTextOperation: Bool {
+        switch self {
+        case .noteBodyTextInserted, .noteBodyTextDeleted: return true
+        default: return false
         }
     }
 
@@ -3010,6 +3129,12 @@ struct SyncConvergenceIncorporationExecutor {
             guard currentBody == plan.initialBody else {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
             }
+        case .anchoredStructural(let plan):
+            let currentBody = try requiredAuthoritativePreBody(current: current, creationEffect: creationEffect, noteID: plan.noteID)
+            guard currentBody == plan.expectedSnapshot.body,
+                  SyncBatchContentHash.sha256Hex(for: currentBody) == plan.resultEvidence.preHash else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
+            }
         case .compatibilityNoopMissingNote(let plan):
             guard current == nil else {
                 throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
@@ -3146,13 +3271,26 @@ struct SyncConvergenceIncorporationExecutor {
             } else {
                 nil
             }
-            try transaction.updateNote(SyncConvergenceUpdatedNoteRecord(
-                noteID: plan.noteID,
-                title: plan.plannedResultingTitle ?? currentTitle,
-                body: plan.plannedFinalBody ?? currentBody,
-                modifiedAt: plan.plannedModifiedAt ?? current?.modifiedAt ?? Date(timeIntervalSinceReferenceDate: 0),
-                deletedAt: lifecycleDeletedAt
-            ))
+            if case .anchoredStructural(let anchored) = plan.bodyEffect {
+                try transaction.updateAnchoredNote(SyncConvergenceAnchoredUpdatedNoteRecord(
+                    noteID: plan.noteID,
+                    title: plan.plannedResultingTitle ?? currentTitle,
+                    modifiedAt: plan.plannedModifiedAt ?? current?.modifiedAt ?? Date(timeIntervalSinceReferenceDate: 0),
+                    deletedAt: lifecycleDeletedAt,
+                    expectedSnapshot: anchored.expectedSnapshot,
+                    finalState: anchored.finalState,
+                    finalBody: anchored.finalBody,
+                    didChangeApplicationState: anchored.didChangeApplicationState
+                ))
+            } else {
+                try transaction.updateNote(SyncConvergenceUpdatedNoteRecord(
+                    noteID: plan.noteID,
+                    title: plan.plannedResultingTitle ?? currentTitle,
+                    body: plan.plannedFinalBody ?? currentBody,
+                    modifiedAt: plan.plannedModifiedAt ?? current?.modifiedAt ?? Date(timeIntervalSinceReferenceDate: 0),
+                    deletedAt: lifecycleDeletedAt
+                ))
+            }
         }
     }
 
@@ -3323,20 +3461,23 @@ struct SyncConvergenceIncorporationExecutor {
                 resultEvidence: resultEvidence
             )
             let affectedNotesPayload = try SyncConvergenceAffectedNotesPayloadV1(noteIDs: affectedNoteIDs).encodedData()
-            let postCommitState = SyncConvergencePostCommitState(
-                queueCleanupPending: input.plan.cleanupPlan.retryQueueCleanup || !input.plan.cleanupPlan.batchIDs.isEmpty,
-                legacyCleanupPending: input.plan.cleanupPlan.retryLegacyCleanup,
-                presentationRefreshPending: !input.plan.presentationPlan.noteRoutings.isEmpty
-            )
             let postCommitWorkPayload: SyncConvergencePostCommitWorkPayloadV1
             do {
                 postCommitWorkPayload = try Self.makePostCommitWorkPayload(input: input)
             } catch let error as PostCommitPayloadConstructionError {
                 throw ExecutorFailure(error.transactionFailure)
             }
-            guard postCommitWorkPayload.derivedInitialState() == postCommitState else {
-                throw ExecutorFailure(.invalidMergePlan(noteID: nil))
-            }
+            let anchoredRecoveryTransitions = Self.anchoredRecoveryTransitions(input: input)
+            let decodedPostCommitWork = SyncConvergenceVersionedPostCommitWorkPayload.Decoded(
+                legacyWorkPayload: postCommitWorkPayload,
+                anchoredRecoveryTransitions: anchoredRecoveryTransitions
+            )
+            let postCommitState = decodedPostCommitWork.derivedInitialState()
+            let postCommitWorkPayloadData = try SyncConvergenceVersionedPostCommitWorkPayload
+                .encodedPayloadData(
+                    legacyWorkPayload: postCommitWorkPayload,
+                    anchoredRecoveryTransitions: anchoredRecoveryTransitions
+                )
             let committedResultDigest = try CanonicalCommittedResultDigestPayloadV1.digest(
                 plan: input.plan,
                 sourceBatch: input.sourceBatch
@@ -3360,7 +3501,7 @@ struct SyncConvergenceIncorporationExecutor {
                 authoritativeChildCount: childProjection.count,
                 authoritativeChildBytes: childBytes,
                 authoritativeChildrenDigest: childrenDigest,
-                postCommitWorkPayloadData: try postCommitWorkPayload.encodedPayloadData(),
+                postCommitWorkPayloadData: postCommitWorkPayloadData,
                 postCommitStatePayloadData: try postCommitState.encodedPayloadData(),
                 hasPendingPostCommitWork: postCommitState.hasPendingWork
             )
@@ -3400,6 +3541,18 @@ struct SyncConvergenceIncorporationExecutor {
                 noteEffects: expectedNoteEffects.sorted { $0.noteID.uuidString < $1.noteID.uuidString },
                 resultEvidence: children.resultEvidence.sorted(by: { resultEvidenceOrder($0.evidence, $1.evidence) })
             )
+        }
+
+        static func anchoredRecoveryTransitions(
+            input: ValidatedSyncConvergenceIncorporationInput
+        ) -> [SyncBatchAnchoredRecoveryStoreTransition] {
+            input.plan.affectedNotePlans.flatMap {
+                notePlan -> [SyncBatchAnchoredRecoveryStoreTransition] in
+                guard case .anchoredStructural(let anchored) = notePlan.bodyEffect else {
+                    return []
+                }
+                return anchored.recoveryTransitions
+            }
         }
 
         static func makePostCommitWorkPayload(
@@ -3782,6 +3935,8 @@ private extension SyncConvergenceNotePlan {
             return plan.finalBody
         case .legacyPositional(let plan):
             return plan.finalBody
+        case .anchoredStructural(let plan):
+            return plan.finalBody
         case .compatibilityNoopMissingNote, .none:
             return nil
         }
@@ -3795,6 +3950,8 @@ private extension SyncConvergenceNotePlan {
             return plan.finalBodyHash
         case .legacyPositional(let plan):
             return plan.finalBodyHash
+        case .anchoredStructural(let plan):
+            return SyncBatchContentHash.sha256Hex(for: plan.finalBody)
         case .compatibilityNoopMissingNote, .none:
             return nil
         }
@@ -3822,6 +3979,8 @@ private extension SyncConvergenceNotePlan {
             return plan.retainedOperationAdditions.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
         case .legacyPositional(let plan):
             return plan.operations.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
+        case .anchoredStructural(let plan):
+            return plan.latestModifiedAt
         case .compatibilityNoopMissingNote, .none:
             return nil
         }
@@ -3861,6 +4020,8 @@ private extension SyncConvergenceBodyEffect? {
             return (plan.projectedPreMergeCurrentHash, plan.finalBodyHash)
         case .legacyPositional(let plan):
             return (SyncBatchContentHash.sha256Hex(for: plan.initialBody), plan.finalBodyHash)
+        case .anchoredStructural(let plan):
+            return (SyncBatchContentHash.sha256Hex(for: plan.expectedSnapshot.body), SyncBatchContentHash.sha256Hex(for: plan.finalBody))
         case .compatibilityNoopMissingNote, .none:
             return nil
         }
@@ -3890,6 +4051,13 @@ private extension SyncConvergenceBodyEffect {
                 preHash: SyncBatchContentHash.sha256Hex(for: plan.initialBody),
                 finalBodyHash: plan.finalBodyHash,
                 identities: plan.operations.map(\.operationIdentity)
+            )
+        case .anchoredStructural(let plan):
+            return .body(
+                noteID: noteID,
+                preHash: SyncBatchContentHash.sha256Hex(for: plan.expectedSnapshot.body),
+                finalBodyHash: SyncBatchContentHash.sha256Hex(for: plan.finalBody),
+                identities: plan.operationIdentities
             )
         case .compatibilityNoopMissingNote:
             return nil
@@ -3972,6 +4140,8 @@ private extension SyncConvergenceNotePlan {
             return plan.finalBodyHash
         case .legacyPositional(let plan):
             return plan.finalBodyHash
+        case .anchoredStructural(let plan):
+            return SyncBatchContentHash.sha256Hex(for: plan.finalBody)
         case .compatibilityNoopMissingNote:
             throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
         case nil:
@@ -3993,6 +4163,11 @@ private extension SyncConvergenceNotePlan {
         switch routing {
         case .none, .noteRemoved:
             return nil
+        case .structuralRefresh:
+            guard case .anchoredStructural(let plan) = bodyEffect else {
+                throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+            }
+            return SyncBatchContentHash.sha256Hex(for: plan.expectedSnapshot.body)
         case .incremental:
             switch bodyEffect {
             case .matchingBaseIncremental(let plan):
@@ -4084,6 +4259,8 @@ private extension SyncConvergenceBodyEffect {
             return plan.orderedOperationIdentities.contains { $0.canonicalReplayKey == key }
         case .legacyPositional(let plan):
             return plan.operations.contains { $0.operationIdentity.canonicalReplayKey == key }
+        case .anchoredStructural(let plan):
+            return plan.operationIdentities.contains { $0.canonicalReplayKey == key }
         case .compatibilityNoopMissingNote(let plan):
             return plan.operationIdentities.contains { $0.canonicalReplayKey == key }
         }

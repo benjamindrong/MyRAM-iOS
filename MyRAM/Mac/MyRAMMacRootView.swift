@@ -768,7 +768,7 @@ struct MyRAMMacRootView: View {
         let adapter = MacNotePersistenceAdapter()
         let prepared: MacPreparedLocalNoteEdit
         do {
-            prepared = try adapter.prepareLocalNoteEdit(
+            prepared = try await adapter.prepareProductionLocalNoteEdit(
                 noteID: attempt.noteID,
                 proposedAttributedContent: attempt.attributedContent
             )

@@ -301,6 +301,61 @@ final class FileBackedSyncBatchAnchoredRecoveryStore {
   }
 }
 
+
+extension FileBackedSyncBatchAnchoredRecoveryStore: SyncConvergenceAnchoredRecoveryAdapter {
+  func applyAnchoredRecoveryTransitions(
+    _ transitions: [SyncBatchAnchoredRecoveryStoreTransition]
+  ) -> SyncConvergencePostCommitAdapterResult {
+    guard !transitions.isEmpty else { return .verifiedComplete }
+
+    do {
+      let current = snapshot()
+      guard current.health.permitsOrdinaryMutation else { return .failed }
+
+      var unapplied: [SyncBatchAnchoredRecoveryStoreTransition] = []
+      for transition in transitions {
+        let record = current.record(for: transition.key)
+        switch transition {
+        case .insertExpectedAbsent(let proposed):
+          if record == proposed { continue }
+          guard record == nil else { return .failed }
+          unapplied.append(transition)
+        case .replace(let expected, let replacement):
+          if record == replacement { continue }
+          guard record == expected else { return .failed }
+          unapplied.append(transition)
+        case .removeCommitted(let expected):
+          if record == nil { continue }
+          guard record == expected else { return .failed }
+          unapplied.append(transition)
+        }
+      }
+
+      if !unapplied.isEmpty {
+        _ = try apply(unapplied)
+      }
+
+      let verified = snapshot()
+      guard verified.health.permitsOrdinaryMutation else { return .failed }
+      for transition in transitions {
+        let record = verified.record(for: transition.key)
+        switch transition {
+        case .insertExpectedAbsent(let proposed):
+          guard record == proposed else { return .failed }
+        case .replace(_, let replacement):
+          guard record == replacement else { return .failed }
+        case .removeCommitted:
+          guard record == nil else { return .failed }
+        }
+      }
+      return .verifiedComplete
+    } catch {
+      return .failed
+    }
+  }
+}
+
+
 private struct PersistedSyncBatchAnchoredRecoveryStore: Codable {
   static let currentVersion = 2
 

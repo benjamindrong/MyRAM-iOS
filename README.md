@@ -1,6 +1,5 @@
 # MyRAM
 
-[![Heavy Verification (Trusted Self-Hosted Mac)](https://github.com/benjamindrong/MyRAM-iOS/actions/workflows/heavy-verification.yml/badge.svg)](https://github.com/benjamindrong/MyRAM-iOS/actions/workflows/heavy-verification.yml)
 [![PR verification](https://github.com/benjamindrong/MyRAM-iOS/actions/workflows/pr-verification.yml/badge.svg)](https://github.com/benjamindrong/MyRAM-iOS/actions/workflows/pr-verification.yml)
 
 MyRAM gives scattered thoughts, notes, screenshots, and copied text a place to land until you are ready to organize them.

@@ -274,6 +274,10 @@
 		C1700100000000000000000C /* MYR170MacFullBodyPathIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */; };
 		C1700100000000000000000D /* MacStartupCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C1700200000000000000000A /* MacStartupCoordinatorTests.swift */; };
 		C17101000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */; };
+		C17901000000000000000001 /* SyncBatchAnchoredLocalCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17902000000000000000001 /* SyncBatchAnchoredLocalCapture.swift */; };
+		C17901000000000000000002 /* SyncBatchAnchoredLocalCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17902000000000000000001 /* SyncBatchAnchoredLocalCapture.swift */; };
+		C17901000000000000000003 /* SyncBatchAnchoredActivationPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17902000000000000000002 /* SyncBatchAnchoredActivationPlanner.swift */; };
+		C17901000000000000000004 /* SyncBatchAnchoredActivationPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17902000000000000000002 /* SyncBatchAnchoredActivationPlanner.swift */; };
 		C17401000000000000000001 /* SyncBatchEnvelopeV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17402000000000000000001 /* SyncBatchEnvelopeV2Tests.swift */; };
 		C17401000000000000000002 /* SyncBatchEnvelopeV2Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17402000000000000000002 /* SyncBatchEnvelopeV2Tests.swift */; };
 		C17421000000000000000001 /* SyncBatchPeerCapability.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17422000000000000000001 /* SyncBatchPeerCapability.swift */; };
@@ -307,6 +311,7 @@
 		D19501000000000000000004 /* MarkdownFileIOTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000002 /* MarkdownFileIOTests.swift */; };
 		D19501000000000000000005 /* NoteEditorFileOperationBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */; };
 		D19501000000000000000006 /* MarkdownFileOperationBoundaryTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000004 /* MarkdownFileOperationBoundaryTests.swift */; };
+		D17901000000000000000179 /* NoteEditorLifecyclePersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D17902000000000000000179 /* NoteEditorLifecyclePersistenceTests.swift */; };
 		D19501000000000000000007 /* MarkdownImportIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000005 /* MarkdownImportIntegrationTests.swift */; };
 		D19501000000000000000008 /* MacMarkdownFileCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000006 /* MacMarkdownFileCommands.swift */; };
 		D19501000000000000000009 /* MacMarkdownFileOperationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = D19502000000000000000007 /* MacMarkdownFileOperationCoordinator.swift */; };
@@ -609,6 +614,8 @@
 		C17002000000000000000009 /* MYR170MacFullBodyPathIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR170MacFullBodyPathIntegrationTests.swift; sourceTree = "<group>"; };
 		C1700200000000000000000A /* MacStartupCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStartupCoordinatorTests.swift; sourceTree = "<group>"; };
 		C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadAdapter.swift; sourceTree = "<group>"; };
+		C17902000000000000000001 /* SyncBatchAnchoredLocalCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredLocalCapture.swift; sourceTree = "<group>"; };
+		C17902000000000000000002 /* SyncBatchAnchoredActivationPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredActivationPlanner.swift; sourceTree = "<group>"; };
 		C17102000000000000000002 /* SyncBatchAnchoredPayloadPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadPolicy.swift; sourceTree = "<group>"; };
 		C17102000000000000000003 /* SyncBatchAnchoredPayloadTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchAnchoredPayloadTests.swift; sourceTree = "<group>"; };
 		C17402000000000000000001 /* SyncBatchEnvelopeV2Tests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SyncBatchEnvelopeV2Tests.swift; sourceTree = "<group>"; };
@@ -632,6 +639,7 @@
 		D19502000000000000000002 /* MarkdownFileIOTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileIOTests.swift; sourceTree = "<group>"; };
 		D19502000000000000000003 /* NoteEditorFileOperationBridge.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditorFileOperationBridge.swift; sourceTree = "<group>"; };
 		D19502000000000000000004 /* MarkdownFileOperationBoundaryTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownFileOperationBoundaryTests.swift; sourceTree = "<group>"; };
+		D17902000000000000000179 /* NoteEditorLifecyclePersistenceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteEditorLifecyclePersistenceTests.swift; sourceTree = "<group>"; };
 		D19502000000000000000005 /* MarkdownImportIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MarkdownImportIntegrationTests.swift; sourceTree = "<group>"; };
 		D19502000000000000000006 /* MacMarkdownFileCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownFileCommands.swift; sourceTree = "<group>"; };
 		D19502000000000000000007 /* MacMarkdownFileOperationCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacMarkdownFileOperationCoordinator.swift; sourceTree = "<group>"; };
@@ -844,6 +852,7 @@
 				F19702000000000000000005 /* MyRAMWidgetHostTests.swift */,
 				D19502000000000000000002 /* MarkdownFileIOTests.swift */,
 				D19502000000000000000004 /* MarkdownFileOperationBoundaryTests.swift */,
+				D17902000000000000000179 /* NoteEditorLifecyclePersistenceTests.swift */,
 				D19502000000000000000005 /* MarkdownImportIntegrationTests.swift */,
 				D1950200000000000000000A /* MarkdownPreviewParserTests.swift */,
 				D1950200000000000000000B /* MarkdownPreviewIntegrationTests.swift */,
@@ -999,6 +1008,8 @@
 			children = (
 				BCA123020000000000000001 /* SyncBatchPayload.swift */,
 				C17102000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift */,
+				C17902000000000000000001 /* SyncBatchAnchoredLocalCapture.swift */,
+				C17902000000000000000002 /* SyncBatchAnchoredActivationPlanner.swift */,
 				C17502000000000000000001 /* SyncBatchAnchoredInsertReplay.swift */,
 				C17702000000000000000001 /* SyncBatchAnchoredRecoveryTypes.swift */,
 				C17702000000000000000002 /* FileBackedSyncBatchAnchoredRecoveryStore.swift */,
@@ -1555,6 +1566,8 @@
 				BCA164010000000000000001 /* AttributedTextStorageKeys.swift in Sources */,
 				BCA123010000000000000001 /* SyncBatchPayload.swift in Sources */,
 				C17101000000000000000001 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
+				C17901000000000000000001 /* SyncBatchAnchoredLocalCapture.swift in Sources */,
+				C17901000000000000000003 /* SyncBatchAnchoredActivationPlanner.swift in Sources */,
 				C17501000000000000000001 /* SyncBatchAnchoredInsertReplay.swift in Sources */,
 				C17701000000000000000001 /* SyncBatchAnchoredRecoveryTypes.swift in Sources */,
 				C17701000000000000000003 /* FileBackedSyncBatchAnchoredRecoveryStore.swift in Sources */,
@@ -1657,6 +1670,7 @@
 				F19701000000000000000009 /* MyRAMWidgetHostTests.swift in Sources */,
 				D19501000000000000000003 /* MarkdownFileIOTests.swift in Sources */,
 				D19501000000000000000006 /* MarkdownFileOperationBoundaryTests.swift in Sources */,
+				D17901000000000000000179 /* NoteEditorLifecyclePersistenceTests.swift in Sources */,
 				D19501000000000000000007 /* MarkdownImportIntegrationTests.swift in Sources */,
 				D1950100000000000000000D /* MarkdownPreviewParserTests.swift in Sources */,
 				D1950100000000000000000F /* MarkdownPreviewIntegrationTests.swift in Sources */,
@@ -1761,6 +1775,8 @@
 				BCA10A010000000000000001 /* MacSidebarCollapsePolicy.swift in Sources */,
 				BCA123010000000000000006 /* SyncBatchPayload.swift in Sources */,
 				C17101000000000000000002 /* SyncBatchAnchoredPayloadAdapter.swift in Sources */,
+				C17901000000000000000002 /* SyncBatchAnchoredLocalCapture.swift in Sources */,
+				C17901000000000000000004 /* SyncBatchAnchoredActivationPlanner.swift in Sources */,
 				C17501000000000000000002 /* SyncBatchAnchoredInsertReplay.swift in Sources */,
 				C17701000000000000000002 /* SyncBatchAnchoredRecoveryTypes.swift in Sources */,
 				C17701000000000000000004 /* FileBackedSyncBatchAnchoredRecoveryStore.swift in Sources */,

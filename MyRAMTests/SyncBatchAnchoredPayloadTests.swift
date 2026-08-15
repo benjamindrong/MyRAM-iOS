@@ -8,6 +8,58 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
     private let deviceID = UUID(uuidString: "17100000-0000-0000-0000-000000000002")!
     private let modifiedAt = Date(timeIntervalSince1970: 1_710)
 
+    func testMYR179FailureFirstAnchoredCapturedEvidenceIsAcceptedWithoutOffsetReplay() throws {
+        let initial = try state(text: "AB")
+        let change = try inserted(offset: 1, text: "x", state: initial, counter: 179)
+        let final = try SyncBatchAnchoredInsertReplay.applying(
+            insertValue(change),
+            to: initial
+        ).sequenceState
+
+        let captured = try SyncConvergenceLocalEvidenceCapture.capturedAnchoredChange(
+            for: change,
+            structuralPreState: initial,
+            structuralPostState: final
+        )
+
+        XCTAssertTrue(SyncConvergenceLocalEvidenceCapture.isBodyTextOperation(captured.change))
+        XCTAssertEqual(captured.evidence?.preBodySnapshot, "AB")
+        XCTAssertEqual(captured.evidence?.postBodySnapshot, "AxB")
+    }
+
+    func testMYR179AnchoredLocalCaptureReplacementUsesDistinctDurableIDsAndFinalStructuralState() async throws {
+        let initial = try state(text: "AB")
+        let reserver = MYR179OperationIDReserver(deviceID: deviceID, nextCounter: 500)
+        let result = try await SyncBatchAnchoredLocalCapture.capture(
+            noteID: noteID,
+            oldBody: "AB",
+            newBody: "AxyB",
+            modifiedAt: modifiedAt,
+            initialState: initial,
+            operationIDReserver: reserver
+        )
+
+        XCTAssertEqual(result.finalState.visibleText, "AxyB")
+        XCTAssertEqual(result.capturedChanges.count, 1)
+        XCTAssertTrue(result.capturedChanges.allSatisfy {
+            $0.change.bodyOperationRepresentation == .anchored
+        })
+        let reservationCount = await reserver.reservationCount
+        XCTAssertEqual(reservationCount, result.capturedChanges.count)
+    }
+
+    func testMYR179ProductionConvergenceWrapperStaysDarkWhileSharedCoreIsFutureEnabled() throws {
+        let batch = makeBatch(changes: [
+            try inserted(offset: 0, text: "A", state: state(text: ""), counter: 180)
+        ])
+        XCTAssertThrowsError(try SyncBatchAnchoredPayloadPolicy.validateConvergence(batch))
+        XCTAssertNoThrow(try SyncBatchAnchoredPayloadPolicy.validateConvergenceCore(
+            batch,
+            activationEnabled: true
+        ))
+        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+    }
+
     func testInsertProducesAllBoundaryAnchorsAndPreservesEvidence() throws {
         let empty = try state(text: "")
         let value = try state(text: "AB")
@@ -671,6 +723,25 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
         XCTAssertThrowsError(try action()) {
             XCTAssertEqual($0 as? SyncBatchAnchoredPayloadPolicyError, expected)
         }
+    }
+}
+
+private actor MYR179OperationIDReserver: SyncOperationIDReserving {
+    let deviceID: UUID
+    var nextCounter: UInt64
+    private(set) var reservationCount = 0
+
+    init(deviceID: UUID, nextCounter: UInt64) {
+        self.deviceID = deviceID
+        self.nextCounter = nextCounter
+    }
+
+    func reserveOperationID() async throws -> SyncOperationID {
+        defer {
+            nextCounter += 1
+            reservationCount += 1
+        }
+        return SyncOperationID(deviceID: deviceID, localCounter: nextCounter)
     }
 }
 

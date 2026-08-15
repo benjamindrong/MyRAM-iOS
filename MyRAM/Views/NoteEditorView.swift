@@ -17,6 +17,10 @@ enum NativeUndoCompletionResume {
     }
 }
 
+private enum NoteEditorAsyncCommitError: Error {
+    case persistenceFailed
+}
+
 struct NoteEditorView: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.dismiss) private var dismiss
@@ -233,7 +237,7 @@ struct NoteEditorView: View {
                 vm.registerActiveEditor(noteID: note.id)
                 initializeEditor()
                 fileOperationBridge?.register(noteID: note.id) {
-                    flushPendingNoteEditForFileOperation()
+                    await flushPendingNoteEditForFileOperation()
                 }
             }
             .onChange(of: title) { _, newTitle in
@@ -258,8 +262,10 @@ struct NoteEditorView: View {
             .onChange(of: scenePhase) { _, newPhase in
                 if newPhase != .active {
                     commitActivePinnedThoughtEdit()
-                    commitPendingNoteEdit()
+                    _ = transferPendingNoteEditToLifecycleOwner()
                     dismissCurrentNoteSearchKeyboard()
+                } else {
+                    vm.retryAllEditorLifecyclePersistence()
                 }
             }
             .onDisappear {
@@ -268,9 +274,11 @@ struct NoteEditorView: View {
                 markdownEditorMode = .edit
                 clearCurrentNoteSearch()
                 commitActivePinnedThoughtEdit()
-                commitPendingNoteEdit()
-                fileOperationBridge?.unregister(noteID: note.id)
-                vm.unregisterActiveEditor(noteID: note.id)
+                let lifecycleOwnershipAccepted = transferPendingNoteEditToLifecycleOwner()
+                if lifecycleOwnershipAccepted {
+                    fileOperationBridge?.unregister(noteID: note.id)
+                    vm.unregisterActiveEditor(noteID: note.id)
+                }
             }
             .onChange(of: note.id) { _, newID in
                 pendingPreviewFocusRequest = nil
@@ -348,7 +356,9 @@ struct NoteEditorView: View {
                     resetAvailability: .available,
                     prepareEditorState: {
                         commitActivePinnedThoughtEdit()
-                        commitPendingNoteEdit()
+                        guard await commitPendingNoteEdit() else {
+                            throw NoteEditorAsyncCommitError.persistenceFailed
+                        }
                     }
                 )
                 .navigationTitle("Nearby Sync")
@@ -1065,9 +1075,11 @@ struct NoteEditorView: View {
         toolbarBridge?.redo = { performRedo() }
         toolbarBridge?.newNote = {
             commitActivePinnedThoughtEdit()
-            commitPendingNoteEdit()
-            if let newNote = vm.createNewNote() {
-                onNewNote(newNote)
+            Task { @MainActor in
+                guard await commitPendingNoteEdit() else { return }
+                if let newNote = vm.createNewNote() {
+                    onNewNote(newNote)
+                }
             }
         }
         toolbarBridge?.newFolder = {
@@ -1076,8 +1088,10 @@ struct NoteEditorView: View {
         }
         toolbarBridge?.exportNote = {
             commitActivePinnedThoughtEdit()
-            commitPendingNoteEdit()
-            exportCurrentNote()
+            Task { @MainActor in
+                guard await commitPendingNoteEdit() else { return }
+                exportCurrentNote()
+            }
         }
         toolbarBridge?.exportMarkdown = {
             prepareMarkdownExport()
@@ -1337,9 +1351,11 @@ struct NoteEditorView: View {
         case .newNote:
             topBarActionButton(systemImage: "square.and.pencil", identifier: "topbar-new-note") {
                 commitActivePinnedThoughtEdit()
-                commitPendingNoteEdit()
-                if let newNote = vm.createNewNote() {
-                    onNewNote(newNote)
+                Task { @MainActor in
+                    guard await commitPendingNoteEdit() else { return }
+                    if let newNote = vm.createNewNote() {
+                        onNewNote(newNote)
+                    }
                 }
             }
         case .newFolder:
@@ -1350,8 +1366,10 @@ struct NoteEditorView: View {
         case .exportNote:
             topBarActionButton(systemImage: "square.and.arrow.up", identifier: "topbar-export-note") {
                 commitActivePinnedThoughtEdit()
-                commitPendingNoteEdit()
-                exportCurrentNote()
+                Task { @MainActor in
+                    guard await commitPendingNoteEdit() else { return }
+                    exportCurrentNote()
+                }
             }
         case .exportMarkdown:
             topBarActionButton(systemImage: "doc.badge.arrow.up", identifier: "topbar-export-markdown") {
@@ -1434,12 +1452,10 @@ struct NoteEditorView: View {
     private func scheduleNoteCommit() {
         hasPendingNoteCommit = true
         pendingNoteCommitTask?.cancel()
-        pendingNoteCommitTask = Task {
+        pendingNoteCommitTask = Task { @MainActor in
             try? await Task.sleep(nanoseconds: EditorTimingPolicy.commitDelayNanoseconds)
             guard !Task.isCancelled else { return }
-            await MainActor.run {
-                _ = commitPendingNoteEdit()
-            }
+            _ = await commitPendingNoteEdit()
         }
     }
 
@@ -1450,7 +1466,7 @@ struct NoteEditorView: View {
     }
 
     @discardableResult
-    private func commitPendingNoteEdit() -> Bool {
+    private func transferPendingNoteEditToLifecycleOwner() -> Bool {
         guard hasPendingNoteCommit else { return true }
         pendingNoteCommitTask?.cancel()
         pendingNoteCommitTask = nil
@@ -1460,7 +1476,40 @@ struct NoteEditorView: View {
         )
         pendingRichTextContentEncoder = nil
         richTextContentData = committedRichTextContentData
-        guard vm.commitNoteEdit(
+        let accepted = vm.acceptEditorLifecycleSnapshot(
+            note,
+            title: title,
+            content: content,
+            richTextContentData: committedRichTextContentData,
+            generation: UUID()
+        )
+        guard accepted else { return false }
+        hasPendingNoteCommit = false
+        if editorBufferOwner == .localEditing {
+            editorBufferOwner = .idle
+        }
+        lastSnapshot = currentNoteSnapshot()
+        if !SyncBatchAnchoredPayloadCapability.isEnabled {
+            fileOperationBridge?.notifyPersistenceSucceeded(noteID: note.id)
+        }
+        return true
+    }
+
+    @discardableResult
+    private func commitPendingNoteEdit() async -> Bool {
+        guard await vm.awaitEditorLifecyclePersistence(noteID: note.id) else {
+            return false
+        }
+        guard hasPendingNoteCommit else { return true }
+        pendingNoteCommitTask?.cancel()
+        pendingNoteCommitTask = nil
+        let committedRichTextContentData = EditorRichTextCommitPolicy.committedRichTextContentData(
+            currentData: richTextContentData,
+            pendingEncoder: pendingRichTextContentEncoder
+        )
+        pendingRichTextContentEncoder = nil
+        richTextContentData = committedRichTextContentData
+        guard await vm.commitNoteEditForProduction(
             note,
             title: title,
             content: content,
@@ -1481,8 +1530,8 @@ struct NoteEditorView: View {
         return true
     }
 
-    private func flushPendingNoteEditForFileOperation() -> EditorLocalFlushOutcome {
-        guard commitPendingNoteEdit() else {
+    private func flushPendingNoteEditForFileOperation() async -> EditorLocalFlushOutcome {
+        guard await commitPendingNoteEdit() else {
             return .failed(message: "Unable to save the current note.")
         }
         return .succeeded
@@ -1760,15 +1809,19 @@ struct NoteEditorView: View {
         restorePinnedThoughts(snapshot.pinnedThoughts)
         lastSnapshot = snapshot
         cancelPendingNoteCommit()
-        vm.commitNoteEdit(
-            note,
-            title: snapshot.title,
-            content: snapshot.content,
-            richTextContentData: snapshot.richTextContentData
-        )
-        vm.recordNoteEdited(note)
-        editorBufferOwner = .idle
-        vm.resumePendingConvergencePresentationIfNeeded()
+        Task { @MainActor in
+            guard await vm.commitNoteEditForProduction(
+                note,
+                title: snapshot.title,
+                content: snapshot.content,
+                richTextContentData: snapshot.richTextContentData
+            ) else {
+                return
+            }
+            vm.recordNoteEdited(note)
+            editorBufferOwner = .idle
+            vm.resumePendingConvergencePresentationIfNeeded()
+        }
     }
 
     private func restorePinnedThoughts(_ snapshots: [PinnedThoughtSnapshot]) {
@@ -2332,9 +2385,10 @@ struct NoteEditorView: View {
     }
 
     private func prepareMarkdownExport() {
-        do {
-            let prepared = try MarkdownExportPreparationCoordinator().prepare(
-                flush: flushPendingNoteEditForFileOperation,
+        Task { @MainActor in
+            do {
+                let prepared = try await MarkdownExportPreparationCoordinator().prepare(
+                    flush: flushPendingNoteEditForFileOperation,
                 snapshot: {
                     (title: title, source: content)
                 }
@@ -2344,6 +2398,7 @@ struct NoteEditorView: View {
             showingMarkdownExporter = true
         } catch {
             markdownExportErrorMessage = "The current note could not be saved before export."
+        }
         }
     }
 
@@ -2360,8 +2415,10 @@ struct NoteEditorView: View {
         case .exportNote:
             Button {
                 commitActivePinnedThoughtEdit()
-                commitPendingNoteEdit()
-                exportCurrentNote()
+                Task { @MainActor in
+                    guard await commitPendingNoteEdit() else { return }
+                    exportCurrentNote()
+                }
             } label: {
                 Label("Export Note", systemImage: "square.and.arrow.up")
             }
@@ -2376,9 +2433,11 @@ struct NoteEditorView: View {
         case .newNote:
             Button {
                 commitActivePinnedThoughtEdit()
-                commitPendingNoteEdit()
-                if let newNote = vm.createNewNote() {
-                    onNewNote(newNote)
+                Task { @MainActor in
+                    guard await commitPendingNoteEdit() else { return }
+                    if let newNote = vm.createNewNote() {
+                        onNewNote(newNote)
+                    }
                 }
             } label: {
                 Label("New Note", systemImage: "square.and.pencil")

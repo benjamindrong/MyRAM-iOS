@@ -15,8 +15,8 @@ struct MyRAMWidgetIOSNoteRouter {
         flushBridge: NoteEditorFileOperationBridge,
         fetchActiveNote: (UUID) -> Note?,
         present: (Note) -> Void
-    ) -> MyRAMWidgetNoteRouteOutcome {
-        switch flushBridge.flushEditor(expected: expectedEditor) {
+    ) async -> MyRAMWidgetNoteRouteOutcome {
+        switch await flushBridge.flushEditor(expected: expectedEditor) {
         case .noActiveEditor, .succeeded:
             break
         case .expectedEditorUnavailable, .editorMismatch, .failed:

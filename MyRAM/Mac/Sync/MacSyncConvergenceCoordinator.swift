@@ -30,7 +30,8 @@ final class MacSyncConvergenceCoordinator {
             localObligationQueue: localObligationQueue,
             localBatchTransportAdapter: syncController,
             presentationAdapter: presentationAdapter,
-            incomingLocalBoundaryAdapter: incomingBoundaryAdapter
+            incomingLocalBoundaryAdapter: incomingBoundaryAdapter,
+            anchoredRecoveryPlatform: .nativeMac
         )
         syncController.convergenceCoordinator = self
     }

@@ -157,6 +157,74 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(candidates.map(\.queuePosition), [0, 1, 2, 3])
     }
 
+    func testDrainPassSchedulerAllowsExactAnchoredDependencyProviderThroughBlock() {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000179301")!
+        let originID = UUID(uuidString: "00000000-0000-0000-0000-000000179302")!
+        let deviceID = UUID(uuidString: "00000000-0000-0000-0000-000000179303")!
+        let dependencyID = SyncOperationID(deviceID: deviceID, localCounter: 41)
+        let blocked = SyncConvergenceQueueCandidate(
+            batchID: UUID(),
+            originDeviceID: originID,
+            affectedNoteIDs: [noteID],
+            queuePosition: 0
+        )
+        let provider = SyncConvergenceQueueCandidate(
+            batchID: UUID(),
+            originDeviceID: originID,
+            affectedNoteIDs: [noteID],
+            queuePosition: 1,
+            anchoredOperationIDs: [dependencyID]
+        )
+
+        let index = SyncConvergenceDrainPassScheduler.nextEligibleIndex(
+            candidates: [blocked, provider],
+            attemptedBatchIDs: [blocked.batchID],
+            blockedNoteIDs: [noteID],
+            blockedOrigins: [originID],
+            anchoredDependenciesByNoteID: [noteID: [dependencyID]]
+        )
+
+        XCTAssertEqual(index, 1)
+    }
+
+    func testDrainPassSchedulerDoesNotBypassBlockForDifferentAnchoredOperation() {
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000179311")!
+        let disjointNoteID = UUID(uuidString: "00000000-0000-0000-0000-000000179312")!
+        let originID = UUID(uuidString: "00000000-0000-0000-0000-000000179313")!
+        let deviceID = UUID(uuidString: "00000000-0000-0000-0000-000000179314")!
+        let dependencyID = SyncOperationID(deviceID: deviceID, localCounter: 51)
+        let unrelatedID = SyncOperationID(deviceID: deviceID, localCounter: 52)
+        let blocked = SyncConvergenceQueueCandidate(
+            batchID: UUID(),
+            originDeviceID: originID,
+            affectedNoteIDs: [noteID],
+            queuePosition: 0
+        )
+        let unrelated = SyncConvergenceQueueCandidate(
+            batchID: UUID(),
+            originDeviceID: originID,
+            affectedNoteIDs: [noteID],
+            queuePosition: 1,
+            anchoredOperationIDs: [unrelatedID]
+        )
+        let disjoint = SyncConvergenceQueueCandidate(
+            batchID: UUID(),
+            originDeviceID: UUID(),
+            affectedNoteIDs: [disjointNoteID],
+            queuePosition: 2
+        )
+
+        let index = SyncConvergenceDrainPassScheduler.nextEligibleIndex(
+            candidates: [blocked, unrelated, disjoint],
+            attemptedBatchIDs: [blocked.batchID],
+            blockedNoteIDs: [noteID],
+            blockedOrigins: [originID],
+            anchoredDependenciesByNoteID: [noteID: [dependencyID]]
+        )
+
+        XCTAssertEqual(index, 2)
+    }
+
     func testFileBackedQueueDeduplicatesByStableBatchID() throws {
         let fileURL = temporaryQueueFileURL()
         let batch = makeBatch(idSuffix: 1)

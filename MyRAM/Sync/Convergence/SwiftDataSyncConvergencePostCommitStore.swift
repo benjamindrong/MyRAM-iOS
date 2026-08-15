@@ -41,8 +41,9 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
                     root: root,
                     postCommitState: state,
                     postCommitStatePayloadData: root.postCommitStatePayloadData,
-                    postCommitWorkPayload: workPayload,
-                    postCommitWorkPayloadData: root.postCommitWorkPayloadData
+                    postCommitWorkPayload: workPayload?.legacyWorkPayload,
+                    postCommitWorkPayloadData: root.postCommitWorkPayloadData,
+                    anchoredRecoveryTransitions: workPayload?.anchoredRecoveryTransitions ?? []
                 ))
             } catch {
                 if let failure = error as? SyncConvergencePostCommitFailure {
@@ -141,31 +142,39 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
         else {
             throw SyncConvergencePostCommitFailure.persistence
         }
+        let decodedWorkPayload = try reloaded.postCommitWorkPayloadData.map(
+            SyncConvergenceVersionedPostCommitWorkPayload.decodePayloadData
+        )
         return SyncConvergencePostCommitFullRootState(
             root: reloaded,
             postCommitState: reloadedState,
             postCommitStatePayloadData: encodedState,
-            postCommitWorkPayload: try reloaded.postCommitWorkPayloadData.map(SyncConvergencePostCommitWorkPayloadV1.decodePayloadData),
-            postCommitWorkPayloadData: reloaded.postCommitWorkPayloadData
+            postCommitWorkPayload: decodedWorkPayload?.legacyWorkPayload,
+            postCommitWorkPayloadData: reloaded.postCommitWorkPayloadData,
+            anchoredRecoveryTransitions: decodedWorkPayload?.anchoredRecoveryTransitions ?? []
         )
     }
 
     private func decodeWorkPayload(
         root: SyncConvergenceIncorporatedRootProjection,
         state: SyncConvergencePostCommitState
-    ) throws -> SyncConvergencePostCommitWorkPayloadV1? {
+    ) throws -> SyncConvergenceVersionedPostCommitWorkPayload.Decoded? {
         guard let data = root.postCommitWorkPayloadData else {
             if state == .none { return nil }
             throw SyncConvergencePostCommitFailure.missingPostCommitWorkPayload(batchID: root.batchID)
         }
         do {
-            let payload = try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(data)
+            let payload = try SyncConvergenceVersionedPostCommitWorkPayload.decodePayloadData(data)
             try payload.validateCurrentState(state)
-            try validateWorkPayload(payload, againstAuthoritativeRowsFor: root)
+            try validateWorkPayload(payload.legacyWorkPayload, againstAuthoritativeRowsFor: root)
             return payload
         } catch let failure as SyncConvergencePostCommitFailure {
             throw failure
         } catch SyncConvergencePostCommitWorkPayloadError.contradictoryState {
+            throw SyncConvergencePostCommitFailure.contradictoryPostCommitWorkPayload(batchID: root.batchID)
+        } catch SyncConvergencePostCommitWorkPayloadError.contradictoryAnchoredRecoveryTransition {
+            throw SyncConvergencePostCommitFailure.contradictoryPostCommitWorkPayload(batchID: root.batchID)
+        } catch SyncConvergencePostCommitWorkPayloadError.duplicateAnchoredRecoveryTransitionKeys {
             throw SyncConvergencePostCommitFailure.contradictoryPostCommitWorkPayload(batchID: root.batchID)
         } catch {
             throw SyncConvergencePostCommitFailure.malformedPostCommitWorkPayload(batchID: root.batchID)
@@ -407,7 +416,8 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
     ) throws -> SyncConvergencePostCommitRequest {
         let workPayload = try decodeWorkPayload(root: root, state: state)
         let noteRoutings = Dictionary(
-            uniqueKeysWithValues: (workPayload?.presentationEntries ?? []).map { ($0.noteID, $0.routing.routing) }
+            uniqueKeysWithValues: (workPayload?.legacyWorkPayload.presentationEntries ?? [])
+                .map { ($0.noteID, $0.routing.routing) }
         )
         return SyncConvergencePostCommitRequest(
             sourceBatchID: root.batchID,
