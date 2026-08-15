@@ -107,6 +107,71 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertEqual(note.richTextContentData, Data("After".utf8))
     }
 
+    func testActivationOffNewerLifecycleSnapshotSupersedesRetainedFailureBeforeRetry() async throws {
+        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR179LifecycleSupersession-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
+        let context = container.mainContext
+        let note = Note(title: "Before", content: "Before")
+        context.insert(note)
+        try context.save()
+        var shouldFailSave = true
+        let viewModel = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveContext: {
+                if shouldFailSave {
+                    throw MYR179LifecycleTestError.injectedSaveFailure
+                }
+                try context.save()
+            }
+        )
+
+        XCTAssertTrue(viewModel.acceptEditorLifecycleSnapshot(
+            note,
+            title: "Older Failed",
+            content: "Older Failed",
+            richTextContentData: Data("Older Failed".utf8),
+            generation: UUID()
+        ))
+        let durableAfterOlderFailure = await viewModel.awaitEditorLifecyclePersistence(noteID: note.id)
+        XCTAssertFalse(durableAfterOlderFailure)
+        XCTAssertEqual(note.title, "Before")
+        XCTAssertEqual(note.content, "Before")
+
+        shouldFailSave = false
+        XCTAssertTrue(viewModel.acceptEditorLifecycleSnapshot(
+            note,
+            title: "Newer",
+            content: "Newer",
+            richTextContentData: Data("Newer".utf8),
+            generation: UUID()
+        ))
+        let durableAfterNewerSnapshot = await viewModel.awaitEditorLifecyclePersistence(noteID: note.id)
+        XCTAssertTrue(durableAfterNewerSnapshot)
+        XCTAssertEqual(note.title, "Newer")
+        XCTAssertEqual(note.content, "Newer")
+        XCTAssertEqual(note.richTextContentData, Data("Newer".utf8))
+
+        viewModel.retryAllEditorLifecyclePersistence()
+        let durableAfterRedundantRetry = await viewModel.awaitEditorLifecyclePersistence(noteID: note.id)
+        XCTAssertTrue(durableAfterRedundantRetry)
+        XCTAssertEqual(note.title, "Newer")
+        XCTAssertEqual(note.content, "Newer")
+    }
+
     func testLifecyclePersistenceOwnershipTransfersBeforeEditorUnregisters() async {
         let noteID = UUID()
         let bridge = NoteEditorFileOperationBridge()
@@ -287,7 +352,7 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertFalse(core.isDrainingForTesting(noteID: noteID))
     }
 
-    func testStaleFailedCompletionCannotDiscardNewerGeneration() async {
+    func testStaleFailedCompletionCannotStrandNewerGeneration() async {
         let noteID = UUID()
         let first = UUID()
         let second = UUID()
@@ -301,14 +366,12 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         core.accept(snapshot(noteID: noteID, generation: second))
 
         persistence.completeNext(success: false)
-        await eventually { !core.isDrainingForTesting(noteID: noteID) }
-        XCTAssertEqual(core.pendingGenerationForTesting(noteID: noteID), second)
-        XCTAssertEqual(persistence.startedGenerations, [first])
-
-        core.retry(noteID: noteID)
         await eventually { persistence.startedGenerations == [first, second] }
+        XCTAssertEqual(core.pendingGenerationForTesting(noteID: noteID), second)
+
         persistence.completeNext(success: true)
         await eventually { core.pendingGenerationForTesting(noteID: noteID) == nil }
+        XCTAssertFalse(core.isDrainingForTesting(noteID: noteID))
     }
 
     func testRetryAllDrainsRetainedFailuresAcrossNotesWithoutActiveSelection() async {

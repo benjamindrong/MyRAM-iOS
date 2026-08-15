@@ -101,6 +101,13 @@ final class NoteEditorLifecyclePersistenceCore {
         startDrainIfNeeded(noteID: snapshot.noteID)
     }
 
+    @discardableResult
+    func acceptIfOwned(_ snapshot: NoteEditorLifecycleSnapshot) -> Bool {
+        guard pendingByNoteID[snapshot.noteID] != nil else { return false }
+        accept(snapshot)
+        return true
+    }
+
     func retry(noteID: UUID) {
         startDrainIfNeeded(noteID: noteID)
     }
@@ -148,7 +155,12 @@ final class NoteEditorLifecyclePersistenceCore {
             }
         }
         while let snapshot = pendingByNoteID[noteID] {
-            guard await persist(snapshot) else { return }
+            guard await persist(snapshot) else {
+                if pendingByNoteID[noteID]?.generation != snapshot.generation {
+                    continue
+                }
+                return
+            }
             didPersist(snapshot)
             if pendingByNoteID[noteID]?.generation == snapshot.generation {
                 pendingByNoteID.removeValue(forKey: noteID)
@@ -827,6 +839,9 @@ final class NotesViewModel: ObservableObject {
             generation: generation
         )
         guard SyncBatchAnchoredPayloadCapability.isEnabled else {
+            if editorLifecyclePersistence.acceptIfOwned(snapshot) {
+                return true
+            }
             let committed = commitNoteEdit(
                 note,
                 title: title,
