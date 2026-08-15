@@ -22,8 +22,9 @@
 7. Follow the required scope, Git safety, verification, severity, evidence, traceability, and readiness standards from the selected workflow.
 8. In MyRAM, call any feature or code named **pinned thought** by the approved term **pinned text**.
 9. MyRAM completion verification ownership:
-    * After the focused implementation gate passes and a stable candidate exists, treat the PR GitHub Actions workflow as the authoritative owner of the broad `MyRAMTests` and `MyRAMMacTests` suites when those lanes are applicable.
-    * Start required independent local-only verification concurrently with CI-owned verification rather than waiting for one environment to finish before starting the other.
-    * Do not duplicate an equivalent CI-owned broad suite locally merely to reproduce completion evidence. Run it locally only for diagnosis, candidate-related remediation, CI unavailability, or an explicit execution contract.
-    * Continue to run any required verification that GitHub Actions does not own or cannot perform reliably, including ticket-specific focused checks, device/manual verification, and other local-only evidence.
-    * If the candidate changes, rerun only the evidence invalidated by that change.
+    * After the focused implementation gate passes and a stable candidate exists, GitHub PR Actions owns automatic `git diff --check` and the broad `MyRAMMacTests` suite when applicable.
+    * Complete iOS application tests, iOS UI tests, iOS Simulator builds, ticket-specific focused iOS selectors, and other simulator/device evidence are local verification owned by the normal development macOS login. Do not require a GitHub self-hosted runner, a dedicated runner macOS account, or user switching as a completion gate.
+    * Start required local iOS verification concurrently with CI-owned verification when both are needed.
+    * Do not rerun equivalent evidence merely because a later candidate changes only documentation, workflow configuration, or other files that cannot affect the already-verified application/test source. Record the source-equivalent candidate identity when reusing evidence.
+    * When a source or test change can invalidate prior local iOS evidence, rerun only the affected focused or broad local verification.
+    * Classify any failed hosted or local verification from observed evidence before modifying source. A red hosted iOS job by itself is not evidence that the candidate is wrong.
