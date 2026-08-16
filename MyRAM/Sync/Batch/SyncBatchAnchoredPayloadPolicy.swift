@@ -1,7 +1,7 @@
 import Foundation
 
 enum SyncBatchAnchoredPayloadCapability {
-    static let isEnabled = false
+    static let isEnabled = true
 }
 
 enum SyncBatchBodyOperationRepresentation: Equatable, Sendable {
@@ -27,7 +27,7 @@ enum SyncBatchAnchoredPayloadPolicyError: Error, Equatable, Sendable {
     case mixedBodyOperationRepresentations(boundary: Boundary)
 }
 
-/// Keeps the Stage 1 capability dark at every side-effecting batch boundary.
+/// Applies the single production anchored-capability state at every side-effecting batch boundary.
 enum SyncBatchAnchoredPayloadPolicy {
     static func validateTransportEncode(_ batch: SyncBatch) throws {
         try validate(batch, boundary: .transportEncode, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
@@ -61,19 +61,27 @@ enum SyncBatchAnchoredPayloadPolicy {
         try validate(batch, boundary: .apply, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
+    static func validateCore(
+        _ batch: SyncBatch,
+        boundary: SyncBatchAnchoredPayloadPolicyError.Boundary,
+        activationEnabled: Bool
+    ) throws {
+        try validate(batch, boundary: boundary, activationEnabled: activationEnabled)
+    }
+
     static func validateDurableAdmissionCore(
         _ batch: SyncBatch,
         activationEnabled: Bool
     ) throws {
-        try validate(batch, boundary: .durableQueue, activationEnabled: activationEnabled)
+        try validateCore(batch, boundary: .durableQueue, activationEnabled: activationEnabled)
     }
 
     static func validateConvergenceCore(_ batch: SyncBatch, activationEnabled: Bool) throws {
-        try validate(batch, boundary: .convergence, activationEnabled: activationEnabled)
+        try validateCore(batch, boundary: .convergence, activationEnabled: activationEnabled)
     }
 
     static func validateRecoveryCore(_ batch: SyncBatch, activationEnabled: Bool) throws {
-        try validate(batch, boundary: .recovery, activationEnabled: activationEnabled)
+        try validateCore(batch, boundary: .recovery, activationEnabled: activationEnabled)
     }
 
     private static func validate(
