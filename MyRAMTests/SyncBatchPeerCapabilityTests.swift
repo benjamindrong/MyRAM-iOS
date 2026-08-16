@@ -88,19 +88,19 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         }
     }
 
-    func testProductionCapabilityRemainsV1Only() {
-        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+    func testProductionCapabilityAdvertisesV1AndV2() {
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.productionCapability,
-            .v1Only
+            .v1AndV2
         )
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.productionDiscoveryInfo,
-            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1"]
+            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"]
         )
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.productionInvitationContext,
-            Data("1".utf8)
+            Data("1,2".utf8)
         )
     }
 
@@ -291,14 +291,14 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
-    func testControllerAdvertisesAndInvitesWithCanonicalV1Context() throws {
+    func testControllerAdvertisesAndInvitesWithCanonicalV1AndV2Context() throws {
         let transport = CapabilityRecordingTransport()
         let controller = makeController(transport: transport)
         let peerID = MCPeerID(displayName: "Remote|capability-peer")
 
         XCTAssertEqual(
             controller.advertisedBatchSchemaDiscoveryInfo,
-            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1"]
+            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"]
         )
 
         controller.invite(MyRAMDiscoveredPeer(
@@ -309,7 +309,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         ))
 
         XCTAssertEqual(transport.invitedPeerIDs, [peerID])
-        XCTAssertEqual(transport.invitationContexts, [Data("1".utf8)])
+        XCTAssertEqual(transport.invitationContexts, [Data("1,2".utf8)])
     }
 
     func testControllerIntersectsDiscoveryAndInvitationEvidenceAndClearsIt() async {
@@ -418,7 +418,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(transport.batchRecipientLists, [[firstPeer, secondPeer]])
     }
 
-    func testExplicitV2NegotiationStillRejectsInboundV2BeforeSideEffects() async throws {
+    func testExplicitV2NegotiationAdmitsInboundV2WhenProductionActivated() async throws {
         let remotePeerID = MCPeerID(displayName: "Remote|capability-peer")
         let transport = CapabilityRecordingTransport(
             connectedPeers: [remotePeerID]
@@ -446,7 +446,10 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             durableCaptureCount += 1
             return true
         }
-        controller.onBatchReceived = { _ in callbackCount += 1; return .acknowledgementPermitted }
+        controller.onBatchReceived = { _ in
+            callbackCount += 1
+            return .acknowledgementPermitted
+        }
 
         controller.browser(
             browser,
@@ -468,7 +471,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             )
         )
 
-        let lastConnectionEvent = controller.lastConnectionEvent
+        let previousConnectionEvent = controller.lastConnectionEvent
         let data = try MultipeerSyncMessageCoding.encode(
             kind: .batchSync,
             payload: SyncBatchEnvelopeCodec.encode(batch: batch)
@@ -476,12 +479,15 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         controller.session(session, didReceive: data, fromPeer: remotePeerID)
         try await Task.sleep(for: .milliseconds(50))
 
-        XCTAssertEqual(durableCaptureCount, 0)
-        XCTAssertEqual(callbackCount, 0)
-        XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
+        XCTAssertEqual(durableCaptureCount, 1)
+        XCTAssertEqual(callbackCount, 1)
+        XCTAssertEqual(
+            transport.sentBatchAcknowledgements.map(\.batchID),
+            [batch.id]
+        )
         XCTAssertTrue(controller.unsentBatchQueueSnapshot().pendingBatches.isEmpty)
-        XCTAssertNil(controller.lastSyncAt)
-        XCTAssertEqual(controller.lastConnectionEvent, lastConnectionEvent)
+        XCTAssertEqual(controller.lastSyncAt, batch.createdAt)
+        XCTAssertNotEqual(controller.lastConnectionEvent, previousConnectionEvent)
     }
 
     private func makeController(

@@ -54,16 +54,16 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         }
     }
 
-    func testProductionCapabilityRemainsV1Only() {
-        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
-        XCTAssertEqual(SyncBatchPeerCapabilityCodec.productionCapability, .v1Only)
+    func testProductionCapabilityAdvertisesV1AndV2() {
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
+        XCTAssertEqual(SyncBatchPeerCapabilityCodec.productionCapability, .v1AndV2)
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.productionDiscoveryInfo,
-            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1"]
+            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"]
         )
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.productionInvitationContext,
-            Data("1".utf8)
+            Data("1,2".utf8)
         )
     }
 
@@ -146,7 +146,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
-    func testControllerAdvertisesAndInvitesWithCanonicalV1Context() throws {
+    func testControllerAdvertisesAndInvitesWithCanonicalV1AndV2Context() throws {
         var invitedPeerIDs: [MCPeerID] = []
         var invitationContexts: [Data] = []
         let controller = try makeController(
@@ -159,7 +159,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
 
         XCTAssertEqual(
             controller.advertisedBatchSchemaDiscoveryInfo,
-            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1"]
+            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"]
         )
 
         controller.invite(MacSyncDiscoveredPeer(
@@ -169,7 +169,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         ))
 
         XCTAssertEqual(invitedPeerIDs, [peerID])
-        XCTAssertEqual(invitationContexts, [Data("1".utf8)])
+        XCTAssertEqual(invitationContexts, [Data("1,2".utf8)])
     }
 
     func testControllerIntersectsDiscoveryAndInvitationEvidenceAndClearsIt() async throws {
@@ -279,7 +279,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(recipientLists, [[firstPeer, secondPeer]])
     }
 
-    func testExplicitV2NegotiationStillRejectsInboundV2BeforeSideEffects() async throws {
+    func testExplicitV2NegotiationReachesActivatedInboundPath() async throws {
         let remotePeerID = MCPeerID(displayName: "Remote|capability-peer")
         var sentData: [Data] = []
         let controller = try makeController(
@@ -334,7 +334,8 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertTrue(sentData.isEmpty)
         XCTAssertEqual(controller.pendingIncomingBatchCount, 0)
         XCTAssertNil(controller.lastSyncAt)
-        XCTAssertEqual(controller.lastConnectionEvent, lastConnectionEvent)
+        XCTAssertNotEqual(controller.lastConnectionEvent, lastConnectionEvent)
+        XCTAssertEqual(controller.lastConnectionEvent, "Received sync from Remote")
     }
 
     private func makeController(

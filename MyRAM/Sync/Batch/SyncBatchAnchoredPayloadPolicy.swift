@@ -1,7 +1,7 @@
 import Foundation
 
 enum SyncBatchAnchoredPayloadCapability {
-    static let isEnabled = false
+    static let isEnabled = true
 }
 
 enum SyncBatchBodyOperationRepresentation: Equatable, Sendable {
@@ -27,7 +27,7 @@ enum SyncBatchAnchoredPayloadPolicyError: Error, Equatable, Sendable {
     case mixedBodyOperationRepresentations(boundary: Boundary)
 }
 
-/// Keeps the Stage 1 capability dark at every side-effecting batch boundary.
+/// Applies the single production anchored-capability state at every side-effecting batch boundary.
 enum SyncBatchAnchoredPayloadPolicy {
     static func validateTransportEncode(_ batch: SyncBatch) throws {
         try validate(batch, boundary: .transportEncode, activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled)

@@ -611,10 +611,6 @@ final class SyncBatchAnchoredDeleteReplayTests: XCTestCase {
         XCTAssertEqual(value.tombstonedUTF16Count, 0)
     }
 
-    func testCapabilityRemainsDisabled() {
-        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
-    }
-
     private func state(text: String) throws -> SyncTextSequenceState {
         guard !text.isEmpty else { return .empty }
         let operationID = operation(1)
