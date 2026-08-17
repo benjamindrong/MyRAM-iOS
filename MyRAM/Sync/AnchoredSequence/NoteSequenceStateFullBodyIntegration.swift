@@ -86,6 +86,45 @@ enum NoteSequenceStateFullBodyIntegration {
         record.statePayloadData = payload
         return .replaced(previousRevision: snapshot.revision, revision: next)
     }
+
+    static func restoreSuppliedStateMutationAfterFailedSave(
+        of note: Note,
+        expected snapshot: NoteSequenceStateMutationSnapshot,
+        failedFinalState: SyncTextSequenceState,
+        in context: ModelContext
+    ) throws {
+        try requireManaged(note, in: context)
+        guard snapshot.noteID == note.id else {
+            throw NoteSequenceStateStoreError.preparedStateNoteIDMismatch
+        }
+        guard let record = try fetchRecord(noteID: note.id, in: context) else {
+            throw NoteSequenceStateStoreError.expectedRowButRowIsMissing
+        }
+        let failedRevision = try nextRevision(after: snapshot.revision)
+        guard record.revision == failedRevision else {
+            throw NoteSequenceStateStoreError.staleRevision(
+                expected: failedRevision,
+                actual: record.revision
+            )
+        }
+        let currentState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record,
+            noteID: note.id
+        )
+        guard currentState == failedFinalState else {
+            throw NoteSequenceStateStoreError.verificationFailure
+        }
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: snapshot.state,
+            noteID: note.id
+        )
+        record.formatVersion = NoteSequenceStatePersistenceCodec.formatVersion
+        record.revision = snapshot.revision
+        record.visibleUTF16Count = snapshot.state.visibleUTF16Count
+        record.tombstonedUTF16Count = snapshot.state.tombstonedUTF16Count
+        record.payloadByteCount = payload.count
+        record.statePayloadData = payload
+    }
     static func insertNewNote(
         _ note: Note,
         preparedState: PreparedInitialNoteSequenceState,

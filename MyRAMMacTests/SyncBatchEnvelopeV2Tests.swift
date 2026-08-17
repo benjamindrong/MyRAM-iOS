@@ -147,7 +147,7 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
         )
     }
 
-    func testOuterV1CanCarryInnerV2WhileProductionTransportRemainsDark() throws {
+    func testOuterV1CarriesInnerV2ThroughActivatedProductionTransport() throws {
         let batch = try anchoredBatch()
         let innerV2 = try SyncBatchEnvelopeCodec.encode(batch: batch)
         let outerV1 = try MultipeerSyncMessageCoding.encode(
@@ -164,16 +164,8 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
             .v2
         )
 
-        XCTAssertThrowsError(try MultipeerSyncMessageCoding.encodeBatch(batch)) {
-            XCTAssertEqual(
-                $0 as? SyncBatchAnchoredPayloadPolicyError,
-                .anchoredPayloadDisabled(
-                    boundary: .transportEncode,
-                    noteID: self.noteID
-                )
-            )
-        }
-        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+        XCTAssertNoThrow(try MultipeerSyncMessageCoding.encodeBatch(batch))
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
     func testPreMYR174PeerRejectsInnerV2BeforeDownstreamEffect() throws {

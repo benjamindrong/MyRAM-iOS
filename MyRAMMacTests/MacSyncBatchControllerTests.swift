@@ -448,13 +448,10 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertNil(controller.lastSyncAt)
     }
 
-    func testConnectedAnchoredLocalBatchRejectsBeforeQueueOrTransportMutation() async throws {
+    func testConnectedAnchoredLocalBatchIsDurablyQueuedWithoutCompatiblePeer() async throws {
         let unsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
         let remotePeerID = MCPeerID(displayName: "remote|anchored-outbound")
         let queue = FileBackedSyncBatchQueue(fileURL: unsentURL)
-        let beforeSnapshot = queue.snapshot()
-        let beforePendingCount = queue.pendingCount
-        let beforeBytes = try dataIfPresent(at: unsentURL)
         var recordedSends: [Data] = []
         let controller = try makeController(
             unsentBatchQueueFileURL: nil,
@@ -463,28 +460,15 @@ final class MacSyncBatchControllerTests: XCTestCase {
             sendBatchDataOperation: { data, _, _ in recordedSends.append(data) }
         )
         let batch = try makeAnchoredBatch()
-        let lastSyncAtBefore = controller.lastSyncAt
-
         XCTAssertTrue(controller.hasConnectedPeers)
 
-        do {
-            try await controller.acceptLocalBatch(batch)
-            XCTFail("Expected anchored local admission to fail")
-        } catch {
-            XCTAssertEqual(
-                error as? SyncBatchAnchoredPayloadPolicyError,
-                .anchoredPayloadDisabled(
-                    boundary: .outboundController,
-                    noteID: batch.changes[0].noteID
-                )
-            )
-        }
+        try await controller.acceptLocalBatch(batch)
 
         XCTAssertTrue(recordedSends.isEmpty)
-        XCTAssertEqual(queue.snapshot(), beforeSnapshot)
-        XCTAssertEqual(queue.pendingCount, beforePendingCount)
-        XCTAssertEqual(try dataIfPresent(at: unsentURL), beforeBytes)
-        XCTAssertEqual(controller.lastSyncAt, lastSyncAtBefore)
+        XCTAssertEqual(queue.pendingBatches, [batch])
+        XCTAssertEqual(queue.pendingCount, 1)
+        XCTAssertNotNil(try dataIfPresent(at: unsentURL))
+        XCTAssertNil(controller.lastSyncAt)
         XCTAssertTrue(controller.hasConnectedPeers)
     }
 

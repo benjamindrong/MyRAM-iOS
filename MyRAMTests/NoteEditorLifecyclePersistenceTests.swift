@@ -4,8 +4,8 @@ import SwiftData
 
 @MainActor
 final class NoteEditorLifecyclePersistenceTests: XCTestCase {
-    func testActivationOffLifecycleBoundaryCommitsSynchronously() throws {
-        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+    func testActivationOnLifecycleBoundaryCommitsThroughAsynchronousDurability() async throws {
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
         let schema = Schema(MyRAMModelRegistry.models)
         let configuration = ModelConfiguration(
             "MYR179Lifecycle-\(UUID().uuidString)",
@@ -16,6 +16,8 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         let context = container.mainContext
         let note = Note(title: "Before", content: "Before")
         context.insert(note)
+        try context.save()
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         let viewModel = NotesViewModel(
             context: context,
@@ -38,13 +40,15 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         )
 
         XCTAssertTrue(completed)
+        let durable = await viewModel.awaitEditorLifecyclePersistence(noteID: note.id)
+        XCTAssertTrue(durable)
         XCTAssertEqual(note.title, "After")
         XCTAssertEqual(note.content, "After")
         XCTAssertEqual(note.richTextContentData, Data("After".utf8))
     }
 
-    func testActivationOffFailedSynchronousLifecycleSaveRetainsOwnershipAndAllowsEditorTeardown() async throws {
-        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+    func testActivationOnFailedLifecycleSaveRetainsOwnershipAndAllowsEditorTeardown() async throws {
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
         let schema = Schema(MyRAMModelRegistry.models)
         let configuration = ModelConfiguration(
             "MYR179LifecycleFailure-\(UUID().uuidString)",
@@ -55,6 +59,8 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         let context = container.mainContext
         let note = Note(title: "Before", content: "Before")
         context.insert(note)
+        try context.save()
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         var shouldFailSave = true
         let viewModel = NotesViewModel(
@@ -107,8 +113,8 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertEqual(note.richTextContentData, Data("After".utf8))
     }
 
-    func testActivationOffNewerLifecycleSnapshotSupersedesRetainedFailureBeforeRetry() async throws {
-        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+    func testActivationOnNewerLifecycleSnapshotSupersedesRetainedFailureBeforeRetry() async throws {
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
         let schema = Schema(MyRAMModelRegistry.models)
         let configuration = ModelConfiguration(
             "MYR179LifecycleSupersession-\(UUID().uuidString)",
@@ -119,6 +125,8 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         let context = container.mainContext
         let note = Note(title: "Before", content: "Before")
         context.insert(note)
+        try context.save()
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
         try context.save()
         var shouldFailSave = true
         let viewModel = NotesViewModel(

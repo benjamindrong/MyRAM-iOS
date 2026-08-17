@@ -950,7 +950,7 @@ final class SyncBatchAnchoredRecoveryPlannerTests: XCTestCase {
     )
   }
 
-  func testPlanningRejectsUnhealthyStoreAndKeepsCapabilityDisabled() throws {
+  func testPlanningRejectsUnhealthyStoreWithoutChangingProductionActivation() throws {
     let change = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
       state: .empty,
       offset: 0,
@@ -972,7 +972,7 @@ final class SyncBatchAnchoredRecoveryPlannerTests: XCTestCase {
         .unhealthyRecoveryStore
       )
     }
-    XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+    XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
   }
 
   private func insertionDependencyFixture() throws -> (

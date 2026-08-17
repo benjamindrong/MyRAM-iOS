@@ -48,16 +48,19 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
         XCTAssertEqual(reservationCount, result.capturedChanges.count)
     }
 
-    func testMYR179ProductionConvergenceWrapperStaysDarkWhileSharedCoreIsFutureEnabled() throws {
+    func testMYR179ProductionConvergenceIsEnabledWhileExistingCorePreservesDarkStateProof() throws {
         let batch = makeBatch(changes: [
             try inserted(offset: 0, text: "A", state: state(text: ""), counter: 180)
         ])
-        XCTAssertThrowsError(try SyncBatchAnchoredPayloadPolicy.validateConvergence(batch))
+        XCTAssertNoThrow(try SyncBatchAnchoredPayloadPolicy.validateConvergence(batch))
+        assertPolicyError(.anchoredPayloadDisabled(boundary: .convergence, noteID: noteID)) {
+            try SyncBatchAnchoredPayloadPolicy.validateConvergenceCore(batch, activationEnabled: false)
+        }
         XCTAssertNoThrow(try SyncBatchAnchoredPayloadPolicy.validateConvergenceCore(
             batch,
             activationEnabled: true
         ))
-        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
     func testInsertProducesAllBoundaryAnchorsAndPreservesEvidence() throws {
@@ -474,16 +477,8 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
         XCTAssertNoThrow(try SyncBatchAnchoredPayloadPolicy.validateApply(metadata))
         XCTAssertNoThrow(try SyncBatchAnchoredPayloadPolicy.validateApply(legacyInsert))
         XCTAssertNoThrow(try SyncBatchAnchoredPayloadPolicy.validateApply(legacyDelete))
-        assertPolicyError(
-            .anchoredPayloadDisabled(boundary: .apply, noteID: noteID)
-        ) {
-            try SyncBatchAnchoredPayloadPolicy.validateApply(anchoredInsert)
-        }
-        assertPolicyError(
-            .anchoredPayloadDisabled(boundary: .apply, noteID: noteID)
-        ) {
-            try SyncBatchAnchoredPayloadPolicy.validateApply(anchoredDelete)
-        }
+        XCTAssertNoThrow(try SyncBatchAnchoredPayloadPolicy.validateApply(anchoredInsert))
+        XCTAssertNoThrow(try SyncBatchAnchoredPayloadPolicy.validateApply(anchoredDelete))
 
         for changes in [
             [legacyInsert.changes[0], anchoredInsert.changes[0]],
@@ -497,7 +492,7 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
         }
     }
 
-    func testEveryNamedBoundaryReportsItsOwnBoundary() throws {
+    func testProductionActivationAdmitsAnchoredWorkAtEveryNamedBoundary() throws {
         let batch = makeBatch(changes: [
             try inserted(offset: 0, text: "A", state: state(text: ""))
         ])
@@ -517,26 +512,20 @@ final class SyncBatchAnchoredPayloadTests: XCTestCase {
             (.apply, SyncBatchAnchoredPayloadPolicy.validateApply)
         ]
 
-        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
-        for (boundary, validate) in cases {
-            assertPolicyError(
-                .anchoredPayloadDisabled(boundary: boundary, noteID: noteID)
-            ) {
-                try validate(batch)
-            }
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
+        for (_, validate) in cases {
+            XCTAssertNoThrow(try validate(batch))
         }
     }
 
-    func testTransportEncoderRejectsBeforeProducingBytes() throws {
+    func testTransportEncoderProducesAnchoredBatchBytesWhenActivated() throws {
         let batch = makeBatch(changes: [
             try inserted(offset: 0, text: "A", state: state(text: ""))
         ])
 
-        assertPolicyError(
-            .anchoredPayloadDisabled(boundary: .transportEncode, noteID: noteID)
-        ) {
-            _ = try MultipeerSyncMessageCoding.encodeBatch(batch)
-        }
+        let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
+        let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+        XCTAssertEqual(try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload).batch, batch)
     }
 
     func testSharedPreflightRejectsBeforeBodyProvider() throws {

@@ -68,7 +68,7 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id), [batch.id])
     }
 
-    func testAnchoredDirectAdmissionRejectsBeforeDurabilityOrRuntimeSubmission() async throws {
+    func testAnchoredDirectAdmissionReachesDurabilityAndRuntimeSubmission() async throws {
         let pendingURL = temporaryQueueFileURL(
             named: "mac-pending-incoming-batch-queue.json"
         )
@@ -93,20 +93,22 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         )
         let batch = try anchoredBatch()
 
-        XCTAssertFalse(coordinator.durablyCaptureIncomingBatch(batch))
+        XCTAssertTrue(coordinator.durablyCaptureIncomingBatch(batch))
         await coordinator.submitRemoteBatch(batch)
         await coordinator.submitLocalObligation(
             SyncConvergenceLocalObligation(legacyBatch: batch)
         )
 
-        XCTAssertEqual(boundaryCalls, 0)
-        XCTAssertTrue(
-            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.isEmpty
+        XCTAssertEqual(boundaryCalls, 1)
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches,
+            [batch]
         )
-        XCTAssertTrue(
+        XCTAssertEqual(
             FileBackedSyncConvergenceLocalObligationQueue(
                 fileURL: localURL
-            ).pendingBatches.isEmpty
+            ).pendingBatches,
+            [batch]
         )
     }
 

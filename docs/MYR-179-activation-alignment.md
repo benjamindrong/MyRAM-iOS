@@ -193,3 +193,28 @@ Remediation revalidation verdict: **VALID — proceed with the named remediation
   - `docs/self-hosted-mac-runner.md`
 
 Continuation revalidation verdict: **VALID — the post-merge identities and scope above supersede the pre-merge execution-packet identities.**
+
+## Slice 2 atomic production activation
+
+- `handoff_revision`: `sha256:d3feed8c2e016f690683746dec5df28fea97da64fb6470db883191c8e162c15a`
+- `base_sha`: `727ffc594b5535b8cf64ca409c6324e16ab07936`
+- `instruction_repository_sha`: `03980a563387559e009ce9e30831207f4a36ca09`
+- `NearbySyncCore_sha`: `4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2`
+- sole production activation source: `SyncBatchAnchoredPayloadCapability.isEnabled = true`
+- activation-driven structural divergence: none
+
+The single production capability now activates the complete Slice 1 pipeline as one state. `SyncBatchPeerCapabilityCodec.productionCapability` advertises canonical V1+V2 discovery and invitation evidence. Current-session compatibility proof and the existing exactly-one-compatible-peer restriction continue to govern V2 routing. Local iPhone and native Mac edits use the reviewed anchored capture, durable operation-ID reservation, structural insertion/deletion, atomic body/sequence persistence, convergence, recovery, publication, and acknowledgement paths. No runtime option, defaults value, launch argument, per-host switch, generic policy override, or independently mutable production capability was added.
+
+The existing specialized activation-aware cores and planners remain the activation-off verification seams. They continue to prove dark-state durable admission, convergence, recovery, transport planning, and application rejection without changing the production capability. Pre-activation anchorless fixtures remain V1 compatibility evidence; MYR-178 matching-base admission remains authoritative and no anchored path gains raw-offset placement authority.
+
+The complete application suites exposed integration tests whose names, fixtures, and expectations still described the pre-activation production gate. Slice 2 migrates those assertions on both hosts to the activated contract: anchored batches cross controller, durable queue, recovery, convergence-planning, runtime-admission, and Mac local-persistence boundaries, with authoritative sequence-state fixtures established before structural capture and later failures classified at their actual post-admission boundary. Explicit capability-off policy tests remain on specialized test cores, so dark-state coverage is preserved without misrepresenting current production behavior.
+
+Focused activation evidence from the coherent Slice 2 staging tree:
+
+- iOS: 140 tests passed, 0 failed across peer capability, anchored payload/capture, lifecycle durability, insertion/deletion replay, recovery planning, V2 envelope, and legacy compatibility suites.
+- native Mac: 43 tests passed, 0 failed across peer capability, insertion/deletion replay, recovery, and V2 envelope suites.
+- lifecycle activation-on coverage establishes the authoritative sequence-state fixture and proves asynchronous durability, persistence-failure retention, retry, newer-generation supersession, teardown ownership, and flush ordering.
+- production V2 encoding and V1+V2 advertisement pass on both hosts; mixed representation remains rejected.
+- structural replay, tombstone, missing-dependency, bootstrap, terminal failure, applied-equivalence, anchorless isolation, and compatibility semantics were not changed by activation.
+
+The final completion-verification evidence document is intentionally deferred until all broad local and CI-owned evidence exists.

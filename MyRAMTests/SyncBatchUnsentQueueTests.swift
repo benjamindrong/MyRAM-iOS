@@ -539,7 +539,7 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(queue.pendingBatches, [batch])
     }
 
-    func testBothDurableQueuesRejectAnchoredAdmissionWithoutMutation() throws {
+    func testBothDurableQueuesAdmitAnchoredPayloads() throws {
         let batchQueueURL = temporaryQueueFileURL()
         let obligationQueueURL = temporaryQueueFileURL()
         try createDirectory(for: batchQueueURL)
@@ -555,35 +555,23 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         try obligationQueue.enqueue(
             SyncConvergenceLocalObligation(legacyBatch: legacy)
         )
-        let originalBatchQueueData = try Data(contentsOf: batchQueueURL)
-        let originalObligationQueueData = try Data(contentsOf: obligationQueueURL)
-
-        XCTAssertThrowsError(try batchQueue.enqueueDurably(anchored)) {
-            XCTAssertEqual(
-                $0 as? SyncBatchAnchoredPayloadPolicyError,
-                .anchoredPayloadDisabled(
-                    boundary: .durableQueue,
-                    noteID: anchored.changes[0].noteID
-                )
-            )
-        }
-        XCTAssertThrowsError(try obligationQueue.enqueue(
+        try batchQueue.enqueueDurably(anchored)
+        try obligationQueue.enqueue(
             SyncConvergenceLocalObligation(legacyBatch: anchored)
-        )) {
-            XCTAssertEqual(
-                $0 as? SyncBatchAnchoredPayloadPolicyError,
-                .anchoredPayloadDisabled(
-                    boundary: .durableQueue,
-                    noteID: anchored.changes[0].noteID
-                )
-            )
-        }
-        XCTAssertEqual(batchQueue.pendingBatches, [legacy])
-        XCTAssertEqual(obligationQueue.pendingBatches, [legacy])
-        XCTAssertEqual(try Data(contentsOf: batchQueueURL), originalBatchQueueData)
+        )
+
+        XCTAssertEqual(batchQueue.pendingBatches, [legacy, anchored])
+        XCTAssertEqual(obligationQueue.pendingBatches, [legacy, anchored])
         XCTAssertEqual(
-            try Data(contentsOf: obligationQueueURL),
-            originalObligationQueueData
+            FileBackedSyncBatchQueue(fileURL: batchQueueURL, limit: 10).pendingBatches,
+            [legacy, anchored]
+        )
+        XCTAssertEqual(
+            FileBackedSyncConvergenceLocalObligationQueue(
+                fileURL: obligationQueueURL,
+                limit: 10
+            ).pendingBatches,
+            [legacy, anchored]
         )
     }
 
@@ -633,7 +621,7 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(obligationQueue.pendingBatches, [legacy])
     }
 
-    func testBothDurableQueuesValidateCompleteReplacementBeforeMutation() throws {
+    func testBothDurableQueuesReplaceWithAnchoredPayloads() throws {
         let legacy = makeBatch(idSuffix: 1)
         let anchored = try makeAnchoredInsertBatchForTest()
         let batchQueue = FileBackedSyncBatchQueue(fileURL: nil, limit: 10)
@@ -646,30 +634,22 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
             SyncConvergenceLocalObligation(legacyBatch: legacy)
         )
 
-        XCTAssertThrowsError(
-            try batchQueue.replacePendingBatches([legacy, anchored])
-        )
-        XCTAssertThrowsError(
-            try obligationQueue.replacePendingBatches([legacy, anchored])
-        )
-        XCTAssertEqual(batchQueue.pendingBatches, [legacy])
-        XCTAssertEqual(obligationQueue.pendingBatches, [legacy])
+        try batchQueue.replacePendingBatches([legacy, anchored])
+        try obligationQueue.replacePendingBatches([legacy, anchored])
+        XCTAssertEqual(batchQueue.pendingBatches, [legacy, anchored])
+        XCTAssertEqual(obligationQueue.pendingBatches, [legacy, anchored])
     }
 
-    func testBothDurableQueuesQuarantinePersistedAnchoredBytes() throws {
+    func testBothDurableQueuesLoadPersistedAnchoredBytes() throws {
         let fileURL = temporaryQueueFileURL()
         try createDirectory(for: fileURL)
         let anchored = try makeAnchoredInsertBatchForTest()
         try JSONEncoder().encode(
             TestPersistedSyncBatchQueue(version: 1, batches: [anchored])
         ).write(to: fileURL)
-        let originalData = try Data(contentsOf: fileURL)
-
         let batchQueue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
-        XCTAssertEqual(batchQueue.snapshot().health, .unsupportedAnchoredPayload)
-        XCTAssertTrue(batchQueue.pendingBatches.isEmpty)
-        XCTAssertThrowsError(try batchQueue.enqueueDurably(makeBatch(idSuffix: 2)))
-        XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+        XCTAssertEqual(batchQueue.snapshot().health, .healthy)
+        XCTAssertEqual(batchQueue.pendingBatches, [anchored])
 
         let obligationQueue = FileBackedSyncConvergenceLocalObligationQueue(
             fileURL: fileURL,
@@ -677,13 +657,9 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         )
         XCTAssertEqual(
             obligationQueue.snapshot().health,
-            .unsupportedAnchoredPayload
+            .healthy
         )
-        XCTAssertTrue(obligationQueue.pendingBatches.isEmpty)
-        XCTAssertThrowsError(try obligationQueue.enqueue(
-            SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 2))
-        ))
-        XCTAssertEqual(try Data(contentsOf: fileURL), originalData)
+        XCTAssertEqual(obligationQueue.pendingBatches, [anchored])
     }
 
     func testMixedReplayKeysSortLegacyBeforeSequencedThenOperationIndex() {

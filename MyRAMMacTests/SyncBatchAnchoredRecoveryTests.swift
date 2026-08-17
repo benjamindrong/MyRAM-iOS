@@ -55,7 +55,7 @@ final class SyncBatchAnchoredRecoveryTests: XCTestCase {
       retry.recoveryStoreTransitions,
       [.removeCommitted(expected: waitingRecord)]
     )
-    XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+    XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
   }
 
   func testNativeMacRecoveryStoreRoundTripsTemporaryFile() throws {

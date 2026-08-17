@@ -87,14 +87,13 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         XCTAssertEqual(envelope.batch, batch)
     }
 
-    func testCapabilityOffProductionCaptureCreatesOnlyLegacyBodyCases() throws {
+    func testPreActivationLegacyFixtureContainsOnlyLegacyBodyCases() throws {
         let fixture = try makeSixCaseCompatibilityFixture()
 
         assertCurrentSixCaseBatch(fixture.currentBatch)
-        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
-    func testCapabilityOffCurrentSixCaseBatchStructurallyEqualsLegacyV1() throws {
+    func testPreActivationSixCaseBatchStructurallyEqualsLegacyV1() throws {
         let fixture = try makeSixCaseCompatibilityFixture()
         assertCurrentSixCaseBatch(fixture.currentBatch)
         assertLegacySixCaseBatch(fixture.legacyBatch)
@@ -109,7 +108,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         assertSixCaseBatchJSONShape(legacyJSON)
     }
 
-    func testCapabilityOffCurrentSixCaseBatchEnvelopeStructurallyEqualsLegacyV1() throws {
+    func testPreActivationSixCaseBatchEnvelopeStructurallyEqualsLegacyV1() throws {
         let fixture = try makeSixCaseCompatibilityFixture()
         assertCurrentSixCaseBatch(fixture.currentBatch)
         assertLegacySixCaseBatch(fixture.legacyBatch)
@@ -129,7 +128,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         assertInnerEnvelopeJSONShape(legacyJSON)
     }
 
-    func testCapabilityOffCurrentSixCaseMultipeerEnvelopeIsRecursivelyCompatibleWithLegacyV1() throws {
+    func testPreActivationSixCaseMultipeerEnvelopeIsRecursivelyCompatibleWithLegacyV1() throws {
         let fixture = try makeSixCaseCompatibilityFixture()
         assertCurrentSixCaseBatch(fixture.currentBatch)
         assertLegacySixCaseBatch(fixture.legacyBatch)
@@ -158,7 +157,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         assertInnerEnvelopeJSONShape(legacyOuter.payload)
     }
 
-    func testCapabilityOffSixCaseEncodingRemainsStructurallyStableAcrossRepeatedInvocations() throws {
+    func testPreActivationSixCaseEncodingRemainsStructurallyStableAcrossRepeatedInvocations() throws {
         let fixture = try makeSixCaseCompatibilityFixture()
         assertCurrentSixCaseBatch(fixture.currentBatch)
         assertLegacySixCaseBatch(fixture.legacyBatch)
@@ -222,7 +221,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
         assertInnerEnvelopeJSONShape(frozenJSON)
     }
 
-    func testLegacyV1DecoderReadsCurrentCapabilityOffSixCaseFixture() throws {
+    func testLegacyV1DecoderReadsPreActivationSixCaseFixture() throws {
         let fixture = try makeSixCaseCompatibilityFixture()
         let currentData = try SyncBatchEnvelopeCodec.encode(batch: fixture.currentBatch)
 
@@ -259,7 +258,7 @@ final class SyncBatchPayloadCompatibilityTests: XCTestCase {
             MultipeerSyncMessageKind.batchSync.rawValue,
             "myram.batchSync.v1"
         )
-        XCTAssertFalse(SyncBatchAnchoredPayloadCapability.isEnabled)
+        XCTAssertTrue(SyncBatchAnchoredPayloadCapability.isEnabled)
     }
 
     func testStableSHA256UsesUTF8Bytes() {

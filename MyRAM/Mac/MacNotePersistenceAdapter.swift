@@ -225,6 +225,7 @@ final class MacNotePersistenceAdapter {
         let currentBody = note.content
         let currentRichTextContentData = note.richTextContentData
         let currentModifiedAt = note.modifiedAt
+        var didStageStructuralMutation = false
 
         do {
             note.title = prepared.proposedTitle
@@ -237,6 +238,7 @@ final class MacNotePersistenceAdapter {
                     finalState: finalState,
                     in: context
                 )
+                didStageStructuralMutation = true
             } else {
                 note.content = prepared.proposedBody
             }
@@ -245,10 +247,28 @@ final class MacNotePersistenceAdapter {
             try saveOperation(context)
         } catch {
             // Restore only the fields mutated by this save so unrelated pending context work is preserved.
+            var structuralRestorationError: Error?
+            if didStageStructuralMutation,
+               let snapshot = prepared.structuralSnapshot,
+               let finalState = prepared.finalStructuralState {
+                do {
+                    try NoteSequenceStateFullBodyIntegration.restoreSuppliedStateMutationAfterFailedSave(
+                        of: note,
+                        expected: snapshot,
+                        failedFinalState: finalState,
+                        in: context
+                    )
+                } catch {
+                    structuralRestorationError = error
+                }
+            }
             note.title = currentTitle
             note.content = currentBody
             note.richTextContentData = currentRichTextContentData
             note.modifiedAt = currentModifiedAt
+            if let structuralRestorationError {
+                throw structuralRestorationError
+            }
             throw error
         }
     }
