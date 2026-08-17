@@ -207,6 +207,8 @@ The single production capability now activates the complete Slice 1 pipeline as 
 
 The existing specialized activation-aware cores and planners remain the activation-off verification seams. They continue to prove dark-state durable admission, convergence, recovery, transport planning, and application rejection without changing the production capability. Pre-activation anchorless fixtures remain V1 compatibility evidence; MYR-178 matching-base admission remains authoritative and no anchored path gains raw-offset placement authority.
 
+The complete iOS application suite exposed seven integration tests whose names and expectations still described the pre-activation production gate. Slice 2 migrates those assertions to the activated contract: anchored batches cross controller, durable queue, recovery, convergence-planning, and runtime-admission boundaries, with later failures classified at the missing authoritative-state boundary. Explicit capability-off policy tests remain on specialized test cores, so dark-state coverage is preserved without misrepresenting current production behavior.
+
 Focused activation evidence from the coherent Slice 2 staging tree:
 
 - iOS: 140 tests passed, 0 failed across peer capability, anchored payload/capture, lifecycle durability, insertion/deletion replay, recovery planning, V2 envelope, and legacy compatibility suites.

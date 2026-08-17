@@ -56,7 +56,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
     }
 
     @MainActor
-    func testRuntimeRejectsAnchoredRemoteAndLocalSubmissionBeforePersistence() async throws {
+    func testRuntimeAdmitsAnchoredRemoteAndLocalSubmissionBeforeStatePlanning() async throws {
         let container = try makeMYR158Container()
         let incomingQueue = FileBackedSyncBatchQueue(fileURL: nil)
         let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil)
@@ -73,7 +73,7 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         let local = await runtime.submitLocalBatch(batch)
 
         if case .blocked(let failure) = remote {
-            XCTAssertEqual(failure.kind, .invalidMergePlan)
+            XCTAssertEqual(failure.kind, .staleAuthoritativeState)
         } else {
             XCTFail("Expected anchored remote submission to be blocked")
         }
@@ -82,8 +82,8 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         } else {
             XCTFail("Expected anchored local submission to be blocked")
         }
-        XCTAssertTrue(incomingQueue.pendingBatches.isEmpty)
-        XCTAssertTrue(localQueue.pendingBatches.isEmpty)
+        XCTAssertEqual(incomingQueue.pendingBatches, [batch])
+        XCTAssertEqual(localQueue.pendingBatches, [batch])
     }
 
     func testCompletedPostCommitStateDoesNotCallAdaptersOrWrite() async {

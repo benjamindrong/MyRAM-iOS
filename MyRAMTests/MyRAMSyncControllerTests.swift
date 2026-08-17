@@ -636,7 +636,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
         )
     }
 
-    func testAnchoredLocalBatchRejectsBeforeQueueOrTransportMutation() async throws {
+    func testAnchoredLocalBatchIsDurablyQueuedWithoutCompatiblePeer() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let controller = try makeController(
             unsentBatchQueueFileURL: temporaryQueueFileURL(),
@@ -644,21 +644,10 @@ final class MyRAMSyncControllerTests: XCTestCase {
         )
         let batch = try makeAnchoredInsertBatchForTest()
 
-        do {
-            try await controller.acceptLocalBatch(batch)
-            XCTFail("Expected anchored local admission to fail")
-        } catch {
-            XCTAssertEqual(
-                error as? SyncBatchAnchoredPayloadPolicyError,
-                .anchoredPayloadDisabled(
-                    boundary: .outboundController,
-                    noteID: batch.changes[0].noteID
-                )
-            )
-        }
+        try await controller.acceptLocalBatch(batch)
 
-        XCTAssertTrue(controller.unsentBatchQueueSnapshot().pendingBatches.isEmpty)
-        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 0)
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
+        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 1)
         XCTAssertTrue(transport.sentBatchEnvelopes.isEmpty)
         XCTAssertNil(controller.lastSyncAt)
     }

@@ -28,7 +28,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
             )
         }
     }
-    func testAnchoredBatchFailsPlanningBeforeCanonicalWork() throws {
+    func testAnchoredBatchReachesAuthoritativeStatePlanning() throws {
         let batch = try makeAnchoredInsertBatchForTest()
 
         XCTAssertEqual(
@@ -36,7 +36,7 @@ final class SyncConvergencePlanningTests: XCTestCase {
                 input: SyncConvergencePlanningInput(incomingBatch: batch)
             ),
             .failedBeforeCommit(
-                .invalidMergePlan(noteID: batch.changes[0].noteID)
+                .staleAuthoritativeState(noteID: batch.changes[0].noteID)
             )
         )
     }

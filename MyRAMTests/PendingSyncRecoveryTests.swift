@@ -5,7 +5,7 @@ import SwiftData
 
 @MainActor
 final class PendingSyncRecoveryTests: XCTestCase {
-    func testStateBuilderRejectsAnchoredBatchBeforeCurrentStateLookup() throws {
+    func testStateBuilderAdmitsAnchoredBatchBeforeCurrentStateLookup() throws {
         let container = try makeContainer()
         let batch = try makeAnchoredInsertBatchForTest()
 
@@ -23,11 +23,8 @@ final class PendingSyncRecoveryTests: XCTestCase {
             recoveryTimestamp: Date(timeIntervalSince1970: 1_710)
         )) {
             XCTAssertEqual(
-                $0 as? SyncBatchAnchoredPayloadPolicyError,
-                .anchoredPayloadDisabled(
-                    boundary: .recovery,
-                    noteID: batch.changes[0].noteID
-                )
+                $0 as? SyncRecoveryStateBuilderError,
+                .missingCurrentNoteReferencedByUnsentBatch(batch.changes[0].noteID)
             )
         }
     }
