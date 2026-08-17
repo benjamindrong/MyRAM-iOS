@@ -5,7 +5,7 @@ import XCTest
 @MainActor
 final class MacStartupCoordinatorTests: XCTestCase {
     func testMacStartupMigrationPrecedesLoadCreationConvergenceNetworkingAndEditorExposure() async {
-        let coordinator = MacStartupCoordinator()
+        let coordinator = MacStartupCoordinator(startsNetworking: true)
         var events: [String] = []
 
         coordinator.startIfNeeded(actions: .init(
@@ -28,6 +28,45 @@ final class MacStartupCoordinatorTests: XCTestCase {
             ]
         )
         XCTAssertEqual(coordinator.state, .ready)
+    }
+
+    func testMacStartupHostedTestDefaultKeepsPeerDiscoveryUnavailable() async {
+        let coordinator = MacStartupCoordinator()
+        var events: [String] = []
+
+        coordinator.startIfNeeded(actions: .init(
+            migrateNoteSequenceStates: { events.append("migration") },
+            loadNotesCreatingFirstIfNeeded: { events.append("load-or-create") },
+            configureConvergenceIfNeeded: { events.append("configure-convergence") },
+            startNetworkingIfNeeded: { events.append("networking") },
+            resumePendingConvergence: { events.append("resume-convergence") }
+        ))
+        await waitUntil { coordinator.state == .ready }
+
+        XCTAssertEqual(
+            events,
+            [
+                "migration",
+                "load-or-create",
+                "configure-convergence",
+                "resume-convergence"
+            ]
+        )
+        XCTAssertEqual(coordinator.state, .ready)
+    }
+
+    func testMacStartupNetworkingPolicyDisablesNetworkingForXCTestEnvironment() {
+        XCTAssertFalse(
+            MacStartupNetworkingPolicy.shouldStartNetworking(
+                environment: ["XCTestConfigurationFilePath": "/tmp/MyRAMMacTests.xctestconfiguration"]
+            )
+        )
+    }
+
+    func testMacStartupNetworkingPolicyKeepsNetworkingEnabledOutsideXCTest() {
+        XCTAssertTrue(
+            MacStartupNetworkingPolicy.shouldStartNetworking(environment: [:])
+        )
     }
 
     func testMacStartupMigrationFailureKeepsCreationEditingConvergenceAndNetworkingUnavailable() async {

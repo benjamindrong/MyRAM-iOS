@@ -2,6 +2,16 @@
 import Combine
 import Foundation
 
+enum MacStartupNetworkingPolicy {
+    static func shouldStartNetworking(environment: [String: String]) -> Bool {
+        environment["XCTestConfigurationFilePath"] == nil
+    }
+
+    static var shouldStartNetworkingInCurrentProcess: Bool {
+        shouldStartNetworking(environment: ProcessInfo.processInfo.environment)
+    }
+}
+
 @MainActor
 final class MacStartupCoordinator: ObservableObject {
     enum State: Equatable {
@@ -20,7 +30,12 @@ final class MacStartupCoordinator: ObservableObject {
     }
 
     @Published private(set) var state: State = .idle
+    private let startsNetworking: Bool
     private var startupTask: Task<Void, Never>?
+
+    init(startsNetworking: Bool = MacStartupNetworkingPolicy.shouldStartNetworkingInCurrentProcess) {
+        self.startsNetworking = startsNetworking
+    }
 
     deinit {
         startupTask?.cancel()
@@ -35,7 +50,9 @@ final class MacStartupCoordinator: ObservableObject {
                 try await actions.migrateNoteSequenceStates()
                 try actions.loadNotesCreatingFirstIfNeeded()
                 actions.configureConvergenceIfNeeded()
-                actions.startNetworkingIfNeeded()
+                if self?.startsNetworking == true {
+                    actions.startNetworkingIfNeeded()
+                }
                 actions.resumePendingConvergence()
                 self?.state = .ready
             } catch {
