@@ -1355,23 +1355,25 @@ private struct SyncOperationReplayEngine {
     ) -> BodyPlanningResult {
         var body = base.body
         var plannedOperations: [SyncConvergencePlannedBodyOperation] = []
-        // Each operation's utf16Offset was recorded relative to its own device's body
-        // state at capture time, which never accounted for the other device's
-        // concurrent edits. Replaying those raw offsets against a body already
-        // mutated by earlier operations in this loop silently reorders or drops
-        // text. Rebasing against every already-applied operation from a *different*
-        // origin device (same-device operations are already self-consistent, since
-        // each one was captured after its own predecessors) keeps both peers'
-        // canonically-ordered replay producing the identical result.
-        var appliedForeignEvents: [SyncConvergenceAppliedRebaseEvent] = []
+        // Legacy-only compatibility for pre-migration anchorless conflict unions.
+        // MYR-178 requires an exact historical base before this path is reachable,
+        // and rewrite safety still validates the resulting whole-note merge. Anchored
+        // V2 work is routed through SyncConvergenceAnchoredBatchPlanner instead; this
+        // positional transform is never structural placement authority.
+        //
+        // Each legacy operation's offset was captured before concurrent edits from a
+        // different device. Transforming against already-applied foreign legacy events
+        // preserves the historical conflict-union behavior without extending it to
+        // anchored operations.
+        var appliedLegacyForeignEvents: [SyncConvergenceLegacyOffsetRebaseEvent] = []
         for operation in operations {
-            let rebasedChange = Self.rebasedChange(
+            let legacyRebasedChange = Self.legacyConflictRebasedChange(
                 operation.change,
                 for: operation.identity.originDeviceIDLowercase,
-                against: appliedForeignEvents
+                against: appliedLegacyForeignEvents
             )
             switch replaySingle(
-                rebasedChange,
+                legacyRebasedChange,
                 identity: operation.identity,
                 body: body,
                 noteID: projectedCurrent.noteID,
@@ -1380,9 +1382,9 @@ private struct SyncOperationReplayEngine {
             case .success(let replay):
                 let utf16LengthDelta = replay.finalBody.utf16.count - body.utf16.count
                 if utf16LengthDelta != 0 {
-                    appliedForeignEvents.append(SyncConvergenceAppliedRebaseEvent(
+                    appliedLegacyForeignEvents.append(SyncConvergenceLegacyOffsetRebaseEvent(
                         originDeviceIDLowercase: operation.identity.originDeviceIDLowercase,
-                        appliedOffset: Self.utf16Offset(of: rebasedChange),
+                        appliedOffset: Self.legacyBodyUTF16Offset(of: legacyRebasedChange),
                         utf16LengthDelta: utf16LengthDelta
                     ))
                 }
@@ -1614,22 +1616,20 @@ private struct SyncOperationReplayEngine {
         }
     }
 
-    /// Adjusts `change`'s utf16Offset by every already-applied `SyncBatchChange`
-    /// event whose origin device differs from `originDeviceIDLowercase` (same-device
-    /// events are already reflected in the offset it was captured with). Applying
-    /// events in the order they were actually applied is what makes this correct:
-    /// each transform compounds onto the position produced by the ones before it.
-    private static func rebasedChange(
+    /// Legacy-only positional transform for a pre-migration anchorless conflict union
+    /// after MYR-178 has proven the exact historical base. Anchored V2 operations never
+    /// route through this helper and structural identity remains their sole authority.
+    private static func legacyConflictRebasedChange(
         _ change: SyncBatchChange,
         for originDeviceIDLowercase: String,
-        against appliedForeignEvents: [SyncConvergenceAppliedRebaseEvent]
+        against appliedLegacyForeignEvents: [SyncConvergenceLegacyOffsetRebaseEvent]
     ) -> SyncBatchChange {
         switch change {
         case .noteBodyTextInserted(let insert):
-            let rebased = rebasedOffset(
+            let rebased = legacyConflictRebasedOffset(
                 insert.utf16Offset,
                 excludingOriginDeviceIDLowercase: originDeviceIDLowercase,
-                against: appliedForeignEvents
+                against: appliedLegacyForeignEvents
             )
             guard rebased != insert.utf16Offset else { return change }
             return .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
@@ -1640,10 +1640,10 @@ private struct SyncOperationReplayEngine {
                 baseContentHash: insert.baseContentHash
             ))
         case .noteBodyTextDeleted(let delete):
-            let rebased = rebasedOffset(
+            let rebased = legacyConflictRebasedOffset(
                 delete.utf16Offset,
                 excludingOriginDeviceIDLowercase: originDeviceIDLowercase,
-                against: appliedForeignEvents
+                against: appliedLegacyForeignEvents
             )
             guard rebased != delete.utf16Offset else { return change }
             return .noteBodyTextDeleted(SyncBatchNoteBodyTextDeletedChange(
@@ -1660,7 +1660,7 @@ private struct SyncOperationReplayEngine {
         }
     }
 
-    private static func utf16Offset(of change: SyncBatchChange) -> Int {
+    private static func legacyBodyUTF16Offset(of change: SyncBatchChange) -> Int {
         switch change {
         case .noteBodyTextInserted(let insert):
             insert.utf16Offset
@@ -1672,13 +1672,13 @@ private struct SyncOperationReplayEngine {
         }
     }
 
-    private static func rebasedOffset(
+    private static func legacyConflictRebasedOffset(
         _ offset: Int,
         excludingOriginDeviceIDLowercase originDeviceIDLowercase: String,
-        against appliedForeignEvents: [SyncConvergenceAppliedRebaseEvent]
+        against appliedLegacyForeignEvents: [SyncConvergenceLegacyOffsetRebaseEvent]
     ) -> Int {
         var adjusted = offset
-        for event in appliedForeignEvents where event.originDeviceIDLowercase != originDeviceIDLowercase {
+        for event in appliedLegacyForeignEvents where event.originDeviceIDLowercase != originDeviceIDLowercase {
             if event.utf16LengthDelta > 0 {
                 if event.appliedOffset <= adjusted {
                     adjusted += event.utf16LengthDelta
@@ -1699,7 +1699,7 @@ private struct SyncOperationReplayEngine {
     }
 }
 
-private struct SyncConvergenceAppliedRebaseEvent {
+private struct SyncConvergenceLegacyOffsetRebaseEvent {
     let originDeviceIDLowercase: String
     let appliedOffset: Int
     let utf16LengthDelta: Int

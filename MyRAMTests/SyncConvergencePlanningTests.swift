@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import CryptoKit
 import XCTest
 
@@ -38,6 +39,60 @@ final class SyncConvergencePlanningTests: XCTestCase {
             .failedBeforeCommit(
                 .staleAuthoritativeState(noteID: batch.changes[0].noteID)
             )
+        )
+    }
+
+    func testMYR180AnchoredStructuralPlanningBypassesLegacyConflictRebasePath() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000180201")
+        let deviceID = uuid("00000000-0000-0000-0000-000000180202")
+        let initialBody = "AB"
+        let initialState = try NoteSequenceStateBootstrapAdapter.makeInitialState(
+            noteID: noteID,
+            body: initialBody
+        )
+        let change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 1,
+            text: "x",
+            modifiedAt: date(2),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: initialBody),
+            operationID: SyncOperationID(deviceID: deviceID, localCounter: 180),
+            state: initialState
+        )
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000180203"),
+            originDeviceID: deviceID,
+            createdAt: date(1),
+            batchSequence: 1,
+            changes: [change]
+        )
+        let snapshot = NoteSequenceStateMutationSnapshot(
+            noteID: noteID,
+            body: initialBody,
+            revision: 7,
+            state: initialState
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            currentNotes: [projectedNote(noteID: noteID, body: initialBody)],
+            anchoredSequenceSnapshots: [snapshot],
+            anchoredRecoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot(
+                records: [],
+                health: .healthy
+            )
+        ))
+
+        guard case .planned(let validatedInput) = outcome,
+              case .anchoredStructural(let bodyPlan) = validatedInput.plan.affectedNotePlans[0].bodyEffect else {
+            return XCTFail("Expected anchored structural planning, got \(outcome)")
+        }
+        XCTAssertEqual(bodyPlan.expectedSnapshot, snapshot)
+        XCTAssertEqual(bodyPlan.finalBody, "AxB")
+        XCTAssertEqual(bodyPlan.finalState.visibleText, "AxB")
+        XCTAssertEqual(
+            validatedInput.plan.presentationPlan.noteRoutings[noteID],
+            .structuralRefresh
         )
     }
 
