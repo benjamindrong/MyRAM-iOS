@@ -846,7 +846,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
 
         XCTAssertTrue(recordedSends.isEmpty)
-        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: receiverPendingURL).pendingBatches, [batch])
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches, [batch])
         XCTAssertEqual(coordinator.pendingIncomingBatchCount, 1)
         XCTAssertEqual(note.content, "local")
         XCTAssertNil(controller.lastSyncAt)
