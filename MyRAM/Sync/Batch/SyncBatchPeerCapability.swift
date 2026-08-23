@@ -253,6 +253,15 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         if evidenceByPeerDeviceID[peerDeviceID]?.isEmpty == true {
             evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         }
+
+        // A positive discovery marker may already have admitted bootstrap work for
+        // the connected MCSession. Browser discovery can disappear independently
+        // of that session, so retain positive support as ephemeral session evidence.
+        // Actual disconnect still clears both discovery and session evidence.
+        if bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported,
+           bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] != .v1Supported {
+            bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] = .v1Supported
+        }
         bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
 

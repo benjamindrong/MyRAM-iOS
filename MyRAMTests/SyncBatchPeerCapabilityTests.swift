@@ -150,6 +150,20 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
     }
 
+    func testDiscoveryOnlyBootstrapSupportSurvivesDiscoveryLossUntilDisconnect() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordBootstrapDiscoveryValue("1", forPeerDeviceID: "peer")
+
+        registry.clearDiscoveryEvidence(forPeerDeviceID: "peer")
+
+        XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+        XCTAssertTrue(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
+
+        registry.clearEvidence(forPeerDeviceID: "peer")
+        XCTAssertFalse(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+        XCTAssertFalse(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
+    }
+
     func testLateBootstrapAnnouncementSupersedesSessionFallback() {
         var registry = SyncBatchPeerCapabilityRegistry()
         registry.recordBootstrapSessionFallbackUnsupported(forPeerDeviceID: "peer")

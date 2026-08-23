@@ -159,6 +159,96 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertTrue(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
     }
 
+    func testDiscoveryOnlyBootstrapSupportBecomesSessionEvidenceUntilDisconnect() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordBootstrapDiscoveryValue("1", forPeerDeviceID: "peer")
+
+        registry.clearDiscoveryEvidence(forPeerDeviceID: "peer")
+
+        XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+        XCTAssertTrue(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
+
+        registry.clearEvidence(forPeerDeviceID: "peer")
+        XCTAssertFalse(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+        XCTAssertFalse(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
+    }
+
+    func testDiscoveryLossDuringActiveMacBootstrapKeepsSameSnapshotRetryAlive() async throws {
+        let peer = MCPeerID(displayName: "Remote|lost-discovery-mac")
+        var attemptedSnapshots: [SyncPeerBootstrapSnapshot] = []
+        let controller = try makeController(
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                guard message.kind == .bootstrapSnapshot else { return }
+                attemptedSnapshots.append(
+                    try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
+                )
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "lost-discovery-mac")
+        controller.setBootstrapRetryDelayNanosecondsForTesting([
+            5_000_000,
+            1_000_000_000,
+            1_000_000_000
+        ])
+        controller.beginBootstrapForTesting(to: peer)
+        let snapshotID = try XCTUnwrap(attemptedSnapshots.first?.id)
+        let attemptsBeforeLoss = attemptedSnapshots.count
+        let localPeerID = MCPeerID(displayName: "Local|local-device")
+        let browser = MCNearbyServiceBrowser(peer: localPeerID, serviceType: "myram-sync")
+
+        controller.browser(browser, lostPeer: peer)
+        try await Task.sleep(nanoseconds: 25_000_000)
+
+        XCTAssertGreaterThan(attemptedSnapshots.count, attemptsBeforeLoss)
+        XCTAssertEqual(Set(attemptedSnapshots.map(\.id)), Set([snapshotID]))
+        XCTAssertFalse(
+            controller.bootstrapStateForTesting(peerDeviceID: "lost-discovery-mac")?.ordinarySyncReady == true
+        )
+    }
+
+    func testBootstrapApplyRejectsDirtyDestinationWithoutSavingOrRollingBackLocalChanges() throws {
+        let sourceContainer = try makeInMemoryContainer()
+        let sourceContext = sourceContainer.mainContext
+        let remoteNote = Note(title: "Remote", content: "")
+        sourceContext.insert(remoteNote)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: remoteNote,
+            in: sourceContext
+        )
+        try sourceContext.save()
+        let snapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: sourceContext)
+
+        let destinationContainer = try makeInMemoryContainer()
+        let destinationContext = destinationContainer.mainContext
+        let localNote = Note(title: "Local", content: "")
+        destinationContext.insert(localNote)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: localNote,
+            in: destinationContext
+        )
+        try destinationContext.save()
+        localNote.title = "Unsaved local edit"
+        XCTAssertTrue(destinationContext.hasChanges)
+
+        XCTAssertThrowsError(
+            try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: destinationContext)
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncPeerBootstrapError,
+                .destinationContextHasPendingChanges
+            )
+        }
+
+        XCTAssertEqual(localNote.title, "Unsaved local edit")
+        XCTAssertTrue(destinationContext.hasChanges)
+        XCTAssertFalse(
+            try destinationContext.fetch(FetchDescriptor<Note>())
+                .contains(where: { $0.id == remoteNote.id })
+        )
+    }
+
     func testLateBootstrapAnnouncementSupersedesFallbackOnMac() {
         var registry = SyncBatchPeerCapabilityRegistry()
         registry.recordBootstrapSessionFallbackUnsupported(forPeerDeviceID: "peer")

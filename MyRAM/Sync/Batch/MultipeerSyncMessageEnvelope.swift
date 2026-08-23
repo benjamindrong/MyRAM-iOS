@@ -130,6 +130,7 @@ enum SyncPeerBootstrapError: Error, Equatable {
     case noteBodyStateMismatch(UUID)
     case conflictingNoteIdentity(UUID)
     case conflictingMissingSequenceState(UUID)
+    case destinationContextHasPendingChanges
     case commitVerificationFailed
 }
 
@@ -196,6 +197,9 @@ enum SyncPeerBootstrapSnapshotPersistence {
         to context: ModelContext
     ) throws -> SyncPeerBootstrapApplyDisposition {
         try validate(snapshot)
+        guard !context.hasChanges else {
+            throw SyncPeerBootstrapError.destinationContextHasPendingChanges
+        }
 
         let existingFolders = try context.fetch(FetchDescriptor<Folder>())
         let existingNotes = try context.fetch(FetchDescriptor<Note>())
