@@ -161,9 +161,10 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertTrue(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
     }
 
-    func testDiscoveryOnlyBootstrapSupportBecomesSessionEvidenceUntilDisconnect() {
+    func testDiscoveryOnlyBootstrapSupportUsedByMacSessionSurvivesDiscoveryLossUntilDisconnect() {
         var registry = SyncBatchPeerCapabilityRegistry()
         registry.recordBootstrapDiscoveryValue("1", forPeerDeviceID: "peer")
+        XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
 
         registry.clearDiscoveryEvidence(forPeerDeviceID: "peer")
 
@@ -173,6 +174,40 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         registry.clearEvidence(forPeerDeviceID: "peer")
         XCTAssertFalse(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
         XCTAssertFalse(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
+    }
+
+    func testMacDiscoveryLossBeforeConnectionDoesNotCreateBootstrapSessionEvidence() async throws {
+        let controller = try makeController(connectedPeersProvider: { [] })
+        let localPeerID = MCPeerID(displayName: "Local|local-device")
+        let remotePeerID = MCPeerID(displayName: "Remote|never-connected-mac")
+        let browser = MCNearbyServiceBrowser(
+            peer: localPeerID,
+            serviceType: "myram-sync"
+        )
+
+        controller.browser(
+            browser,
+            foundPeer: remotePeerID,
+            withDiscoveryInfo: [
+                SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+            ]
+        )
+        await Task.yield()
+        XCTAssertTrue(
+            controller.isBootstrapCapabilityResolvedForTesting(
+                peerDeviceID: "never-connected-mac"
+            )
+        )
+
+        controller.browser(browser, lostPeer: remotePeerID)
+        await Task.yield()
+
+        XCTAssertFalse(
+            controller.isBootstrapCapabilityResolvedForTesting(
+                peerDeviceID: "never-connected-mac"
+            )
+        )
     }
 
     func testDiscoveryLossDuringActiveMacBootstrapKeepsSameSnapshotRetryAlive() async throws {
@@ -208,6 +243,48 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertFalse(
             controller.bootstrapStateForTesting(peerDeviceID: "lost-discovery-mac")?.ordinarySyncReady == true
         )
+    }
+
+    func testExistingMacBaselineContinuesManifestedHistoryAfterBootstrapAck() async throws {
+        let peer = MCPeerID(displayName: "Remote|behind-mac")
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "21600000-0000-0000-0000-0000000000B1")!
+        let note = Note(title: "Authoritative", content: "")
+        note.id = noteID
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: context
+        )
+        try context.save()
+
+        var kinds: [MultipeerSyncMessageKind] = []
+        let controller = try makeController(
+            context: context,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                kinds.append(try MultipeerSyncMessageCoding.decodeMessage(from: data).kind)
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "behind-mac")
+        let historical = makeV1TitleBatch(idSuffix: 2172, noteID: noteID)
+
+        try await controller.acceptLocalBatch(historical)
+        controller.beginBootstrapForTesting(to: peer)
+        let state = try XCTUnwrap(controller.bootstrapStateForTesting(peerDeviceID: "behind-mac"))
+        XCTAssertEqual(kinds, [.bootstrapSnapshot])
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(snapshotID: state.snapshotID, coveredBatchIDs: []),
+            from: peer
+        )
+
+        XCTAssertTrue(
+            controller.bootstrapStateForTesting(peerDeviceID: "behind-mac")?.ordinarySyncReady == true
+        )
+        XCTAssertEqual(kinds, [.bootstrapSnapshot, .batchSync])
     }
 
     func testBootstrapApplyRejectsDirtyDestinationWithoutSavingOrRollingBackLocalChanges() throws {
@@ -476,16 +553,23 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
     }
 
     private func makeController(
+        context: ModelContext? = nil,
         connectedPeersProvider: (() -> [MCPeerID])? = nil,
         sendBatchDataOperation:
             ((Data, [MCPeerID], MCSessionSendDataMode) throws -> Void)? = nil,
         invitePeerOperation:
             ((MCPeerID, Data, TimeInterval) -> Void)? = nil
     ) throws -> MacSyncBatchController {
-        let container = try makeInMemoryContainer()
-        retainedContainers.append(container)
+        let resolvedContext: ModelContext
+        if let context {
+            resolvedContext = context
+        } else {
+            let container = try makeInMemoryContainer()
+            retainedContainers.append(container)
+            resolvedContext = container.mainContext
+        }
         return MacSyncBatchController(
-            context: container.mainContext,
+            context: resolvedContext,
             unsentBatchQueueFileURL: temporaryQueueFileURL(),
             startsNetworking: false,
             connectedPeersProvider: connectedPeersProvider,
@@ -505,6 +589,27 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             )!,
             createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
             changes: []
+        )
+    }
+
+    private func makeV1TitleBatch(idSuffix: Int, noteID: UUID) -> SyncBatch {
+        let modifiedAt = Date(timeIntervalSince1970: TimeInterval(idSuffix))
+        return SyncBatch(
+            id: UUID(uuidString: String(
+                format: "00000000-0000-0000-0000-%012d",
+                idSuffix
+            ))!,
+            originDeviceID: UUID(
+                uuidString: "00000000-0000-0000-0000-000000000001"
+            )!,
+            createdAt: modifiedAt,
+            changes: [
+                .noteTitleChanged(.init(
+                    noteID: noteID,
+                    title: "Historical title",
+                    modifiedAt: modifiedAt
+                ))
+            ]
         )
     }
 

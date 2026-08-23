@@ -39,8 +39,7 @@ struct SyncPeerBootstrapSnapshot: Codable, Equatable, Sendable {
             notes: notes,
             historyCoverage: batches.compactMap { batch in
                 let coverage = SyncPeerBootstrapHistoryBatchCoverage(batch: batch)
-                guard !coverage.noteIDs.isEmpty,
-                      coverage.noteIDs.isSubset(of: representedNoteIDs) else {
+                guard coverage.noteIDs.isSubset(of: representedNoteIDs) else {
                     return nil
                 }
                 return coverage
@@ -111,12 +110,52 @@ struct SyncPeerBootstrapApplyDisposition: Equatable, Sendable {
 
 struct SyncPeerBootstrapPendingState: Equatable, Sendable {
     let snapshot: SyncPeerBootstrapSnapshot
+    private let capturedBatchIDs: Set<SyncBatchID>
+    /// IDs the frozen snapshot manifest actually represents. Bootstrap ACKs may
+    /// prune only this set, never every batch that happened to be queued at capture.
     let coveredBatchIDs: Set<SyncBatchID>
     var withheldHistoricalBatchIDs: Set<SyncBatchID>
-    var ordinarySyncReady: Bool
+    var ordinarySyncReady: Bool {
+        didSet {
+            guard ordinarySyncReady else { return }
+            withheldHistoricalBatchIDs = historicalBatchIDsThatRemainWithheld
+        }
+    }
     var retryAttempt: Int
 
+    init(
+        snapshot: SyncPeerBootstrapSnapshot,
+        coveredBatchIDs capturedBatchIDs: Set<SyncBatchID>,
+        withheldHistoricalBatchIDs: Set<SyncBatchID>,
+        ordinarySyncReady: Bool,
+        retryAttempt: Int
+    ) {
+        self.snapshot = snapshot
+        self.capturedBatchIDs = capturedBatchIDs
+        coveredBatchIDs = Set(snapshot.historyCoverage.map(\.batchID))
+        self.withheldHistoricalBatchIDs = withheldHistoricalBatchIDs
+        self.ordinarySyncReady = ordinarySyncReady
+        self.retryAttempt = retryAttempt
+
+        if ordinarySyncReady {
+            self.withheldHistoricalBatchIDs = historicalBatchIDsThatRemainWithheld
+        }
+    }
+
     var snapshotID: UUID { snapshot.id }
+
+    private var historicalBatchIDsThatRemainWithheld: Set<SyncBatchID> {
+        let absentFromManifest = capturedBatchIDs.subtracting(coveredBatchIDs)
+        // Empty batches carry no note delta. Keeping an unacknowledged empty entry
+        // withheld preserves the existing no-op queue behavior without blocking an
+        // existing note baseline that needs real manifested history to catch up.
+        let emptyManifestBatchIDs = Set(
+            snapshot.historyCoverage.compactMap { coverage in
+                coverage.noteIDs.isEmpty ? coverage.batchID : nil
+            }
+        )
+        return absentFromManifest.union(emptyManifestBatchIDs)
+    }
 }
 
 enum SyncPeerBootstrapError: Error, Equatable {
@@ -308,7 +347,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
 
         return SyncPeerBootstrapApplyDisposition(
             coveredBatchIDs: Set(snapshot.historyCoverage.compactMap { coverage in
-                !coverage.noteIDs.isEmpty && coverage.noteIDs.isSubset(of: coveredNoteIDs)
+                coverage.noteIDs.isSubset(of: coveredNoteIDs)
                     ? coverage.batchID
                     : nil
             }),

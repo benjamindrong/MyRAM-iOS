@@ -253,15 +253,9 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         if evidenceByPeerDeviceID[peerDeviceID]?.isEmpty == true {
             evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         }
-
-        // A positive discovery marker may already have admitted bootstrap work for
-        // the connected MCSession. Browser discovery can disappear independently
-        // of that session, so retain positive support as ephemeral session evidence.
-        // Actual disconnect still clears both discovery and session evidence.
-        if bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported,
-           bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] != .v1Supported {
-            bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] = .v1Supported
-        }
+        // Discovery loss alone must never create session capability evidence.
+        // Positive discovery support is bound to session evidence only when a
+        // connected-session path actually consumes it below.
         bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
 
@@ -284,11 +278,21 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         effectiveCapability(forPeerDeviceID: peerDeviceID).supportsV2
     }
 
-    func hasExplicitCurrentSessionBootstrapV1Support(
+    mutating func hasExplicitCurrentSessionBootstrapV1Support(
         forPeerDeviceID peerDeviceID: String
     ) -> Bool {
-        bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported
-            || bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported
+        if bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported {
+            return true
+        }
+        guard bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported else {
+            return false
+        }
+
+        // All production callers reach this predicate from a connected-peer path.
+        // Bind the positive discovery marker to that MCSession before browser
+        // discovery can disappear independently of the live session.
+        bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] = .v1Supported
+        return true
     }
 
     func isBootstrapCapabilityResolved(forPeerDeviceID peerDeviceID: String) -> Bool {
