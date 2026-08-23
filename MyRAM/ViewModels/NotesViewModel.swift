@@ -303,6 +303,25 @@ final class NotesViewModel: ObservableObject {
                 await statusController?.refreshPendingSyncStatus()
             }
         }
+        if let bootstrapController = syncController as? MyRAMSyncBootstrapConfiguring {
+            bootstrapController.buildBootstrapSnapshot = { [context] in
+                try SyncPeerBootstrapSnapshotPersistence.build(from: context)
+            }
+            bootstrapController.applyBootstrapSnapshot = { [context] snapshot in
+                try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: context)
+            }
+            bootstrapController.onBootstrapPresentationRefresh = { [weak self] in
+                guard let self else { return }
+                let currentNoteID = currentNote?.id
+                let currentFolderID = currentFolder?.id
+                refreshCurrentFolderContent()
+                currentNote = currentNoteID.flatMap(fetchNote(withID:))
+                currentFolder = currentFolderID.flatMap(fetchFolder(withID:))
+            }
+            bootstrapController.onResumeIncomingAfterBootstrap = { [weak self] in
+                await self?.resumePendingConvergencePresentation()
+            }
+        }
         syncConvergenceRuntime = SyncConvergenceRuntime(
             context: context,
             convergenceQueue: pendingIncomingBatches,

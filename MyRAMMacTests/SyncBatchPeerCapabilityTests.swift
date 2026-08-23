@@ -59,7 +59,10 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(SyncBatchPeerCapabilityCodec.productionCapability, .v1AndV2)
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.productionDiscoveryInfo,
-            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"]
+            [
+                SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+            ]
         )
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.productionInvitationContext,
@@ -146,6 +149,24 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
+    func testBootstrapAnnouncementRemainsSupportedAfterDiscoveryLossOrMissingMarker() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordBootstrapV1Announcement(forPeerDeviceID: "peer")
+        registry.recordBootstrapDiscoveryValue(nil, forPeerDeviceID: "peer")
+        registry.clearDiscoveryEvidence(forPeerDeviceID: "peer")
+
+        XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+        XCTAssertTrue(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
+    }
+
+    func testLateBootstrapAnnouncementSupersedesFallbackOnMac() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordBootstrapSessionFallbackUnsupported(forPeerDeviceID: "peer")
+        registry.recordBootstrapV1Announcement(forPeerDeviceID: "peer")
+
+        XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+    }
+
     func testControllerAdvertisesAndInvitesWithCanonicalV1AndV2Context() throws {
         var invitedPeerIDs: [MCPeerID] = []
         var invitationContexts: [Data] = []
@@ -159,7 +180,10 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
 
         XCTAssertEqual(
             controller.advertisedBatchSchemaDiscoveryInfo,
-            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"]
+            [
+                SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+            ]
         )
 
         controller.invite(MacSyncDiscoveredPeer(
@@ -273,6 +297,27 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
                 recipientLists.append(peers)
             }
         )
+        let localPeerID = MCPeerID(displayName: "Local|local-device")
+        let browser = MCNearbyServiceBrowser(
+            peer: localPeerID,
+            serviceType: "myram-sync"
+        )
+        let legacyDiscoveryInfo = [
+            SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"
+        ]
+
+        controller.browser(
+            browser,
+            foundPeer: firstPeer,
+            withDiscoveryInfo: legacyDiscoveryInfo
+        )
+        controller.browser(
+            browser,
+            foundPeer: secondPeer,
+            withDiscoveryInfo: legacyDiscoveryInfo
+        )
+        await Task.yield()
+        recipientLists.removeAll()
 
         try await controller.acceptLocalBatch(makeV1Batch(idSuffix: 1))
 

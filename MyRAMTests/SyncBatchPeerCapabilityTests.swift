@@ -96,12 +96,360 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.productionDiscoveryInfo,
-            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"]
+            [
+                SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+            ]
         )
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.productionInvitationContext,
             Data("1,2".utf8)
         )
+    }
+
+    func testBootstrapRequiresExplicitCurrentDiscoveryMarkerAndClearsOnDisconnect() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        XCTAssertFalse(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
+        XCTAssertFalse(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+
+        registry.recordBootstrapDiscoveryValue(nil, forPeerDeviceID: "peer")
+        XCTAssertTrue(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
+        XCTAssertFalse(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+
+        registry.recordBootstrapDiscoveryValue("1", forPeerDeviceID: "peer")
+        XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+
+        registry.clearEvidence(forPeerDeviceID: "peer")
+        XCTAssertFalse(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
+        XCTAssertFalse(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+    }
+
+    func testBootstrapAnnouncementResolvesSupportedWithoutDiscovery() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordBootstrapV1Announcement(forPeerDeviceID: "peer")
+        XCTAssertTrue(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
+        XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+    }
+
+    func testBootstrapAnnouncementCannotBeDowngradedByMissingDiscoveryMarker() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordBootstrapV1Announcement(forPeerDeviceID: "peer")
+        registry.recordBootstrapDiscoveryValue(nil, forPeerDeviceID: "peer")
+
+        XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+        XCTAssertTrue(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
+    }
+
+    func testLostPeerClearsOnlyDiscoveryBootstrapEvidence() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordBootstrapDiscoveryValue("1", forPeerDeviceID: "peer")
+        registry.recordBootstrapV1Announcement(forPeerDeviceID: "peer")
+
+        registry.clearDiscoveryEvidence(forPeerDeviceID: "peer")
+
+        XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+    }
+
+    func testLateBootstrapAnnouncementSupersedesSessionFallback() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordBootstrapSessionFallbackUnsupported(forPeerDeviceID: "peer")
+        XCTAssertFalse(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+
+        registry.recordBootstrapV1Announcement(forPeerDeviceID: "peer")
+
+        XCTAssertTrue(registry.hasExplicitCurrentSessionBootstrapV1Support(forPeerDeviceID: "peer"))
+    }
+
+    func testBootstrapCapablePeerWithholdsBatchesUntilPositiveAckAndPrunesOnlyCapturedIDs() async throws {
+        let peer = MCPeerID(displayName: "Remote|bootstrap-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let snapshotID = UUID()
+        controller.buildBootstrapSnapshot = {
+            SyncPeerBootstrapSnapshot(id: snapshotID, folders: [], notes: [])
+        }
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "bootstrap-peer")
+        let covered = makeV1Batch(idSuffix: 2161)
+        let newer = makeV1Batch(idSuffix: 2162)
+
+        try await controller.acceptLocalBatch(covered)
+        XCTAssertTrue(transport.batchRecipientLists.isEmpty)
+        await controller.beginBootstrapForTesting(to: peer)
+        try await controller.acceptLocalBatch(newer)
+        XCTAssertTrue(transport.batchRecipientLists.isEmpty)
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(snapshotID: snapshotID, coveredBatchIDs: [covered.id]),
+            from: peer
+        )
+
+        XCTAssertTrue(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "bootstrap-peer"))
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches.map(\.id), [newer.id])
+        XCTAssertEqual(transport.batchRecipientLists, [[peer]])
+        controller.clearBootstrapStateForTesting(peerDeviceID: "bootstrap-peer")
+        XCTAssertFalse(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "bootstrap-peer"))
+    }
+
+    func testUncoveredBootstrapHistoryIsWithheldAfterBarrierOpens() async throws {
+        let peer = MCPeerID(displayName: "Remote|bootstrap-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let snapshotID = UUID()
+        controller.buildBootstrapSnapshot = {
+            SyncPeerBootstrapSnapshot(id: snapshotID, folders: [], notes: [])
+        }
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "bootstrap-peer")
+        let covered = makeV1Batch(idSuffix: 2163)
+        try await controller.acceptLocalBatch(covered)
+        await controller.beginBootstrapForTesting(to: peer)
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(snapshotID: snapshotID, coveredBatchIDs: []),
+            from: peer
+        )
+
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches.map(\.id), [covered.id])
+        XCTAssertTrue(transport.batchRecipientLists.isEmpty)
+    }
+
+    func testBootstrapPruningFailureKeepsBarrierClosedAndHistoryQueued() async throws {
+        let peer = MCPeerID(displayName: "Remote|bootstrap-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let snapshotID = UUID()
+        controller.buildBootstrapSnapshot = {
+            SyncPeerBootstrapSnapshot(id: snapshotID, folders: [], notes: [])
+        }
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "bootstrap-peer")
+        let historical = makeV1Batch(idSuffix: 2164)
+        try await controller.acceptLocalBatch(historical)
+        await controller.beginBootstrapForTesting(to: peer)
+        controller.injectUnsentBatchPersistenceFailureForNextWrite()
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshotID,
+                coveredBatchIDs: [historical.id]
+            ),
+            from: peer
+        )
+
+        XCTAssertFalse(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "bootstrap-peer"))
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [historical])
+        XCTAssertTrue(transport.batchRecipientLists.isEmpty)
+    }
+
+    func testInvalidBootstrapCoverageAcknowledgementFailsClosed() async throws {
+        let peer = MCPeerID(displayName: "Remote|bootstrap-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let snapshotID = UUID()
+        controller.buildBootstrapSnapshot = {
+            SyncPeerBootstrapSnapshot(id: snapshotID, folders: [], notes: [])
+        }
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "bootstrap-peer")
+        let historical = makeV1Batch(idSuffix: 2165)
+        try await controller.acceptLocalBatch(historical)
+        await controller.beginBootstrapForTesting(to: peer)
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshotID,
+                coveredBatchIDs: [UUID()]
+            ),
+            from: peer
+        )
+
+        XCTAssertFalse(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "bootstrap-peer"))
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [historical])
+        XCTAssertTrue(transport.batchRecipientLists.isEmpty)
+    }
+
+    func testCapabilityAnnouncementResolvesPeerAndStartsBootstrapBeforeBatchSync() async throws {
+        let peer = MCPeerID(displayName: "Remote|announcement-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        controller.buildBootstrapSnapshot = {
+            SyncPeerBootstrapSnapshot(id: UUID(), folders: [], notes: [])
+        }
+        try await controller.acceptLocalBatch(makeV1Batch(idSuffix: 2166))
+        XCTAssertTrue(transport.sentMessageKinds.isEmpty)
+
+        await controller.handleBootstrapCapabilityAnnouncementForTesting(from: peer)
+
+        XCTAssertTrue(controller.isBootstrapCapabilityResolvedForTesting(peerDeviceID: "announcement-peer"))
+        XCTAssertEqual(transport.sentMessageKinds, [.bootstrapSnapshot])
+        XCTAssertTrue(transport.batchRecipientLists.isEmpty)
+    }
+
+    func testUnresolvedPeerFallsBackBeforeReceivingBatchSyncAndLateSupportStartsBootstrap() async throws {
+        let peer = MCPeerID(displayName: "Remote|fallback-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        controller.buildBootstrapSnapshot = {
+            SyncPeerBootstrapSnapshot(id: UUID(), folders: [], notes: [])
+        }
+        let batch = makeV1Batch(idSuffix: 2167)
+        try await controller.acceptLocalBatch(batch)
+        XCTAssertTrue(transport.batchRecipientLists.isEmpty)
+
+        await controller.resolveBootstrapCapabilityFallbackForTesting(peerID: peer)
+
+        XCTAssertEqual(transport.batchRecipientLists, [[peer]])
+        await controller.handleBootstrapCapabilityAnnouncementForTesting(from: peer)
+        XCTAssertEqual(transport.sentMessageKinds.last, .bootstrapSnapshot)
+    }
+
+    func testBootstrapSnapshotSendFailureAutomaticallyRetriesSameSnapshot() async throws {
+        let peer = MCPeerID(displayName: "Remote|retry-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        transport.failNextBootstrapSnapshotSend = true
+        let controller = makeController(transport: transport)
+        let snapshot = SyncPeerBootstrapSnapshot(id: UUID(), folders: [], notes: [])
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "retry-peer")
+        controller.buildBootstrapSnapshot = { snapshot }
+        controller.setBootstrapRetryDelayNanosecondsForTesting([
+            1_000_000,
+            1_000_000_000,
+            1_000_000_000
+        ])
+
+        await controller.beginBootstrapForTesting(to: peer)
+        try await Task.sleep(nanoseconds: 25_000_000)
+
+        XCTAssertGreaterThanOrEqual(transport.attemptedBootstrapSnapshots.count, 2)
+        XCTAssertEqual(
+            Set(transport.attemptedBootstrapSnapshots.map(\.id)),
+            Set([snapshot.id])
+        )
+        XCTAssertFalse(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "retry-peer"))
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(snapshotID: snapshot.id, coveredBatchIDs: []),
+            from: peer
+        )
+        let attemptsAfterAck = transport.attemptedBootstrapSnapshots.count
+        try await Task.sleep(nanoseconds: 25_000_000)
+
+        XCTAssertEqual(transport.attemptedBootstrapSnapshots.count, attemptsAfterAck)
+        XCTAssertTrue(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "retry-peer"))
+    }
+
+    func testBootstrapAckTimeoutRetransmitsSameSnapshotUntilAck() async throws {
+        let peer = MCPeerID(displayName: "Remote|ack-timeout-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let snapshot = SyncPeerBootstrapSnapshot(id: UUID(), folders: [], notes: [])
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "ack-timeout-peer")
+        controller.buildBootstrapSnapshot = { snapshot }
+        controller.setBootstrapRetryDelayNanosecondsForTesting([
+            1_000_000,
+            1_000_000_000,
+            1_000_000_000
+        ])
+
+        await controller.beginBootstrapForTesting(to: peer)
+        try await Task.sleep(nanoseconds: 25_000_000)
+
+        XCTAssertGreaterThanOrEqual(transport.attemptedBootstrapSnapshots.count, 2)
+        XCTAssertEqual(
+            Set(transport.attemptedBootstrapSnapshots.map(\.id)),
+            Set([snapshot.id])
+        )
+        XCTAssertTrue(transport.batchRecipientLists.isEmpty)
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(snapshotID: snapshot.id, coveredBatchIDs: []),
+            from: peer
+        )
+        let attemptsAfterAck = transport.attemptedBootstrapSnapshots.count
+        try await Task.sleep(nanoseconds: 25_000_000)
+
+        XCTAssertEqual(transport.attemptedBootstrapSnapshots.count, attemptsAfterAck)
+        XCTAssertTrue(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "ack-timeout-peer"))
+    }
+
+    func testBootstrapAckSendLossIsRecoveredByDuplicateSnapshot() async {
+        let peer = MCPeerID(displayName: "Remote|ack-loss-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        transport.failNextBootstrapAcknowledgementSend = true
+        let controller = makeController(transport: transport)
+        let snapshot = SyncPeerBootstrapSnapshot(id: UUID(), folders: [], notes: [])
+        var applyCount = 0
+        var resumeCount = 0
+        controller.applyBootstrapSnapshot = { _ in
+            applyCount += 1
+            return SyncPeerBootstrapApplyDisposition(
+                coveredBatchIDs: [],
+                insertedNoteIDs: [],
+                presentationRefreshRequired: false
+            )
+        }
+        controller.onResumeIncomingAfterBootstrap = {
+            resumeCount += 1
+        }
+
+        await controller.receiveBootstrapSnapshotForTesting(snapshot, from: peer)
+        XCTAssertEqual(applyCount, 1)
+        XCTAssertEqual(resumeCount, 0)
+        XCTAssertTrue(transport.sentBootstrapAcknowledgements.isEmpty)
+
+        await controller.receiveBootstrapSnapshotForTesting(snapshot, from: peer)
+
+        XCTAssertEqual(applyCount, 2)
+        XCTAssertEqual(resumeCount, 1)
+        XCTAssertEqual(transport.sentBootstrapAcknowledgements.map(\.snapshotID), [snapshot.id])
+    }
+
+    func testDisconnectCancelsPendingBootstrapRetry() async throws {
+        let peer = MCPeerID(displayName: "Remote|disconnect-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        controller.buildBootstrapSnapshot = {
+            SyncPeerBootstrapSnapshot(id: UUID(), folders: [], notes: [])
+        }
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "disconnect-peer")
+        controller.setBootstrapRetryDelayNanosecondsForTesting([
+            20_000_000,
+            1_000_000_000,
+            1_000_000_000
+        ])
+        await controller.beginBootstrapForTesting(to: peer)
+        XCTAssertTrue(controller.isBootstrapCapabilityResolvedForTesting(peerDeviceID: "disconnect-peer"))
+        let attemptsBeforeDisconnect = transport.attemptedBootstrapSnapshots.count
+
+        controller.handlePeerDisconnectForTesting(peerDeviceID: "disconnect-peer")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertFalse(controller.isBootstrapCapabilityResolvedForTesting(peerDeviceID: "disconnect-peer"))
+        XCTAssertFalse(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "disconnect-peer"))
+        XCTAssertEqual(transport.attemptedBootstrapSnapshots.count, attemptsBeforeDisconnect)
+    }
+
+    func testReceiveBootstrapOrdersApplyThenAcknowledgementThenResume() async {
+        let peer = MCPeerID(displayName: "Remote|ordering-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        var events: [String] = []
+        transport.onSendKind = { kind in
+            if kind == .bootstrapAcknowledgement { events.append("ack") }
+        }
+        controller.applyBootstrapSnapshot = { _ in
+            events.append("apply")
+            return SyncPeerBootstrapApplyDisposition(
+                coveredBatchIDs: [],
+                insertedNoteIDs: [],
+                presentationRefreshRequired: false
+            )
+        }
+        controller.onResumeIncomingAfterBootstrap = { events.append("resume") }
+
+        await controller.receiveBootstrapSnapshotForTesting(
+            SyncPeerBootstrapSnapshot(id: UUID(), folders: [], notes: []),
+            from: peer
+        )
+
+        XCTAssertEqual(events, ["apply", "ack", "resume"])
     }
 
     func testUnknownPeerDefaultsToV1Only() {
@@ -298,7 +646,10 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
 
         XCTAssertEqual(
             controller.advertisedBatchSchemaDiscoveryInfo,
-            [SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"]
+            [
+                SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+            ]
         )
 
         controller.invite(MyRAMDiscoveredPeer(
@@ -411,6 +762,8 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             connectedPeers: [firstPeer, secondPeer]
         )
         let controller = makeController(transport: transport)
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "first-device")
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "second-device")
         let batch = makeV1Batch(idSuffix: 1)
 
         try await controller.acceptLocalBatch(batch)
@@ -528,6 +881,13 @@ private final class CapabilityRecordingTransport: MyRAMSyncTransporting {
     private(set) var invitationContexts: [Data] = []
     private(set) var batchRecipientLists: [[MCPeerID]] = []
     private(set) var sentBatchAcknowledgements: [SyncBatchAcknowledgement] = []
+    private(set) var attemptedBootstrapSnapshots: [SyncPeerBootstrapSnapshot] = []
+    private(set) var sentBootstrapSnapshots: [SyncPeerBootstrapSnapshot] = []
+    private(set) var sentBootstrapAcknowledgements: [SyncPeerBootstrapAcknowledgement] = []
+    private(set) var sentMessageKinds: [MultipeerSyncMessageKind] = []
+    var onSendKind: ((MultipeerSyncMessageKind) -> Void)?
+    var failNextBootstrapSnapshotSend = false
+    var failNextBootstrapAcknowledgementSend = false
 
     init(connectedPeers: [MCPeerID] = []) {
         connectedPeerValues = connectedPeers
@@ -552,6 +912,22 @@ private final class CapabilityRecordingTransport: MyRAMSyncTransporting {
         mode: MCSessionSendDataMode
     ) async throws {
         let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+        if message.kind == .bootstrapSnapshot {
+            attemptedBootstrapSnapshots.append(
+                try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
+            )
+            if failNextBootstrapSnapshotSend {
+                failNextBootstrapSnapshotSend = false
+                throw CapabilityRecordingTransportError.injected
+            }
+        }
+        if message.kind == .bootstrapAcknowledgement,
+           failNextBootstrapAcknowledgementSend {
+            failNextBootstrapAcknowledgementSend = false
+            throw CapabilityRecordingTransportError.injected
+        }
+        sentMessageKinds.append(message.kind)
+        onSendKind?(message.kind)
         switch message.kind {
         case .batchSync:
             batchRecipientLists.append(peers)
@@ -562,8 +938,23 @@ private final class CapabilityRecordingTransport: MyRAMSyncTransporting {
                     from: message.payload
                 )
             )
-        case .legacySyncEnvelope:
+        case .bootstrapSnapshot:
+            sentBootstrapSnapshots.append(
+                try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
+            )
+        case .bootstrapAcknowledgement:
+            sentBootstrapAcknowledgements.append(
+                try JSONDecoder().decode(
+                    SyncPeerBootstrapAcknowledgement.self,
+                    from: message.payload
+                )
+            )
+        case .legacySyncEnvelope, .bootstrapCapability:
             break
         }
     }
+}
+
+private enum CapabilityRecordingTransportError: Error {
+    case injected
 }

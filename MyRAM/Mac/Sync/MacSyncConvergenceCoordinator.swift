@@ -83,6 +83,10 @@ final class MacSyncConvergenceCoordinator {
         await handle(outcome: runtime.resumePendingWork(), sourceBatch: nil)
     }
 
+    func refreshAfterBootstrap() {
+        presentationAdapter.refreshAfterBootstrap()
+    }
+
     private func handle(outcome: SyncConvergenceRuntimeOutcome, sourceBatch: SyncBatch?) async {
         switch outcome {
         case .drained:

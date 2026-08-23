@@ -36,6 +36,13 @@
             ReferencedContainer = "container:MyRAM.xcodeproj">
          </BuildableReference>
       </MacroExpansion>
+      <EnvironmentVariables>
+         <EnvironmentVariable
+            key = "MYRAM_HOSTED_TEST_MODE"
+            value = "1"
+            isEnabled = "YES">
+         </EnvironmentVariable>
+      </EnvironmentVariables>
       <Testables>
          <TestableReference
             skipped = "NO"

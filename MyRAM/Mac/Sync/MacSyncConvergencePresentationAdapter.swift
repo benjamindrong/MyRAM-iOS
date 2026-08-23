@@ -20,6 +20,10 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
         self.surface = surface
     }
 
+    func refreshAfterBootstrap() {
+        surface.refreshNotesList()
+    }
+
     func refreshPresentation(for request: SyncConvergencePresentationRequest) async -> SyncConvergencePostCommitAdapterResult {
         guard request.noteID == request.committedNote.noteID else { return .failed }
         guard request.committedBodyHash == SyncBatchContentHash.sha256Hex(for: request.committedNote.body) else { return .failed }

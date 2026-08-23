@@ -6,6 +6,402 @@ import XCTest
 
 @MainActor
 final class MacSyncBatchControllerTests: XCTestCase {
+    private var retainedContainers: [ModelContainer] = []
+
+    func testBootstrapBarrierPositiveAckPrunesCapturedBatchesAndPreservesNewerWork() async throws {
+        let peer = MCPeerID(displayName: "remote|bootstrap-mac")
+        var sends: [Data] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sends.append(data) }
+        )
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "bootstrap-mac")
+        let covered = makeBatch(idSuffix: 2161)
+        let newer = makeBatch(idSuffix: 2162)
+        try await controller.acceptLocalBatch(covered)
+        XCTAssertTrue(sends.isEmpty)
+
+        controller.beginBootstrapForTesting(to: peer)
+        let bootstrapData = try XCTUnwrap(sends.first)
+        let bootstrapMessage = try MultipeerSyncMessageCoding.decodeMessage(from: bootstrapData)
+        let snapshot = try JSONDecoder().decode(
+            SyncPeerBootstrapSnapshot.self,
+            from: bootstrapMessage.payload
+        )
+        try await controller.acceptLocalBatch(newer)
+        XCTAssertEqual(sends.count, 1)
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(snapshotID: snapshot.id, coveredBatchIDs: [covered.id]),
+            from: peer
+        )
+
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id), [newer.id])
+        XCTAssertTrue(controller.bootstrapStateForTesting(peerDeviceID: "bootstrap-mac")?.ordinarySyncReady == true)
+        XCTAssertEqual(try MultipeerSyncMessageCoding.decodeMessage(from: sends.last!).kind, .batchSync)
+    }
+
+    func testBootstrapBarrierWithholdsUncoveredHistoricalWork() async throws {
+        let peer = MCPeerID(displayName: "remote|bootstrap-mac")
+        var sends: [Data] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sends.append(data) }
+        )
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "bootstrap-mac")
+        let covered = makeBatch(idSuffix: 2163)
+        try await controller.acceptLocalBatch(covered)
+        controller.beginBootstrapForTesting(to: peer)
+        let message = try MultipeerSyncMessageCoding.decodeMessage(from: sends[0])
+        let snapshot = try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(snapshotID: snapshot.id, coveredBatchIDs: []),
+            from: peer
+        )
+
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id), [covered.id])
+        XCTAssertEqual(try MultipeerSyncMessageCoding.decodeMessage(from: sends.last!).kind, .bootstrapSnapshot)
+    }
+
+    func testBootstrapPruningFailureKeepsMacBarrierClosedAndHistoryQueued() async throws {
+        let peer = MCPeerID(displayName: "remote|bootstrap-mac")
+        var sends: [Data] = []
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-216-mac-pruning-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let queueURL = directory.appendingPathComponent("unsent-batches.json")
+        let queue = FileBackedSyncBatchQueue(fileURL: queueURL)
+        let controller = try makeController(
+            unsentBatchQueueFileURL: queueURL,
+            unsentBatchQueue: queue,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sends.append(data) }
+        )
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "bootstrap-mac")
+        let historical = makeBatch(idSuffix: 2164)
+        try await controller.acceptLocalBatch(historical)
+        controller.beginBootstrapForTesting(to: peer)
+        let message = try MultipeerSyncMessageCoding.decodeMessage(from: sends[0])
+        let snapshot = try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
+        queue.injectPersistenceFailureForNextWrite()
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshot.id,
+                coveredBatchIDs: [historical.id]
+            ),
+            from: peer
+        )
+
+        XCTAssertFalse(controller.bootstrapStateForTesting(peerDeviceID: "bootstrap-mac")?.ordinarySyncReady == true)
+        XCTAssertEqual(queue.pendingBatches, [historical])
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: queueURL).pendingBatches, [historical])
+        XCTAssertEqual(sends.count, 1)
+    }
+
+    func testMacCapabilityAnnouncementResolvesPeerAndStartsBootstrapBeforeBatchSync() async throws {
+        let peer = MCPeerID(displayName: "remote|announcement-mac")
+        var kinds: [MultipeerSyncMessageKind] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                kinds.append(try MultipeerSyncMessageCoding.decodeMessage(from: data).kind)
+            }
+        )
+        try await controller.acceptLocalBatch(makeBatch(idSuffix: 2165))
+        XCTAssertTrue(kinds.isEmpty)
+
+        controller.handleBootstrapCapabilityAnnouncementForTesting(from: peer)
+
+        XCTAssertTrue(controller.isBootstrapCapabilityResolvedForTesting(peerDeviceID: "announcement-mac"))
+        XCTAssertEqual(kinds, [.bootstrapSnapshot])
+    }
+
+    func testMacUnresolvedPeerFallsBackBeforeBatchSyncAndLateSupportStartsBootstrap() async throws {
+        let peer = MCPeerID(displayName: "remote|fallback-mac")
+        var kinds: [MultipeerSyncMessageKind] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                kinds.append(try MultipeerSyncMessageCoding.decodeMessage(from: data).kind)
+            }
+        )
+        try await controller.acceptLocalBatch(makeBatch(idSuffix: 2166))
+        XCTAssertTrue(kinds.isEmpty)
+
+        await controller.resolveBootstrapCapabilityFallbackForTesting(peerID: peer)
+        XCTAssertEqual(kinds, [.batchSync])
+
+        controller.handleBootstrapCapabilityAnnouncementForTesting(from: peer)
+        XCTAssertEqual(kinds.last, .bootstrapSnapshot)
+    }
+
+    func testMacBootstrapSnapshotSendFailureAutomaticallyRetriesSameSnapshot() async throws {
+        let peer = MCPeerID(displayName: "remote|retry-mac")
+        var shouldFail = true
+        var attemptedSnapshots: [SyncPeerBootstrapSnapshot] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                guard message.kind == .bootstrapSnapshot else { return }
+                let snapshot = try JSONDecoder().decode(
+                    SyncPeerBootstrapSnapshot.self,
+                    from: message.payload
+                )
+                attemptedSnapshots.append(snapshot)
+                if shouldFail {
+                    shouldFail = false
+                    throw MacBootstrapSendTestError.injected
+                }
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "retry-mac")
+        controller.setBootstrapRetryDelayNanosecondsForTesting([
+            1_000_000,
+            1_000_000_000,
+            1_000_000_000
+        ])
+
+        controller.beginBootstrapForTesting(to: peer)
+        try await Task.sleep(nanoseconds: 25_000_000)
+
+        XCTAssertGreaterThanOrEqual(attemptedSnapshots.count, 2)
+        XCTAssertEqual(Set(attemptedSnapshots.map(\.id)).count, 1)
+        let snapshotID = try XCTUnwrap(attemptedSnapshots.first?.id)
+        XCTAssertEqual(
+            controller.bootstrapStateForTesting(peerDeviceID: "retry-mac")?.snapshotID,
+            snapshotID
+        )
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(snapshotID: snapshotID, coveredBatchIDs: []),
+            from: peer
+        )
+        let attemptsAfterAck = attemptedSnapshots.count
+        try await Task.sleep(nanoseconds: 25_000_000)
+        XCTAssertEqual(attemptedSnapshots.count, attemptsAfterAck)
+    }
+
+    func testMacBootstrapAckTimeoutRetransmitsSameSnapshotUntilAck() async throws {
+        let peer = MCPeerID(displayName: "remote|ack-timeout-mac")
+        var attemptedSnapshots: [SyncPeerBootstrapSnapshot] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                guard message.kind == .bootstrapSnapshot else { return }
+                attemptedSnapshots.append(
+                    try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
+                )
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "ack-timeout-mac")
+        controller.setBootstrapRetryDelayNanosecondsForTesting([
+            1_000_000,
+            1_000_000_000,
+            1_000_000_000
+        ])
+
+        controller.beginBootstrapForTesting(to: peer)
+        try await Task.sleep(nanoseconds: 25_000_000)
+
+        XCTAssertGreaterThanOrEqual(attemptedSnapshots.count, 2)
+        XCTAssertEqual(Set(attemptedSnapshots.map(\.id)).count, 1)
+        let snapshotID = try XCTUnwrap(attemptedSnapshots.first?.id)
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(snapshotID: snapshotID, coveredBatchIDs: []),
+            from: peer
+        )
+        let attemptsAfterAck = attemptedSnapshots.count
+        try await Task.sleep(nanoseconds: 25_000_000)
+
+        XCTAssertEqual(attemptedSnapshots.count, attemptsAfterAck)
+        XCTAssertTrue(
+            controller.bootstrapStateForTesting(peerDeviceID: "ack-timeout-mac")?.ordinarySyncReady == true
+        )
+    }
+
+    func testMacDisconnectCancelsPendingBootstrapRetry() async throws {
+        let peer = MCPeerID(displayName: "remote|disconnect-mac")
+        var snapshotSendCount = 0
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                if try MultipeerSyncMessageCoding.decodeMessage(from: data).kind == .bootstrapSnapshot {
+                    snapshotSendCount += 1
+                }
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "disconnect-mac")
+        controller.setBootstrapRetryDelayNanosecondsForTesting([
+            20_000_000,
+            1_000_000_000,
+            1_000_000_000
+        ])
+        controller.beginBootstrapForTesting(to: peer)
+        XCTAssertTrue(controller.isBootstrapCapabilityResolvedForTesting(peerDeviceID: "disconnect-mac"))
+        let sendsBeforeDisconnect = snapshotSendCount
+
+        controller.handlePeerDisconnectForTesting(peerDeviceID: "disconnect-mac")
+        try await Task.sleep(nanoseconds: 50_000_000)
+
+        XCTAssertFalse(controller.isBootstrapCapabilityResolvedForTesting(peerDeviceID: "disconnect-mac"))
+        XCTAssertNil(controller.bootstrapStateForTesting(peerDeviceID: "disconnect-mac"))
+        XCTAssertEqual(snapshotSendCount, sendsBeforeDisconnect)
+    }
+
+    func testMacReceiveBootstrapPersistsBeforeAckAndResumesRealPendingWorkAfterSuccessfulAck() async throws {
+        let peer = MCPeerID(displayName: "remote|ordering-mac")
+        let destinationContainer = try makeInMemoryContainer()
+        let destinationContext = destinationContainer.mainContext
+        let sourceContainer = try makeInMemoryContainer()
+        let sourceContext = sourceContainer.mainContext
+        let noteID = UUID(uuidString: "21600000-0000-0000-0000-0000000000A1")!
+
+        let sourceNote = Note(title: "", content: "")
+        sourceNote.id = noteID
+        sourceContext.insert(sourceNote)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: sourceNote,
+            in: sourceContext
+        )
+        try sourceContext.save()
+
+        let sourceRecord = try XCTUnwrap(
+            try sourceContext.fetch(FetchDescriptor<NoteSequenceStateRecord>())
+                .first(where: { $0.noteID == noteID })
+        )
+        let initialState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: sourceRecord,
+            noteID: noteID
+        )
+        let snapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: sourceContext)
+        XCTAssertEqual(snapshot.notes.map(\.id), [noteID])
+
+        let originDeviceID = UUID(uuidString: "21600000-0000-0000-0000-0000000000A2")!
+        let change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 0,
+            text: "A",
+            modifiedAt: Date(timeIntervalSince1970: 216),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            operationID: SyncOperationID(deviceID: originDeviceID, localCounter: 1),
+            state: initialState
+        )
+        let historicalBatch = SyncBatch(
+            id: UUID(uuidString: "21600000-0000-0000-0000-0000000000A3")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSince1970: 216),
+            batchSequence: 1,
+            changes: [change]
+        )
+
+        var acknowledgementAttempts = 0
+        var acknowledgementBodies: [String] = []
+        var successfulAcknowledgement: SyncPeerBootstrapAcknowledgement?
+        let controller = try makeController(
+            context: destinationContext,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                guard message.kind == .bootstrapAcknowledgement else { return }
+                acknowledgementAttempts += 1
+
+                let notes = try destinationContext.fetch(FetchDescriptor<Note>())
+                let records = try destinationContext.fetch(
+                    FetchDescriptor<NoteSequenceStateRecord>()
+                )
+                if let note = notes.first(where: { $0.id == noteID }),
+                   let record = records.first(where: { $0.noteID == noteID }) {
+                    let state = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+                        record: record,
+                        noteID: noteID
+                    )
+                    XCTAssertTrue(NoteSequenceStateExactText.matches(note.content, ""))
+                    XCTAssertTrue(NoteSequenceStateExactText.matches(state.visibleText, ""))
+                    acknowledgementBodies.append(note.content)
+                }
+
+                let acknowledgement = try JSONDecoder().decode(
+                    SyncPeerBootstrapAcknowledgement.self,
+                    from: message.payload
+                )
+                if acknowledgementAttempts == 1 {
+                    throw MacBootstrapSendTestError.injected
+                }
+                successfulAcknowledgement = acknowledgement
+            }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: destinationContext,
+            syncController: controller,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: temporaryQueueFileURL(
+                named: "ordering-pending-incoming.json"
+            ),
+            localObligationQueueFileURL: temporaryQueueFileURL(
+                named: "ordering-local-obligations.json"
+            )
+        )
+        XCTAssertTrue(coordinator.durablyCaptureIncomingBatch(historicalBatch))
+        XCTAssertEqual(coordinator.pendingIncomingBatchCount, 1)
+
+        await controller.receiveBootstrapSnapshotForTesting(snapshot, from: peer)
+
+        XCTAssertEqual(acknowledgementAttempts, 1)
+        XCTAssertEqual(acknowledgementBodies, [""])
+        XCTAssertEqual(coordinator.pendingIncomingBatchCount, 1)
+        let persistedBaseline = try XCTUnwrap(
+            try destinationContext.fetch(FetchDescriptor<Note>())
+                .first(where: { $0.id == noteID })
+        )
+        XCTAssertTrue(NoteSequenceStateExactText.matches(persistedBaseline.content, ""))
+
+        await controller.receiveBootstrapSnapshotForTesting(snapshot, from: peer)
+
+        XCTAssertEqual(acknowledgementAttempts, 2)
+        XCTAssertEqual(acknowledgementBodies, ["", ""])
+        XCTAssertEqual(successfulAcknowledgement?.snapshotID, snapshot.id)
+        let finalNote = try XCTUnwrap(
+            try destinationContext.fetch(FetchDescriptor<Note>())
+                .first(where: { $0.id == noteID })
+        )
+        let finalRecord = try XCTUnwrap(
+            try destinationContext.fetch(FetchDescriptor<NoteSequenceStateRecord>())
+                .first(where: { $0.noteID == noteID })
+        )
+        let finalState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: finalRecord,
+            noteID: noteID
+        )
+        XCTAssertTrue(NoteSequenceStateExactText.matches(finalNote.content, "A"))
+        XCTAssertTrue(NoteSequenceStateExactText.matches(finalState.visibleText, "A"))
+        XCTAssertEqual(coordinator.pendingIncomingBatchCount, 0)
+        _ = coordinator
+    }
 
     func testMYR178MacConsumerUsesSharedMatchingBaseDecisionSemantics() {
         let noteID = UUID(uuidString: "17800000-0000-0000-0000-000000000001")!
@@ -628,6 +1024,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+        try ProtectedRepositoryAuditPolicy.skipIfNeeded(repositoryURL: repo)
         let checkedFiles = [
             "MyRAM/Mac/MyRAMMacRootView.swift",
             "MyRAM/Mac/MacNotePersistenceAdapter.swift",
@@ -670,6 +1067,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
+        try ProtectedRepositoryAuditPolicy.skipIfNeeded(repositoryURL: repo)
         let project = try String(
             contentsOf: repo.appendingPathComponent("MyRAM.xcodeproj/project.pbxproj"),
             encoding: .utf8
@@ -699,6 +1097,50 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertFalse(macTestSources.contains("SyncBatchAnchoredPayloadTests.swift in Sources"))
         XCTAssertTrue(macAppSources.contains("MacSyncBatchApplier.swift in Sources"))
         XCTAssertTrue(macTestSources.contains("MacSyncBatchApplierTests.swift in Sources"))
+    }
+
+    func testMyRAMMacSchemeScopesHostedTestModeToTestAction() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        try ProtectedRepositoryAuditPolicy.skipIfNeeded(repositoryURL: repo)
+        let scheme = try String(
+            contentsOf: repo.appendingPathComponent(
+                "MyRAM.xcodeproj/xcshareddata/xcschemes/MyRAMMac.xcscheme"
+            ),
+            encoding: .utf8
+        )
+        let testAction = try XCTUnwrap(scheme.xmlSection(named: "TestAction"))
+        let launchAction = try XCTUnwrap(scheme.xmlSection(named: "LaunchAction"))
+
+        XCTAssertTrue(testAction.contains("MYRAM_HOSTED_TEST_MODE"))
+        XCTAssertTrue(testAction.contains("value = \"1\""))
+        XCTAssertFalse(launchAction.contains("MYRAM_HOSTED_TEST_MODE"))
+    }
+
+    func testProtectedRepositoryAuditPolicyClassifiesProtectedCheckoutBeforeRead() {
+        let home = URL(fileURLWithPath: "/Users/tester", isDirectory: true)
+        let repository = home.appendingPathComponent("Documents/ChatGPT/MyRAM", isDirectory: true)
+
+        XCTAssertEqual(
+            ProtectedRepositoryAuditPolicy.protectedDirectory(
+                containing: repository,
+                homeDirectoryURL: home
+            ),
+            "Documents"
+        )
+    }
+
+    func testProtectedRepositoryAuditPolicyAllowsCIStyleCheckout() {
+        let home = URL(fileURLWithPath: "/Users/tester", isDirectory: true)
+        let repository = URL(fileURLWithPath: "/private/tmp/ci/MyRAM", isDirectory: true)
+
+        XCTAssertNil(
+            ProtectedRepositoryAuditPolicy.protectedDirectory(
+                containing: repository,
+                homeDirectoryURL: home
+            )
+        )
     }
 
     private func assertInvalidOuterBatchSchemaRejected(
@@ -787,14 +1229,23 @@ final class MacSyncBatchControllerTests: XCTestCase {
     }
 
     private func makeController(
+        context: ModelContext? = nil,
         unsentBatchQueueFileURL: URL?,
         unsentBatchQueue: FileBackedSyncBatchQueue?,
         connectedPeersProvider: (() -> [MCPeerID])? = nil,
         sendBatchDataOperation:
             ((Data, [MCPeerID], MCSessionSendDataMode) throws -> Void)? = nil
     ) throws -> MacSyncBatchController {
-        MacSyncBatchController(
-            context: try makeInMemoryContainer().mainContext,
+        let resolvedContext: ModelContext
+        if let context {
+            resolvedContext = context
+        } else {
+            let container = try makeInMemoryContainer()
+            retainedContainers.append(container)
+            resolvedContext = container.mainContext
+        }
+        return MacSyncBatchController(
+            context: resolvedContext,
             unsentBatchQueueFileURL: unsentBatchQueueFileURL,
             unsentBatchQueue: unsentBatchQueue,
             startsNetworking: false,
@@ -929,6 +1380,35 @@ final class MacSyncBatchControllerTests: XCTestCase {
     }
 }
 
+private enum MacBootstrapSendTestError: Error {
+    case injected
+}
+
+private enum ProtectedRepositoryAuditPolicy {
+    static func protectedDirectory(
+        containing repositoryURL: URL,
+        homeDirectoryURL: URL = FileManager.default.homeDirectoryForCurrentUser
+    ) -> String? {
+        let repositoryPath = repositoryURL.standardizedFileURL.path
+        for directory in ["Documents", "Desktop", "Downloads"] {
+            let protectedPath = homeDirectoryURL
+                .appendingPathComponent(directory, isDirectory: true)
+                .standardizedFileURL.path
+            if repositoryPath == protectedPath || repositoryPath.hasPrefix(protectedPath + "/") {
+                return directory
+            }
+        }
+        return nil
+    }
+
+    static func skipIfNeeded(repositoryURL: URL) throws {
+        guard let directory = protectedDirectory(containing: repositoryURL) else { return }
+        throw XCTSkip(
+            "Repository static audit intentionally deferred to CI/static completion verification because the checkout is under the macOS-protected \(directory) folder"
+        )
+    }
+}
+
 
 private extension String {
     func countOccurrences(of needle: String) -> Int {
@@ -938,6 +1418,14 @@ private extension String {
     func section(startingWith marker: String) -> String? {
         guard let startRange = range(of: marker),
               let endRange = range(of: "\n\t\t};", range: startRange.upperBound..<endIndex) else {
+            return nil
+        }
+        return String(self[startRange.lowerBound..<endRange.upperBound])
+    }
+
+    func xmlSection(named element: String) -> String? {
+        guard let startRange = range(of: "<\(element)"),
+              let endRange = range(of: "</\(element)>", range: startRange.upperBound..<endIndex) else {
             return nil
         }
         return String(self[startRange.lowerBound..<endRange.upperBound])
