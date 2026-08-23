@@ -525,6 +525,10 @@ final class MacSyncBatchControllerTests: XCTestCase {
                 recordedSends.append((data, peers, mode))
             }
         )
+        controller.recordBootstrapCapabilityForTesting(
+            nil,
+            forPeerDeviceID: "legacy-outbound"
+        )
         let batch = makeLegacyBodyBatch(idSuffix: 2)
 
         XCTAssertTrue(controller.hasConnectedPeers)
@@ -561,6 +565,10 @@ final class MacSyncBatchControllerTests: XCTestCase {
             startsNetworking: false,
             connectedPeersProvider: { [receiverPeerID] },
             sendBatchDataOperation: { data, _, _ in senderSends.append(data) }
+        )
+        sender.recordBootstrapCapabilityForTesting(
+            nil,
+            forPeerDeviceID: "compatible-redelivery-receiver"
         )
         let receiverContainer = try makeInMemoryContainer()
         let receiverContext = receiverContainer.mainContext
@@ -838,7 +846,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         try await Task.sleep(for: .milliseconds(100))
 
         XCTAssertTrue(recordedSends.isEmpty)
-        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches, [batch])
+        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: receiverPendingURL).pendingBatches, [batch])
         XCTAssertEqual(coordinator.pendingIncomingBatchCount, 1)
         XCTAssertEqual(note.content, "local")
         XCTAssertNil(controller.lastSyncAt)
