@@ -6,6 +6,8 @@ import XCTest
 
 @MainActor
 final class SyncBatchPeerCapabilityTests: XCTestCase {
+    private var retainedContainers: [ModelContainer] = []
+
     func testCanonicalEncoding() throws {
         XCTAssertEqual(SyncBatchPeerCapabilityCodec.encode(.v1Only), "1")
         XCTAssertEqual(SyncBatchPeerCapabilityCodec.encode(.v2Only), "2")
@@ -480,8 +482,10 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         invitePeerOperation:
             ((MCPeerID, Data, TimeInterval) -> Void)? = nil
     ) throws -> MacSyncBatchController {
-        MacSyncBatchController(
-            context: try makeInMemoryContainer().mainContext,
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        return MacSyncBatchController(
+            context: container.mainContext,
             unsentBatchQueueFileURL: temporaryQueueFileURL(),
             startsNetworking: false,
             connectedPeersProvider: connectedPeersProvider,
