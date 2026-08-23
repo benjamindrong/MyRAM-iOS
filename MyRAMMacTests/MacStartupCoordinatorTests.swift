@@ -1,4 +1,5 @@
 import SwiftData
+import SwiftUI
 import XCTest
 @testable import MyRAMMac
 
@@ -58,14 +59,97 @@ final class MacStartupCoordinatorTests: XCTestCase {
     func testMacStartupNetworkingPolicyDisablesNetworkingForXCTestEnvironment() {
         XCTAssertFalse(
             MacStartupNetworkingPolicy.shouldStartNetworking(
-                environment: ["XCTestConfigurationFilePath": "/tmp/MyRAMMacTests.xctestconfiguration"]
+                environment: ["XCTestConfigurationFilePath": "/tmp/MyRAMMacTests.xctestconfiguration"],
+                isXCTestRuntimeLoaded: false
+            )
+        )
+    }
+
+    func testMacStartupNetworkingPolicyDisablesNetworkingForDeterministicHostedTestFlag() {
+        XCTAssertFalse(
+            MacStartupNetworkingPolicy.shouldStartNetworking(
+                environment: [MacStartupNetworkingPolicy.hostedTestModeEnvironmentKey: "1"],
+                isXCTestRuntimeLoaded: false
+            )
+        )
+    }
+
+    func testMacStartupNetworkingPolicyExplicitDisablePreventsNetworking() {
+        XCTAssertFalse(
+            MacStartupNetworkingPolicy.shouldStartNetworking(
+                environment: [MacStartupNetworkingPolicy.disablePeerDiscoveryEnvironmentKey: "1"],
+                isXCTestRuntimeLoaded: false
+            )
+        )
+    }
+
+    func testMacStartupNetworkingPolicyLoadedXCTestRuntimePreventsNetworking() {
+        XCTAssertFalse(
+            MacStartupNetworkingPolicy.shouldStartNetworking(
+                environment: [:],
+                isXCTestRuntimeLoaded: true
             )
         )
     }
 
     func testMacStartupNetworkingPolicyKeepsNetworkingEnabledOutsideXCTest() {
         XCTAssertTrue(
-            MacStartupNetworkingPolicy.shouldStartNetworking(environment: [:])
+            MacStartupNetworkingPolicy.shouldStartNetworking(
+                environment: [:],
+                isXCTestRuntimeLoaded: false
+            )
+        )
+    }
+
+    func testHostedAppRootDoesNotConstructProductionRoot() {
+        var constructedHostedRoot = false
+        var constructedProductionRoot = false
+
+        _ = MyRAMMacAppRootFactory.makeRoot(
+            environment: [MacStartupNetworkingPolicy.hostedTestModeEnvironmentKey: "1"],
+            isXCTestRuntimeLoaded: false,
+            hostedRoot: {
+                constructedHostedRoot = true
+                return AnyView(EmptyView())
+            },
+            productionRoot: {
+                constructedProductionRoot = true
+                return AnyView(EmptyView())
+            }
+        )
+
+        XCTAssertTrue(constructedHostedRoot)
+        XCTAssertFalse(
+            constructedProductionRoot,
+            "Hosted root selection must happen before production persistence or App Group state can be resolved"
+        )
+    }
+
+    func testProductionAppRootConstructsProductionRootOutsideXCTest() {
+        var constructedProductionRoot = false
+
+        _ = MyRAMMacAppRootFactory.makeRoot(
+            environment: [:],
+            isXCTestRuntimeLoaded: false,
+            hostedRoot: { AnyView(EmptyView()) },
+            productionRoot: {
+                constructedProductionRoot = true
+                return AnyView(EmptyView())
+            }
+        )
+
+        XCTAssertTrue(constructedProductionRoot)
+    }
+
+    func testMacStartupNetworkingPolicyExplicitDisableWinsWithUnrelatedEnvironment() {
+        XCTAssertFalse(
+            MacStartupNetworkingPolicy.shouldStartNetworking(
+                environment: [
+                    MacStartupNetworkingPolicy.disablePeerDiscoveryEnvironmentKey: "1",
+                    "UNRELATED": "value"
+                ],
+                isXCTestRuntimeLoaded: false
+            )
         )
     }
 

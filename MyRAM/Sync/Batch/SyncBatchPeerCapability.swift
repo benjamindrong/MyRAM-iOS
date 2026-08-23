@@ -47,13 +47,18 @@ enum SyncBatchPeerCapabilityCodecError: Error, Equatable, Sendable {
 
 enum SyncBatchPeerCapabilityCodec {
     static let discoveryInfoKey = "batch-schemas"
+    static let bootstrapDiscoveryInfoKey = "bootstrap-snapshot"
+    static let bootstrapDiscoveryInfoValue = "1"
 
     static var productionCapability: SyncBatchPeerCapability {
         SyncBatchAnchoredPayloadCapability.isEnabled ? .v1AndV2 : .v1Only
     }
 
     static var productionDiscoveryInfo: [String: String] {
-        [discoveryInfoKey: encode(productionCapability)]
+        [
+            discoveryInfoKey: encode(productionCapability),
+            bootstrapDiscoveryInfoKey: bootstrapDiscoveryInfoValue
+        ]
     }
 
     static var productionInvitationContext: Data {
@@ -141,6 +146,16 @@ enum SyncBatchPeerCapabilityCodec {
 }
 
 struct SyncBatchPeerCapabilityRegistry: Sendable {
+    enum BootstrapCapabilityEvidence: Equatable, Sendable {
+        case explicitlyUnsupported
+        case v1Supported
+    }
+
+    enum BootstrapSessionEvidence: Equatable, Sendable {
+        case fallbackUnsupported
+        case v1Supported
+    }
+
     enum EvidenceSource: Hashable, Sendable {
         case discoveryInformation
         case invitationContext
@@ -162,6 +177,33 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
 
     private var evidenceByPeerDeviceID:
         [String: [EvidenceSource: NormalizedEvidence]] = [:]
+    private var bootstrapDiscoveryEvidenceByPeerDeviceID:
+        [String: BootstrapCapabilityEvidence] = [:]
+    private var bootstrapSessionEvidenceByPeerDeviceID:
+        [String: BootstrapSessionEvidence] = [:]
+
+    mutating func recordBootstrapDiscoveryValue(
+        _ value: String?,
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] =
+            value == SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoValue
+                ? .v1Supported
+                : .explicitlyUnsupported
+    }
+
+    mutating func recordBootstrapV1Announcement(forPeerDeviceID peerDeviceID: String) {
+        bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] = .v1Supported
+    }
+
+    mutating func recordBootstrapSessionFallbackUnsupported(
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        guard bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] != .v1Supported else {
+            return
+        }
+        bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] = .fallbackUnsupported
+    }
 
     mutating func recordDiscoveryValue(
         _ value: String?,
@@ -202,6 +244,19 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
 
     mutating func clearEvidence(forPeerDeviceID peerDeviceID: String) {
         evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+    }
+
+    mutating func clearDiscoveryEvidence(forPeerDeviceID peerDeviceID: String) {
+        evidenceByPeerDeviceID[peerDeviceID]?.removeValue(forKey: .discoveryInformation)
+        if evidenceByPeerDeviceID[peerDeviceID]?.isEmpty == true {
+            evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        }
+        // Discovery loss alone must never create session capability evidence.
+        // Positive discovery support is bound to session evidence only when a
+        // connected-session path actually consumes it below.
+        bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
 
     func effectiveCapability(
@@ -221,6 +276,28 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         forPeerDeviceID peerDeviceID: String
     ) -> Bool {
         effectiveCapability(forPeerDeviceID: peerDeviceID).supportsV2
+    }
+
+    mutating func hasExplicitCurrentSessionBootstrapV1Support(
+        forPeerDeviceID peerDeviceID: String
+    ) -> Bool {
+        if bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported {
+            return true
+        }
+        guard bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported else {
+            return false
+        }
+
+        // All production callers reach this predicate from a connected-peer path.
+        // Bind the positive discovery marker to that MCSession before browser
+        // discovery can disappear independently of the live session.
+        bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] = .v1Supported
+        return true
+    }
+
+    func isBootstrapCapabilityResolved(forPeerDeviceID peerDeviceID: String) -> Bool {
+        bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] != nil
+            || bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] != nil
     }
 
     func evidence(

@@ -327,6 +327,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
             unsentBatchQueueFileURL: temporaryQueueFileURL(),
             transport: transport
         )
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "remote-device")
         let batch = makeBatch(idSuffix: 199)
 
         controller.suspendOutboundForRecovery()
@@ -351,6 +352,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
     func testManualSyncFlushesUnsentBatchQueue() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(transport: transport)
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "remote-device")
         let batch = makeBatch(idSuffix: 201)
 
         try await controller.acceptLocalBatch(batch)
@@ -423,6 +425,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
             unsentBatchQueueFileURL: temporaryQueueFileURL(),
             transport: transport
         )
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "remote-device")
         let batch = makeBatch(idSuffix: 203)
 
         try await controller.acceptLocalBatch(batch)
@@ -484,6 +487,7 @@ final class MyRAMSyncControllerTests: XCTestCase {
             unsentBatchQueueFileURL: temporaryQueueFileURL(),
             transport: senderTransport
         )
+        sender.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "remote-device")
         let receiverTransport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let receiver = try makeController(transport: receiverTransport)
         let receiverContainer = try makeContainer()
@@ -970,6 +974,8 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
             )
         case .batchAcknowledgement:
             sentBatchAcknowledgements.append(try JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload))
+        case .bootstrapCapability, .bootstrapSnapshot, .bootstrapAcknowledgement:
+            break
         }
     }
 

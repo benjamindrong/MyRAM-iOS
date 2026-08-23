@@ -3,12 +3,33 @@ import Combine
 import Foundation
 
 enum MacStartupNetworkingPolicy {
-    static func shouldStartNetworking(environment: [String: String]) -> Bool {
-        environment["XCTestConfigurationFilePath"] == nil
+    static let hostedTestModeEnvironmentKey = "MYRAM_HOSTED_TEST_MODE"
+    static let disablePeerDiscoveryEnvironmentKey = "MYRAM_DISABLE_PEER_DISCOVERY_FOR_TESTS"
+
+    static func isHostedTest(
+        environment: [String: String],
+        isXCTestRuntimeLoaded: Bool
+    ) -> Bool {
+        environment[hostedTestModeEnvironmentKey] == "1"
+            || environment["XCTestConfigurationFilePath"] != nil
+            || isXCTestRuntimeLoaded
+    }
+
+    static func shouldStartNetworking(
+        environment: [String: String],
+        isXCTestRuntimeLoaded: Bool
+    ) -> Bool {
+        !isHostedTest(
+            environment: environment,
+            isXCTestRuntimeLoaded: isXCTestRuntimeLoaded
+        ) && environment[disablePeerDiscoveryEnvironmentKey] != "1"
     }
 
     static var shouldStartNetworkingInCurrentProcess: Bool {
-        shouldStartNetworking(environment: ProcessInfo.processInfo.environment)
+        shouldStartNetworking(
+            environment: ProcessInfo.processInfo.environment,
+            isXCTestRuntimeLoaded: NSClassFromString("XCTestCase") != nil
+        )
     }
 }
 
