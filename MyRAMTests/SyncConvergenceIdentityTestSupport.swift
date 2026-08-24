@@ -1,4 +1,6 @@
 import Foundation
+import MultipeerConnectivity
+import XCTest
 #if os(macOS)
 @testable import MyRAMMac
 #else
@@ -112,3 +114,46 @@ private struct RawCanonicalReplayKeyPayload: Codable {
     let batchIDLowercase: String
     let operationIndex: Int
 }
+
+#if !os(macOS)
+final class MyRAMDeviceIdentityTests: XCTestCase {
+    private let deviceID = "00000000-0000-0000-0000-000000000123"
+
+    func testSimulatorStyleDeviceNameFitsMCPeerIDWithoutChangingDeviceID() {
+        let displayName = MyRAMDeviceIdentity.boundedDisplayName(
+            "MYR-180-S2-20260824T010103Z",
+            deviceID: deviceID
+        )
+        let peerDisplayName = "\(displayName)|\(deviceID)"
+
+        XCTAssertEqual(displayName, "MYR-180-S2-20260824T010103")
+        XCTAssertEqual(peerDisplayName.utf8.count, MyRAMDeviceIdentity.maximumPeerDisplayNameUTF8ByteCount)
+        XCTAssertTrue(peerDisplayName.hasSuffix("|\(deviceID)"))
+        XCTAssertEqual(MCPeerID(displayName: peerDisplayName).displayName, peerDisplayName)
+    }
+
+    func testMultibyteDeviceNameIsBoundedAtCharacterBoundary() {
+        let displayName = MyRAMDeviceIdentity.boundedDisplayName(
+            String(repeating: "é", count: 100),
+            deviceID: deviceID
+        )
+        let peerDisplayName = "\(displayName)|\(deviceID)"
+
+        XCTAssertEqual(displayName, String(repeating: "é", count: 13))
+        XCTAssertEqual(peerDisplayName.utf8.count, MyRAMDeviceIdentity.maximumPeerDisplayNameUTF8ByteCount)
+        XCTAssertEqual(MCPeerID(displayName: peerDisplayName).displayName, peerDisplayName)
+    }
+
+    func testWhitespaceOnlyDeviceNameUsesSafeFallback() {
+        let displayName = MyRAMDeviceIdentity.boundedDisplayName(
+            "  \n\t ",
+            deviceID: deviceID
+        )
+        let peerDisplayName = "\(displayName)|\(deviceID)"
+
+        XCTAssertEqual(displayName, "iPhone")
+        XCTAssertLessThanOrEqual(peerDisplayName.utf8.count, MyRAMDeviceIdentity.maximumPeerDisplayNameUTF8ByteCount)
+        XCTAssertEqual(MCPeerID(displayName: peerDisplayName).displayName, peerDisplayName)
+    }
+}
+#endif
