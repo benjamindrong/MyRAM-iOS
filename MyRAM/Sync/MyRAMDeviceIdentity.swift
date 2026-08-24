@@ -8,8 +8,8 @@ enum MyRAMDeviceIdentity {
 
     static func currentDeviceID() -> String {
         if let existing = UserDefaults.standard.string(forKey: deviceIDKey),
-           let existingID = UUID(uuidString: existing) {
-            return existingID.uuidString
+           UUID(uuidString: existing) != nil {
+            return existing
         }
 
         let created = UUID().uuidString
