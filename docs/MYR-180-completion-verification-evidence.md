@@ -19,7 +19,7 @@ This file is the canonical Stage 2 completion artifact. Its own evidence-only co
 
 ## Final Slice 2 scope
 
-Relative to post-MYR-216 base `6faa472d…`, Slice 2 contains:
+Relative to post-MYR-216 base `6faa472d…`, the final reviewed PR scope contains:
 
 1. `MyRAM/Sync/MyRAMDeviceIdentity.swift`
    - preserves valid stored iOS sync-device UUID text instead of rewriting its representation;
@@ -32,6 +32,10 @@ Relative to post-MYR-216 base `6faa472d…`, Slice 2 contains:
    - final aggregate MYR-175 through MYR-179 external-reference alignment and deliberate-divergence record.
 5. `docs/MYR-180-completion-verification-evidence.md`
    - this canonical completion artifact.
+6. `docs/MYR-177-completion-verification-evidence.md`
+   - final-review evidence remediation only: consolidates MYR-177's already-observed successful exact-head remediation and merge result so the aggregate consumes a genuinely final committed MYR-177 completion record rather than a stale pre-closeout snapshot.
+
+The sixth file was not part of the approved preexisting changed-file set. Fresh independent MYR-180 review proved the scope expansion necessary because the aggregate explicitly consumed the MYR-177 completion record as final while that committed record still described verification as pending. The remediation changes evidence only and does not alter MYR-177 or MYR-180 product/test behavior.
 
 No SwiftData schema, transport schema, acknowledgement schema, generic transport behavior, `NearbySyncCore`, structural comparator, deletion/tombstone contract, missing-dependency recovery taxonomy, or MYR-178 guarded anchorless compatibility contract is changed by Slice 2.
 
@@ -151,10 +155,10 @@ The post-MYR-216 tree already had successful package, application, UI, Mac, buil
 - `MyRAMDeviceIdentity.swift` can affect iOS sync startup identity, so the affected seam was reverified by focused exact-candidate tests, exact iOS Simulator build, and exact successful simulator launch.
 - `SyncConvergenceIdentityTestSupport.swift` is test support for that same boundary and was exercised by the focused/complete iOS unit evidence.
 - the deterministic Stage 2 acceptance is Mac-test-only and was executed in the complete exact-PR-head `MyRAMMacTests` suite.
-- `docs/MYR-180-stage-2-aggregate-alignment.md` and this completion artifact cannot affect application/test behavior.
+- `docs/MYR-180-stage-2-aggregate-alignment.md`, `docs/MYR-177-completion-verification-evidence.md`, and this completion artifact are evidence-only and cannot affect application/test behavior.
 - no Slice 2 change touches UI behavior, `AnchoredSequenceCore`, `NearbySyncCore`, Xcode scheme definitions, SwiftData schema, transport/acknowledgement schema, or target membership.
 
-Therefore unaffected previously successful evidence remains source-equivalent and reusable, while every changed production/test seam received candidate-specific verification.
+Therefore unaffected previously successful evidence remains source-equivalent and reusable, while every changed production/test seam received candidate-specific verification. The final-review MYR-177 consolidation reuses only the already-observed MYR-177 exact-candidate/merge evidence and does not imply a new MYR-177 test run.
 
 ## Acceptance-criteria disposition
 
@@ -173,7 +177,7 @@ Therefore unaffected previously successful evidence remains source-equivalent an
 - Identical visible and durable structural convergence without corruption, duplicate content, loss, positional fallback, or hidden divergence: PASS.
 - Restart persistence: PASS through canonical sequence-state encode/decode structural validation.
 - Historical unresolved compatibility work is not misclassified as acceptance failure and no new unresolved work is introduced: PASS by preserved-baseline classification plus isolated deterministic acceptance.
-- Aggregate MYR-175–179 alignment/divergence record: PASS at `docs/MYR-180-stage-2-aggregate-alignment.md`.
+- Aggregate MYR-175–179 alignment/divergence record: PASS at `docs/MYR-180-stage-2-aggregate-alignment.md`, with the MYR-177 completion record consolidated during final review so every listed consumed completion artifact is actually final.
 - Canonical Stage 2 completion artifact: PASS with this file, subject only to final evidence-only-head CI, independent PR review, merge identity recording, and Jira transition.
 
 ## Remaining merge gate
