@@ -25,7 +25,7 @@ Relative to post-MYR-216 base `6faa472d…`, Slice 2 contains:
    - preserves valid stored iOS sync-device UUID text instead of rewriting its representation;
    - bounds the Multipeer Connectivity peer display name to the MCPeerID UTF-8 limit while retaining the complete stable device identifier.
 2. `MyRAMTests/SyncConvergenceIdentityTestSupport.swift`
-   - production-seam regression coverage for long ASCII, multibyte, whitespace/fallback, and compound Unicode device names while preserving the complete device identity.
+   - production-seam regression coverage for long ASCII, multibyte Unicode, and whitespace/fallback device names while preserving the complete device identity.
 3. `MyRAMMacTests/MacSyncDeviceIdentityTests.swift`
    - deterministic Stage 2 two-replica acceptance using activated structural capture payload creation, production Multipeer envelope coding, opposite-order structural replay, canonical sequence-state persistence, and structural restart validation.
 4. `docs/MYR-180-stage-2-aggregate-alignment.md`
