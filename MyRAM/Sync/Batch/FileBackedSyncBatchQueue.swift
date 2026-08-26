@@ -130,15 +130,17 @@ final class FileBackedSyncBatchQueue {
     }
 
     func removeAll(withIDs ids: Set<SyncBatchID>) {
+        let existingIDs = Set(queue.pendingBatches.map(\.id))
+        let removedIDs = ids.intersection(existingIDs)
         let didChange = queue.removeAll(withIDs: ids)
         if didChange {
-            persistQueue()
-            for id in ids {
+            let persisted = persistQueue()
+            for id in removedIDs {
                 recordBenchmark(
                     .batchDequeued,
                     batchID: id,
                     queueDepth: queue.pendingBatches.count,
-                    outcome: "bestEffortPersistence"
+                    outcome: persisted ? "durable" : "memoryOnly"
                 )
             }
         }
@@ -155,12 +157,14 @@ final class FileBackedSyncBatchQueue {
             throw QueueError.unhealthyPersistence
         }
         let originalBatches = queue.pendingBatches
+        let existingIDs = Set(originalBatches.map(\.id))
+        let removedIDs = ids.intersection(existingIDs)
         let didChange = queue.removeAll(withIDs: ids)
         guard didChange else { return }
 
         do {
             try persistQueueThrowing()
-            for id in ids {
+            for id in removedIDs {
                 recordBenchmark(
                     .batchDequeued,
                     batchID: id,
@@ -183,12 +187,12 @@ final class FileBackedSyncBatchQueue {
     func remove(_ batchID: SyncBatchID) {
         let didChange = queue.remove(batchID)
         if didChange {
-            persistQueue()
+            let persisted = persistQueue()
             recordBenchmark(
                 .batchDequeued,
                 batchID: batchID,
                 queueDepth: queue.pendingBatches.count,
-                outcome: "bestEffortPersistence"
+                outcome: persisted ? "durable" : "memoryOnly"
             )
         }
     }
@@ -281,8 +285,19 @@ final class FileBackedSyncBatchQueue {
         }
     }
 
-    private func persistQueue() {
-        try? persistQueueThrowing()
+    @discardableResult
+    private func persistQueue() -> Bool {
+        do {
+            try persistQueueThrowing()
+            return true
+        } catch {
+            recordBenchmark(
+                .queueWriteFailed,
+                queueDepth: queue.pendingBatches.count,
+                outcome: "persistenceFailed"
+            )
+            return false
+        }
     }
 
     private func persistQueueThrowing(allowUnhealthyReplacement: Bool = false) throws {
