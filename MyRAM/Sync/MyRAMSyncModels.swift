@@ -222,12 +222,23 @@ enum MyRAMSyncBenchmarkEventType: String, Codable, Sendable {
     case queueReplaced
     case queueWriteFailed
     case peerObserved
+    case peerConnectionState
     case messageEncoded
     case messageDecoded
+    case batchSendStarted
+    case batchSendSucceeded
+    case batchSendFailed
+    case batchSendDeferred
+    case batchReceived
+    case batchCaptureCompleted
+    case batchConvergenceCompleted
+    case batchAcknowledgementSent
+    case batchAcknowledgementSendFailed
+    case batchAcknowledgementReceived
 }
 
 struct MyRAMSyncBenchmarkEvent: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
 
     let schemaVersion: Int
     let sessionID: UUID
@@ -444,5 +455,17 @@ final class MyRAMSyncBenchmarkTelemetry: @unchecked Sendable {
             outcome: outcome,
             detail: detail
         )
+    }
+
+    /// Narrow test seam for exercising real sync call paths with an isolated artifact.
+    func replaceRecorderForTesting(_ recorder: MyRAMSyncBenchmarkRecorder?) {
+        lock.withLock {
+            self.recorder = recorder
+        }
+    }
+
+    func flushForTesting() {
+        let currentRecorder = lock.withLock { recorder }
+        currentRecorder?.flushForTesting()
     }
 }
