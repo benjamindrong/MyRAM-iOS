@@ -222,6 +222,8 @@ enum MyRAMSyncBenchmarkEventType: String, Codable, Sendable {
     case queueReplaced
     case queueWriteFailed
     case peerObserved
+    case messageEncoded
+    case messageDecoded
 }
 
 struct MyRAMSyncBenchmarkEvent: Codable, Equatable, Sendable {
