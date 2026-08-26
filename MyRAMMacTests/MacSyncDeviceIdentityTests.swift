@@ -1,4 +1,6 @@
 import AnchoredSequenceCore
+@preconcurrency import MultipeerConnectivity
+import SwiftData
 import XCTest
 @testable import MyRAMMac
 
@@ -313,5 +315,193 @@ final class MyRAMMacSyncBenchmarkRecorderTests: XCTestCase {
         XCTAssertEqual(event.deviceID, "mac-device")
         XCTAssertEqual(event.runID, "live-convergence-01")
         XCTAssertEqual(event.eventType, .sessionStarted)
+    }
+}
+
+@MainActor
+final class MyRAMMacSyncBenchmarkProductionTelemetryTests: XCTestCase {
+    func testControllerRecordsConnectionSendAndAcknowledgementLifecycle() async throws {
+        let directory = try benchmarkDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recorder = MyRAMSyncBenchmarkRecorder(
+            enabled: true,
+            platform: .macOS,
+            deviceID: "local-mac",
+            runID: "production-seam",
+            outputDirectoryURL: directory
+        )
+        MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(recorder)
+        defer { MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(nil) }
+
+        let peer = MCPeerID(displayName: "Remote|telemetry-peer")
+        let queueURL = directory.appendingPathComponent("unsent.json")
+        let container = try makeContainer()
+        var sends: [Data] = []
+        let controller = MacSyncBatchController(
+            context: container.mainContext,
+            unsentBatchQueueFileURL: queueURL,
+            startsNetworking: false,
+            identityProvider: {
+                MacSyncDeviceIdentity(
+                    id: UUID(uuidString: "21800000-0000-0000-0000-000000000010")!,
+                    displayName: "Telemetry Mac"
+                )
+            },
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sends.append(data) }
+        )
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "telemetry-peer")
+        let dummySession = MCSession(
+            peer: MCPeerID(displayName: "Local|local-mac"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+        controller.session(dummySession, peer: peer, didChange: .connecting)
+
+        let batch = makeBatch(idSuffix: 2181)
+        try await controller.acceptLocalBatch(batch)
+        let acknowledgementData = try MultipeerSyncMessageCoding.encode(
+            kind: .batchAcknowledgement,
+            payload: JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batch.id))
+        )
+        controller.session(dummySession, didReceive: acknowledgementData, fromPeer: peer)
+        await waitUntil {
+            FileBackedSyncBatchQueue(fileURL: queueURL).pendingBatches.isEmpty
+        }
+
+        let events = try events(from: recorder)
+        let batchID = String(describing: batch.id)
+        XCTAssertTrue(events.contains {
+            $0.eventType == .peerConnectionState &&
+            $0.peerDeviceID == "telemetry-peer" &&
+            $0.outcome == "connecting"
+        })
+        XCTAssertTrue(events.contains {
+            $0.eventType == .batchSendStarted &&
+            $0.batchID == batchID &&
+            $0.peerDeviceID == "telemetry-peer"
+        })
+        XCTAssertTrue(events.contains {
+            $0.eventType == .batchSendSucceeded &&
+            $0.batchID == batchID &&
+            $0.peerDeviceID == "telemetry-peer"
+        })
+        XCTAssertTrue(events.contains {
+            $0.eventType == .batchAcknowledgementReceived &&
+            $0.batchID == batchID &&
+            $0.peerDeviceID == "telemetry-peer"
+        })
+        XCTAssertTrue(events.contains {
+            $0.eventType == .batchDequeued && $0.batchID == batchID
+        })
+        XCTAssertFalse(sends.isEmpty)
+    }
+
+    func testControllerRecordsTransportFailureWithoutSuccess() async throws {
+        let directory = try benchmarkDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recorder = MyRAMSyncBenchmarkRecorder(
+            enabled: true,
+            platform: .macOS,
+            deviceID: "local-mac",
+            outputDirectoryURL: directory
+        )
+        MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(recorder)
+        defer { MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(nil) }
+
+        let peer = MCPeerID(displayName: "Remote|failing-peer")
+        let container = try makeContainer()
+        let controller = MacSyncBatchController(
+            context: container.mainContext,
+            unsentBatchQueueFileURL: directory.appendingPathComponent("unsent-failure.json"),
+            startsNetworking: false,
+            identityProvider: {
+                MacSyncDeviceIdentity(
+                    id: UUID(uuidString: "21800000-0000-0000-0000-000000000011")!,
+                    displayName: "Telemetry Mac"
+                )
+            },
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { _, _, _ in throw TelemetryTestError.injected }
+        )
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "failing-peer")
+        let batch = makeBatch(idSuffix: 2182)
+
+        try await controller.acceptLocalBatch(batch)
+
+        let events = try events(from: recorder)
+        let batchID = String(describing: batch.id)
+        XCTAssertTrue(events.contains {
+            $0.eventType == .batchSendStarted && $0.batchID == batchID
+        })
+        XCTAssertTrue(events.contains {
+            $0.eventType == .batchSendFailed && $0.batchID == batchID
+        })
+        XCTAssertFalse(events.contains {
+            $0.eventType == .batchSendSucceeded && $0.batchID == batchID
+        })
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(
+                fileURL: directory.appendingPathComponent("unsent-failure.json")
+            ).pendingBatches,
+            [batch]
+        )
+    }
+
+    private func makeBatch(idSuffix: Int) -> SyncBatch {
+        SyncBatch(
+            id: UUID(uuidString: String(format: "00000000-0000-0000-0000-%012d", idSuffix))!,
+            originDeviceID: UUID(uuidString: "21800000-0000-0000-0000-000000000020")!,
+            createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
+            changes: []
+        )
+    }
+
+    private func benchmarkDirectory() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-218-Mac-production-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        return directory
+    }
+
+    private func makeContainer() throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR-218-Mac-production-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
+    }
+
+    private func events(
+        from recorder: MyRAMSyncBenchmarkRecorder
+    ) throws -> [MyRAMSyncBenchmarkEvent] {
+        MyRAMSyncBenchmarkTelemetry.shared.flushForTesting()
+        let artifactURL = try XCTUnwrap(recorder.artifactURL)
+        let data = try Data(contentsOf: artifactURL)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try data.split(separator: 0x0A).map {
+            try decoder.decode(MyRAMSyncBenchmarkEvent.self, from: Data($0))
+        }
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        condition: @escaping @MainActor () -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition(), clock.now < deadline {
+            await Task.yield()
+        }
+    }
+
+    private enum TelemetryTestError: Error {
+        case injected
     }
 }
