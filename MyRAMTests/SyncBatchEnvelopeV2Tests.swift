@@ -379,3 +379,139 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
         )
     }
 }
+
+final class MyRAMSyncBenchmarkRecorderTests: XCTestCase {
+    func testBenchmarkConfigurationIsExplicitAndDefaultOff() {
+        XCTAssertFalse(MyRAMSyncBenchmarkConfiguration.isEnabled(environment: [:]))
+        XCTAssertFalse(MyRAMSyncBenchmarkConfiguration.isEnabled(environment: [
+            MyRAMSyncBenchmarkConfiguration.loggingEnvironmentKey: "0"
+        ]))
+        for enabledValue in ["1", "true", "TRUE", "yes", "on"] {
+            XCTAssertTrue(MyRAMSyncBenchmarkConfiguration.isEnabled(environment: [
+                MyRAMSyncBenchmarkConfiguration.loggingEnvironmentKey: enabledValue
+            ]))
+        }
+    }
+
+    func testDisabledRecorderDoesNotCreateArtifact() {
+        let directory = temporaryDirectory()
+        let recorder = MyRAMSyncBenchmarkRecorder(
+            enabled: false,
+            platform: .iOS,
+            deviceID: "device-a",
+            outputDirectoryURL: directory
+        )
+
+        recorder.record(.sessionStarted)
+        recorder.flushForTesting()
+
+        XCTAssertNil(recorder.artifactURL)
+        XCTAssertEqual((try? FileManager.default.contentsOfDirectory(atPath: directory.path)) ?? [], [])
+    }
+
+    func testEnabledRecorderWritesStructuredJSONLWithoutUserTextFields() throws {
+        let directory = temporaryDirectory()
+        let sessionID = UUID(uuidString: "21800000-0000-0000-0000-000000000001")!
+        let recorder = MyRAMSyncBenchmarkRecorder(
+            enabled: true,
+            platform: .iOS,
+            deviceID: "device-a",
+            runID: "live-convergence-01",
+            sessionID: sessionID,
+            outputDirectoryURL: directory
+        )
+
+        recorder.record(
+            .batchQueued,
+            batchID: "batch-1",
+            peerDeviceID: "device-b",
+            queueName: "ios-unsent-batch-queue.json",
+            queueDepth: 3,
+            itemCount: 1,
+            outcome: "durable"
+        )
+        recorder.flushForTesting()
+
+        let artifactURL = try XCTUnwrap(recorder.artifactURL)
+        let rawData = try Data(contentsOf: artifactURL)
+        let lines = rawData.split(separator: 0x0A)
+        XCTAssertEqual(lines.count, 1)
+
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let event = try decoder.decode(MyRAMSyncBenchmarkEvent.self, from: Data(lines[0]))
+        XCTAssertEqual(event.sessionID, sessionID)
+        XCTAssertEqual(event.runID, "live-convergence-01")
+        XCTAssertEqual(event.platform, .iOS)
+        XCTAssertEqual(event.deviceID, "device-a")
+        XCTAssertEqual(event.eventType, .batchQueued)
+        XCTAssertEqual(event.batchID, "batch-1")
+        XCTAssertEqual(event.peerDeviceID, "device-b")
+        XCTAssertEqual(event.queueDepth, 3)
+        XCTAssertGreaterThan(event.monotonicNanoseconds, 0)
+
+        let json = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: Data(lines[0])) as? [String: Any]
+        )
+        XCTAssertNil(json["title"])
+        XCTAssertNil(json["body"])
+        XCTAssertNil(json["content"])
+        XCTAssertNil(json["text"])
+    }
+
+    func testRecordersUseDistinctSessionArtifacts() throws {
+        let directory = temporaryDirectory()
+        let first = MyRAMSyncBenchmarkRecorder(
+            enabled: true,
+            platform: .iOS,
+            deviceID: "device-a",
+            outputDirectoryURL: directory
+        )
+        let second = MyRAMSyncBenchmarkRecorder(
+            enabled: true,
+            platform: .iOS,
+            deviceID: "device-a",
+            outputDirectoryURL: directory
+        )
+
+        first.record(.sessionStarted)
+        second.record(.sessionStarted)
+        first.flushForTesting()
+        second.flushForTesting()
+
+        XCTAssertNotEqual(first.sessionID, second.sessionID)
+        XCTAssertNotEqual(first.artifactURL, second.artifactURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(first.artifactURL).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: try XCTUnwrap(second.artifactURL).path))
+    }
+
+    func testTelemetryWriteFailureDoesNotEscapeIntoSyncCaller() throws {
+        let root = temporaryDirectory()
+        let blockingFile = root.appendingPathComponent("not-a-directory")
+        try Data("block".utf8).write(to: blockingFile)
+        let recorder = MyRAMSyncBenchmarkRecorder(
+            enabled: true,
+            platform: .iOS,
+            deviceID: "device-a",
+            outputDirectoryURL: blockingFile
+        )
+
+        recorder.record(.batchQueued, batchID: "batch-1", queueDepth: 1)
+        recorder.flushForTesting()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: blockingFile.path))
+    }
+
+    private func temporaryDirectory() -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-218-\(UUID().uuidString)", isDirectory: true)
+        try? FileManager.default.createDirectory(
+            at: url,
+            withIntermediateDirectories: true
+        )
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: url)
+        }
+        return url
+    }
+}
