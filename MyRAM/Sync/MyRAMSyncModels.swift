@@ -238,12 +238,15 @@ enum MyRAMSyncBenchmarkEventType: String, Codable, Sendable {
 }
 
 struct MyRAMSyncBenchmarkEvent: Codable, Equatable, Sendable {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     let schemaVersion: Int
     let sessionID: UUID
     let runID: String?
     let timestamp: Date
+    /// Explicit sub-second wall-clock value for combining separately recorded device artifacts.
+    let unixEpochMilliseconds: Int64
+    /// Process-local monotonic time for precise duration calculations that must ignore wall-clock changes.
     let monotonicNanoseconds: UInt64
     let platform: MyRAMSyncBenchmarkPlatform
     let deviceID: String
@@ -261,6 +264,7 @@ struct MyRAMSyncBenchmarkEvent: Codable, Equatable, Sendable {
         sessionID: UUID,
         runID: String?,
         timestamp: Date = Date(),
+        unixEpochMilliseconds: Int64? = nil,
         monotonicNanoseconds: UInt64 = DispatchTime.now().uptimeNanoseconds,
         platform: MyRAMSyncBenchmarkPlatform,
         deviceID: String,
@@ -277,6 +281,8 @@ struct MyRAMSyncBenchmarkEvent: Codable, Equatable, Sendable {
         self.sessionID = sessionID
         self.runID = runID
         self.timestamp = timestamp
+        self.unixEpochMilliseconds = unixEpochMilliseconds
+            ?? Int64(timestamp.timeIntervalSince1970 * 1_000)
         self.monotonicNanoseconds = monotonicNanoseconds
         self.platform = platform
         self.deviceID = deviceID
