@@ -88,11 +88,27 @@ enum SyncBatchEnvelopeCodec {
         if envelope.schemaVersion == .v2 {
             encoder.outputFormatting = [.sortedKeys]
         }
-        return try encoder.encode(envelope)
+        let data = try encoder.encode(envelope)
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .messageEncoded,
+            batchID: String(describing: batch.id),
+            itemCount: batch.changes.count,
+            outcome: "batchSync",
+            detail: "schema-v\(envelope.schemaVersion.rawValue)"
+        )
+        return data
     }
 
     static func decode(_ data: Data) throws -> SyncBatchEnvelope {
-        try JSONDecoder().decode(SyncBatchEnvelope.self, from: data)
+        let envelope = try JSONDecoder().decode(SyncBatchEnvelope.self, from: data)
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .messageDecoded,
+            batchID: String(describing: envelope.batch.id),
+            itemCount: envelope.batch.changes.count,
+            outcome: "batchSync",
+            detail: "schema-v\(envelope.schemaVersion.rawValue)"
+        )
+        return envelope
     }
 }
 
