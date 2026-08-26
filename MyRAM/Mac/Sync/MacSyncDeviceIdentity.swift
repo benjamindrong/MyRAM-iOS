@@ -40,10 +40,15 @@ struct MacSyncDeviceIdentityProvider {
     }
 
     func currentIdentity() -> MacSyncDeviceIdentity {
-        MacSyncDeviceIdentity(
+        let identity = MacSyncDeviceIdentity(
             id: storedDeviceID(),
             displayName: hostNameProvider()?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Mac"
         )
+        MyRAMSyncBenchmarkTelemetry.shared.configure(
+            platform: .macOS,
+            deviceID: identity.id.uuidString
+        )
+        return identity
     }
 
     private func storedDeviceID() -> UUID {
