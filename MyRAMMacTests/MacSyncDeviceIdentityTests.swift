@@ -281,3 +281,37 @@ final class MYR180DeterministicTwoReplicaAcceptanceTests: XCTestCase {
         case expectedSingleAnchoredInsert
     }
 }
+
+final class MyRAMMacSyncBenchmarkRecorderTests: XCTestCase {
+    func testMacRecorderWritesMacPlatformSessionMetadata() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-218-Mac-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let recorder = MyRAMSyncBenchmarkRecorder(
+            enabled: true,
+            platform: .macOS,
+            deviceID: "mac-device",
+            runID: "live-convergence-01",
+            outputDirectoryURL: directory
+        )
+        recorder.record(.sessionStarted)
+        recorder.flushForTesting()
+
+        let artifactURL = try XCTUnwrap(recorder.artifactURL)
+        let rawData = try Data(contentsOf: artifactURL)
+        let line = try XCTUnwrap(rawData.split(separator: 0x0A).first)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let event = try decoder.decode(MyRAMSyncBenchmarkEvent.self, from: Data(line))
+
+        XCTAssertEqual(event.platform, .macOS)
+        XCTAssertEqual(event.deviceID, "mac-device")
+        XCTAssertEqual(event.runID, "live-convergence-01")
+        XCTAssertEqual(event.eventType, .sessionStarted)
+    }
+}
