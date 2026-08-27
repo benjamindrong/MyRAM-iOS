@@ -137,6 +137,7 @@ private struct MyRAMWidgetEntryView: View {
     let entry: MyRAMWidgetEntry
     @Environment(\.widgetFamily) private var widgetFamily
     @Environment(\.widgetContentMargins) private var widgetContentMargins
+    @Environment(\.widgetRenderingMode) private var widgetRenderingMode
 
     private var layoutPolicy: MyRAMWidgetLayoutPolicy {
         MyRAMWidgetLayoutPolicy(
@@ -147,6 +148,21 @@ private struct MyRAMWidgetEntryView: View {
 
     private var pinnedHighlightPresentation: MyRAMWidgetPinnedHighlightPresentation {
         MyRAMWidgetPinnedHighlightPresentation(rawValue: entry.pinnedHighlightColorRaw)
+    }
+
+    private var pinnedRowPresentationMode: MyRAMWidgetPinnedRowPresentationMode {
+        MyRAMWidgetPinnedRowPresentationPolicy().presentationMode(
+            isFullColor: widgetRenderingMode == .fullColor
+        )
+    }
+
+    private var pinnedRowForeground: Color {
+        switch pinnedRowPresentationMode {
+        case .filled:
+            pinnedHighlightPresentation.foreground
+        case .outlined:
+            .primary
+        }
     }
 
     private var contentInsets: EdgeInsets {
@@ -172,16 +188,21 @@ private struct MyRAMWidgetEntryView: View {
                 HStack(spacing: layoutPolicy.pinSpacing) {
                     Image(systemName: "pin.fill")
                         .font(.caption2)
-                        .foregroundStyle(pinnedHighlightPresentation.foreground)
+                        .foregroundStyle(pinnedRowForeground)
                     Text(text)
                         .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(pinnedHighlightPresentation.foreground)
+                        .foregroundStyle(pinnedRowForeground)
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
                 .background {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(pinnedHighlightPresentation.background)
+                    if pinnedRowPresentationMode == .filled {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .fill(pinnedHighlightPresentation.background)
+                    } else {
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(.primary.opacity(0.55), lineWidth: 1)
+                    }
                 }
                 .layoutPriority(1)
             }

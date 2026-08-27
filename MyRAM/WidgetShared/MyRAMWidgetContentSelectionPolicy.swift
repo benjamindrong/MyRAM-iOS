@@ -17,6 +17,17 @@ struct MyRAMWidgetLayoutPolicy: Equatable, Sendable {
     }
 }
 
+enum MyRAMWidgetPinnedRowPresentationMode: Equatable, Sendable {
+    case filled
+    case outlined
+}
+
+struct MyRAMWidgetPinnedRowPresentationPolicy: Sendable {
+    func presentationMode(isFullColor: Bool) -> MyRAMWidgetPinnedRowPresentationMode {
+        isFullColor ? .filled : .outlined
+    }
+}
+
 enum MyRAMWidgetRenderState: Equatable, Sendable {
     case content
     case noSelection
