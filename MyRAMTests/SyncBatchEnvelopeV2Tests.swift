@@ -616,10 +616,17 @@ final class MyRAMSyncBenchmarkProductionTelemetryTests: XCTestCase {
         )
 
         controller.session(dummySession, didReceive: data, fromPeer: peer)
-        await waitUntil { !transport.sentBatchAcknowledgements.isEmpty }
+        let batchID = String(describing: batch.id)
+        await waitUntil {
+            guard let recordedEvents = try? events(from: recorder) else { return false }
+            return recordedEvents.contains {
+                $0.eventType == .batchAcknowledgementSent &&
+                $0.batchID == batchID &&
+                $0.peerDeviceID == "inbound-peer"
+            }
+        }
 
         let events = try events(from: recorder)
-        let batchID = String(describing: batch.id)
         XCTAssertTrue(events.contains {
             $0.eventType == .batchReceived &&
             $0.batchID == batchID &&
