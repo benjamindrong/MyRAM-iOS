@@ -618,7 +618,7 @@ final class MyRAMSyncBenchmarkProductionTelemetryTests: XCTestCase {
         controller.session(dummySession, didReceive: data, fromPeer: peer)
         let batchID = String(describing: batch.id)
         await waitUntil {
-            guard let recordedEvents = try? events(from: recorder) else { return false }
+            guard let recordedEvents = try? self.events(from: recorder) else { return false }
             return recordedEvents.contains {
                 $0.eventType == .batchAcknowledgementSent &&
                 $0.batchID == batchID &&
