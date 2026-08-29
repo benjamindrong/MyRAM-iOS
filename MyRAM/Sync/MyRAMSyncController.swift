@@ -175,6 +175,11 @@ extension MyRAMSyncControlling {
 
 @MainActor
 final class MyRAMSyncController: NSObject, ObservableObject {
+    private struct IncomingBatchWork {
+        let batch: SyncBatch
+        let peerID: MCPeerID
+    }
+
     @Published private(set) var availablePeers: [MyRAMDiscoveredPeer] = []
     @Published private(set) var connectedPeers: [String] = []
     @Published private(set) var pendingChangeCount = 0
@@ -223,6 +228,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private var outboundFlushRequestedWhileRecoverySuspended = false
     private var isOutboundSuspendedForRecovery = false
     private var hasStartedNetworking = false
+    private var pendingIncomingBatchWork: [IncomingBatchWork] = []
+    private var isProcessingIncomingBatchWork = false
 
     init(
         unsentBatchQueueFileURL: URL? = MyRAMSyncController.unsentBatchQueueFileURL(),
@@ -700,6 +707,36 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
     }
 
+    private func enqueueIncomingBatch(_ batch: SyncBatch, from peerID: MCPeerID) {
+        pendingIncomingBatchWork.append(IncomingBatchWork(batch: batch, peerID: peerID))
+        guard !isProcessingIncomingBatchWork else { return }
+
+        isProcessingIncomingBatchWork = true
+        Task { @MainActor [weak self] in
+            await self?.processIncomingBatchWork()
+        }
+    }
+
+    private func processIncomingBatchWork() async {
+        while !pendingIncomingBatchWork.isEmpty {
+            let work = pendingIncomingBatchWork.removeFirst()
+            let captured = await onDurablyCaptureIncomingBatch?(work.batch) ?? false
+            if captured {
+                let disposition = await onBatchReceived?(work.batch) ?? .acknowledgementPermitted
+                if disposition == .acknowledgementPermitted {
+                    lastSyncAt = work.batch.createdAt
+                    await sendBatchAcknowledgement(batchID: work.batch.id, to: work.peerID)
+                }
+            }
+
+            rememberTrustedPeer(work.peerID)
+            lastConnectionEvent = "Received sync from \(displayName(for: work.peerID))"
+            await updatePendingCount()
+        }
+
+        isProcessingIncomingBatchWork = false
+    }
+
     private func beginBootstrap(to peerID: MCPeerID) async {
         let identity = MyRAMPeerIdentity(peerID: peerID)
         guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
@@ -1136,14 +1173,8 @@ extension MyRAMSyncController: MCSessionDelegate {
                 guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(envelope.batch)) != nil else {
                     return
                 }
-                let captured = await onDurablyCaptureIncomingBatch?(envelope.batch) ?? false
-                if captured {
-                    let disposition = await onBatchReceived?(envelope.batch) ?? .acknowledgementPermitted
-                    if disposition == .acknowledgementPermitted {
-                        lastSyncAt = envelope.batch.createdAt
-                        await sendBatchAcknowledgement(batchID: envelope.batch.id, to: peerID)
-                    }
-                }
+                enqueueIncomingBatch(envelope.batch, from: peerID)
+                return
 
             case .batchAcknowledgement:
                 guard let acknowledgement = try? JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload) else { return }
