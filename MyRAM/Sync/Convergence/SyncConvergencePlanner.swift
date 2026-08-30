@@ -1279,7 +1279,7 @@ private struct SyncOperationReplayEngine {
         ).map { replay in
             let initialHash = SyncBatchContentHash.sha256Hex(for: current.body)
             let finalHash = replay.resultEvidence.postHash ?? SyncBatchContentHash.sha256Hex(for: replay.finalBody)
-            let operation = replay.retainedAdditions[0]
+            let operation = replay.operation
             let evidence = SyncConvergenceResultEvidence(
                 batchID: batchID,
                 noteID: current.noteID,
@@ -1317,7 +1317,7 @@ private struct SyncOperationReplayEngine {
         replaySingle(change, identity: identity, body: current.body, noteID: current.noteID, mode: .reconstructingDeclaredChain).map { replay in
             let initialHash = SyncBatchContentHash.sha256Hex(for: current.body)
             let finalHash = replay.resultEvidence.postHash ?? SyncBatchContentHash.sha256Hex(for: replay.finalBody)
-            let operation = replay.retainedAdditions[0]
+            let operation = replay.operation
             let evidence = SyncConvergenceResultEvidence(
                 batchID: batchID,
                 noteID: current.noteID,
@@ -1389,7 +1389,7 @@ private struct SyncOperationReplayEngine {
                     ))
                 }
                 body = replay.finalBody
-                plannedOperations.append(contentsOf: replay.retainedAdditions)
+                plannedOperations.append(replay.operation)
             case .deferred(let reason):
                 return .deferred(reason)
             case .failed(let failure):
@@ -1480,7 +1480,7 @@ private struct SyncOperationReplayEngine {
         body: String,
         noteID: UUID,
         mode: SyncOperationReplayMode
-    ) -> BodyPlanningResult {
+    ) -> SingleReplayPlanningResult {
         if case .matchingCurrentBase(let eligibility) = mode {
             do {
                 try SyncBatchAnchorlessCompatibilityEvaluator.validate(
@@ -1500,7 +1500,7 @@ private struct SyncOperationReplayEngine {
             }
             guard !insert.text.isEmpty else {
                 let hash = SyncBatchContentHash.sha256Hex(for: body)
-                return .success(PlannedBodyResult.singleNoop(
+                return .success(SingleReplayResult.noop(
                     noteID: noteID,
                     body: body,
                     hash: hash,
@@ -1515,7 +1515,7 @@ private struct SyncOperationReplayEngine {
             let safeOffset = body.syncBatchSafeInsertionOffset(fallingForwardFrom: insert.utf16Offset)
             let finalBody = body.syncBatchInserting(insert.text, atUTF16Offset: safeOffset)
             let finalHash = SyncBatchContentHash.sha256Hex(for: finalBody)
-            return .success(PlannedBodyResult.single(
+            return .success(SingleReplayResult.single(
                 noteID: noteID,
                 initialBody: body,
                 finalBody: finalBody,
@@ -1539,7 +1539,7 @@ private struct SyncOperationReplayEngine {
             }
             guard delete.utf16Length > 0 else {
                 let hash = SyncBatchContentHash.sha256Hex(for: body)
-                return .success(PlannedBodyResult.singleNoop(
+                return .success(SingleReplayResult.noop(
                     noteID: noteID,
                     body: body,
                     hash: hash,
@@ -1558,7 +1558,7 @@ private struct SyncOperationReplayEngine {
                     return .failed(.corruptHistory(noteID: noteID))
                 }
                 let hash = SyncBatchContentHash.sha256Hex(for: body)
-                return .success(PlannedBodyResult.singleNoop(
+                return .success(SingleReplayResult.noop(
                     noteID: noteID,
                     body: body,
                     hash: hash,
@@ -1577,7 +1577,7 @@ private struct SyncOperationReplayEngine {
                     return .failed(.corruptHistory(noteID: noteID))
                 }
                 let hash = SyncBatchContentHash.sha256Hex(for: body)
-                return .success(PlannedBodyResult.singleNoop(
+                return .success(SingleReplayResult.noop(
                     noteID: noteID,
                     body: body,
                     hash: hash,
@@ -1593,7 +1593,7 @@ private struct SyncOperationReplayEngine {
             var finalBody = body
             finalBody.removeSubrange(swiftRange)
             let finalHash = SyncBatchContentHash.sha256Hex(for: finalBody)
-            return .success(PlannedBodyResult.single(
+            return .success(SingleReplayResult.single(
                 noteID: noteID,
                 initialBody: body,
                 finalBody: finalBody,
@@ -2280,10 +2280,6 @@ struct SyncConvergencePlanValidator {
                         guard bodyPlan.initialBodyHash == creationEffect.initialBodyHash else {
                             return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                         }
-                    case .legacyPositional(let bodyPlan):
-                        guard SyncBatchContentHash.sha256Hex(for: bodyPlan.initialBody) == creationEffect.initialBodyHash else {
-                            return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
-                        }
                     case .anchoredStructural(let bodyPlan):
                         guard SyncBatchContentHash.sha256Hex(for: bodyPlan.expectedSnapshot.body) == creationEffect.initialBodyHash else {
                             return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
@@ -2348,20 +2344,6 @@ struct SyncConvergencePlanValidator {
                 }
                 expectedRetainedAdditions.append(contentsOf: bodyPlan.retainedOperationAdditions)
                 expectedSnapshotAdditions.append(contentsOf: bodyPlan.snapshotAdditions)
-                expectedResultEvidence.append(bodyPlan.resultEvidence)
-            case .legacyPositional(let bodyPlan):
-                guard bodyPlan.noteID == notePlan.noteID,
-                      bodyPlan.finalBodyHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.finalBody),
-                      bodyPlan.resultEvidence.kind == .body,
-                      bodyPlan.resultEvidence.noteID == notePlan.noteID,
-                      bodyPlan.resultEvidence.batchID == plan.batchID,
-                      bodyPlan.resultEvidence.preHash == SyncBatchContentHash.sha256Hex(for: bodyPlan.initialBody),
-                      bodyPlan.resultEvidence.postHash == bodyPlan.finalBodyHash,
-                      routing == .incremental || (lifecycleAppliesDelete && routing == .noteRemoved),
-                      bodyPlan.operations.allSatisfy({ $0.noteID == notePlan.noteID }) else {
-                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
-                }
-                expectedRetainedAdditions.append(contentsOf: bodyPlan.operations)
                 expectedResultEvidence.append(bodyPlan.resultEvidence)
             case .anchoredStructural(let bodyPlan):
                 let expectedPreHash = SyncBatchContentHash.sha256Hex(for: bodyPlan.expectedSnapshot.body)
@@ -2565,14 +2547,27 @@ private enum BodyPlanningResult {
     }
 }
 
-private struct PlannedBodyResult {
-    let effect: SyncConvergenceBodyEffect
+private enum SingleReplayPlanningResult {
+    case success(SingleReplayResult)
+    case deferred(SyncConvergenceDeferredReason)
+    case failed(SyncConvergenceTransactionFailure)
+
+    func map(_ transform: (SingleReplayResult) -> PlannedBodyResult) -> BodyPlanningResult {
+        switch self {
+        case .success(let result):
+            return .success(transform(result))
+        case .deferred(let reason):
+            return .deferred(reason)
+        case .failed(let failure):
+            return .failed(failure)
+        }
+    }
+}
+
+private struct SingleReplayResult {
     let finalBody: String
-    let operationIdentities: [OperationIdentityPayload]
+    let operation: SyncConvergencePlannedBodyOperation
     let resultEvidence: SyncConvergenceResultEvidence
-    let retainedAdditions: [SyncConvergencePlannedBodyOperation]
-    let snapshotAdditions: [SyncConvergenceSnapshotAddition]
-    let routing: SyncConvergencePresentationRouting
 
     static func single(
         noteID: UUID,
@@ -2580,7 +2575,7 @@ private struct PlannedBodyResult {
         finalBody: String,
         finalHash: String,
         operation: SyncConvergencePlannedBodyOperation
-    ) -> PlannedBodyResult {
+    ) -> SingleReplayResult {
         let evidence = SyncConvergenceResultEvidence(
             batchID: UUID(uuidString: operation.operationIdentity.batchIDLowercase) ?? noteID,
             noteID: noteID,
@@ -2589,25 +2584,14 @@ private struct PlannedBodyResult {
             postHash: finalHash,
             canonicalReplayKey: operation.operationIdentity.canonicalReplayKey
         )
-        return PlannedBodyResult(
-            effect: .legacyPositional(LegacyBodyPlan(
-                noteID: noteID,
-                initialBody: initialBody,
-                operations: [operation],
-                finalBody: finalBody,
-                finalBodyHash: finalHash,
-                resultEvidence: evidence
-            )),
+        return SingleReplayResult(
             finalBody: finalBody,
-            operationIdentities: [operation.operationIdentity],
-            resultEvidence: evidence,
-            retainedAdditions: [operation],
-            snapshotAdditions: [],
-            routing: .incremental
+            operation: operation,
+            resultEvidence: evidence
         )
     }
 
-    static func singleNoop(
+    static func noop(
         noteID: UUID,
         body: String,
         hash: String,
@@ -2619,7 +2603,7 @@ private struct PlannedBodyResult {
         expectedText: String? = nil,
         baseContentHash: String?,
         resultContentHash: String?
-    ) -> PlannedBodyResult {
+    ) -> SingleReplayResult {
         let operation = SyncConvergencePlannedBodyOperation(
             noteID: noteID,
             kind: kind,
@@ -2633,6 +2617,16 @@ private struct PlannedBodyResult {
         )
         return single(noteID: noteID, initialBody: body, finalBody: body, finalHash: hash, operation: operation)
     }
+}
+
+private struct PlannedBodyResult {
+    let effect: SyncConvergenceBodyEffect
+    let finalBody: String
+    let operationIdentities: [OperationIdentityPayload]
+    let resultEvidence: SyncConvergenceResultEvidence
+    let retainedAdditions: [SyncConvergencePlannedBodyOperation]
+    let snapshotAdditions: [SyncConvergenceSnapshotAddition]
+    let routing: SyncConvergencePresentationRouting
 }
 
 private enum HistoryPlanningResult {
@@ -3119,15 +3113,6 @@ struct SyncConvergenceIncorporationExecutor {
                 context: .reconciliation
             )), receipt == plannedReceipt else {
                 throw ExecutorFailure(.unprovenTextLoss(noteID: plan.noteID))
-            }
-        case .legacyPositional(let plan):
-            let currentBody = try requiredAuthoritativePreBody(
-                current: current,
-                creationEffect: creationEffect,
-                noteID: plan.noteID
-            )
-            guard currentBody == plan.initialBody else {
-                throw ExecutorFailure(.staleAuthoritativeState(noteID: plan.noteID))
             }
         case .anchoredStructural(let plan):
             let currentBody = try requiredAuthoritativePreBody(current: current, creationEffect: creationEffect, noteID: plan.noteID)
@@ -3933,8 +3918,6 @@ private extension SyncConvergenceNotePlan {
             return plan.finalBody
         case .reconstructedConflict(let plan):
             return plan.finalBody
-        case .legacyPositional(let plan):
-            return plan.finalBody
         case .anchoredStructural(let plan):
             return plan.finalBody
         case .compatibilityNoopMissingNote, .none:
@@ -3947,8 +3930,6 @@ private extension SyncConvergenceNotePlan {
         case .matchingBaseIncremental(let plan):
             return plan.finalBodyHash
         case .reconstructedConflict(let plan):
-            return plan.finalBodyHash
-        case .legacyPositional(let plan):
             return plan.finalBodyHash
         case .anchoredStructural(let plan):
             return SyncBatchContentHash.sha256Hex(for: plan.finalBody)
@@ -3977,8 +3958,6 @@ private extension SyncConvergenceNotePlan {
             return plan.operations.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
         case .reconstructedConflict(let plan):
             return plan.retainedOperationAdditions.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
-        case .legacyPositional(let plan):
-            return plan.operations.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
         case .anchoredStructural(let plan):
             return plan.latestModifiedAt
         case .compatibilityNoopMissingNote, .none:
@@ -4018,8 +3997,6 @@ private extension SyncConvergenceBodyEffect? {
             return (plan.initialBodyHash, plan.finalBodyHash)
         case .reconstructedConflict(let plan):
             return (plan.projectedPreMergeCurrentHash, plan.finalBodyHash)
-        case .legacyPositional(let plan):
-            return (SyncBatchContentHash.sha256Hex(for: plan.initialBody), plan.finalBodyHash)
         case .anchoredStructural(let plan):
             return (SyncBatchContentHash.sha256Hex(for: plan.expectedSnapshot.body), SyncBatchContentHash.sha256Hex(for: plan.finalBody))
         case .compatibilityNoopMissingNote, .none:
@@ -4044,13 +4021,6 @@ private extension SyncConvergenceBodyEffect {
                 preHash: plan.projectedPreMergeCurrentHash,
                 finalBodyHash: plan.finalBodyHash,
                 identities: plan.retainedOperationAdditions.map(\.operationIdentity)
-            )
-        case .legacyPositional(let plan):
-            return .body(
-                noteID: noteID,
-                preHash: SyncBatchContentHash.sha256Hex(for: plan.initialBody),
-                finalBodyHash: plan.finalBodyHash,
-                identities: plan.operations.map(\.operationIdentity)
             )
         case .anchoredStructural(let plan):
             return .body(
@@ -4082,16 +4052,14 @@ private extension SyncConvergenceTitleEffect {
 }
 
 private extension SyncConvergencePlannedBodyOperation {
-    func postCommitOperationPayload(
-        baseContentHashOverride: String? = nil
-    ) throws -> SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload {
+    func postCommitOperationPayload() throws -> SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload {
         guard let payloadKind = SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload.Kind(
             rawValue: kind.rawValue
         ) else {
             throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
         }
-        // Only .incremental-routed operations (matchingBaseIncremental/legacyPositional)
-        // ever reach this payload; those always carry a stable resultContentHash.
+        // Only matching-base incremental operations reach this payload; those
+        // always carry a stable resultContentHash.
         // A nil here means an operation from a conflict-union replay was routed
         // through the incremental post-commit path, which is itself a plan bug.
         guard let resultContentHash else {
@@ -4106,7 +4074,7 @@ private extension SyncConvergencePlannedBodyOperation {
             utf16Length: utf16Length,
             text: text,
             expectedText: expectedText,
-            baseContentHash: baseContentHash ?? baseContentHashOverride,
+            baseContentHash: baseContentHash,
             resultContentHash: resultContentHash,
             operationIdentity: operationIdentity
         )
@@ -4137,8 +4105,6 @@ private extension SyncConvergenceNotePlan {
         case .matchingBaseIncremental(let plan):
             return plan.finalBodyHash
         case .reconstructedConflict(let plan):
-            return plan.finalBodyHash
-        case .legacyPositional(let plan):
             return plan.finalBodyHash
         case .anchoredStructural(let plan):
             return SyncBatchContentHash.sha256Hex(for: plan.finalBody)
@@ -4172,8 +4138,6 @@ private extension SyncConvergenceNotePlan {
             switch bodyEffect {
             case .matchingBaseIncremental(let plan):
                 return plan.initialBodyHash
-            case .legacyPositional(let plan):
-                return SyncBatchContentHash.sha256Hex(for: plan.initialBody)
             default:
                 throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
             }
@@ -4193,14 +4157,9 @@ private extension SyncConvergenceNotePlan {
     ) throws -> [SyncConvergencePostCommitWorkPayloadV1.IncrementalOperationPayload] {
         guard routing == .incremental else { return [] }
         let operations: [SyncConvergencePlannedBodyOperation]
-        let derivesMissingBaseHashes: Bool
         switch bodyEffect {
         case .matchingBaseIncremental(let plan):
             operations = plan.operations
-            derivesMissingBaseHashes = false
-        case .legacyPositional(let plan):
-            operations = plan.operations
-            derivesMissingBaseHashes = true
         default:
             throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
         }
@@ -4209,20 +4168,14 @@ private extension SyncConvergenceNotePlan {
             throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
         }
         let sortedOperations = operations.sorted { $0.operationIdentity.operationIndex < $1.operationIdentity.operationIndex }
-        return try sortedOperations.enumerated().map { index, operation in
+        return try sortedOperations.map { operation in
                 let key = operation.operationIdentity.planIdentityKey
                 guard let authority = identityAuthority[key],
                       authority.identity == operation.operationIdentity,
                       authority.noteID == noteID else {
                     throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
                 }
-                guard derivesMissingBaseHashes else {
-                    return try operation.postCommitOperationPayload()
-                }
-                // Legacy positional operations predate per-operation base hashes;
-                // persist the deterministic chain required by post-commit replay.
-                let baseHash = index == 0 ? try expectedPreBodyHash(for: routing) : sortedOperations[index - 1].resultContentHash
-                return try operation.postCommitOperationPayload(baseContentHashOverride: baseHash)
+                return try operation.postCommitOperationPayload()
             }
     }
 }
@@ -4257,8 +4210,6 @@ private extension SyncConvergenceBodyEffect {
             // including ones already durably retained (and thus intentionally absent
             // from retainedOperationAdditions, which only lists genuinely new rows).
             return plan.orderedOperationIdentities.contains { $0.canonicalReplayKey == key }
-        case .legacyPositional(let plan):
-            return plan.operations.contains { $0.operationIdentity.canonicalReplayKey == key }
         case .anchoredStructural(let plan):
             return plan.operationIdentities.contains { $0.canonicalReplayKey == key }
         case .compatibilityNoopMissingNote(let plan):

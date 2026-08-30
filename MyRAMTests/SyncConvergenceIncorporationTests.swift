@@ -5244,8 +5244,6 @@ private extension SyncConvergenceNotePlan {
             return plan.finalBody
         case .reconstructedConflict(let plan):
             return plan.finalBody
-        case .legacyPositional(let plan):
-            return plan.finalBody
         case .anchoredStructural(let plan):
             return plan.finalBody
         case .compatibilityNoopMissingNote, .none:
@@ -5262,8 +5260,6 @@ private extension SyncConvergenceNotePlan {
             return plan.operations.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
         case .reconstructedConflict(let plan):
             return plan.retainedOperationAdditions.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
-        case .legacyPositional(let plan):
-            return plan.operations.map { $0.operationIdentity.canonicalReplayKey.modifiedAt }.max()
         case .anchoredStructural(let plan):
             return plan.latestModifiedAt
         case .compatibilityNoopMissingNote, .none:
@@ -5278,8 +5274,6 @@ private extension SyncConvergenceNotePlan {
             bodyHashes = (plan.initialBodyHash, plan.finalBodyHash)
         case .reconstructedConflict(let plan):
             bodyHashes = (plan.projectedPreMergeCurrentHash, plan.finalBodyHash)
-        case .legacyPositional(let plan):
-            bodyHashes = (SyncBatchContentHash.sha256Hex(for: plan.initialBody), plan.finalBodyHash)
         case .anchoredStructural(let plan):
             bodyHashes = (
                 SyncBatchContentHash.sha256Hex(for: plan.expectedSnapshot.body),
