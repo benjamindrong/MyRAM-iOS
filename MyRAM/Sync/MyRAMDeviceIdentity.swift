@@ -7,14 +7,21 @@ enum MyRAMDeviceIdentity {
     static let maximumPeerDisplayNameUTF8ByteCount = 63
 
     static func currentDeviceID() -> String {
+        let deviceID: String
         if let existing = UserDefaults.standard.string(forKey: deviceIDKey),
            UUID(uuidString: existing) != nil {
-            return existing
+            deviceID = existing
+        } else {
+            let created = UUID().uuidString
+            UserDefaults.standard.set(created, forKey: deviceIDKey)
+            deviceID = created
         }
 
-        let created = UUID().uuidString
-        UserDefaults.standard.set(created, forKey: deviceIDKey)
-        return created
+        MyRAMSyncBenchmarkTelemetry.shared.configure(
+            platform: .iOS,
+            deviceID: deviceID
+        )
+        return deviceID
     }
 
     static func currentDisplayName() -> String {
@@ -49,6 +56,10 @@ struct MyRAMPeerIdentity {
         let parts = peerID.displayName.split(separator: "|", maxSplits: 1).map(String.init)
         displayName = parts.first ?? peerID.displayName
         deviceID = parts.count > 1 ? parts[1] : peerID.displayName
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .peerObserved,
+            peerDeviceID: deviceID
+        )
     }
 }
 

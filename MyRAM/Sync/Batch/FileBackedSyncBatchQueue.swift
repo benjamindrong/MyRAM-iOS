@@ -18,6 +18,12 @@ final class FileBackedSyncBatchQueue {
         let snapshot = loadPersistedQueue()
         queue.replacePendingBatches(snapshot.pendingBatches)
         health = snapshot.health
+        recordBenchmark(
+            .queueLoaded,
+            queueDepth: queue.pendingBatches.count,
+            itemCount: queue.pendingBatches.count,
+            outcome: snapshot.health.benchmarkLabel
+        )
     }
 
     var isEmpty: Bool {
@@ -73,17 +79,48 @@ final class FileBackedSyncBatchQueue {
             batch,
             activationEnabled: activationEnabled
         )
-        guard canPersistCurrentQueue else { throw QueueError.unhealthyPersistence }
+        guard canPersistCurrentQueue else {
+            recordBenchmark(
+                .queueWriteFailed,
+                batchID: batch.id,
+                queueDepth: queue.pendingBatches.count,
+                outcome: "unhealthyPersistence"
+            )
+            throw QueueError.unhealthyPersistence
+        }
         let originalBatches = queue.pendingBatches
         do {
             let didChange = try queue.enqueuePreservingExisting(batch)
             if didChange {
                 try persistQueueThrowing()
+                recordBenchmark(
+                    .batchQueued,
+                    batchID: batch.id,
+                    queueDepth: queue.pendingBatches.count
+                )
+            } else {
+                recordBenchmark(
+                    .batchQueueDuplicate,
+                    batchID: batch.id,
+                    queueDepth: queue.pendingBatches.count
+                )
             }
         } catch SyncBatchUnsentQueue.EnqueueError.capacityExceeded {
+            recordBenchmark(
+                .queueWriteFailed,
+                batchID: batch.id,
+                queueDepth: queue.pendingBatches.count,
+                outcome: "capacityExceeded"
+            )
             throw QueueError.capacityExceeded
         } catch {
             queue.replacePendingBatches(originalBatches)
+            recordBenchmark(
+                .queueWriteFailed,
+                batchID: batch.id,
+                queueDepth: queue.pendingBatches.count,
+                outcome: "persistenceFailed"
+            )
             throw QueueError.persistenceFailed
         }
     }
@@ -93,22 +130,56 @@ final class FileBackedSyncBatchQueue {
     }
 
     func removeAll(withIDs ids: Set<SyncBatchID>) {
+        let existingIDs = Set(queue.pendingBatches.map(\.id))
+        let removedIDs = ids.intersection(existingIDs)
         let didChange = queue.removeAll(withIDs: ids)
         if didChange {
-            persistQueue()
+            let persisted = persistQueue()
+            for id in removedIDs {
+                recordBenchmark(
+                    .batchDequeued,
+                    batchID: id,
+                    queueDepth: queue.pendingBatches.count,
+                    outcome: persisted ? "durable" : "memoryOnly"
+                )
+            }
         }
     }
 
     func removeBatches(withIDs ids: Set<SyncBatchID>) throws {
-        guard canPersistCurrentQueue else { throw QueueError.unhealthyPersistence }
+        guard canPersistCurrentQueue else {
+            recordBenchmark(
+                .queueWriteFailed,
+                queueDepth: queue.pendingBatches.count,
+                itemCount: ids.count,
+                outcome: "unhealthyPersistence"
+            )
+            throw QueueError.unhealthyPersistence
+        }
         let originalBatches = queue.pendingBatches
+        let existingIDs = Set(originalBatches.map(\.id))
+        let removedIDs = ids.intersection(existingIDs)
         let didChange = queue.removeAll(withIDs: ids)
         guard didChange else { return }
 
         do {
             try persistQueueThrowing()
+            for id in removedIDs {
+                recordBenchmark(
+                    .batchDequeued,
+                    batchID: id,
+                    queueDepth: queue.pendingBatches.count,
+                    outcome: "durable"
+                )
+            }
         } catch {
             queue.replacePendingBatches(originalBatches)
+            recordBenchmark(
+                .queueWriteFailed,
+                queueDepth: queue.pendingBatches.count,
+                itemCount: ids.count,
+                outcome: "persistenceFailed"
+            )
             throw QueueError.persistenceFailed
         }
     }
@@ -116,21 +187,47 @@ final class FileBackedSyncBatchQueue {
     func remove(_ batchID: SyncBatchID) {
         let didChange = queue.remove(batchID)
         if didChange {
-            persistQueue()
+            let persisted = persistQueue()
+            recordBenchmark(
+                .batchDequeued,
+                batchID: batchID,
+                queueDepth: queue.pendingBatches.count,
+                outcome: persisted ? "durable" : "memoryOnly"
+            )
         }
     }
 
     func replacePendingBatches(_ replacement: [SyncBatch]) throws {
         try replacement.forEach(SyncBatchAnchoredPayloadPolicy.validateDurableAdmission)
-        guard canReplaceQueue else { throw QueueError.unhealthyPersistence }
+        guard canReplaceQueue else {
+            recordBenchmark(
+                .queueWriteFailed,
+                queueDepth: queue.pendingBatches.count,
+                itemCount: replacement.count,
+                outcome: "unhealthyPersistence"
+            )
+            throw QueueError.unhealthyPersistence
+        }
 
         let originalBatches = queue.pendingBatches
         queue.replacePendingBatches(replacement)
         do {
             try persistQueueThrowing(allowUnhealthyReplacement: true)
             health = .healthy
+            recordBenchmark(
+                .queueReplaced,
+                queueDepth: replacement.count,
+                itemCount: replacement.count,
+                outcome: "durable"
+            )
         } catch {
             queue.replacePendingBatches(originalBatches)
+            recordBenchmark(
+                .queueWriteFailed,
+                queueDepth: queue.pendingBatches.count,
+                itemCount: replacement.count,
+                outcome: "persistenceFailed"
+            )
             throw QueueError.persistenceFailed
         }
     }
@@ -188,8 +285,19 @@ final class FileBackedSyncBatchQueue {
         }
     }
 
-    private func persistQueue() {
-        try? persistQueueThrowing()
+    @discardableResult
+    private func persistQueue() -> Bool {
+        do {
+            try persistQueueThrowing()
+            return true
+        } catch {
+            recordBenchmark(
+                .queueWriteFailed,
+                queueDepth: queue.pendingBatches.count,
+                outcome: "persistenceFailed"
+            )
+            return false
+        }
     }
 
     private func persistQueueThrowing(allowUnhealthyReplacement: Bool = false) throws {
@@ -220,6 +328,27 @@ final class FileBackedSyncBatchQueue {
             throw error
         }
     }
+
+    private var benchmarkQueueName: String {
+        fileURL?.lastPathComponent ?? "memory"
+    }
+
+    private func recordBenchmark(
+        _ eventType: MyRAMSyncBenchmarkEventType,
+        batchID: SyncBatchID? = nil,
+        queueDepth: Int? = nil,
+        itemCount: Int? = nil,
+        outcome: String? = nil
+    ) {
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            eventType,
+            batchID: batchID.map { String(describing: $0) },
+            queueName: benchmarkQueueName,
+            queueDepth: queueDepth,
+            itemCount: itemCount,
+            outcome: outcome
+        )
+    }
 }
 
 enum PersistedQueueHealth: Equatable {
@@ -229,6 +358,17 @@ enum PersistedQueueHealth: Equatable {
     case unsupportedVersion(Int)
     case unsupportedAnchoredPayload
     case readFailed(String)
+
+    var benchmarkLabel: String {
+        switch self {
+        case .healthy: "healthy"
+        case .fileMissing: "fileMissing"
+        case .corrupt: "corrupt"
+        case .unsupportedVersion: "unsupportedVersion"
+        case .unsupportedAnchoredPayload: "unsupportedAnchoredPayload"
+        case .readFailed: "readFailed"
+        }
+    }
 }
 
 struct FileBackedSyncBatchQueueSnapshot: Equatable {

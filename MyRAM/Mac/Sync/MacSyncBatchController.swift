@@ -362,20 +362,85 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             recipients = eligiblePeers
         case .sendToPeer(let transportIndex):
             guard eligiblePeers.indices.contains(transportIndex) else {
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    .batchSendDeferred,
+                    batchID: String(describing: batch.id),
+                    outcome: "invalidRoutingIndex"
+                )
                 return false
             }
             recipients = [eligiblePeers[transportIndex]]
         case .withhold:
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchSendDeferred,
+                batchID: String(describing: batch.id),
+                itemCount: connectedPeers.count,
+                outcome: "routingWithheld"
+            )
             return false
+        }
+
+        let recipientDeviceIDs = recipients.map { MacSyncPeerIdentity(peerID: $0).deviceID }
+        if recipientDeviceIDs.isEmpty {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchSendStarted,
+                batchID: String(describing: batch.id),
+                itemCount: 0,
+                outcome: "noRecipients"
+            )
+        } else {
+            for deviceID in recipientDeviceIDs {
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    .batchSendStarted,
+                    batchID: String(describing: batch.id),
+                    peerDeviceID: deviceID,
+                    itemCount: batch.changes.count
+                )
+            }
         }
 
         do {
             let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
             try sendBatchDataOperation(data, recipients, .reliable)
+            if recipientDeviceIDs.isEmpty {
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    .batchSendSucceeded,
+                    batchID: String(describing: batch.id),
+                    itemCount: 0,
+                    outcome: "transportAcceptedNoRecipients"
+                )
+            } else {
+                for deviceID in recipientDeviceIDs {
+                    MyRAMSyncBenchmarkTelemetry.shared.record(
+                        .batchSendSucceeded,
+                        batchID: String(describing: batch.id),
+                        peerDeviceID: deviceID,
+                        itemCount: batch.changes.count
+                    )
+                }
+            }
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
             return true
         } catch {
+            if recipientDeviceIDs.isEmpty {
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    .batchSendFailed,
+                    batchID: String(describing: batch.id),
+                    itemCount: 0,
+                    outcome: "transportFailed"
+                )
+            } else {
+                for deviceID in recipientDeviceIDs {
+                    MyRAMSyncBenchmarkTelemetry.shared.record(
+                        .batchSendFailed,
+                        batchID: String(describing: batch.id),
+                        peerDeviceID: deviceID,
+                        itemCount: batch.changes.count,
+                        outcome: "transportFailed"
+                    )
+                }
+            }
             lastErrorMessage = "Unable to sync nearby batch changes."
             return false
         }
@@ -390,14 +455,39 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
     }
 
-    private func handleBatchAcknowledgement(_ acknowledgement: SyncBatchAcknowledgement) {
+    private func handleBatchAcknowledgement(
+        _ acknowledgement: SyncBatchAcknowledgement,
+        from peerID: MCPeerID
+    ) {
+        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .batchAcknowledgementReceived,
+            batchID: String(describing: acknowledgement.batchID),
+            peerDeviceID: peerDeviceID
+        )
         unsentBatches.removeAll(withIDs: [acknowledgement.batchID])
     }
 
     private func sendBatchAcknowledgement(batchID: SyncBatchID, to peerID: MCPeerID) throws {
-        let payload = try JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
-        let data = try MultipeerSyncMessageCoding.encode(kind: .batchAcknowledgement, payload: payload)
-        try sendBatchDataOperation(data, [peerID], .reliable)
+        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        do {
+            let payload = try JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
+            let data = try MultipeerSyncMessageCoding.encode(kind: .batchAcknowledgement, payload: payload)
+            try sendBatchDataOperation(data, [peerID], .reliable)
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchAcknowledgementSent,
+                batchID: String(describing: batchID),
+                peerDeviceID: peerDeviceID
+            )
+        } catch {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchAcknowledgementSendFailed,
+                batchID: String(describing: batchID),
+                peerDeviceID: peerDeviceID,
+                outcome: "transportFailed"
+            )
+            throw error
+        }
     }
 
     private func beginBootstrap(to peerID: MCPeerID) {
@@ -660,9 +750,22 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private func processIncomingBatchWork() async {
         while !pendingIncomingBatchWork.isEmpty {
             let work = pendingIncomingBatchWork.removeFirst()
+            let peerDeviceID = MacSyncPeerIdentity(peerID: work.peerID).deviceID
             let captured = convergenceCoordinator?.durablyCaptureIncomingBatch(work.batch) ?? false
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchCaptureCompleted,
+                batchID: String(describing: work.batch.id),
+                peerDeviceID: peerDeviceID,
+                outcome: captured ? "captured" : "notCaptured"
+            )
             if captured {
                 let disposition = await processReceivedBatch(work.batch)
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    .batchConvergenceCompleted,
+                    batchID: String(describing: work.batch.id),
+                    peerDeviceID: peerDeviceID,
+                    outcome: String(describing: disposition)
+                )
                 if disposition == .acknowledgementPermitted {
                     try? sendBatchAcknowledgement(batchID: work.batch.id, to: work.peerID)
                 }
@@ -753,6 +856,11 @@ extension MacSyncBatchController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         Task { @MainActor in
             let identity = MacSyncPeerIdentity(peerID: peerID)
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .peerConnectionState,
+                peerDeviceID: identity.deviceID,
+                outcome: state.benchmarkLabel
+            )
             connectedPeers = session.connectedPeers.map { displayName(for: $0) }
             lastConnectionEvent = "\(state.syncDescription): \(displayName(for: peerID))"
             if state == .notConnected {
@@ -782,6 +890,12 @@ extension MacSyncBatchController: MCSessionDelegate {
                     message.payload
                 ) else { return }
                 let identity = MacSyncPeerIdentity(peerID: peerID)
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    .batchReceived,
+                    batchID: String(describing: envelope.batch.id),
+                    peerDeviceID: identity.deviceID,
+                    itemCount: envelope.batch.changes.count
+                )
                 let admission = SyncBatchTransportAdmissionPlanner.inboundAdmission(
                     schemaVersion: envelope.schemaVersion,
                     activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
@@ -792,9 +906,21 @@ extension MacSyncBatchController: MCSessionDelegate {
                             )
                 )
                 guard admission == .admitV1 || admission == .admitV2 else {
+                    MyRAMSyncBenchmarkTelemetry.shared.record(
+                        .batchCaptureCompleted,
+                        batchID: String(describing: envelope.batch.id),
+                        peerDeviceID: identity.deviceID,
+                        outcome: "rejectedByAdmission"
+                    )
                     return
                 }
                 guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(envelope.batch)) != nil else {
+                    MyRAMSyncBenchmarkTelemetry.shared.record(
+                        .batchCaptureCompleted,
+                        batchID: String(describing: envelope.batch.id),
+                        peerDeviceID: identity.deviceID,
+                        outcome: "rejectedByPayloadPolicy"
+                    )
                     return
                 }
                 enqueueIncomingBatch(envelope.batch, from: peerID)
@@ -804,7 +930,7 @@ extension MacSyncBatchController: MCSessionDelegate {
                 receiveLegacyEnvelope(envelope, from: peerID)
             case .batchAcknowledgement:
                 guard let acknowledgement = try? JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload) else { return }
-                handleBatchAcknowledgement(acknowledgement)
+                handleBatchAcknowledgement(acknowledgement, from: peerID)
             case .bootstrapCapability:
                 guard let announcement = try? JSONDecoder().decode(
                     SyncPeerBootstrapCapabilityAnnouncement.self,
@@ -929,6 +1055,15 @@ private extension MCSessionState {
         case .connecting: "Connecting"
         case .connected: "Connected"
         @unknown default: "Unknown"
+        }
+    }
+
+    var benchmarkLabel: String {
+        switch self {
+        case .notConnected: "notConnected"
+        case .connecting: "connecting"
+        case .connected: "connected"
+        @unknown default: "unknown"
         }
     }
 }
