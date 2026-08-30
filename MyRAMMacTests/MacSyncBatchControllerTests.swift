@@ -551,7 +551,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastSyncAt, batch.createdAt)
     }
 
-    func testManualResendRetainsExactBatchUntilRealReceiverRedeliveryAcknowledgement() async throws {
+    func testInboundBatchPipelineSerializesConvergenceAndAcknowledgesQueuedBatchWithoutRedelivery() async throws {
         let senderPeerID = MCPeerID(displayName: "remote|compatible-redelivery-sender")
         let receiverPeerID = MCPeerID(displayName: "remote|compatible-redelivery-receiver")
         let senderUnsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
@@ -581,7 +581,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
         let noteA = Note(title: "Drain holder", content: "A0")
         noteA.id = UUID(uuidString: "17800000-0000-0000-0000-000000000241")!
-        let noteB = Note(title: "Redelivery target", content: "B0")
+        let noteB = Note(title: "FIFO target", content: "B0")
         noteB.id = UUID(uuidString: "17800000-0000-0000-0000-000000000242")!
         receiverContext.insert(noteA)
         receiverContext.insert(noteB)
@@ -642,8 +642,9 @@ final class MacSyncBatchControllerTests: XCTestCase {
         try await sender.acceptLocalBatch(batchB)
         await waitUntil { senderSends.count == 1 }
         receiver.session(receiverSession, didReceive: senderSends[0], fromPeer: senderPeerID)
-        await waitUntil { FileBackedSyncBatchQueue(fileURL: receiverPendingURL).contains(batchB.id) }
+        try await Task.sleep(nanoseconds: 50_000_000)
 
+        XCTAssertFalse(FileBackedSyncBatchQueue(fileURL: receiverPendingURL).contains(batchB.id))
         XCTAssertTrue(
             receiverSends.allSatisfy { data in
                 guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
@@ -663,21 +664,6 @@ final class MacSyncBatchControllerTests: XCTestCase {
         boundaryContinuation?.resume(returning: .ready)
         await waitUntil {
             noteB.content == "B0-once" &&
-            receiver.lastSyncAt == batchA.createdAt
-        }
-        XCTAssertEqual(noteB.content, "B0-once")
-        XCTAssertEqual(receiver.lastSyncAt, batchA.createdAt)
-        XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: senderUnsentURL).pendingBatches, [batchB])
-
-        sender.flushPendingBatch()
-        await waitUntil { senderSends.count == 2 }
-        let resentBatches = try senderSends.map { data in
-            let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
-            return try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload).batch
-        }
-        XCTAssertEqual(resentBatches, [batchB, batchB])
-        receiver.session(receiverSession, didReceive: senderSends[1], fromPeer: senderPeerID)
-        await waitUntil {
             receiverSends.contains { data in
                 guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
                       message.kind == .batchAcknowledgement,
@@ -690,6 +676,12 @@ final class MacSyncBatchControllerTests: XCTestCase {
                 return acknowledgement.batchID == batchB.id
             }
         }
+
+        let sentBatches = try senderSends.map { data in
+            let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+            return try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload).batch
+        }
+        XCTAssertEqual(sentBatches, [batchB])
 
         let acknowledgementData = try XCTUnwrap(
             receiverSends.first { data in
@@ -1005,7 +997,6 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.pendingIncomingBatchCount, 0)
     }
 
-
     func testQuarantinedConvergenceStatusPreservesWorkReason() throws {
         let controller = try makeController(unsentBatchQueueFileURL: nil)
         let item = SyncConvergenceQuarantinedItem(
@@ -1069,7 +1060,6 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
         XCTAssertFalse(coordinatorSource.contains("kind: .corruptHistory"))
     }
-
 
     func testSyncTargetMembershipIncludesSharedCaptureAndMacPresentationTests() throws {
         let repo = URL(fileURLWithPath: #filePath)
@@ -1416,7 +1406,6 @@ private enum ProtectedRepositoryAuditPolicy {
         )
     }
 }
-
 
 private extension String {
     func countOccurrences(of needle: String) -> Int {

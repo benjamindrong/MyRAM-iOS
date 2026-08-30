@@ -14,6 +14,11 @@ struct MacSyncDiscoveredPeer: Identifiable, Equatable {
 
 @MainActor
 final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceLocalBatchTransportAdapter {
+    private struct IncomingBatchWork {
+        let batch: SyncBatch
+        let peerID: MCPeerID
+    }
+
     @Published private(set) var availablePeers: [MacSyncDiscoveredPeer] = []
     @Published private(set) var connectedPeers: [String] = []
     @Published private(set) var lastConnectionEvent = "Browsing for nearby MyRAM devices"
@@ -51,6 +56,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         1_000_000_000
     ]
     private var hasStartedNetworking = false
+    private var pendingIncomingBatchWork: [IncomingBatchWork] = []
+    private var isProcessingIncomingBatchWork = false
 
     init(
         context: ModelContext,
@@ -730,6 +737,47 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         return await convergenceCoordinator?.submitRemoteBatch(batch) ?? .acknowledgementPermitted
     }
 
+    private func enqueueIncomingBatch(_ batch: SyncBatch, from peerID: MCPeerID) {
+        pendingIncomingBatchWork.append(IncomingBatchWork(batch: batch, peerID: peerID))
+        guard !isProcessingIncomingBatchWork else { return }
+
+        isProcessingIncomingBatchWork = true
+        Task { @MainActor [weak self] in
+            await self?.processIncomingBatchWork()
+        }
+    }
+
+    private func processIncomingBatchWork() async {
+        while !pendingIncomingBatchWork.isEmpty {
+            let work = pendingIncomingBatchWork.removeFirst()
+            let peerDeviceID = MacSyncPeerIdentity(peerID: work.peerID).deviceID
+            let captured = convergenceCoordinator?.durablyCaptureIncomingBatch(work.batch) ?? false
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchCaptureCompleted,
+                batchID: String(describing: work.batch.id),
+                peerDeviceID: peerDeviceID,
+                outcome: captured ? "captured" : "notCaptured"
+            )
+            if captured {
+                let disposition = await processReceivedBatch(work.batch)
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    .batchConvergenceCompleted,
+                    batchID: String(describing: work.batch.id),
+                    peerDeviceID: peerDeviceID,
+                    outcome: String(describing: disposition)
+                )
+                if disposition == .acknowledgementPermitted {
+                    try? sendBatchAcknowledgement(batchID: work.batch.id, to: work.peerID)
+                }
+            }
+
+            remember(work.peerID)
+            lastConnectionEvent = "Received sync from \(displayName(for: work.peerID))"
+        }
+
+        isProcessingIncomingBatchWork = false
+    }
+
     var pendingIncomingBatchCount: Int {
         convergenceCoordinator?.pendingIncomingBatchCount ?? 0
     }
@@ -875,25 +923,8 @@ extension MacSyncBatchController: MCSessionDelegate {
                     )
                     return
                 }
-                let captured = convergenceCoordinator?.durablyCaptureIncomingBatch(envelope.batch) ?? false
-                MyRAMSyncBenchmarkTelemetry.shared.record(
-                    .batchCaptureCompleted,
-                    batchID: String(describing: envelope.batch.id),
-                    peerDeviceID: identity.deviceID,
-                    outcome: captured ? "captured" : "notCaptured"
-                )
-                if captured {
-                    let disposition = await processReceivedBatch(envelope.batch)
-                    MyRAMSyncBenchmarkTelemetry.shared.record(
-                        .batchConvergenceCompleted,
-                        batchID: String(describing: envelope.batch.id),
-                        peerDeviceID: identity.deviceID,
-                        outcome: String(describing: disposition)
-                    )
-                    if disposition == .acknowledgementPermitted {
-                        try? sendBatchAcknowledgement(batchID: envelope.batch.id, to: peerID)
-                    }
-                }
+                enqueueIncomingBatch(envelope.batch, from: peerID)
+                return
             case .legacySyncEnvelope:
                 guard let envelope = try? JSONDecoder().decode(SyncEnvelope.self, from: message.payload) else { return }
                 receiveLegacyEnvelope(envelope, from: peerID)

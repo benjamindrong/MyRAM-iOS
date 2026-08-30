@@ -212,6 +212,13 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         }
     }
 
+    func testPinnedRowPresentationUsesFillOnlyForFullColorRendering() {
+        let policy = MyRAMWidgetPinnedRowPresentationPolicy()
+
+        XCTAssertEqual(policy.presentationMode(isFullColor: true), .filled)
+        XCTAssertEqual(policy.presentationMode(isFullColor: false), .outlined)
+    }
+
     func testContentPolicyPreservesAllPinsAndDoesNotCapBodyLines() {
         let zeroPins = render(pins: [], body: "Body", family: .small)
         XCTAssertTrue(zeroPins.pinnedTexts.isEmpty)
