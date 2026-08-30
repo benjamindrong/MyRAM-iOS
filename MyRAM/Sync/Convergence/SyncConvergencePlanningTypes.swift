@@ -200,7 +200,6 @@ struct SyncConvergenceCreationEffect: Equatable {
 enum SyncConvergenceBodyEffect: Equatable {
     case matchingBaseIncremental(MatchingBaseBodyPlan)
     case reconstructedConflict(ReconstructedConflictBodyPlan)
-    case legacyPositional(LegacyBodyPlan)
     case anchoredStructural(SyncConvergenceAnchoredStructuralBodyPlan)
     case compatibilityNoopMissingNote(MissingNoteBodyNoopPlan)
 }
@@ -269,15 +268,6 @@ struct ReconstructedConflictBodyPlan: Equatable {
         self.presentationRouting = presentationRouting
         self.rewriteSafetyReceipt = rewriteSafetyReceipt
     }
-}
-
-struct LegacyBodyPlan: Equatable {
-    let noteID: UUID
-    let initialBody: String
-    let operations: [SyncConvergencePlannedBodyOperation]
-    let finalBody: String
-    let finalBodyHash: String
-    let resultEvidence: SyncConvergenceResultEvidence
 }
 
 struct MissingNoteBodyNoopPlan: Equatable {

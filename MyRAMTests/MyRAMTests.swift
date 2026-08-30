@@ -4382,12 +4382,9 @@ final class MyRAMTests: XCTestCase {
             newText: String,
             modifiedAt: Date
         ) throws -> (batch: SyncBatch, capturedChanges: [SyncConvergenceCapturedLocalChange]) {
-            // SyncBatchBodyHashCapability.defaultEnabled is currently false (staged
-            // rollout: body-hash emission stays off until "PR 3"), so real captures
-            // never set baseContentHash and route through the naive .legacyPositional
-            // path instead of reconstruction — that's the actual live bug. This test
-            // exercises the capability as it's meant to work once enabled, to prove
-            // this session's reconstruction fixes actually resolve it.
+            // SyncBatchBodyHashCapability.defaultEnabled is currently false during
+            // the staged rollout. This test explicitly enables the capability to
+            // exercise reconstruction with the body-hash evidence it requires.
             let captured = try SyncBatchNoteChangeCapture.capturedBodyChanges(
                 noteID: noteID,
                 oldBody: base,
