@@ -267,7 +267,7 @@ struct ValidatedCanonicalReplayKey: Comparable, Sendable {
             guard let legacyCreatedAtBitPattern = payload.legacyCreatedAtBitPattern else {
                 throw SyncConvergenceValidationError.invalidReplayKeyShape(field: "legacyCreatedAtBitPattern")
             }
-            self.batchOrderSortKey = .legacy(
+            batchOrderSortKey = .legacy(
                 createdAt: SyncConvergenceDateBits.date(from: legacyCreatedAtBitPattern),
                 batchIDLowercase: payload.batchIDLowercase
             )
@@ -275,7 +275,7 @@ struct ValidatedCanonicalReplayKey: Comparable, Sendable {
             guard let sequence = payload.sequence else {
                 throw SyncConvergenceValidationError.invalidReplayKeyShape(field: "sequence")
             }
-            self.batchOrderSortKey = .sequenced(sequence)
+            batchOrderSortKey = .sequenced(sequence)
         }
     }
 
@@ -548,8 +548,8 @@ struct OperationIdentityPayload: Codable, Equatable, Sendable {
         canonicalReplayKey: CanonicalReplayKeyPayload
     ) {
         self.version = version
-        self.batchIDLowercase = batchID.uuidString.lowercased()
-        self.originDeviceIDLowercase = originDeviceID.uuidString.lowercased()
+        batchIDLowercase = batchID.uuidString.lowercased()
+        originDeviceIDLowercase = originDeviceID.uuidString.lowercased()
         self.operationIndex = operationIndex
         self.operationKind = operationKind
         self.canonicalReplayKey = canonicalReplayKey
@@ -634,17 +634,20 @@ struct SyncConvergencePostCommitState: Codable, Equatable, Sendable {
     let legacyCleanupPending: Bool
     let presentationRefreshPending: Bool
     let anchoredRecoveryPending: Bool
+    let lifecycleMaterializationPending: Bool
 
     init(
         queueCleanupPending: Bool,
         legacyCleanupPending: Bool,
         presentationRefreshPending: Bool,
-        anchoredRecoveryPending: Bool = false
+        anchoredRecoveryPending: Bool = false,
+        lifecycleMaterializationPending: Bool = false
     ) {
         self.queueCleanupPending = queueCleanupPending
         self.legacyCleanupPending = legacyCleanupPending
         self.presentationRefreshPending = presentationRefreshPending
         self.anchoredRecoveryPending = anchoredRecoveryPending
+        self.lifecycleMaterializationPending = lifecycleMaterializationPending
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -652,6 +655,7 @@ struct SyncConvergencePostCommitState: Codable, Equatable, Sendable {
         case legacyCleanupPending
         case presentationRefreshPending
         case anchoredRecoveryPending
+        case lifecycleMaterializationPending
     }
 
     init(from decoder: Decoder) throws {
@@ -663,6 +667,10 @@ struct SyncConvergencePostCommitState: Codable, Equatable, Sendable {
             anchoredRecoveryPending: try container.decodeIfPresent(
                 Bool.self,
                 forKey: .anchoredRecoveryPending
+            ) ?? false,
+            lifecycleMaterializationPending: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .lifecycleMaterializationPending
             ) ?? false
         )
     }
@@ -673,13 +681,15 @@ struct SyncConvergencePostCommitState: Codable, Equatable, Sendable {
         try container.encode(legacyCleanupPending, forKey: .legacyCleanupPending)
         try container.encode(presentationRefreshPending, forKey: .presentationRefreshPending)
         try container.encode(anchoredRecoveryPending, forKey: .anchoredRecoveryPending)
+        try container.encode(lifecycleMaterializationPending, forKey: .lifecycleMaterializationPending)
     }
 
     static let none = SyncConvergencePostCommitState(
         queueCleanupPending: false,
         legacyCleanupPending: false,
         presentationRefreshPending: false,
-        anchoredRecoveryPending: false
+        anchoredRecoveryPending: false,
+        lifecycleMaterializationPending: false
     )
 }
 
