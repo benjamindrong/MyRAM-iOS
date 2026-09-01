@@ -1,20 +1,21 @@
+import CryptoKit
 import Foundation
 import NearbySyncCore
 
-enum SyncConflictEntityType: String, Codable {
+enum SyncConflictEntityType: String, Codable, Sendable {
     case note
     case folder
     case pinnedThought
 }
 
-enum SyncConflictField: String, Codable {
+enum SyncConflictField: String, Codable, Sendable {
     case noteTitle
     case noteContent
     case folderTitle
     case pinnedText
 }
 
-struct SyncConflictVersion: Codable, Equatable, Identifiable {
+struct SyncConflictVersion: Codable, Equatable, Identifiable, Sendable {
     let id: UUID
     let entityType: SyncConflictEntityType
     let entityID: UUID
@@ -111,6 +112,10 @@ extension SyncConflictStoring {
     }
 }
 
+private protocol SyncConflictLegacyInspecting: AnyObject {
+    func legacyActiveConflicts(now: Date) -> [SyncConflictVersion]
+}
+
 struct LegacyIncomingBufferedEffects: Equatable {
     var preservedConflicts: [SyncConflictVersion] = []
     var removedConflictIDs: [UUID] = []
@@ -158,7 +163,7 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
         var conflicts = base.activeConflicts(now: now)
             .filter { !removedConflictIDs.contains($0.id) }
             .filter { conflict in
-                !removedResolvedConflicts.contains {
+                conflict.id.isLifecycleConflictID || !removedResolvedConflicts.contains {
                     $0.entityType == conflict.entityType
                         && $0.entityID == conflict.entityID
                         && $0.field == conflict.field
@@ -167,23 +172,18 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
         for conflict in bufferedConflicts where !conflicts.contains(where: { $0.id == conflict.id }) {
             conflicts.append(conflict)
         }
-        return conflicts.sorted {
-            if $0.preservedAt == $1.preservedAt {
-                return $0.id.uuidString < $1.id.uuidString
-            }
-            return $0.preservedAt > $1.preservedAt
-        }
+        return conflicts.sorted(by: SyncConflictStore.conflictDisplayOrder)
     }
 
     func preserve(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
-        let conflicts = activeConflicts()
-        if conflicts.contains(where: {
+        let legacyConflicts = legacyActiveConflicts(now: Date())
+        if legacyConflicts.contains(where: {
             SyncTextConflictStore.isExactRemoteMatch($0.syncTextConflict, conflict.syncTextConflict)
         }) {
-            return conflicts
+            return activeConflicts()
         }
         preservedEffectConflicts.append(conflict)
-        if conflicts.contains(where: { sameLogicalConflict($0, conflict) }) {
+        if legacyConflicts.contains(where: { sameLogicalConflict($0, conflict) }) {
             queuedConflictsByKey[ConflictKey(
                 entityType: conflict.entityType,
                 entityID: conflict.entityID,
@@ -196,6 +196,7 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
     }
 
     func removeConflict(id: UUID) -> [SyncConflictVersion] {
+        guard !id.isLifecycleConflictID else { return activeConflicts() }
         bufferedConflicts.removeAll { $0.id == id }
         if !removedConflictIDs.contains(id) {
             removedConflictIDs.append(id)
@@ -204,6 +205,7 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
     }
 
     func removeResolvedConflict(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
+        guard !conflict.id.isLifecycleConflictID else { return activeConflicts() }
         bufferedConflicts.removeAll { sameLogicalConflict($0, conflict) }
         removedResolvedConflicts.append(conflict)
         return activeConflicts()
@@ -290,6 +292,28 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
         ))
     }
 
+    private func legacyActiveConflicts(now: Date) -> [SyncConflictVersion] {
+        var conflicts: [SyncConflictVersion]
+        if let legacyInspector = base as? SyncConflictLegacyInspecting {
+            conflicts = legacyInspector.legacyActiveConflicts(now: now)
+        } else {
+            conflicts = base.activeConflicts(now: now).filter { !$0.id.isLifecycleConflictID }
+        }
+        conflicts = conflicts
+            .filter { !removedConflictIDs.contains($0.id) }
+            .filter { conflict in
+                !removedResolvedConflicts.contains {
+                    $0.entityType == conflict.entityType
+                        && $0.entityID == conflict.entityID
+                        && $0.field == conflict.field
+                }
+            }
+        for conflict in bufferedConflicts where !conflicts.contains(where: { $0.id == conflict.id }) {
+            conflicts.append(conflict)
+        }
+        return conflicts
+    }
+
     private func sameLogicalConflict(_ lhs: SyncConflictVersion, _ rhs: SyncConflictVersion) -> Bool {
         lhs.entityType == rhs.entityType
             && lhs.entityID == rhs.entityID
@@ -302,14 +326,22 @@ enum SyncConflictBaselineSnapshotState: Equatable {
     case present(Data)
 }
 
+enum SyncConflictLifecycleSnapshotState: Equatable {
+    case absent
+    case present(Data)
+}
+
 enum SyncConflictStoreSnapshotError: Error, Equatable {
     case baselineCaptureFailed(path: String)
     case baselineRestoreFailed(path: String)
+    case lifecycleCaptureFailed(path: String)
+    case lifecycleRestoreFailed(path: String)
 }
 
 struct SyncConflictStoreSnapshot {
     let textConflicts: SyncTextConflictStoreSnapshot
     let baselines: SyncConflictBaselineSnapshotState
+    let lifecycle: SyncConflictLifecycleSnapshotState
 }
 
 extension SyncRemoteTextBaseline {
@@ -322,7 +354,301 @@ extension SyncRemoteTextBaseline {
     }
 }
 
-final class SyncConflictStore: SyncConflictStoring {
+enum SyncLifecycleConflictReceiptState: String, Codable, Equatable, Sendable {
+    case preparing
+    case visible
+    case resolved
+    case expired
+}
+
+struct SyncLifecycleSourceIncorporationIdentity: Codable, Equatable, Sendable {
+    let batchID: UUID
+    let canonicalPayloadDigest: String
+    let canonicalPayloadDigestFormatVersion: Int
+    let committedResultDigest: String
+    let committedResultDigestFormatVersion: Int
+
+    init(_ identity: SyncConvergencePersistedIncorporationIdentity) {
+        batchID = identity.batchID
+        canonicalPayloadDigest = identity.canonicalPayloadDigest
+        canonicalPayloadDigestFormatVersion = identity.canonicalPayloadDigestFormatVersion
+        committedResultDigest = identity.committedResultDigest
+        committedResultDigestFormatVersion = identity.committedResultDigestFormatVersion
+    }
+
+    func matches(_ identity: SyncConvergencePersistedIncorporationIdentity) -> Bool {
+        self == SyncLifecycleSourceIncorporationIdentity(identity)
+    }
+}
+
+struct SyncLifecycleOptionalDataFingerprint: Codable, Equatable, Sendable {
+    let isPresent: Bool
+    let sha256Hex: String?
+
+    static func make(_ data: Data?) -> Self {
+        guard let data else { return Self(isPresent: false, sha256Hex: nil) }
+        return Self(isPresent: true, sha256Hex: SyncLifecycleConflictIdentityV1.sha256Hex(data))
+    }
+}
+
+struct SyncLifecycleConflictIdentityV1: Codable, Equatable, Sendable {
+    static let supportedFormatVersion = 1
+    static let semanticDomain = "myram.lifecycle-conflict.identity.v1"
+
+    let formatVersion: Int
+    let domain: String
+    let sourceBatchID: UUID
+    let canonicalPayloadDigest: String
+    let canonicalPayloadDigestFormatVersion: Int
+    let lifecycleOperationIdentity: OperationIdentityPayload
+    let noteID: UUID
+    let field: SyncConflictField
+    let localTextSHA256: String
+    let localDataFingerprint: SyncLifecycleOptionalDataFingerprint
+    let incomingTextSHA256: String
+    let incomingDataFingerprint: SyncLifecycleOptionalDataFingerprint
+
+    init(
+        sourceBatchID: UUID,
+        canonicalPayloadDigest: String,
+        canonicalPayloadDigestFormatVersion: Int,
+        lifecycleOperationIdentity: OperationIdentityPayload,
+        noteID: UUID,
+        field: SyncConflictField,
+        localText: String,
+        localData: Data?,
+        incomingText: String,
+        incomingData: Data?
+    ) {
+        formatVersion = Self.supportedFormatVersion
+        domain = Self.semanticDomain
+        self.sourceBatchID = sourceBatchID
+        self.canonicalPayloadDigest = canonicalPayloadDigest
+        self.canonicalPayloadDigestFormatVersion = canonicalPayloadDigestFormatVersion
+        self.lifecycleOperationIdentity = lifecycleOperationIdentity
+        self.noteID = noteID
+        self.field = field
+        localTextSHA256 = Self.sha256Hex(Data(localText.utf8))
+        localDataFingerprint = .make(localData)
+        incomingTextSHA256 = Self.sha256Hex(Data(incomingText.utf8))
+        incomingDataFingerprint = .make(incomingData)
+    }
+
+    func validate() throws {
+        guard formatVersion == Self.supportedFormatVersion,
+              domain == Self.semanticDomain,
+              UUID(uuidString: sourceBatchID.uuidString) != nil,
+              canonicalPayloadDigest.count == 64,
+              canonicalPayloadDigest.allSatisfy({ $0.isHexDigit && !$0.isUppercase }),
+              canonicalPayloadDigestFormatVersion > 0,
+              localTextSHA256.count == 64,
+              incomingTextSHA256.count == 64,
+              localDataFingerprint.isPresent == (localDataFingerprint.sha256Hex != nil),
+              incomingDataFingerprint.isPresent == (incomingDataFingerprint.sha256Hex != nil)
+        else {
+            throw SyncLifecycleConflictStoreError.contradictoryIdentity
+        }
+        try lifecycleOperationIdentity.validate()
+    }
+
+    func deterministicUUID(domain: String) throws -> UUID {
+        try validate()
+        struct DomainSeparatedIdentity: Codable {
+            let domain: String
+            let identity: SyncLifecycleConflictIdentityV1
+        }
+        let bytes = Array(SHA256.hash(data: try SyncConvergenceStableEncoding.encode(
+            DomainSeparatedIdentity(domain: domain, identity: self)
+        )))
+        var uuidBytes = Array(bytes.prefix(16))
+        uuidBytes[6] = (uuidBytes[6] & 0x0f) | 0x80
+        uuidBytes[8] = (uuidBytes[8] & 0x3f) | 0x80
+        let hex = uuidBytes.map { String(format: "%02x", $0) }.joined()
+        let value = "\(hex.prefix(8))-\(hex.dropFirst(8).prefix(4))-\(hex.dropFirst(12).prefix(4))-\(hex.dropFirst(16).prefix(4))-\(hex.dropFirst(20).prefix(12))"
+        guard let uuid = UUID(uuidString: value), uuid.isLifecycleConflictID else {
+            throw SyncLifecycleConflictStoreError.contradictoryIdentity
+        }
+        return uuid
+    }
+
+    fileprivate static func sha256Hex(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+struct SyncLifecycleConflictIntent: Codable, Equatable, Sendable {
+    static let conflictIDDomain = "myram.lifecycle-conflict.id.v1"
+    static let materializationIDDomain = "myram.lifecycle-conflict.materialization.v1"
+
+    let sourceIdentity: SyncLifecycleSourceIncorporationIdentity
+    let identity: SyncLifecycleConflictIdentityV1
+    let materializationID: UUID
+    let conflictID: UUID
+    let localText: String
+    let localData: Data?
+    let incomingText: String
+    let incomingData: Data?
+    let incomingModifiedAt: Date
+    let preservedAt: Date
+    let expiresAt: Date
+
+    init(
+        sourceIdentity: SyncLifecycleSourceIncorporationIdentity,
+        lifecycleOperationIdentity: OperationIdentityPayload,
+        noteID: UUID,
+        field: SyncConflictField,
+        localText: String,
+        localData: Data?,
+        incomingText: String,
+        incomingData: Data?,
+        incomingModifiedAt: Date,
+        preservedAt: Date,
+        expiresAt: Date
+    ) throws {
+        self.sourceIdentity = sourceIdentity
+        identity = SyncLifecycleConflictIdentityV1(
+            sourceBatchID: sourceIdentity.batchID,
+            canonicalPayloadDigest: sourceIdentity.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: sourceIdentity.canonicalPayloadDigestFormatVersion,
+            lifecycleOperationIdentity: lifecycleOperationIdentity,
+            noteID: noteID,
+            field: field,
+            localText: localText,
+            localData: localData,
+            incomingText: incomingText,
+            incomingData: incomingData
+        )
+        materializationID = try identity.deterministicUUID(domain: Self.materializationIDDomain)
+        conflictID = try identity.deterministicUUID(domain: Self.conflictIDDomain)
+        self.localText = localText
+        self.localData = localData
+        self.incomingText = incomingText
+        self.incomingData = incomingData
+        self.incomingModifiedAt = incomingModifiedAt
+        self.preservedAt = preservedAt
+        self.expiresAt = expiresAt
+        try validate()
+    }
+
+    var conflictVersion: SyncConflictVersion {
+        SyncConflictVersion(
+            id: conflictID,
+            entityType: .note,
+            entityID: identity.noteID,
+            noteID: identity.noteID,
+            field: identity.field,
+            localText: localText,
+            remoteText: incomingText,
+            remoteRichTextContentData: incomingData,
+            remoteModifiedAt: incomingModifiedAt,
+            preservedAt: preservedAt,
+            expiresAt: expiresAt
+        )
+    }
+
+    func validate() throws {
+        try identity.validate()
+        let recomputedIdentity = SyncLifecycleConflictIdentityV1(
+            sourceBatchID: sourceIdentity.batchID,
+            canonicalPayloadDigest: sourceIdentity.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: sourceIdentity.canonicalPayloadDigestFormatVersion,
+            lifecycleOperationIdentity: identity.lifecycleOperationIdentity,
+            noteID: identity.noteID,
+            field: identity.field,
+            localText: localText,
+            localData: localData,
+            incomingText: incomingText,
+            incomingData: incomingData
+        )
+        guard recomputedIdentity == identity,
+              try identity.deterministicUUID(domain: Self.materializationIDDomain) == materializationID,
+              try identity.deterministicUUID(domain: Self.conflictIDDomain) == conflictID,
+              materializationID.isLifecycleConflictID,
+              conflictID.isLifecycleConflictID,
+              preservedAt <= expiresAt else {
+            throw SyncLifecycleConflictStoreError.contradictoryIdentity
+        }
+    }
+}
+
+struct SyncLifecycleConflictEntry: Codable, Equatable, Sendable {
+    let intent: SyncLifecycleConflictIntent
+    var receiptState: SyncLifecycleConflictReceiptState
+    var conflict: SyncConflictVersion?
+    var publicationAuthorized: Bool
+}
+
+struct SyncDeferredRemoteLifecycleResolution: Codable, Equatable, Sendable {
+    let conflict: SyncConflictVersion
+    let receivedAt: Date
+
+    func validate() throws {
+        guard conflict.id.isLifecycleConflictID,
+              conflict.entityType == .note,
+              conflict.noteID == conflict.entityID else {
+            throw SyncLifecycleConflictStoreError.invalidDeferredResolution
+        }
+    }
+}
+
+private struct SyncLifecycleConflictPersistenceEnvelope: Codable, Equatable, Sendable {
+    static let supportedFormatVersion = 1
+
+    let formatVersion: Int
+    var entries: [SyncLifecycleConflictEntry]
+    var deferredRemoteResolutions: [SyncDeferredRemoteLifecycleResolution]
+
+    static let empty = Self(formatVersion: supportedFormatVersion, entries: [], deferredRemoteResolutions: [])
+
+    func validate() throws {
+        guard formatVersion == Self.supportedFormatVersion else {
+            throw SyncLifecycleConflictStoreError.unsupportedPersistenceVersion
+        }
+        var conflictIDs: Set<UUID> = []
+        var materializationIDs: Set<UUID> = []
+        for entry in entries {
+            try entry.intent.validate()
+            guard conflictIDs.insert(entry.intent.conflictID).inserted,
+                  materializationIDs.insert(entry.intent.materializationID).inserted else {
+                throw SyncLifecycleConflictStoreError.contradictoryIdentity
+            }
+            switch entry.receiptState {
+            case .preparing:
+                guard !entry.publicationAuthorized else {
+                    throw SyncLifecycleConflictStoreError.contradictoryReceipt
+                }
+            case .visible:
+                guard entry.conflict == nil || entry.conflict == entry.intent.conflictVersion else {
+                    throw SyncLifecycleConflictStoreError.contradictoryReceipt
+                }
+            case .resolved, .expired:
+                guard entry.conflict == nil, !entry.publicationAuthorized else {
+                    throw SyncLifecycleConflictStoreError.contradictoryReceipt
+                }
+            }
+        }
+        var markerIDs: Set<UUID> = []
+        for marker in deferredRemoteResolutions {
+            try marker.validate()
+            guard markerIDs.insert(marker.conflict.id).inserted else {
+                throw SyncLifecycleConflictStoreError.contradictoryDeferredResolution
+            }
+        }
+    }
+}
+
+enum SyncLifecycleConflictStoreError: Error, Equatable {
+    case unsupportedPersistenceVersion
+    case persistenceUnavailable
+    case contradictoryIdentity
+    case contradictoryReceipt
+    case contradictoryDeferredResolution
+    case invalidDeferredResolution
+    case missingLifecycleConflict
+    case baselineVerificationFailed
+}
+
+final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting {
     struct FileIO {
         var fileExists: (String) -> Bool
         var readData: (URL) throws -> Data
@@ -368,19 +694,42 @@ final class SyncConflictStore: SyncConflictStoring {
     }
 
     func activeConflicts(now: Date = Date()) -> [SyncConflictVersion] {
+        let legacy = legacyActiveConflicts(now: now)
+        let lifecycle = actionableLifecycleConflicts(now: now)
+        return (legacy + lifecycle).sorted(by: Self.conflictDisplayOrder)
+    }
+
+    fileprivate static func conflictDisplayOrder(_ lhs: SyncConflictVersion, _ rhs: SyncConflictVersion) -> Bool {
+        if lhs.preservedAt == rhs.preservedAt {
+            return lhs.id.uuidString < rhs.id.uuidString
+        }
+        return lhs.preservedAt > rhs.preservedAt
+    }
+
+    func legacyActiveConflicts(now: Date) -> [SyncConflictVersion] {
         textConflictStore.activeConflicts(now: now).compactMap(SyncConflictVersion.init)
     }
 
     func preserve(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
-        textConflictStore.preserve(conflict.syncTextConflict).compactMap(SyncConflictVersion.init)
+        guard !conflict.id.isLifecycleConflictID else { return activeConflicts() }
+        _ = textConflictStore.preserve(conflict.syncTextConflict)
+        return activeConflicts()
     }
 
     func removeConflict(id: UUID) -> [SyncConflictVersion] {
-        textConflictStore.removeConflict(id: id).compactMap(SyncConflictVersion.init)
+        guard !id.isLifecycleConflictID else { return activeConflicts() }
+        _ = textConflictStore.removeConflict(id: id)
+        return activeConflicts()
     }
 
     func removeResolvedConflict(_ conflict: SyncConflictVersion) -> [SyncConflictVersion] {
-        textConflictStore.removeResolvedConflict(conflict.syncTextConflict).compactMap(SyncConflictVersion.init)
+        guard !conflict.id.isLifecycleConflictID else { return activeConflicts() }
+        _ = textConflictStore.removeResolvedConflict(conflict.syncTextConflict)
+        return activeConflicts()
+    }
+
+    func activeConflict(id: UUID, now: Date = Date()) -> SyncConflictVersion? {
+        activeConflicts(now: now).first { $0.id == id }
     }
 
     func hasActiveConflict(
@@ -389,12 +738,9 @@ final class SyncConflictStore: SyncConflictStoring {
         field: SyncConflictField,
         now: Date = Date()
     ) -> Bool {
-        textConflictStore.hasActiveConflict(
-            entityType: entityType.syncEntityType,
-            entityID: entityID.uuidString,
-            fieldID: field.rawValue,
-            now: now
-        )
+        activeConflicts(now: now).contains {
+            $0.entityType == entityType && $0.entityID == entityID && $0.field == field
+        }
     }
 
     func queuedConflict(
@@ -435,11 +781,36 @@ final class SyncConflictStore: SyncConflictStoring {
         saveBaselines(baselines)
     }
 
+    func saveRemoteBaselineChecked(_ baseline: SyncRemoteTextBaseline) throws {
+        try saveRemoteBaselinesChecked([baseline])
+        guard remoteBaselineChecked(
+            entityType: baseline.entityType,
+            entityID: baseline.entityID,
+            field: baseline.field
+        ) == baseline else {
+            throw SyncLifecycleConflictStoreError.baselineVerificationFailed
+        }
+    }
+
+    func remoteBaselineChecked(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField
+    ) throws -> SyncRemoteTextBaseline? {
+        try loadBaselinesChecked().first {
+            $0.entityType == entityType && $0.entityID == entityID && $0.field == field
+        }
+    }
+
     func commitLegacyIncomingEffectsChecked(_ effects: LegacyIncomingBufferedEffects) throws {
         try textConflictStore.commitChecked(SyncTextConflictCommitEffects(
-            preservedConflicts: effects.preservedConflicts.map(\.syncTextConflict),
-            removedConflictIDs: effects.removedConflictIDs,
-            removedResolvedConflicts: effects.removedResolvedConflicts.map(\.syncTextConflict)
+            preservedConflicts: effects.preservedConflicts
+                .filter { !$0.id.isLifecycleConflictID }
+                .map(\.syncTextConflict),
+            removedConflictIDs: effects.removedConflictIDs.filter { !$0.isLifecycleConflictID },
+            removedResolvedConflicts: effects.removedResolvedConflicts
+                .filter { !$0.id.isLifecycleConflictID }
+                .map(\.syncTextConflict)
         ))
         try saveRemoteBaselinesChecked(effects.remoteBaselines)
     }
@@ -492,19 +863,157 @@ final class SyncConflictStore: SyncConflictStoring {
         )
     }
 
-    /// Captures the exact on-disk conflict-store and remote-text-baseline
-    /// state. Intended for callers that speculatively apply an incoming
-    /// change (which may write conflict/baseline state as a side effect)
-    /// before a separate, later persistence step (e.g. a SwiftData save) is
-    /// known to succeed, so that write can be rolled back on failure.
+    func materializeLifecycleConflicts(
+        _ intents: [SyncLifecycleConflictIntent],
+        now: Date = Date()
+    ) -> SyncConvergencePostCommitAdapterResult {
+        do {
+            var state = try loadLifecycleStateChecked()
+            for intent in intents.sorted(by: { $0.conflictID.uuidString < $1.conflictID.uuidString }) {
+                try intent.validate()
+                if let existingIndex = state.entries.firstIndex(where: { $0.intent.conflictID == intent.conflictID }) {
+                    guard state.entries[existingIndex].intent == intent else {
+                        throw SyncLifecycleConflictStoreError.contradictoryIdentity
+                    }
+                    switch state.entries[existingIndex].receiptState {
+                    case .resolved, .expired, .visible:
+                        continue
+                    case .preparing:
+                        try finishPreparingLifecycleEntry(at: existingIndex, state: &state, now: now)
+                    }
+                    continue
+                }
+                guard !state.entries.contains(where: { $0.intent.materializationID == intent.materializationID }) else {
+                    throw SyncLifecycleConflictStoreError.contradictoryIdentity
+                }
+                state.entries.append(SyncLifecycleConflictEntry(
+                    intent: intent,
+                    receiptState: .preparing,
+                    conflict: nil,
+                    publicationAuthorized: false
+                ))
+                try saveLifecycleStateChecked(state)
+                guard let index = state.entries.firstIndex(where: { $0.intent.conflictID == intent.conflictID }) else {
+                    throw SyncLifecycleConflictStoreError.contradictoryIdentity
+                }
+                try finishPreparingLifecycleEntry(at: index, state: &state, now: now)
+            }
+            return .verifiedComplete
+        } catch {
+            return .failed
+        }
+    }
+
+    func authorizeLifecyclePublication(
+        sourceIdentity: SyncLifecycleSourceIncorporationIdentity
+    ) -> SyncConvergencePostCommitAdapterResult {
+        do {
+            var state = try loadLifecycleStateChecked()
+            let indices = state.entries.indices.filter { state.entries[$0].intent.sourceIdentity == sourceIdentity }
+            guard indices.allSatisfy({ state.entries[$0].receiptState != .preparing }) else {
+                return .stillPending
+            }
+            var changed = false
+            for index in indices where state.entries[index].receiptState == .visible {
+                if !state.entries[index].publicationAuthorized {
+                    state.entries[index].publicationAuthorized = true
+                    changed = true
+                }
+            }
+            if changed {
+                try saveLifecycleStateChecked(state)
+            }
+            return .verifiedComplete
+        } catch {
+            return .failed
+        }
+    }
+
+    func lifecycleConflict(id: UUID) throws -> SyncConflictVersion? {
+        guard id.isLifecycleConflictID else { return nil }
+        let state = try loadLifecycleStateChecked()
+        guard let entry = state.entries.first(where: { $0.intent.conflictID == id }) else { return nil }
+        try verifyLifecycleEntry(entry)
+        return entry.conflict
+    }
+
+    func markLifecycleResolvedChecked(id: UUID) throws {
+        guard id.isLifecycleConflictID else { throw SyncLifecycleConflictStoreError.missingLifecycleConflict }
+        var state = try loadLifecycleStateChecked()
+        guard let index = state.entries.firstIndex(where: { $0.intent.conflictID == id }) else {
+            throw SyncLifecycleConflictStoreError.missingLifecycleConflict
+        }
+        try verifyLifecycleEntry(state.entries[index])
+        if state.entries[index].receiptState == .expired {
+            throw SyncLifecycleConflictStoreError.contradictoryReceipt
+        }
+        if state.entries[index].receiptState == .resolved { return }
+        state.entries[index].receiptState = .resolved
+        state.entries[index].publicationAuthorized = false
+        state.entries[index].conflict = nil
+        try saveLifecycleStateChecked(state)
+    }
+
+    func cleanupResolvedLifecycleConflictChecked(id: UUID) throws {
+        guard id.isLifecycleConflictID else { return }
+        let state = try loadLifecycleStateChecked()
+        guard let entry = state.entries.first(where: { $0.intent.conflictID == id }),
+              entry.receiptState == .resolved,
+              entry.conflict == nil else {
+            throw SyncLifecycleConflictStoreError.contradictoryReceipt
+        }
+    }
+
+    func applyRemoteLifecycleResolutionChecked(_ receivedConflict: SyncConflictVersion) throws -> Bool {
+        guard receivedConflict.id.isLifecycleConflictID else { return false }
+        var state = try loadLifecycleStateChecked()
+        guard let index = state.entries.firstIndex(where: { $0.intent.conflictID == receivedConflict.id }) else {
+            return false
+        }
+        try verifyLifecycleEntry(state.entries[index])
+        guard deferredConflict(receivedConflict, isCompatibleWith: state.entries[index].intent) else {
+            throw SyncLifecycleConflictStoreError.contradictoryDeferredResolution
+        }
+        state.entries[index].receiptState = .resolved
+        state.entries[index].publicationAuthorized = false
+        state.entries[index].conflict = nil
+        state.deferredRemoteResolutions.removeAll { $0.conflict.id == receivedConflict.id }
+        try saveLifecycleStateChecked(state)
+        return true
+    }
+
+    func persistDeferredRemoteLifecycleResolutionChecked(
+        _ conflict: SyncConflictVersion,
+        receivedAt: Date = Date()
+    ) throws {
+        let marker = SyncDeferredRemoteLifecycleResolution(conflict: conflict, receivedAt: receivedAt)
+        try marker.validate()
+        var state = try loadLifecycleStateChecked()
+        if let entry = state.entries.first(where: { $0.intent.conflictID == conflict.id }) {
+            try verifyLifecycleEntry(entry)
+            guard deferredConflict(conflict, isCompatibleWith: entry.intent) else {
+                throw SyncLifecycleConflictStoreError.contradictoryDeferredResolution
+            }
+            return
+        }
+        if let existing = state.deferredRemoteResolutions.first(where: { $0.conflict.id == conflict.id }) {
+            guard existing.conflict == conflict else {
+                throw SyncLifecycleConflictStoreError.contradictoryDeferredResolution
+            }
+            return
+        }
+        state.deferredRemoteResolutions.append(marker)
+        try saveLifecycleStateChecked(state)
+    }
+
     func snapshot() throws -> SyncConflictStoreSnapshot {
         SyncConflictStoreSnapshot(
             textConflicts: try textConflictStore.snapshot(),
-            baselines: try baselineSnapshotState()
+            baselines: try baselineSnapshotState(),
+            lifecycle: try lifecycleSnapshotState()
         )
     }
 
-    /// Restores exactly the state captured by `snapshot()`.
     func restore(_ snapshot: SyncConflictStoreSnapshot) throws {
         try textConflictStore.restore(snapshot.textConflicts)
         do {
@@ -519,6 +1028,184 @@ final class SyncConflictStore: SyncConflictStoring {
             }
         } catch {
             throw SyncConflictStoreSnapshotError.baselineRestoreFailed(path: baselineFileURL.path)
+        }
+        do {
+            switch snapshot.lifecycle {
+            case .absent:
+                if fileIO.fileExists(lifecycleFileURL.path) {
+                    try fileIO.removeItem(lifecycleFileURL)
+                }
+            case .present(let lifecycleData):
+                try fileIO.createDirectory(lifecycleFileURL.deletingLastPathComponent())
+                try fileIO.writeData(lifecycleData, lifecycleFileURL)
+            }
+        } catch {
+            throw SyncConflictStoreSnapshotError.lifecycleRestoreFailed(path: lifecycleFileURL.path)
+        }
+    }
+
+    private func actionableLifecycleConflicts(now: Date) -> [SyncConflictVersion] {
+        do {
+            var state = try loadLifecycleStateChecked()
+            for index in state.entries.indices where
+                state.entries[index].receiptState == .visible &&
+                state.entries[index].publicationAuthorized &&
+                state.entries[index].intent.expiresAt <= now {
+                var candidate = state
+                candidate.entries[index].receiptState = .expired
+                candidate.entries[index].publicationAuthorized = false
+                candidate.entries[index].conflict = nil
+                do {
+                    try saveLifecycleStateChecked(candidate)
+                    state = candidate
+                } catch {
+                    // Retention cleanup may never make a visible conflict disappear
+                    // unless the terminal receipt transition is durable.
+                }
+            }
+            return try state.entries.compactMap { entry in
+                try verifyLifecycleEntry(entry)
+                guard entry.receiptState == .visible,
+                      entry.publicationAuthorized,
+                      let conflict = entry.conflict else { return nil }
+                return conflict
+            }
+        } catch {
+            // Corrupt or contradictory lifecycle state is fail-closed and never
+            // reclassified into the legacy namespace.
+            return []
+        }
+    }
+
+    private func finishPreparingLifecycleEntry(
+        at index: Int,
+        state: inout SyncLifecycleConflictPersistenceEnvelope,
+        now: Date
+    ) throws {
+        guard state.entries.indices.contains(index), state.entries[index].receiptState == .preparing else {
+            throw SyncLifecycleConflictStoreError.contradictoryReceipt
+        }
+        let intent = state.entries[index].intent
+        if let markerIndex = state.deferredRemoteResolutions.firstIndex(where: { $0.conflict.id == intent.conflictID }) {
+            let marker = state.deferredRemoteResolutions[markerIndex]
+            guard deferredConflict(marker.conflict, isCompatibleWith: intent) else {
+                throw SyncLifecycleConflictStoreError.contradictoryDeferredResolution
+            }
+            state.entries[index].receiptState = .resolved
+            state.entries[index].conflict = nil
+            state.entries[index].publicationAuthorized = false
+            state.deferredRemoteResolutions.remove(at: markerIndex)
+            try saveLifecycleStateChecked(state)
+            return
+        }
+        if intent.expiresAt <= now {
+            state.entries[index].receiptState = .expired
+            state.entries[index].conflict = nil
+            state.entries[index].publicationAuthorized = false
+            try saveLifecycleStateChecked(state)
+            return
+        }
+        if let existingConflict = state.entries[index].conflict {
+            guard existingConflict == intent.conflictVersion else {
+                throw SyncLifecycleConflictStoreError.contradictoryReceipt
+            }
+        } else {
+            state.entries[index].conflict = intent.conflictVersion
+            try saveLifecycleStateChecked(state)
+        }
+        let reloaded = try loadLifecycleStateChecked()
+        guard let verified = reloaded.entries.first(where: { $0.intent.conflictID == intent.conflictID }),
+              verified.receiptState == .preparing,
+              verified.intent == intent,
+              verified.conflict == intent.conflictVersion else {
+            throw SyncLifecycleConflictStoreError.contradictoryReceipt
+        }
+        state = reloaded
+        guard let reloadedIndex = state.entries.firstIndex(where: { $0.intent.conflictID == intent.conflictID }) else {
+            throw SyncLifecycleConflictStoreError.contradictoryReceipt
+        }
+        state.entries[reloadedIndex].receiptState = .visible
+        state.entries[reloadedIndex].publicationAuthorized = false
+        try saveLifecycleStateChecked(state)
+    }
+
+    private func verifyLifecycleEntry(_ entry: SyncLifecycleConflictEntry) throws {
+        try entry.intent.validate()
+        if let conflict = entry.conflict {
+            guard conflict == entry.intent.conflictVersion else {
+                throw SyncLifecycleConflictStoreError.contradictoryReceipt
+            }
+        }
+        switch entry.receiptState {
+        case .preparing:
+            guard !entry.publicationAuthorized else {
+                throw SyncLifecycleConflictStoreError.contradictoryReceipt
+            }
+        case .visible:
+            guard entry.conflict != nil else {
+                throw SyncLifecycleConflictStoreError.contradictoryReceipt
+            }
+        case .resolved, .expired:
+            guard entry.conflict == nil, !entry.publicationAuthorized else {
+                throw SyncLifecycleConflictStoreError.contradictoryReceipt
+            }
+        }
+    }
+
+    private func deferredConflict(
+        _ conflict: SyncConflictVersion,
+        isCompatibleWith intent: SyncLifecycleConflictIntent
+    ) -> Bool {
+        conflict.id == intent.conflictID
+            && conflict.entityType == .note
+            && conflict.entityID == intent.identity.noteID
+            && conflict.noteID == intent.identity.noteID
+            && conflict.field == intent.identity.field
+            && conflict.localText == intent.localText
+            && conflict.remoteText == intent.incomingText
+            && conflict.remoteRichTextContentData == intent.incomingData
+    }
+
+    private func loadLifecycleStateChecked() throws -> SyncLifecycleConflictPersistenceEnvelope {
+        guard fileIO.fileExists(lifecycleFileURL.path) else { return .empty }
+        do {
+            let data = try fileIO.readData(lifecycleFileURL)
+            let state = try decoder.decode(SyncLifecycleConflictPersistenceEnvelope.self, from: data)
+            try state.validate()
+            return state
+        } catch let error as SyncLifecycleConflictStoreError {
+            throw error
+        } catch {
+            throw SyncLifecycleConflictStoreError.persistenceUnavailable
+        }
+    }
+
+    private func saveLifecycleStateChecked(_ state: SyncLifecycleConflictPersistenceEnvelope) throws {
+        try state.validate()
+        do {
+            try fileIO.createDirectory(lifecycleFileURL.deletingLastPathComponent())
+            try fileIO.writeData(try encoder.encode(state), lifecycleFileURL)
+            let persisted = try decoder.decode(
+                SyncLifecycleConflictPersistenceEnvelope.self,
+                from: fileIO.readData(lifecycleFileURL)
+            )
+            try persisted.validate()
+            guard persisted == state else {
+                throw SyncLifecycleConflictStoreError.persistenceUnavailable
+            }
+        } catch let error as SyncLifecycleConflictStoreError {
+            throw error
+        } catch {
+            throw SyncLifecycleConflictStoreError.persistenceUnavailable
+        }
+    }
+
+    private func lifecycleSnapshotState() throws -> SyncConflictLifecycleSnapshotState {
+        guard fileIO.fileExists(lifecycleFileURL.path) else { return .absent }
+        do {
+            return .present(try fileIO.readData(lifecycleFileURL))
+        } catch {
+            throw SyncConflictStoreSnapshotError.lifecycleCaptureFailed(path: lifecycleFileURL.path)
         }
     }
 
@@ -591,6 +1278,11 @@ final class SyncConflictStore: SyncConflictStoring {
             .appendingPathComponent("sync-remote-text-baselines.json")
     }
 
+    private var lifecycleFileURL: URL {
+        fileURL.deletingLastPathComponent()
+            .appendingPathComponent("sync-lifecycle-conflicts.json")
+    }
+
     private static func defaultFileURL() -> URL {
         let supportDirectory = FileManager.default.urls(
             for: .applicationSupportDirectory,
@@ -640,6 +1332,14 @@ extension SyncConflictVersion {
             preservedAt: preservedAt,
             expiresAt: expiresAt
         )
+    }
+}
+
+extension UUID {
+    var isLifecycleConflictID: Bool {
+        let components = uuidString.split(separator: "-")
+        guard components.count == 5, let versionCharacter = components[2].first else { return false }
+        return versionCharacter == "8"
     }
 }
 
