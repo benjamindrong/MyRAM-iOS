@@ -5,6 +5,7 @@ actor SyncConvergencePostCommitExecutor {
     private let queueCleanupAdapter: SyncConvergenceQueueCleanupAdapter
     private let legacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapter?
     private let anchoredRecoveryAdapter: SyncConvergenceAnchoredRecoveryAdapter?
+    private let lifecycleConflictAdapter: SyncConvergenceLifecycleConflictAdapter?
     private let presentationAdapter: SyncConvergencePresentationAdapter
     private var activeRun: (id: UUID, task: Task<SyncConvergencePostCommitOutcome, Never>)?
     private var acknowledgedPresentations: Set<AcknowledgedPresentation> = []
@@ -14,12 +15,14 @@ actor SyncConvergencePostCommitExecutor {
         queueCleanupAdapter: SyncConvergenceQueueCleanupAdapter,
         legacyCleanupAdapter: SyncConvergenceLegacyCleanupAdapter? = nil,
         anchoredRecoveryAdapter: SyncConvergenceAnchoredRecoveryAdapter? = nil,
+        lifecycleConflictAdapter: SyncConvergenceLifecycleConflictAdapter? = nil,
         presentationAdapter: SyncConvergencePresentationAdapter
     ) {
         self.store = store
         self.queueCleanupAdapter = queueCleanupAdapter
         self.legacyCleanupAdapter = legacyCleanupAdapter
         self.anchoredRecoveryAdapter = anchoredRecoveryAdapter
+        self.lifecycleConflictAdapter = lifecycleConflictAdapter
         self.presentationAdapter = presentationAdapter
     }
 
@@ -86,6 +89,19 @@ actor SyncConvergencePostCommitExecutor {
                 loaded: current,
                 activationEnabled: activationEnabled
             )
+            switch outcome {
+            case .complete:
+                guard case .fullRoot(let reloaded) = reloadState(for: request) else {
+                    return .failedBeforeWork(.missingAuthoritativeIncorporation(batchID: request.sourceBatchID))
+                }
+                current = reloaded
+            case .pending, .failedBeforeWork:
+                return outcome
+            }
+        }
+
+        if current.postCommitState.lifecycleMaterializationPending {
+            let outcome = executeLifecycleMaterializationIfNeeded(request, loaded: current)
             switch outcome {
             case .complete:
                 guard case .fullRoot(let reloaded) = reloadState(for: request) else {
@@ -179,11 +195,56 @@ actor SyncConvergencePostCommitExecutor {
         }
     }
 
+    private func executeLifecycleMaterializationIfNeeded(
+        _ request: SyncConvergencePostCommitRequest,
+        loaded: SyncConvergencePostCommitFullRootState
+    ) -> SyncConvergencePostCommitOutcome {
+        guard let lifecycleConflictAdapter else {
+            return .failedBeforeWork(.missingLifecycleConflictAdapter(batchID: request.sourceBatchID))
+        }
+        guard !loaded.lifecycleIntents.isEmpty else {
+            return .failedBeforeWork(.contradictoryPostCommitWorkPayload(batchID: request.sourceBatchID))
+        }
+        switch lifecycleConflictAdapter.materializeLifecycleConflicts(
+            loaded.lifecycleIntents,
+            now: Date()
+        ) {
+        case .verifiedComplete:
+            return persistCompletedWork(.lifecycleMaterialization, request: request, loaded: loaded)
+        case .stillPending:
+            return pendingOutcome(blocking: .lifecycleMaterialization, for: loaded.postCommitState)
+        case .failed:
+            return .pending(
+                blocking: .lifecycleMaterialization,
+                outstanding: loaded.postCommitState.pendingWork
+            )
+        }
+    }
+
     private func executePresentationIfNeeded(
         _ request: SyncConvergencePostCommitRequest,
         loaded: SyncConvergencePostCommitFullRootState,
         workPayload: SyncConvergencePostCommitWorkPayloadV1
     ) async -> SyncConvergencePostCommitOutcome {
+        if !loaded.lifecycleIntents.isEmpty {
+            guard let lifecycleConflictAdapter else {
+                return .failedBeforeWork(.missingLifecycleConflictAdapter(batchID: request.sourceBatchID))
+            }
+            switch lifecycleConflictAdapter.authorizeLifecyclePublication(
+                sourceIdentity: SyncLifecycleSourceIncorporationIdentity(request.persistedIncorporationIdentity)
+            ) {
+            case .verifiedComplete:
+                break
+            case .stillPending:
+                return pendingOutcome(blocking: .presentationRefresh, for: loaded.postCommitState)
+            case .failed:
+                return .pending(
+                    blocking: .presentationRefresh,
+                    outstanding: loaded.postCommitState.pendingWork
+                )
+            }
+        }
+
         let acknowledged = acknowledgedPresentationIdentities(request, entries: workPayload.presentationEntries)
         let result: SyncConvergencePostCommitAdapterResult
         if acknowledged.isSubset(of: acknowledgedPresentations) {
@@ -243,7 +304,10 @@ actor SyncConvergencePostCommitExecutor {
             presentationRefreshPending: work == .presentationRefresh ? false : original.presentationRefreshPending,
             anchoredRecoveryPending: work == .anchoredRecoveryPersistence
                 ? false
-                : original.anchoredRecoveryPending
+                : original.anchoredRecoveryPending,
+            lifecycleMaterializationPending: work == .lifecycleMaterialization
+                ? false
+                : original.lifecycleMaterializationPending
         )
 
         do {
@@ -308,7 +372,7 @@ actor SyncConvergencePostCommitExecutor {
         _ request: SyncConvergencePostCommitRequest,
         entries: [SyncConvergencePostCommitWorkPayloadV1.PresentationEntry]
     ) async -> SyncConvergencePostCommitAdapterResult {
-        guard !entries.isEmpty else { return .failed }
+        guard !entries.isEmpty else { return .verifiedComplete }
         do {
             let pendingRequests = try store.loadPendingPostCommitRequests()
             let laterPendingPresentationNoteIDs = pendingPresentationNoteIDs(
@@ -316,14 +380,9 @@ actor SyncConvergencePostCommitExecutor {
                 in: pendingRequests
             )
             for entry in entries.sorted(by: { $0.noteID.uuidString < $1.noteID.uuidString }) {
-                // A later pending request for this note owns the current presentation state. Its
-                // own entry will catch the UI up, so the older entry is already satisfied.
                 if laterPendingPresentationNoteIDs.contains(entry.noteID) {
                     continue
                 }
-                // The note may be gone by the time presentation catches up (deleted, or never
-                // locally present). There's nothing left to refresh for it, so treat it as satisfied
-                // rather than failing the whole batch.
                 guard let note = try store.loadCommittedNote(id: entry.noteID) else {
                     continue
                 }
@@ -361,9 +420,6 @@ actor SyncConvergencePostCommitExecutor {
         }
         return pendingRequests[(requestIndex + 1)...].reduce(into: Set()) { noteIDs, pendingRequest in
             guard pendingRequest.cleanupPlan.retryPresentationRefresh else { return }
-            // Only a routing that actually re-establishes editor content (or closes the editor
-            // entirely) can be relied on to catch the UI up. A later .none entry only refreshes
-            // list metadata, so it can't stand in for an older incremental/whole-note refresh.
             for noteID in pendingRequest.affectedNoteIDs {
                 guard let routing = pendingRequest.presentationPlan.noteRoutings[noteID], routing != .none else { continue }
                 noteIDs.insert(noteID)
