@@ -635,19 +635,22 @@ struct SyncConvergencePostCommitState: Codable, Equatable, Sendable {
     let presentationRefreshPending: Bool
     let anchoredRecoveryPending: Bool
     let lifecycleMaterializationPending: Bool
+    let lifecyclePublicationPending: Bool
 
     init(
         queueCleanupPending: Bool,
         legacyCleanupPending: Bool,
         presentationRefreshPending: Bool,
         anchoredRecoveryPending: Bool = false,
-        lifecycleMaterializationPending: Bool = false
+        lifecycleMaterializationPending: Bool = false,
+        lifecyclePublicationPending: Bool = false
     ) {
         self.queueCleanupPending = queueCleanupPending
         self.legacyCleanupPending = legacyCleanupPending
         self.presentationRefreshPending = presentationRefreshPending
         self.anchoredRecoveryPending = anchoredRecoveryPending
         self.lifecycleMaterializationPending = lifecycleMaterializationPending
+        self.lifecyclePublicationPending = lifecyclePublicationPending
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -656,6 +659,7 @@ struct SyncConvergencePostCommitState: Codable, Equatable, Sendable {
         case presentationRefreshPending
         case anchoredRecoveryPending
         case lifecycleMaterializationPending
+        case lifecyclePublicationPending
     }
 
     init(from decoder: Decoder) throws {
@@ -671,6 +675,10 @@ struct SyncConvergencePostCommitState: Codable, Equatable, Sendable {
             lifecycleMaterializationPending: try container.decodeIfPresent(
                 Bool.self,
                 forKey: .lifecycleMaterializationPending
+            ) ?? false,
+            lifecyclePublicationPending: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .lifecyclePublicationPending
             ) ?? false
         )
     }
@@ -682,6 +690,7 @@ struct SyncConvergencePostCommitState: Codable, Equatable, Sendable {
         try container.encode(presentationRefreshPending, forKey: .presentationRefreshPending)
         try container.encode(anchoredRecoveryPending, forKey: .anchoredRecoveryPending)
         try container.encode(lifecycleMaterializationPending, forKey: .lifecycleMaterializationPending)
+        try container.encode(lifecyclePublicationPending, forKey: .lifecyclePublicationPending)
     }
 
     static let none = SyncConvergencePostCommitState(
@@ -689,7 +698,8 @@ struct SyncConvergencePostCommitState: Codable, Equatable, Sendable {
         legacyCleanupPending: false,
         presentationRefreshPending: false,
         anchoredRecoveryPending: false,
-        lifecycleMaterializationPending: false
+        lifecycleMaterializationPending: false,
+        lifecyclePublicationPending: false
     )
 }
 

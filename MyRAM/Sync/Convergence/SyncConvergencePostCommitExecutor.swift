@@ -126,6 +126,29 @@ actor SyncConvergencePostCommitExecutor {
             }
         }
 
+        if current.postCommitState.lifecyclePublicationPending {
+            guard let lifecycleConflictAdapter else {
+                return .failedBeforeWork(.missingLifecycleConflictAdapter(batchID: request.sourceBatchID))
+            }
+            switch lifecycleConflictAdapter.authorizeLifecyclePublication(
+                sourceIdentity: SyncLifecycleSourceIncorporationIdentity(request.persistedIncorporationIdentity)
+            ) {
+            case .verifiedComplete:
+                let outcome = persistCompletedWork(.lifecyclePublication, request: request, loaded: current)
+                switch outcome {
+                case .complete:
+                    guard case .fullRoot(let reloaded) = reloadState(for: request) else {
+                        return .failedBeforeWork(.missingAuthoritativeIncorporation(batchID: request.sourceBatchID))
+                    }
+                    current = reloaded
+                case .pending, .failedBeforeWork:
+                    return outcome
+                }
+            case .stillPending, .failed:
+                return pendingOutcome(blocking: .lifecyclePublication, for: current.postCommitState)
+            }
+        }
+
         if current.postCommitState.legacyCleanupPending {
             let outcome = await executeLegacyCleanupIfNeeded(request, loaded: current)
             switch outcome {
@@ -226,25 +249,6 @@ actor SyncConvergencePostCommitExecutor {
         loaded: SyncConvergencePostCommitFullRootState,
         workPayload: SyncConvergencePostCommitWorkPayloadV1
     ) async -> SyncConvergencePostCommitOutcome {
-        if !loaded.lifecycleIntents.isEmpty {
-            guard let lifecycleConflictAdapter else {
-                return .failedBeforeWork(.missingLifecycleConflictAdapter(batchID: request.sourceBatchID))
-            }
-            switch lifecycleConflictAdapter.authorizeLifecyclePublication(
-                sourceIdentity: SyncLifecycleSourceIncorporationIdentity(request.persistedIncorporationIdentity)
-            ) {
-            case .verifiedComplete:
-                break
-            case .stillPending:
-                return pendingOutcome(blocking: .presentationRefresh, for: loaded.postCommitState)
-            case .failed:
-                return .pending(
-                    blocking: .presentationRefresh,
-                    outstanding: loaded.postCommitState.pendingWork
-                )
-            }
-        }
-
         let acknowledged = acknowledgedPresentationIdentities(request, entries: workPayload.presentationEntries)
         let result: SyncConvergencePostCommitAdapterResult
         if acknowledged.isSubset(of: acknowledgedPresentations) {
@@ -307,7 +311,10 @@ actor SyncConvergencePostCommitExecutor {
                 : original.anchoredRecoveryPending,
             lifecycleMaterializationPending: work == .lifecycleMaterialization
                 ? false
-                : original.lifecycleMaterializationPending
+                : original.lifecycleMaterializationPending,
+            lifecyclePublicationPending: work == .lifecyclePublication
+                ? false
+                : original.lifecyclePublicationPending
         )
 
         do {

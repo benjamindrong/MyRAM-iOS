@@ -14,6 +14,7 @@ final class MacSyncConvergenceCoordinator {
     init(
         context: ModelContext,
         syncController: MacSyncBatchController,
+        conflictStore: SyncConflictStore,
         presentationSurface: MacSyncConvergencePresentationSurface,
         incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface,
         pendingIncomingQueueFileURL: URL? = SyncBatchQueueFileLocation.pendingIncoming(for: .nativeMac),
@@ -31,6 +32,7 @@ final class MacSyncConvergenceCoordinator {
             localBatchTransportAdapter: syncController,
             presentationAdapter: presentationAdapter,
             incomingLocalBoundaryAdapter: incomingBoundaryAdapter,
+            conflictStore: conflictStore,
             anchoredRecoveryPlatform: .nativeMac
         )
         syncController.convergenceCoordinator = self

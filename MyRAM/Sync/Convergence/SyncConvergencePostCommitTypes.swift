@@ -52,6 +52,7 @@ enum SyncConvergencePostCommitOutcome: Equatable, Sendable {
 enum SyncConvergencePostCommitPendingWork: Hashable, Sendable {
     case anchoredRecoveryPersistence
     case lifecycleMaterialization
+    case lifecyclePublication
     case queueCleanup
     case legacyCleanup
     case presentationRefresh
@@ -221,6 +222,9 @@ extension SyncConvergencePostCommitState {
         if lifecycleMaterializationPending {
             work.insert(.lifecycleMaterialization)
         }
+        if lifecyclePublicationPending {
+            work.insert(.lifecyclePublication)
+        }
         if queueCleanupPending {
             work.insert(.queueCleanup)
         }
@@ -287,6 +291,9 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
             throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
         }
         if state.lifecycleMaterializationPending {
+            throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+        }
+        if state.lifecyclePublicationPending {
             throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
         }
     }
@@ -648,7 +655,8 @@ enum SyncConvergenceVersionedPostCommitWorkPayload {
                 legacyCleanupPending: legacyWorkPayload.legacyCleanupRequired,
                 presentationRefreshPending: !legacyWorkPayload.presentationEntries.isEmpty || !lifecycleIntents.isEmpty,
                 anchoredRecoveryPending: !anchoredRecoveryTransitions.isEmpty,
-                lifecycleMaterializationPending: !lifecycleIntents.isEmpty
+                lifecycleMaterializationPending: !lifecycleIntents.isEmpty,
+                lifecyclePublicationPending: !lifecycleIntents.isEmpty
             )
         }
 
@@ -663,6 +671,9 @@ enum SyncConvergenceVersionedPostCommitWorkPayload {
                 throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
             }
             if state.lifecycleMaterializationPending && lifecycleIntents.isEmpty {
+                throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+            }
+            if state.lifecyclePublicationPending && lifecycleIntents.isEmpty {
                 throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
             }
             if state.presentationRefreshPending && legacyWorkPayload.presentationEntries.isEmpty && lifecycleIntents.isEmpty {

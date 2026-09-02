@@ -30,7 +30,7 @@ final class MacLegacySyncReceiver {
 
     init(
         context: ModelContext,
-        conflictStore: SyncConflictStore = SyncConflictStore(),
+        conflictStore: SyncConflictStore,
         appliedStore: MacLegacyAppliedChangeStoring = FileBackedMacLegacyAppliedChangeStore(),
         performSave: (() throws -> Void)? = nil
     ) {

@@ -2867,11 +2867,25 @@ struct SyncConvergenceIncorporationExecutor {
         let prepared: PreparedIncorporation
         let historyInsertions: HistoryInsertions
         do {
-            prepared = try PreparedIncorporation(input: input, committedAt: committedAt)
-            if let outcome = try loadAndClassifyDuplicateState(prepared, transaction: transaction) {
+            let duplicateProbe = try PreparedIncorporation(
+                input: input,
+                committedAt: committedAt,
+                lifecycleIntents: []
+            )
+            if let outcome = try loadAndClassifyDuplicateState(duplicateProbe, transaction: transaction) {
                 return outcome
             }
-            try verifyAuthoritativeState(prepared, transaction: transaction)
+            try verifyAuthoritativeState(duplicateProbe, transaction: transaction)
+            let lifecycleIntents = try makeLifecycleIntents(
+                input: input,
+                transaction: transaction,
+                committedAt: committedAt
+            )
+            prepared = try PreparedIncorporation(
+                input: input,
+                committedAt: committedAt,
+                lifecycleIntents: lifecycleIntents
+            )
             historyInsertions = try verifyHistory(prepared, transaction: transaction)
         } catch let failure as ExecutorFailure {
             return .failedBeforeCommit(failure.transactionFailure)
@@ -3053,6 +3067,205 @@ struct SyncConvergenceIncorporationExecutor {
             )
             try verifyTitlePrecondition(notePlan.titleEffect, current: current, transaction: transaction)
         }
+    }
+
+    private func makeLifecycleIntents(
+        input: ValidatedSyncConvergenceIncorporationInput,
+        transaction: SyncConvergencePersistenceTransaction,
+        committedAt: Date
+    ) throws -> [SyncLifecycleConflictIntent] {
+        let lifecyclePlans = input.plan.affectedNotePlans.filter { $0.lifecycleEffect != nil }
+        guard !lifecyclePlans.isEmpty else { return [] }
+        let committedResultDigest = try CanonicalCommittedResultDigestPayloadV1.digest(
+            plan: input.plan,
+            sourceBatch: input.sourceBatch
+        )
+        let sourceIdentity = SyncLifecycleSourceIncorporationIdentity(
+            SyncConvergencePersistedIncorporationIdentity(
+                batchID: input.sourceBatchID,
+                canonicalPayloadDigest: input.plan.canonicalPayloadDigest,
+                canonicalPayloadDigestFormatVersion: input.plan.canonicalPayloadDigestFormatVersion,
+                committedResultDigest: committedResultDigest,
+                committedResultDigestFormatVersion: CanonicalCommittedResultDigestPayloadV1.formatVersion
+            )
+        )
+        var intents: [SyncLifecycleConflictIntent] = []
+        for notePlan in lifecyclePlans {
+            guard let effect = notePlan.lifecycleEffect else { continue }
+            guard input.sourceBatch.changes.indices.contains(effect.operationIdentity.operationIndex),
+                  case .noteLifecycleChanged(let sourceLifecycle) = input.sourceBatch.changes[effect.operationIdentity.operationIndex],
+                  sourceLifecycle.noteID == effect.noteID,
+                  sourceLifecycle.deletedAt == effect.deletedAt,
+                  sourceLifecycle.modifiedAt == effect.modifiedAt,
+                  sourceLifecycle.title == effect.title,
+                  sourceLifecycle.body == effect.body,
+                  sourceLifecycle.baseTitleHash == effect.baseTitleHash,
+                  sourceLifecycle.baseBodyHash == effect.baseBodyHash else {
+                throw ExecutorFailure(.invalidMergePlan(noteID: notePlan.noteID))
+            }
+            let current = try transaction.loadNote(id: notePlan.noteID)
+            let projected = try lifecycleClassificationProjection(
+                input: input,
+                notePlan: notePlan,
+                current: current,
+                transaction: transaction,
+                lifecycleOperationIndex: effect.operationIdentity.operationIndex
+            )
+            let matchesBase = projected.map {
+                SyncBatchContentHash.sha256Hex(for: $0.title) == effect.baseTitleHash &&
+                    SyncBatchContentHash.sha256Hex(for: $0.body) == effect.baseBodyHash
+            } ?? false
+            let authoritativeVerdict: SyncConvergenceLifecycleEffect.Verdict = matchesBase
+                ? .apply
+                : .preserveLiveNote
+            guard authoritativeVerdict == effect.verdict else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: notePlan.noteID))
+            }
+            guard SyncConvergenceLifecycleConflictIntentEligibility.isEligible(authoritativeVerdict) else {
+                continue
+            }
+            guard let frozenLocal = projected else {
+                throw ExecutorFailure(.staleAuthoritativeState(noteID: notePlan.noteID))
+            }
+            let frozenLocalRichTextData = current?.body == frozenLocal.body
+                ? current?.richTextContentData
+                : nil
+            let expiresAt = committedAt.addingTimeInterval(SyncConflictStore.retention)
+            if frozenLocal.title != effect.title {
+                intents.append(try SyncLifecycleConflictIntent(
+                    sourceIdentity: sourceIdentity,
+                    lifecycleOperationIdentity: effect.operationIdentity,
+                    noteID: notePlan.noteID,
+                    field: .noteTitle,
+                    localText: frozenLocal.title,
+                    localData: nil,
+                    incomingText: effect.title,
+                    incomingData: nil,
+                    incomingModifiedAt: effect.modifiedAt,
+                    preservedAt: committedAt,
+                    expiresAt: expiresAt
+                ))
+            }
+            if frozenLocal.body != effect.body {
+                intents.append(try SyncLifecycleConflictIntent(
+                    sourceIdentity: sourceIdentity,
+                    lifecycleOperationIdentity: effect.operationIdentity,
+                    noteID: notePlan.noteID,
+                    field: .noteContent,
+                    localText: frozenLocal.body,
+                    localData: frozenLocalRichTextData,
+                    incomingText: effect.body,
+                    incomingData: nil,
+                    incomingModifiedAt: effect.modifiedAt,
+                    preservedAt: committedAt,
+                    expiresAt: expiresAt
+                ))
+            }
+        }
+        return intents.sorted { $0.conflictID.uuidString < $1.conflictID.uuidString }
+    }
+
+    private func lifecycleClassificationProjection(
+        input: ValidatedSyncConvergenceIncorporationInput,
+        notePlan: SyncConvergenceNotePlan,
+        current: SyncConvergenceMutableNoteRecord?,
+        transaction: SyncConvergencePersistenceTransaction,
+        lifecycleOperationIndex: Int
+    ) throws -> SyncConvergenceProjectedNote? {
+        var projected = current.map {
+            SyncConvergenceProjectedNote(
+                noteID: $0.noteID,
+                folderID: $0.folderID,
+                title: $0.title,
+                body: $0.body,
+                createdAt: $0.createdAt,
+                modifiedAt: $0.modifiedAt
+            )
+        }
+        let storedWinner = try transaction.loadTitleWinner(noteID: notePlan.noteID)
+        let persistedWinners = storedWinner.map {
+            [SyncConvergenceTitleWinnerProjection(
+                noteID: $0.noteID,
+                title: $0.title,
+                canonicalReplayKey: $0.canonicalReplayKey,
+                operationIdentity: $0.operationIdentity
+            )]
+        } ?? []
+        var processedBody = false
+        for (index, change) in input.sourceBatch.changes.enumerated() where index < lifecycleOperationIndex {
+            guard change.noteID == notePlan.noteID else { continue }
+            switch change {
+            case .noteCreated(let created):
+                if projected == nil {
+                    projected = SyncConvergenceProjectedNote(
+                        noteID: created.noteID,
+                        folderID: created.folderID,
+                        title: created.title,
+                        body: created.body,
+                        createdAt: created.createdAt,
+                        modifiedAt: created.modifiedAt
+                    )
+                }
+            case .noteTitleChanged(let titleChange):
+                guard let existing = projected else { continue }
+                let identity = OperationIdentityPayload(
+                    batchID: input.sourceBatch.id,
+                    originDeviceID: input.sourceBatch.originDeviceID,
+                    operationIndex: index,
+                    operationKind: "title",
+                    canonicalReplayKey: CanonicalReplayKeyPayload(
+                        replayKey: SyncBatchReplayKey(
+                            batch: input.sourceBatch,
+                            change: change,
+                            operationIndex: index
+                        )
+                    )
+                )
+                guard input.plan.incorporationEvidence.operationIdentities.contains(identity) else {
+                    throw ExecutorFailure(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+                switch SyncTitleWinnerPlanner().plan(
+                    noteID: notePlan.noteID,
+                    priorTitle: existing.title,
+                    persistedWinners: persistedWinners,
+                    candidateTitle: titleChange.title,
+                    candidateIdentity: identity
+                ) {
+                case .success(let titleEffect):
+                    if titleEffect.verdict == .apply || titleEffect.verdict == .idempotent {
+                        projected = SyncConvergenceProjectedNote(
+                            noteID: existing.noteID,
+                            folderID: existing.folderID,
+                            title: titleEffect.resultingTitle,
+                            body: existing.body,
+                            createdAt: existing.createdAt,
+                            modifiedAt: titleChange.modifiedAt
+                        )
+                    }
+                case .failure(let failure):
+                    throw ExecutorFailure(failure)
+                }
+            case .noteBodyTextInserted, .noteBodyTextDeleted,
+                 .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
+                guard !processedBody else { continue }
+                processedBody = true
+                guard let existing = projected,
+                      let plannedBody = notePlan.plannedFinalBody else {
+                    throw ExecutorFailure(.staleAuthoritativeState(noteID: notePlan.noteID))
+                }
+                projected = SyncConvergenceProjectedNote(
+                    noteID: existing.noteID,
+                    folderID: existing.folderID,
+                    title: existing.title,
+                    body: plannedBody,
+                    createdAt: existing.createdAt,
+                    modifiedAt: change.modifiedAtForReplayOrdering
+                )
+            case .noteBodyReconciled, .noteLifecycleChanged:
+                break
+            }
+        }
+        return projected
     }
 
     private func verifyBodyPrecondition(
@@ -3360,7 +3573,11 @@ struct SyncConvergenceIncorporationExecutor {
         let snapshots: [SyncConvergenceSnapshotRecord]
         let childProjection: [ChildProjection]
 
-        init(input: ValidatedSyncConvergenceIncorporationInput, committedAt: Date) throws {
+        init(
+            input: ValidatedSyncConvergenceIncorporationInput,
+            committedAt: Date,
+            lifecycleIntents: [SyncLifecycleConflictIntent]
+        ) throws {
             guard input.plan.batchID == input.sourceBatchID,
                   input.plan.originDeviceID == input.sourceOriginDeviceID,
                   input.sourceSchemaVersion > 0
@@ -3455,13 +3672,15 @@ struct SyncConvergenceIncorporationExecutor {
             let anchoredRecoveryTransitions = Self.anchoredRecoveryTransitions(input: input)
             let decodedPostCommitWork = SyncConvergenceVersionedPostCommitWorkPayload.Decoded(
                 legacyWorkPayload: postCommitWorkPayload,
-                anchoredRecoveryTransitions: anchoredRecoveryTransitions
+                anchoredRecoveryTransitions: anchoredRecoveryTransitions,
+                lifecycleIntents: lifecycleIntents
             )
             let postCommitState = decodedPostCommitWork.derivedInitialState()
             let postCommitWorkPayloadData = try SyncConvergenceVersionedPostCommitWorkPayload
                 .encodedPayloadData(
                     legacyWorkPayload: postCommitWorkPayload,
-                    anchoredRecoveryTransitions: anchoredRecoveryTransitions
+                    anchoredRecoveryTransitions: anchoredRecoveryTransitions,
+                    lifecycleIntents: lifecycleIntents
                 )
             let committedResultDigest = try CanonicalCommittedResultDigestPayloadV1.digest(
                 plan: input.plan,

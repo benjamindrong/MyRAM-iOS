@@ -2,7 +2,7 @@ import Foundation
 
 extension SyncConvergenceCleanupPlan {
     func gated(by state: SyncConvergencePostCommitState) -> SyncConvergenceCleanupPlan {
-        let lifecycleAllowsDownstreamWork = !state.lifecycleMaterializationPending
+        let lifecycleAllowsDownstreamWork = !state.lifecycleMaterializationPending && !state.lifecyclePublicationPending
         return SyncConvergenceCleanupPlan(
             batchIDs: lifecycleAllowsDownstreamWork && state.queueCleanupPending ? batchIDs : [],
             retryQueueCleanup: lifecycleAllowsDownstreamWork && state.queueCleanupPending && retryQueueCleanup,

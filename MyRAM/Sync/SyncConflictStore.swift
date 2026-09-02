@@ -121,6 +121,7 @@ struct LegacyIncomingBufferedEffects: Equatable {
     var removedConflictIDs: [UUID] = []
     var removedResolvedConflicts: [SyncConflictVersion] = []
     var remoteBaselines: [SyncRemoteTextBaseline] = []
+    var lifecycleResolutions: [SyncConflictVersion] = []
 }
 
 final class BufferedSyncConflictStore: SyncConflictStoring {
@@ -137,6 +138,7 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
     private var removedResolvedConflicts: [SyncConflictVersion] = []
     private var queuedConflictsByKey: [ConflictKey: SyncTextQueuedConflict] = [:]
     private var baselinesByKey: [ConflictKey: SyncRemoteTextBaseline] = [:]
+    private var lifecycleResolutionsByID: [UUID: SyncConflictVersion] = [:]
 
     init(base: SyncConflictStoring) {
         self.base = base
@@ -155,8 +157,22 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
                     return $0.entityID.uuidString < $1.entityID.uuidString
                 }
                 return $0.field.rawValue < $1.field.rawValue
-            }
+            },
+            lifecycleResolutions: lifecycleResolutionsByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
         )
+    }
+
+    func stageRemoteLifecycleResolution(_ conflict: SyncConflictVersion) throws {
+        guard conflict.id.isLifecycleConflictID,
+              conflict.entityType == .note,
+              conflict.entityID == conflict.noteID else {
+            throw SyncLifecycleConflictStoreError.invalidDeferredResolution
+        }
+        if let existing = lifecycleResolutionsByID[conflict.id],
+           !SyncConflictStore.lifecycleResolutionSemanticallyMatches(existing, conflict) {
+            throw SyncLifecycleConflictStoreError.contradictoryDeferredResolution
+        }
+        lifecycleResolutionsByID[conflict.id] = conflict
     }
 
     func activeConflicts(now: Date) -> [SyncConflictVersion] {
@@ -783,7 +799,7 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
 
     func saveRemoteBaselineChecked(_ baseline: SyncRemoteTextBaseline) throws {
         try saveRemoteBaselinesChecked([baseline])
-        guard remoteBaselineChecked(
+        guard try remoteBaselineChecked(
             entityType: baseline.entityType,
             entityID: baseline.entityID,
             field: baseline.field
@@ -813,6 +829,11 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
                 .map(\.syncTextConflict)
         ))
         try saveRemoteBaselinesChecked(effects.remoteBaselines)
+        for conflict in effects.lifecycleResolutions {
+            if try !applyRemoteLifecycleResolutionChecked(conflict) {
+                try persistDeferredRemoteLifecycleResolutionChecked(conflict)
+            }
+        }
     }
 
     func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date, originDeviceID: String?) {
@@ -974,6 +995,9 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
         guard deferredConflict(receivedConflict, isCompatibleWith: state.entries[index].intent) else {
             throw SyncLifecycleConflictStoreError.contradictoryDeferredResolution
         }
+        if state.entries[index].receiptState == .resolved || state.entries[index].receiptState == .expired {
+            return true
+        }
         state.entries[index].receiptState = .resolved
         state.entries[index].publicationAuthorized = false
         state.entries[index].conflict = nil
@@ -997,7 +1021,7 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
             return
         }
         if let existing = state.deferredRemoteResolutions.first(where: { $0.conflict.id == conflict.id }) {
-            guard existing.conflict == conflict else {
+            guard Self.lifecycleResolutionSemanticallyMatches(existing.conflict, conflict) else {
                 throw SyncLifecycleConflictStoreError.contradictoryDeferredResolution
             }
             return
@@ -1164,6 +1188,22 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
             && conflict.localText == intent.localText
             && conflict.remoteText == intent.incomingText
             && conflict.remoteRichTextContentData == intent.incomingData
+            && conflict.remoteModifiedAt == intent.incomingModifiedAt
+    }
+
+    fileprivate static func lifecycleResolutionSemanticallyMatches(
+        _ lhs: SyncConflictVersion,
+        _ rhs: SyncConflictVersion
+    ) -> Bool {
+        lhs.id == rhs.id
+            && lhs.entityType == rhs.entityType
+            && lhs.entityID == rhs.entityID
+            && lhs.noteID == rhs.noteID
+            && lhs.field == rhs.field
+            && lhs.localText == rhs.localText
+            && lhs.remoteText == rhs.remoteText
+            && lhs.remoteRichTextContentData == rhs.remoteRichTextContentData
+            && lhs.remoteModifiedAt == rhs.remoteModifiedAt
     }
 
     private func loadLifecycleStateChecked() throws -> SyncLifecycleConflictPersistenceEnvelope {

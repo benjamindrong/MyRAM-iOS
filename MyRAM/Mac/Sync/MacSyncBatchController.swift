@@ -61,6 +61,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     init(
         context: ModelContext,
+        conflictStore: SyncConflictStore,
         unsentBatchQueueFileURL: URL? = MacSyncBatchController.unsentBatchQueueFileURL(),
         unsentBatchQueue: FileBackedSyncBatchQueue? = nil,
         startsNetworking: Bool = true,
@@ -116,7 +117,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         accumulator = MacSyncBatchAccumulator(originDeviceID: identity.id)
         self.context = context
         unsentBatches = unsentBatchQueue ?? FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
-        self.legacyReceiver = legacyReceiver ?? MacLegacySyncReceiver(context: context)
+        self.legacyReceiver = legacyReceiver ?? MacLegacySyncReceiver(
+            context: context,
+            conflictStore: conflictStore
+        )
         self.startAdvertisingOperation = startAdvertisingOperation
             ?? { [retainedAdvertiser] in retainedAdvertiser.startAdvertisingPeer() }
         self.startBrowsingOperation = startBrowsingOperation

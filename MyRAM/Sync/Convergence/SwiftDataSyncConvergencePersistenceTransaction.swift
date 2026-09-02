@@ -17,7 +17,8 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
                 body: $0.content,
                 createdAt: $0.createdAt,
                 modifiedAt: $0.modifiedAt,
-                deletedAt: $0.deletedAt
+                deletedAt: $0.deletedAt,
+                richTextContentData: $0.richTextContentData
             )
         }
     }
