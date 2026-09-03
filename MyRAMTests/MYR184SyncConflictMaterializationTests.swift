@@ -106,8 +106,8 @@ final class MYR184SyncConflictMaterializationTests: XCTestCase {
             incomingText: incomingText,
             incomingData: nil,
             incomingModifiedAt: Date(timeIntervalSince1970: 10),
-            preservedAt: Date(timeIntervalSince1970: 20),
-            expiresAt: Date(timeIntervalSince1970: 200)
+            preservedAt: Date(timeIntervalSince1970: 3_999_996_400),
+            expiresAt: Date(timeIntervalSince1970: 4_000_000_000)
         )
     }
 }
