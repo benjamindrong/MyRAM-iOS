@@ -80,7 +80,7 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
         XCTAssertEqual(snapshot.pendingChanges.count, 1)
         XCTAssertEqual(queued.entityType, .conflict)
         XCTAssertEqual(queued.entityID, lifecycleConflict.id.uuidString)
-        XCTAssertEqual(queued.payload, try MyRAMSyncPayloadCoding.encode(payload))
+        XCTAssertEqual(try MyRAMSyncPayloadCoding.decodeSyncConflict(from: queued.payload), payload)
 
         controller.resumeOutboundAfterRecovery()
     }
