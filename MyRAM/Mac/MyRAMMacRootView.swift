@@ -3,7 +3,6 @@ import AppKit
 import SwiftUI
 
 struct MyRAMMacRootView: View {
-    private let syncConflictStore: SyncConflictStore
     @StateObject private var startupCoordinator = MacStartupCoordinator()
     @StateObject private var syncController: MacSyncBatchController
     @StateObject private var editorSyncBridge = MacEditorSyncBridge()
@@ -32,12 +31,15 @@ struct MyRAMMacRootView: View {
 
     init() {
         let conflictStore = SyncConflictStore()
-        syncConflictStore = conflictStore
         _syncController = StateObject(wrappedValue: MacSyncBatchController(
             context: PersistenceManager.shared.context,
             conflictStore: conflictStore,
             startsNetworking: false
         ))
+    }
+
+    private var syncConflictStore: SyncConflictStore {
+        syncController.conflictStore
     }
 
     // MYR-195 Slice 2: scene-local mode state. Not persisted, not Codable, not added to Note.

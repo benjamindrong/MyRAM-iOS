@@ -113,19 +113,6 @@ actor SyncConvergencePostCommitExecutor {
             }
         }
 
-        if current.postCommitState.presentationRefreshPending {
-            let outcome = await executePresentationIfNeeded(request, loaded: current, workPayload: workPayload)
-            switch outcome {
-            case .complete:
-                guard case .fullRoot(let reloaded) = reloadState(for: request) else {
-                    return .failedBeforeWork(.missingAuthoritativeIncorporation(batchID: request.sourceBatchID))
-                }
-                current = reloaded
-            case .pending, .failedBeforeWork:
-                return outcome
-            }
-        }
-
         if current.postCommitState.lifecyclePublicationPending {
             guard let lifecycleConflictAdapter else {
                 return .failedBeforeWork(.missingLifecycleConflictAdapter(batchID: request.sourceBatchID))
@@ -146,6 +133,19 @@ actor SyncConvergencePostCommitExecutor {
                 }
             case .stillPending, .failed:
                 return pendingOutcome(blocking: .lifecyclePublication, for: current.postCommitState)
+            }
+        }
+
+        if current.postCommitState.presentationRefreshPending {
+            let outcome = await executePresentationIfNeeded(request, loaded: current, workPayload: workPayload)
+            switch outcome {
+            case .complete:
+                guard case .fullRoot(let reloaded) = reloadState(for: request) else {
+                    return .failedBeforeWork(.missingAuthoritativeIncorporation(batchID: request.sourceBatchID))
+                }
+                current = reloaded
+            case .pending, .failedBeforeWork:
+                return outcome
             }
         }
 

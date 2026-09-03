@@ -41,6 +41,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private let browser: MCNearbyServiceBrowser
     private let accumulator: MacSyncBatchAccumulator
     private let context: ModelContext
+    let conflictStore: SyncConflictStore
     private var readyBatchTask: Task<Void, Never>?
     private let unsentBatches: FileBackedSyncBatchQueue
     private let legacyReceiver: MacLegacySyncReceiver
@@ -116,6 +117,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         browser = retainedBrowser
         accumulator = MacSyncBatchAccumulator(originDeviceID: identity.id)
         self.context = context
+        self.conflictStore = conflictStore
         unsentBatches = unsentBatchQueue ?? FileBackedSyncBatchQueue(fileURL: unsentBatchQueueFileURL)
         self.legacyReceiver = legacyReceiver ?? MacLegacySyncReceiver(
             context: context,

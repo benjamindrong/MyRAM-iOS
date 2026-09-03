@@ -80,14 +80,26 @@ extension MacSyncConvergenceCoordinator {
     }
 }
 
+@MainActor
 final class MYR184MacSyncConflictTests: XCTestCase {
     func testNativeMacConflictSurfaceConstructsWithSharedStore() {
-        let store = SyncConflictStore(
-            fileURL: FileManager.default.temporaryDirectory
-                .appendingPathComponent(UUID().uuidString, isDirectory: true)
-                .appendingPathComponent("conflicts.json")
-        )
+        let store = makeMYR184TestConflictStore()
         _ = MacSyncConflictSummaryView(store: store) { _, _ in }
         XCTAssertTrue(store.activeConflicts().isEmpty)
+    }
+
+    func testNativeMacControllerRetainsCanonicalSharedStore() throws {
+        let store = makeMYR184TestConflictStore()
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let controller = MacSyncBatchController(
+            context: ModelContext(container),
+            conflictStore: store,
+            startsNetworking: false
+        )
+
+        XCTAssertTrue(controller.conflictStore === store)
     }
 }

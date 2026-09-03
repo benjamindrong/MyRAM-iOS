@@ -1,6 +1,8 @@
+import SwiftData
 import XCTest
 @testable import MyRAM
 
+@MainActor
 final class MYR184SyncConflictMaterializationTests: XCTestCase {
     func testDeterministicIDsIgnoreReplicaSpecificCommittedResultDigest() throws {
         let first = try makeIntent(committedResultDigest: String(repeating: "1", count: 64))
@@ -14,10 +16,13 @@ final class MYR184SyncConflictMaterializationTests: XCTestCase {
 
     func testMateriallyDifferentIdentityInputProducesDifferentIDs() throws {
         let first = try makeIntent(incomingText: "incoming")
-        let second = try makeIntent(incomingText: "different")
+        let differentIncoming = try makeIntent(incomingText: "different")
+        let differentLocal = try makeIntent(localText: "different-local")
 
-        XCTAssertNotEqual(first.conflictID, second.conflictID)
-        XCTAssertNotEqual(first.materializationID, second.materializationID)
+        XCTAssertNotEqual(first.conflictID, differentIncoming.conflictID)
+        XCTAssertNotEqual(first.materializationID, differentIncoming.materializationID)
+        XCTAssertNotEqual(first.conflictID, differentLocal.conflictID)
+        XCTAssertNotEqual(first.materializationID, differentLocal.materializationID)
     }
 
     func testPreparingVisibleResolvedOrderingAndTerminalNonRecreation() throws {
@@ -35,6 +40,27 @@ final class MYR184SyncConflictMaterializationTests: XCTestCase {
         XCTAssertTrue(store.activeConflicts(now: intent.preservedAt).isEmpty)
     }
 
+    func testPublishedLifecycleConflictIgnoresStaleCachedConflictList() throws {
+        let store = makeStore()
+        let intent = try makeIntent()
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let note = Note(title: "Local", content: "local")
+        note.id = intent.identity.noteID
+        context.insert(note)
+        try context.save()
+        let service = MyRAMSyncConflictService(context: context, store: store)
+
+        XCTAssertEqual(store.materializeLifecycleConflicts([intent], now: intent.preservedAt), .verifiedComplete)
+        XCTAssertTrue(service.activeConflicts(for: note, in: []).isEmpty)
+
+        XCTAssertEqual(store.authorizeLifecyclePublication(sourceIdentity: intent.sourceIdentity), .verifiedComplete)
+        XCTAssertEqual(service.activeConflicts(for: note, in: []).map(\.id), [intent.conflictID])
+    }
+
     private func makeStore() -> SyncConflictStore {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         return SyncConflictStore(fileURL: directory.appendingPathComponent("conflicts.json"))
@@ -42,6 +68,7 @@ final class MYR184SyncConflictMaterializationTests: XCTestCase {
 
     private func makeIntent(
         committedResultDigest: String = String(repeating: "b", count: 64),
+        localText: String = "local",
         incomingText: String = "incoming"
     ) throws -> SyncLifecycleConflictIntent {
         let batchID = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
@@ -74,7 +101,7 @@ final class MYR184SyncConflictMaterializationTests: XCTestCase {
             lifecycleOperationIdentity: operation,
             noteID: UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!,
             field: .noteContent,
-            localText: "local",
+            localText: localText,
             localData: nil,
             incomingText: incomingText,
             incomingData: nil,

@@ -42,7 +42,7 @@ final class MyRAMSyncConflictService {
     }
 
     func activeConflicts(for note: Note, in conflicts: [SyncConflictVersion]) -> [SyncConflictVersion] {
-        conflicts.filter { conflict in
+        store.activeConflicts().filter { conflict in
             conflict.noteID == note.id || (conflict.entityType == .note && conflict.entityID == note.id)
         }
     }

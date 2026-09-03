@@ -165,7 +165,8 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
     func stageRemoteLifecycleResolution(_ conflict: SyncConflictVersion) throws {
         guard conflict.id.isLifecycleConflictID,
               conflict.entityType == .note,
-              conflict.entityID == conflict.noteID else {
+              conflict.entityID == conflict.noteID,
+              conflict.field == .noteTitle || conflict.field == .noteContent else {
             throw SyncLifecycleConflictStoreError.invalidDeferredResolution
         }
         if let existing = lifecycleResolutionsByID[conflict.id],
@@ -457,6 +458,7 @@ struct SyncLifecycleConflictIdentityV1: Codable, Equatable, Sendable {
               canonicalPayloadDigest.count == 64,
               canonicalPayloadDigest.allSatisfy({ $0.isHexDigit && !$0.isUppercase }),
               canonicalPayloadDigestFormatVersion > 0,
+              field == .noteTitle || field == .noteContent,
               localTextSHA256.count == 64,
               incomingTextSHA256.count == 64,
               localDataFingerprint.isPresent == (localDataFingerprint.sha256Hex != nil),
@@ -601,7 +603,8 @@ struct SyncDeferredRemoteLifecycleResolution: Codable, Equatable, Sendable {
     func validate() throws {
         guard conflict.id.isLifecycleConflictID,
               conflict.entityType == .note,
-              conflict.noteID == conflict.entityID else {
+              conflict.noteID == conflict.entityID,
+              conflict.field == .noteTitle || conflict.field == .noteContent else {
             throw SyncLifecycleConflictStoreError.invalidDeferredResolution
         }
     }

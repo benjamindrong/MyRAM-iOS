@@ -216,6 +216,9 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)?
     var onBootstrapPresentationRefresh: (() -> Void)?
     var onResumeIncomingAfterBootstrap: (() async -> Void)?
+#if DEBUG
+    var onCheckedPublicationLeaseAcquiredForTesting: (() async -> Void)?
+#endif
 
     private let serviceType = "myram-sync"
     private let peerID: MCPeerID
@@ -479,6 +482,9 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             pendingLegacyFlushAfterActiveSend = true
             Task { await requestLegacyFlush() }
         }
+#if DEBUG
+        await onCheckedPublicationLeaseAcquiredForTesting?()
+#endif
         let admitted = await syncEngine.recordLocalChange(
             entityType: .conflict,
             entityID: payload.conflictID.uuidString,
@@ -486,9 +492,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             payload: data,
             updatedAt: payload.updatedAt
         )
-        guard !recoveryRequested else {
-            throw CheckedConflictPublicationError.recoveryInProgress
-        }
         let snapshot = await syncEngine.queueSnapshot()
         let health = await syncEngine.queuePersistenceHealth()
         guard health == .healthy else {
