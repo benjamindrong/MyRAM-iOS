@@ -187,7 +187,7 @@ extension MyRAMSyncControlling {
 
 @MainActor
 final class MyRAMSyncController: NSObject, ObservableObject {
-    private struct CheckedPublicationTail {
+    private struct TargetMutationTail {
         let operationID: UUID
         let task: Task<Void, Never>
     }
@@ -217,6 +217,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var onBootstrapPresentationRefresh: (() -> Void)?
     var onResumeIncomingAfterBootstrap: (() async -> Void)?
 #if DEBUG
+    var onOrdinaryTargetMutationReadyForTesting: (() async -> Void)?
     var onCheckedPublicationLeaseAcquiredForTesting: (() async -> Void)?
 #endif
 
@@ -247,7 +248,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private var pendingLegacyFlushAfterActiveSend = false
     private var outboundFlushRequestedWhileRecoverySuspended = false
     private var isOutboundSuspendedForRecovery = false
-    private var checkedPublicationTails: [String: CheckedPublicationTail] = [:]
+    private var targetMutationTails: [String: TargetMutationTail] = [:]
     private var checkedPublicationLeaseCount = 0
     private var recoveryRequested = false
     private var hasStartedNetworking = false
@@ -425,11 +426,17 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         payload: Data,
         updatedAt: Date
     ) {
-        Task {
-            let targetKey = checkedPublicationTargetKey(entityType: entityType, entityID: entityID)
-            if let tail = checkedPublicationTails[targetKey] {
-                await tail.task.value
+        let targetKey = targetMutationKey(entityType: entityType, entityID: entityID)
+        let predecessor = targetMutationTails[targetKey]?.task
+        let operationID = UUID()
+        let operationTask = Task { @MainActor [weak self] in
+            if let predecessor {
+                await predecessor.value
             }
+            guard let self else { return }
+#if DEBUG
+            await onOrdinaryTargetMutationReadyForTesting?()
+#endif
             _ = await syncEngine.recordLocalChange(
                 entityType: entityType,
                 entityID: entityID,
@@ -440,6 +447,16 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             await updatePendingCount()
             await debouncedSender.schedule()
         }
+        targetMutationTails[targetKey] = TargetMutationTail(
+            operationID: operationID,
+            task: operationTask
+        )
+        Task { @MainActor [weak self] in
+            await operationTask.value
+            guard let self,
+                  targetMutationTails[targetKey]?.operationID == operationID else { return }
+            targetMutationTails[targetKey] = nil
+        }
     }
 
     func publishConflictResolutionChecked(_ payload: MyRAMSyncConflictPayload) async throws {
@@ -447,8 +464,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
               let data = try? MyRAMSyncPayloadCoding.encode(payload) else {
             throw CheckedConflictPublicationError.queueAdmissionNotDurable
         }
-        let targetKey = checkedPublicationTargetKey(entityType: .conflict, entityID: payload.conflictID.uuidString)
-        let predecessor = checkedPublicationTails[targetKey]?.task
+        let targetKey = targetMutationKey(entityType: .conflict, entityID: payload.conflictID.uuidString)
+        let predecessor = targetMutationTails[targetKey]?.task
         let operationID = UUID()
         let operation = Task { @MainActor [weak self] () throws -> Void in
             if let predecessor {
@@ -460,10 +477,10 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         let tail = Task { @MainActor in
             _ = try? await operation.value
         }
-        checkedPublicationTails[targetKey] = CheckedPublicationTail(operationID: operationID, task: tail)
+        targetMutationTails[targetKey] = TargetMutationTail(operationID: operationID, task: tail)
         defer {
-            if checkedPublicationTails[targetKey]?.operationID == operationID {
-                checkedPublicationTails[targetKey] = nil
+            if targetMutationTails[targetKey]?.operationID == operationID {
+                targetMutationTails[targetKey] = nil
             }
         }
         try await operation.value
@@ -1291,29 +1308,29 @@ extension MyRAMSyncController: PendingSyncQueueAdministrating {
     }
 
     func legacyQueueSnapshot() async -> SyncQueueSnapshot {
-        await waitForCheckedPublications()
+        await waitForTargetMutations()
         return await syncEngine.queueSnapshot()
     }
 
     func legacyQueueHealth() async -> SyncQueuePersistenceHealth {
-        await waitForCheckedPublications()
+        await waitForTargetMutations()
         return await syncEngine.queuePersistenceHealth()
     }
 
     func replaceLegacyQueueSnapshot(_ snapshot: SyncQueueSnapshot) async throws {
-        await waitForCheckedPublications()
+        await waitForTargetMutations()
         try await syncEngine.replaceQueueSnapshot(snapshot)
         await updatePendingCount()
     }
 
-    private func waitForCheckedPublications() async {
-        let tails = checkedPublicationTails.values.map(\.task)
+    private func waitForTargetMutations() async {
+        let tails = targetMutationTails.values.map(\.task)
         for tail in tails {
             await tail.value
         }
     }
 
-    private func checkedPublicationTargetKey(entityType: SyncEntityType, entityID: String) -> String {
+    private func targetMutationKey(entityType: SyncEntityType, entityID: String) -> String {
         "\(entityType.rawValue):\(entityID.lowercased())"
     }
 

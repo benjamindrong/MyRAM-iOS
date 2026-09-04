@@ -71,7 +71,7 @@ extension MacSyncConvergenceCoordinator {
         self.init(
             context: context,
             syncController: syncController,
-            conflictStore: makeMYR184TestConflictStore(),
+            conflictStore: syncController.conflictStore,
             presentationSurface: presentationSurface,
             incomingBoundarySurface: incomingBoundarySurface,
             pendingIncomingQueueFileURL: pendingIncomingQueueFileURL,
@@ -101,5 +101,15 @@ final class MYR184MacSyncConflictTests: XCTestCase {
         )
 
         XCTAssertTrue(controller.conflictStore === store)
+    }
+
+    func testNativeMacProcessCompositionRootReusesOneControllerAndStore() {
+        let firstController = MyRAMMacProcessSyncCompositionRoot.syncController
+        let secondController = MyRAMMacProcessSyncCompositionRoot.syncController
+        let processStore = MyRAMMacProcessSyncCompositionRoot.conflictStore
+
+        XCTAssertTrue(firstController === secondController)
+        XCTAssertTrue(firstController.conflictStore === processStore)
+        XCTAssertTrue(secondController.conflictStore === processStore)
     }
 }

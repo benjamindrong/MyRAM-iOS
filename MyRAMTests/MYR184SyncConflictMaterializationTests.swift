@@ -31,12 +31,77 @@ final class MYR184SyncConflictMaterializationTests: XCTestCase {
 
         XCTAssertEqual(store.materializeLifecycleConflicts([intent], now: intent.preservedAt), .verifiedComplete)
         XCTAssertTrue(store.activeConflicts(now: intent.preservedAt).isEmpty)
-        XCTAssertEqual(store.authorizeLifecyclePublication(sourceIdentity: intent.sourceIdentity), .verifiedComplete)
+        XCTAssertEqual(store.authorizeLifecyclePublication([intent]), .verifiedComplete)
         XCTAssertEqual(store.activeConflicts(now: intent.preservedAt).map(\.id), [intent.conflictID])
 
         try store.markLifecycleResolvedChecked(id: intent.conflictID)
         XCTAssertTrue(store.activeConflicts(now: intent.preservedAt).isEmpty)
         XCTAssertEqual(store.materializeLifecycleConflicts([intent], now: intent.preservedAt), .verifiedComplete)
+        XCTAssertTrue(store.activeConflicts(now: intent.preservedAt).isEmpty)
+    }
+
+    func testPublicationFailsClosedWhenExpectedLifecycleStateIsMissing() throws {
+        let store = makeStore()
+        let intent = try makeIntent()
+
+        XCTAssertEqual(store.authorizeLifecyclePublication([intent]), .failed)
+        XCTAssertTrue(store.activeConflicts(now: intent.preservedAt).isEmpty)
+    }
+
+    func testPublicationFailsClosedUntilEveryExpectedFieldReceiptExists() throws {
+        let store = makeStore()
+        let body = try makeIntent(field: .noteContent)
+        let title = try makeIntent(
+            field: .noteTitle,
+            localText: "local title",
+            incomingText: "incoming title"
+        )
+
+        XCTAssertEqual(store.materializeLifecycleConflicts([body], now: body.preservedAt), .verifiedComplete)
+        XCTAssertEqual(store.authorizeLifecyclePublication([body, title]), .failed)
+        XCTAssertTrue(store.activeConflicts(now: body.preservedAt).isEmpty)
+
+        XCTAssertEqual(store.materializeLifecycleConflicts([title], now: title.preservedAt), .verifiedComplete)
+        XCTAssertEqual(store.authorizeLifecyclePublication([body, title]), .verifiedComplete)
+        XCTAssertEqual(Set(store.activeConflicts(now: body.preservedAt).map(\.id)), Set([body.conflictID, title.conflictID]))
+    }
+
+    func testPreparingCrashWindowsRetrySameIntentWithoutPrematureVisibility() throws {
+        for failedWrite in [2, 3] {
+            let probe = MYR184LifecycleFileIOProbe(failOnWrite: failedWrite)
+            let store = makeStore(fileIO: probe.fileIO)
+            let intent = try makeIntent()
+
+            XCTAssertEqual(store.materializeLifecycleConflicts([intent], now: intent.preservedAt), .failed)
+            XCTAssertTrue(store.activeConflicts(now: intent.preservedAt).isEmpty)
+
+            probe.failOnWrite = nil
+            XCTAssertEqual(store.materializeLifecycleConflicts([intent], now: intent.preservedAt), .verifiedComplete)
+            XCTAssertTrue(store.activeConflicts(now: intent.preservedAt).isEmpty)
+            XCTAssertEqual(store.authorizeLifecyclePublication([intent]), .verifiedComplete)
+            XCTAssertEqual(store.activeConflicts(now: intent.preservedAt).map(\.id), [intent.conflictID])
+        }
+    }
+
+    func testContradictoryVisibleReceiptFailsClosed() throws {
+        let store = makeStore()
+        let intent = try makeIntent()
+        XCTAssertEqual(store.materializeLifecycleConflicts([intent], now: intent.preservedAt), .verifiedComplete)
+
+        let snapshot = try store.snapshot()
+        guard case .present(let lifecycleData) = snapshot.lifecycle,
+              var json = String(data: lifecycleData, encoding: .utf8) else {
+            return XCTFail("expected persisted lifecycle state")
+        }
+        XCTAssertTrue(json.contains("\"visible\""))
+        json = json.replacingOccurrences(of: "\"visible\"", with: "\"resolved\"")
+        try store.restore(SyncConflictStoreSnapshot(
+            textConflicts: snapshot.textConflicts,
+            baselines: snapshot.baselines,
+            lifecycle: .present(Data(json.utf8))
+        ))
+
+        XCTAssertEqual(store.authorizeLifecyclePublication([intent]), .failed)
         XCTAssertTrue(store.activeConflicts(now: intent.preservedAt).isEmpty)
     }
 
@@ -57,17 +122,21 @@ final class MYR184SyncConflictMaterializationTests: XCTestCase {
         XCTAssertEqual(store.materializeLifecycleConflicts([intent], now: intent.preservedAt), .verifiedComplete)
         XCTAssertTrue(service.activeConflicts(for: note, in: []).isEmpty)
 
-        XCTAssertEqual(store.authorizeLifecyclePublication(sourceIdentity: intent.sourceIdentity), .verifiedComplete)
+        XCTAssertEqual(store.authorizeLifecyclePublication([intent]), .verifiedComplete)
         XCTAssertEqual(service.activeConflicts(for: note, in: []).map(\.id), [intent.conflictID])
     }
 
-    private func makeStore() -> SyncConflictStore {
+    private func makeStore(fileIO: SyncConflictStore.FileIO = .live) -> SyncConflictStore {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
-        return SyncConflictStore(fileURL: directory.appendingPathComponent("conflicts.json"))
+        return SyncConflictStore(
+            fileURL: directory.appendingPathComponent("conflicts.json"),
+            fileIO: fileIO
+        )
     }
 
     private func makeIntent(
         committedResultDigest: String = String(repeating: "b", count: 64),
+        field: SyncConflictField = .noteContent,
         localText: String = "local",
         incomingText: String = "incoming"
     ) throws -> SyncLifecycleConflictIntent {
@@ -100,7 +169,7 @@ final class MYR184SyncConflictMaterializationTests: XCTestCase {
             sourceIdentity: SyncLifecycleSourceIncorporationIdentity(persisted),
             lifecycleOperationIdentity: operation,
             noteID: UUID(uuidString: "cccccccc-cccc-4ccc-8ccc-cccccccccccc")!,
-            field: .noteContent,
+            field: field,
             localText: localText,
             localData: nil,
             incomingText: incomingText,
@@ -110,4 +179,38 @@ final class MYR184SyncConflictMaterializationTests: XCTestCase {
             expiresAt: Date(timeIntervalSince1970: 4_000_000_000)
         )
     }
+}
+
+private final class MYR184LifecycleFileIOProbe {
+    var failOnWrite: Int?
+    private var writeCount = 0
+    private var dataByPath: [String: Data] = [:]
+
+    init(failOnWrite: Int?) {
+        self.failOnWrite = failOnWrite
+    }
+
+    lazy var fileIO = SyncConflictStore.FileIO(
+        fileExists: { [weak self] path in
+            self?.dataByPath[path] != nil
+        },
+        readData: { [weak self] url in
+            guard let data = self?.dataByPath[url.path] else {
+                throw CocoaError(.fileNoSuchFile)
+            }
+            return data
+        },
+        createDirectory: { _ in },
+        writeData: { [weak self] data, url in
+            guard let self else { throw CocoaError(.fileWriteUnknown) }
+            writeCount += 1
+            if failOnWrite == writeCount {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            dataByPath[url.path] = data
+        },
+        removeItem: { [weak self] url in
+            self?.dataByPath.removeValue(forKey: url.path)
+        }
+    )
 }

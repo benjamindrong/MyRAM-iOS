@@ -199,7 +199,7 @@ protocol SyncConvergenceLifecycleConflictAdapter: AnyObject {
     ) -> SyncConvergencePostCommitAdapterResult
 
     func authorizeLifecyclePublication(
-        sourceIdentity: SyncLifecycleSourceIncorporationIdentity
+        _ intents: [SyncLifecycleConflictIntent]
     ) -> SyncConvergencePostCommitAdapterResult
 }
 

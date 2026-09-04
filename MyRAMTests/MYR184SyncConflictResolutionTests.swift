@@ -53,6 +53,55 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
     }
 
 #if DEBUG
+    func testOrdinarySameTargetWriteStartedFirstCannotSupersedeCheckedResolution() async throws {
+        let controller = makeController()
+        let gate = MYR184AsyncGate()
+        let legacyConflict = conflict(
+            id: UUID(uuidString: "12345678-1234-4234-9234-123456789abc")!,
+            remoteText: "winner",
+            preservedAt: 10,
+            expiresAt: 20
+        )
+        let preservedPayload = MyRAMSyncConflictPayload(
+            action: .preserved,
+            conflict: legacyConflict,
+            updatedAt: Date(timeIntervalSince1970: 40)
+        )
+        let resolvedPayload = MyRAMSyncConflictPayload(
+            action: .resolved,
+            conflict: legacyConflict,
+            resolvedText: "winner",
+            baseText: "local",
+            updatedAt: Date(timeIntervalSince1970: 50)
+        )
+
+        controller.onOrdinaryTargetMutationReadyForTesting = {
+            await gate.arriveAndWait()
+        }
+        controller.recordLocalChange(
+            entityType: .conflict,
+            entityID: legacyConflict.id.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(preservedPayload),
+            updatedAt: preservedPayload.updatedAt
+        )
+        await gate.waitUntilArrived()
+
+        let checkedTask = Task { @MainActor in
+            try await controller.publishConflictResolutionChecked(resolvedPayload)
+        }
+        await Task.yield()
+        await gate.release()
+        try await checkedTask.value
+
+        let snapshot = await controller.legacyQueueSnapshot()
+        let queued = try XCTUnwrap(snapshot.pendingChanges.first)
+        XCTAssertEqual(snapshot.pendingChanges.count, 1)
+        XCTAssertEqual(queued.entityType, .conflict)
+        XCTAssertEqual(queued.entityID, legacyConflict.id.uuidString)
+        XCTAssertEqual(try MyRAMSyncPayloadCoding.decodeSyncConflict(from: queued.payload), resolvedPayload)
+    }
+
     func testCheckedPublicationAlreadyOwningLeaseCompletesBeforeRecovery() async throws {
         let controller = makeController()
         let lifecycleConflict = conflict(
@@ -155,6 +204,35 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
             preservedAt: Date(timeIntervalSince1970: preservedAt),
             expiresAt: Date(timeIntervalSince1970: expiresAt)
         )
+    }
+}
+
+private actor MYR184AsyncGate {
+    private var hasArrived = false
+    private var arrivalWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func arriveAndWait() async {
+        hasArrived = true
+        let waiters = arrivalWaiters
+        arrivalWaiters.removeAll()
+        waiters.forEach { $0.resume() }
+        await withCheckedContinuation { continuation in
+            releaseWaiters.append(continuation)
+        }
+    }
+
+    func waitUntilArrived() async {
+        guard !hasArrived else { return }
+        await withCheckedContinuation { continuation in
+            arrivalWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        let waiters = releaseWaiters
+        releaseWaiters.removeAll()
+        waiters.forEach { $0.resume() }
     }
 }
 

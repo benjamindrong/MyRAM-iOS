@@ -2,6 +2,16 @@
 import AppKit
 import SwiftUI
 
+@MainActor
+enum MyRAMMacProcessSyncCompositionRoot {
+    static let conflictStore = SyncConflictStore()
+    static let syncController = MacSyncBatchController(
+        context: PersistenceManager.shared.context,
+        conflictStore: conflictStore,
+        startsNetworking: false
+    )
+}
+
 struct MyRAMMacRootView: View {
     @StateObject private var startupCoordinator = MacStartupCoordinator()
     @StateObject private var syncController: MacSyncBatchController
@@ -30,12 +40,7 @@ struct MyRAMMacRootView: View {
     @State private var activeExternalFileRequestID: UUID?
 
     init() {
-        let conflictStore = SyncConflictStore()
-        _syncController = StateObject(wrappedValue: MacSyncBatchController(
-            context: PersistenceManager.shared.context,
-            conflictStore: conflictStore,
-            startsNetworking: false
-        ))
+        _syncController = StateObject(wrappedValue: MyRAMMacProcessSyncCompositionRoot.syncController)
     }
 
     private var syncConflictStore: SyncConflictStore {

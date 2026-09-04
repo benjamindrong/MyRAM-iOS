@@ -130,9 +130,7 @@ actor SyncConvergencePostCommitExecutor {
             guard let lifecycleConflictAdapter else {
                 return .failedBeforeWork(.missingLifecycleConflictAdapter(batchID: request.sourceBatchID))
             }
-            switch lifecycleConflictAdapter.authorizeLifecyclePublication(
-                sourceIdentity: SyncLifecycleSourceIncorporationIdentity(request.persistedIncorporationIdentity)
-            ) {
+            switch lifecycleConflictAdapter.authorizeLifecyclePublication(current.lifecycleIntents) {
             case .verifiedComplete:
                 let outcome = persistCompletedWork(.lifecyclePublication, request: request, loaded: current)
                 switch outcome {

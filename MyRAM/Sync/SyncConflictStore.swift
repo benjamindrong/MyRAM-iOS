@@ -633,11 +633,12 @@ private struct SyncLifecycleConflictPersistenceEnvelope: Codable, Equatable, Sen
             }
             switch entry.receiptState {
             case .preparing:
-                guard !entry.publicationAuthorized else {
+                guard !entry.publicationAuthorized,
+                      entry.conflict == nil || entry.conflict == entry.intent.conflictVersion else {
                     throw SyncLifecycleConflictStoreError.contradictoryReceipt
                 }
             case .visible:
-                guard entry.conflict == nil || entry.conflict == entry.intent.conflictVersion else {
+                guard entry.conflict == entry.intent.conflictVersion else {
                     throw SyncLifecycleConflictStoreError.contradictoryReceipt
                 }
             case .resolved, .expired:
@@ -929,16 +930,48 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
     }
 
     func authorizeLifecyclePublication(
-        sourceIdentity: SyncLifecycleSourceIncorporationIdentity
+        _ intents: [SyncLifecycleConflictIntent]
     ) -> SyncConvergencePostCommitAdapterResult {
         do {
-            var state = try loadLifecycleStateChecked()
-            let indices = state.entries.indices.filter { state.entries[$0].intent.sourceIdentity == sourceIdentity }
-            guard indices.allSatisfy({ state.entries[$0].receiptState != .preparing }) else {
-                return .stillPending
+            let expected = intents.sorted { $0.conflictID.uuidString < $1.conflictID.uuidString }
+            guard let sourceIdentity = expected.first?.sourceIdentity else {
+                throw SyncLifecycleConflictStoreError.contradictoryIdentity
             }
+            var expectedConflictIDs: Set<UUID> = []
+            var expectedMaterializationIDs: Set<UUID> = []
+            for intent in expected {
+                try intent.validate()
+                guard intent.sourceIdentity == sourceIdentity,
+                      expectedConflictIDs.insert(intent.conflictID).inserted,
+                      expectedMaterializationIDs.insert(intent.materializationID).inserted else {
+                    throw SyncLifecycleConflictStoreError.contradictoryIdentity
+                }
+            }
+
+            var state = try loadLifecycleStateChecked()
+            let sourceIndices = state.entries.indices.filter {
+                state.entries[$0].intent.sourceIdentity == sourceIdentity
+            }
+            guard sourceIndices.count == expected.count else {
+                throw SyncLifecycleConflictStoreError.contradictoryReceipt
+            }
+
+            var matchedIndices: [Int] = []
+            for intent in expected {
+                guard let index = sourceIndices.first(where: {
+                    state.entries[$0].intent.conflictID == intent.conflictID
+                }), state.entries[index].intent == intent else {
+                    throw SyncLifecycleConflictStoreError.contradictoryReceipt
+                }
+                try verifyLifecycleEntry(state.entries[index])
+                if state.entries[index].receiptState == .preparing {
+                    return .stillPending
+                }
+                matchedIndices.append(index)
+            }
+
             var changed = false
-            for index in indices where state.entries[index].receiptState == .visible {
+            for index in matchedIndices where state.entries[index].receiptState == .visible {
                 if !state.entries[index].publicationAuthorized {
                     state.entries[index].publicationAuthorized = true
                     changed = true
