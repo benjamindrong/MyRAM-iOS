@@ -16,6 +16,7 @@
 		BC24E30B2FDF8F94004694D1 /* MyRAMSyncConflictService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */; };
 		BC24E3102FDF8F94004694D1 /* SyncConflictStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3032FDF8F94004694D1 /* SyncConflictStore.swift */; };
 		BC24E3112FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E3062FDF8F94004694D1 /* MyRAMSyncChangeApplier.swift */; };
+		BC24E3122FDF8F94004694D1 /* MyRAMSyncConflictService.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC24E30C2FDF8F94004694D1 /* MyRAMSyncConflictService.swift */; };
 		BC4CB4BB301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B4301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift */; };
 		BC4CB4BC301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B9301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift */; };
 		BC4CB4BD301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC4CB4B7301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift */; };
@@ -54,12 +55,17 @@
 		BC9F1BB62EA47D300045FD72 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BC9F1BB52EA47D300045FD72 /* Assets.xcassets */; };
 		BC9F1BB92EA47D300045FD72 /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BC9F1BB82EA47D300045FD72 /* Preview Assets.xcassets */; };
 		BC9F1BC32EA47D310045FD72 /* MyRAMTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BC22EA47D310045FD72 /* MyRAMTests.swift */; };
+		F18401000000000000000001 /* MYR184SyncConflictRoutingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F18402000000000000000001 /* MYR184SyncConflictRoutingTests.swift */; };
+		F18401000000000000000002 /* MYR184SyncConflictMaterializationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F18402000000000000000002 /* MYR184SyncConflictMaterializationTests.swift */; };
+		F18401000000000000000003 /* MYR184SyncConflictResolutionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F18402000000000000000003 /* MYR184SyncConflictResolutionTests.swift */; };
+		F18401000000000000000004 /* MYR184MacSyncConflictTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F18402000000000000000004 /* MYR184MacSyncConflictTests.swift */; };
 		BC9F1BCD2EA47D310045FD72 /* MyRAMUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCC2EA47D310045FD72 /* MyRAMUITests.swift */; };
 		BC9F1BCF2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */; };
 		BCA104010000000000000001 /* RTFCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA104020000000000000001 /* RTFCoding.swift */; };
 		BCA104010000000000000002 /* RTFCoding.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA104020000000000000001 /* RTFCoding.swift */; };
 		BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000002 /* MyRAMMacApp.swift */; };
 		BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000003 /* MyRAMMacRootView.swift */; };
+		BCA105010000000000000006 /* MacSyncConflictViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA105020000000000000006 /* MacSyncConflictViews.swift */; };
 		BCA105010000000000000003 /* MyRAMPlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCF104012FF1040000000104 /* MyRAMPlatform.swift */; };
 		BCA105010000000000000004 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = BC9F1BB52EA47D300045FD72 /* Assets.xcassets */; };
 		BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCA106020000000000000001 /* MacNoteEditorView.swift */; };
@@ -446,6 +452,10 @@
 		BC9F1BB82EA47D300045FD72 /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		BC9F1BBE2EA47D310045FD72 /* MyRAMTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyRAMTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BC9F1BC22EA47D310045FD72 /* MyRAMTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMTests.swift; sourceTree = "<group>"; };
+		F18402000000000000000001 /* MYR184SyncConflictRoutingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR184SyncConflictRoutingTests.swift; sourceTree = "<group>"; };
+		F18402000000000000000002 /* MYR184SyncConflictMaterializationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR184SyncConflictMaterializationTests.swift; sourceTree = "<group>"; };
+		F18402000000000000000003 /* MYR184SyncConflictResolutionTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR184SyncConflictResolutionTests.swift; sourceTree = "<group>"; };
+		F18402000000000000000004 /* MYR184MacSyncConflictTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MYR184MacSyncConflictTests.swift; sourceTree = "<group>"; };
 		BC9F1BC82EA47D310045FD72 /* MyRAMUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = MyRAMUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		BC9F1BCC2EA47D310045FD72 /* MyRAMUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITests.swift; sourceTree = "<group>"; };
 		BC9F1BCE2EA47D310045FD72 /* MyRAMUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMUITestsLaunchTests.swift; sourceTree = "<group>"; };
@@ -453,6 +463,7 @@
 		BCA105020000000000000001 /* MyRAMMac.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyRAMMac.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		BCA105020000000000000002 /* MyRAMMacApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacApp.swift; sourceTree = "<group>"; };
 		BCA105020000000000000003 /* MyRAMMacRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MyRAMMacRootView.swift; sourceTree = "<group>"; };
+		BCA105020000000000000006 /* MacSyncConflictViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacSyncConflictViews.swift; sourceTree = "<group>"; };
 		BCA106020000000000000001 /* MacNoteEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacNoteEditorView.swift; sourceTree = "<group>"; };
 		BCA106020000000000000002 /* MacTextViewRepresentable.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacTextViewRepresentable.swift; sourceTree = "<group>"; };
 		BCA106020000000000000003 /* MacEditorSampleDocument.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacEditorSampleDocument.swift; sourceTree = "<group>"; };
@@ -848,6 +859,9 @@
 		BC9F1BC12EA47D310045FD72 /* MyRAMTests */ = {
 			isa = PBXGroup;
 			children = (
+				F18402000000000000000001 /* MYR184SyncConflictRoutingTests.swift */,
+				F18402000000000000000002 /* MYR184SyncConflictMaterializationTests.swift */,
+				F18402000000000000000003 /* MYR184SyncConflictResolutionTests.swift */,
 				BC4CB50E301F70E00062C4D6 /* MyRAMWidgetCoreTests.swift */,
 				F19702000000000000000005 /* MyRAMWidgetHostTests.swift */,
 				D19502000000000000000002 /* MarkdownFileIOTests.swift */,
@@ -923,6 +937,7 @@
 				D19502000000000000000006 /* MacMarkdownFileCommands.swift */,
 				D19502000000000000000007 /* MacMarkdownFileOperationCoordinator.swift */,
 				BCA105020000000000000003 /* MyRAMMacRootView.swift */,
+				BCA105020000000000000006 /* MacSyncConflictViews.swift */,
 				BCA170020000000000000001 /* MacStartupCoordinator.swift */,
 				BCA106020000000000000001 /* MacNoteEditorView.swift */,
 				BCA106020000000000000002 /* MacTextViewRepresentable.swift */,
@@ -945,6 +960,7 @@
 		BCA107030000000000000001 /* MyRAMMacTests */ = {
 			isa = PBXGroup;
 			children = (
+				F18402000000000000000004 /* MYR184MacSyncConflictTests.swift */,
 				C16902000000000000000004 /* ../MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift */,
 				C17002000000000000000005 /* ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift */,
 				C17002000000000000000007 /* ../MyRAMTests/NoteSequenceStateBootstrapMigratorTests.swift */,
@@ -1667,6 +1683,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F18401000000000000000001 /* MYR184SyncConflictRoutingTests.swift in Sources */,
+				F18401000000000000000002 /* MYR184SyncConflictMaterializationTests.swift in Sources */,
+				F18401000000000000000003 /* MYR184SyncConflictResolutionTests.swift in Sources */,
 				F19701000000000000000009 /* MyRAMWidgetHostTests.swift in Sources */,
 				D19501000000000000000003 /* MarkdownFileIOTests.swift in Sources */,
 				D19501000000000000000006 /* MarkdownFileOperationBoundaryTests.swift in Sources */,
@@ -1755,6 +1774,7 @@
 				C16801000000000000000004 /* FileBackedSyncOperationIDReservationStore.swift in Sources */,
 				BCA105010000000000000001 /* MyRAMMacApp.swift in Sources */,
 				BCA105010000000000000002 /* MyRAMMacRootView.swift in Sources */,
+				BCA105010000000000000006 /* MacSyncConflictViews.swift in Sources */,
 				BCA170010000000000000001 /* MacStartupCoordinator.swift in Sources */,
 				BCA106010000000000000001 /* MacNoteEditorView.swift in Sources */,
 				BCA106010000000000000002 /* MacTextViewRepresentable.swift in Sources */,
@@ -1812,6 +1832,7 @@
 				BCA123010000000000000024 /* FileBackedSyncBatchQueue.swift in Sources */,
 				C071000D2FF0000000000001 /* MyRAMSyncModels.swift in Sources */,
 				BC24E3102FDF8F94004694D1 /* SyncConflictStore.swift in Sources */,
+				BC24E3122FDF8F94004694D1 /* MyRAMSyncConflictService.swift in Sources */,
 				BC4CB4BB301EF17C0062C4D6 /* MyRAMWidgetContentSelectionPolicy.swift in Sources */,
 				BC4CB4BC301EF17C0062C4D6 /* MyRAMWidgetSnapshotStore.swift in Sources */,
 				BC4CB4BD301EF17C0062C4D6 /* MyRAMWidgetSnapshot.swift in Sources */,
@@ -1842,6 +1863,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				F18401000000000000000004 /* MYR184MacSyncConflictTests.swift in Sources */,
 				D19501000000000000000004 /* MarkdownFileIOTests.swift in Sources */,
 				C16901000000000000000006 /* ../MyRAMTests/SwiftDataNoteSequenceStateStoreTests.swift in Sources */,
 				C17001000000000000000008 /* ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift in Sources */,

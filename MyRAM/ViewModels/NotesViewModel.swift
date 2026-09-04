@@ -1157,85 +1157,70 @@ final class NotesViewModel: ObservableObject {
     }
 
     func markSyncConflictReviewed(_ conflict: SyncConflictVersion) {
-        // Terminal conflict action: keep the local model, remove the saved
-        // remote version, and publish the kept local value as the winner.
-        guard let result = syncConflictService.keepLocal(conflict, activeNoteID: currentNote?.id) else { return }
-        let resolution = result.resolution
-        syncConflicts = result.conflicts
-        saveResolvedVersionAsSyncBase(conflict, resolvedText: resolution.resolvedText, result: result)
-        recordSyncConflictResolution(
-            conflict,
-            resolvedText: resolution.resolvedText,
-            baseText: resolution.baseText
-        )
-
-        if result.shouldRefreshActiveNote {
-            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
-        }
-        refreshCurrentFolderContent()
-        resumePendingConvergencePresentationIfNeeded()
+        performCheckedSyncConflictResolution(conflict, action: .keepLocal)
     }
 
     func restoreSyncConflict(_ conflict: SyncConflictVersion) {
-        // Restore is local and terminal for this preserved conflict. It does not
-        // bounce the restored value back as a fresh sync edit.
-        guard let result = syncConflictService.acceptIncoming(conflict, activeNoteID: currentNote?.id) else { return }
-        let resolution = result.resolution
-        syncConflicts = result.conflicts
-        saveResolvedVersionAsSyncBase(conflict, resolvedText: resolution.resolvedText, result: result)
-        recordSyncConflictResolution(
-            conflict,
-            resolvedText: resolution.resolvedText,
-            baseText: resolution.baseText
-        )
-
-        if result.shouldRefreshActiveNote {
-            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
-        }
-        refreshCurrentFolderContent()
-        resumePendingConvergencePresentationIfNeeded()
+        performCheckedSyncConflictResolution(conflict, action: .acceptIncoming)
     }
 
     func saveMergedSyncConflict(_ conflict: SyncConflictVersion, mergedText: String) {
-        guard let result = syncConflictService.saveMergedText(
-            conflict,
-            text: mergedText,
-            activeNoteID: currentNote?.id
-        ) else { return }
-        let resolution = result.resolution
-        syncConflicts = result.conflicts
-        saveResolvedVersionAsSyncBase(conflict, resolvedText: resolution.resolvedText, result: result)
-        recordSyncConflictResolution(
-            conflict,
-            resolvedText: resolution.resolvedText,
-            baseText: resolution.baseText
-        )
-
-        if result.shouldRefreshActiveNote {
-            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
-        }
-        refreshCurrentFolderContent()
-        resumePendingConvergencePresentationIfNeeded()
+        performCheckedSyncConflictResolution(conflict, action: .merged(mergedText))
     }
 
     func discardSyncConflict(_ conflict: SyncConflictVersion) {
-        // Discard keeps the local model and publishes that local value as the
-        // winner so peers do not keep replaying the discarded remote version.
-        guard let result = syncConflictService.keepLocal(conflict, activeNoteID: currentNote?.id) else { return }
-        let resolution = result.resolution
-        syncConflicts = result.conflicts
-        saveResolvedVersionAsSyncBase(conflict, resolvedText: resolution.resolvedText, result: result)
-        recordSyncConflictResolution(
-            conflict,
-            resolvedText: resolution.resolvedText,
-            baseText: resolution.baseText
-        )
+        performCheckedSyncConflictResolution(conflict, action: .keepLocal)
+    }
 
-        if result.shouldRefreshActiveNote {
-            publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
+    private enum CheckedSyncConflictAction {
+        case keepLocal
+        case acceptIncoming
+        case merged(String)
+    }
+
+    private func performCheckedSyncConflictResolution(
+        _ conflict: SyncConflictVersion,
+        action: CheckedSyncConflictAction
+    ) {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            let publisher: ((MyRAMSyncConflictPayload) async throws -> Void)? = syncController.map { controller in
+                { payload in try await controller.publishConflictResolutionChecked(payload) }
+            }
+            let result: SyncConflictRestoreResult
+            do {
+                switch action {
+                case .keepLocal:
+                    result = try await syncConflictService.keepLocalChecked(
+                        conflict,
+                        activeNoteID: currentNote?.id,
+                        publishResolution: publisher
+                    )
+                case .acceptIncoming:
+                    result = try await syncConflictService.acceptIncomingChecked(
+                        conflict,
+                        activeNoteID: currentNote?.id,
+                        publishResolution: publisher
+                    )
+                case .merged(let text):
+                    result = try await syncConflictService.saveMergedTextChecked(
+                        conflict,
+                        text: text,
+                        activeNoteID: currentNote?.id,
+                        publishResolution: publisher
+                    )
+                }
+            } catch {
+                syncConflicts = syncConflictService.activeConflicts()
+                return
+            }
+            syncConflicts = result.conflicts
+            if result.shouldRefreshActiveNote {
+                publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
+            }
+            refreshCurrentFolderContent()
+            resumePendingConvergencePresentationIfNeeded()
         }
-        refreshCurrentFolderContent()
-        resumePendingConvergencePresentationIfNeeded()
     }
 
     func addPhotoAttachment(to note: Note, imageData: Data) {

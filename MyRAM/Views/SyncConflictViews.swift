@@ -15,7 +15,7 @@ struct SyncConflictNotice: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("A version is ready for review.")
                         .font(.caption.weight(.semibold))
-                    Text("Open Sync Conflicts to copy, accept, or discard it within 7 days.")
+                    Text("Open Sync Conflicts to copy, accept, or discard it before it expires.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -41,7 +41,7 @@ struct SyncConflictNotice: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(
-            "A version is ready for review. Open Sync Conflicts to copy, accept, or discard it within 7 days."
+            "A version is ready for review. Open Sync Conflicts to copy, accept, or discard it before it expires."
         )
         .accessibilityIdentifier("sync-conflict-notice")
     }

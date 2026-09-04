@@ -201,8 +201,17 @@ final class MyRAMSyncChangeApplier {
         }
         switch payload.action {
         case .preserved:
-            return payload.conflict == nil ? .rejectedInvalidState : .preservedForReview
+            guard let conflict = payload.conflict,
+                  !conflict.id.isLifecycleConflictID,
+                  conflict.id == payload.conflictID else {
+                return .rejectedInvalidState
+            }
+            return .preservedForReview
         case .resolved:
+            guard let conflict = payload.conflict else {
+                return payload.conflictID.isLifecycleConflictID ? .rejectedInvalidState : .applied
+            }
+            guard conflict.id == payload.conflictID else { return .rejectedInvalidState }
             return .applied
         }
     }
@@ -938,10 +947,24 @@ final class MyRAMSyncChangeApplier {
         guard let payload = try? MyRAMSyncPayloadCoding.decodeSyncConflict(from: change.payload) else { return false }
         switch payload.action {
         case .preserved:
-            guard let conflict = payload.conflict else { return false }
+            guard let conflict = payload.conflict,
+                  conflict.id == payload.conflictID,
+                  !conflict.id.isLifecycleConflictID else {
+                throw SyncLifecycleConflictStoreError.invalidDeferredResolution
+            }
             syncConflicts = conflictStore.preserve(normalizedIncomingConflict(conflict))
             return true
         case .resolved:
+            if let conflict = payload.conflict, conflict.id.isLifecycleConflictID {
+                guard conflict.id == payload.conflictID,
+                      conflict.entityType == .note,
+                      conflict.entityID == conflict.noteID,
+                      payload.resolvedText != nil,
+                      let bufferedStore = conflictStore as? BufferedSyncConflictStore else {
+                    throw SyncLifecycleConflictStoreError.invalidDeferredResolution
+                }
+                try bufferedStore.stageRemoteLifecycleResolution(conflict)
+            }
             // Resolved metadata carries the winning text. Apply that winner
             // before clearing the local review row so peers converge.
             if let conflict = payload.conflict,
@@ -953,6 +976,9 @@ final class MyRAMSyncChangeApplier {
                 ) else {
                     return false
                 }
+            }
+            if let conflict = payload.conflict, conflict.id.isLifecycleConflictID {
+                return true
             }
             if let conflict = payload.conflict {
                 syncConflicts = conflictStore.removeResolvedConflict(conflict)
@@ -1084,7 +1110,7 @@ final class MyRAMSyncChangeApplier {
                 options: [.documentType: NSAttributedString.DocumentType.rtf],
                 documentAttributes: nil
               ),
-              let compatibleText = attributedText.compatibleConflictText(matching: plainText) else { return nil }
+              let compatibleText = attributedText.myramCompatibleConflictText(matching: plainText) else { return nil }
         return RTFCoding.encode(NSMutableAttributedString(attributedString: compatibleText))
         #endif
     }
@@ -1431,8 +1457,8 @@ private extension SyncConflictEntityType {
     }
 }
 
-private extension NSAttributedString {
-    func compatibleConflictText(matching plainText: String) -> NSAttributedString? {
+extension NSAttributedString {
+    func myramCompatibleConflictText(matching plainText: String) -> NSAttributedString? {
         guard string != plainText else { return self }
         let nsString = string as NSString
         let nsPlainLength = (plainText as NSString).length
@@ -1440,7 +1466,7 @@ private extension NSAttributedString {
         guard nsString.substring(to: nsPlainLength) == plainText else { return nil }
 
         let extraTrailingText = nsString.substring(from: nsPlainLength)
-        guard extraTrailingText.isDocumentBoundaryWhitespace else { return nil }
+        guard extraTrailingText.isMyRAMDocumentBoundaryWhitespace else { return nil }
 
         let mutable = NSMutableAttributedString(attributedString: self)
         mutable.deleteCharacters(
@@ -1451,8 +1477,8 @@ private extension NSAttributedString {
     }
 }
 
-private extension String {
-    var isDocumentBoundaryWhitespace: Bool {
+extension String {
+    var isMyRAMDocumentBoundaryWhitespace: Bool {
         self == "\n"
             || (!isEmpty && unicodeScalars.allSatisfy { CharacterSet.whitespaces.contains($0) })
     }

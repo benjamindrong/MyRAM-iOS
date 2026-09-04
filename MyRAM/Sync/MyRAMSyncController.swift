@@ -110,6 +110,8 @@ protocol MyRAMSyncControlling: AnyObject {
         updatedAt: Date
     )
 
+    func publishConflictResolutionChecked(_ payload: MyRAMSyncConflictPayload) async throws
+
     func acceptLocalBatch(_ batch: SyncBatch) async throws
 }
 
@@ -122,6 +124,12 @@ enum LegacyIncomingCandidateDisposition: Equatable, Sendable {
 struct LegacyIncomingChangeResult: Equatable, Sendable {
     let changeID: UUID
     let disposition: LegacyIncomingCandidateDisposition
+}
+
+enum CheckedConflictPublicationError: Error, Equatable {
+    case recoveryInProgress
+    case queueAdmissionNotDurable
+    case queueAdmissionSuperseded
 }
 
 @MainActor
@@ -157,6 +165,10 @@ protocol PendingSyncQueueAdministrating: AnyObject {
 }
 
 extension MyRAMSyncControlling {
+    func publishConflictResolutionChecked(_ payload: MyRAMSyncConflictPayload) async throws {
+        throw CheckedConflictPublicationError.queueAdmissionNotDurable
+    }
+
     func recordLocalChange(
         entityType: SyncEntityType,
         entityID: String,
@@ -175,6 +187,11 @@ extension MyRAMSyncControlling {
 
 @MainActor
 final class MyRAMSyncController: NSObject, ObservableObject {
+    private struct TargetMutationTail {
+        let operationID: UUID
+        let task: Task<Void, Never>
+    }
+
     private struct IncomingBatchWork {
         let batch: SyncBatch
         let peerID: MCPeerID
@@ -199,6 +216,10 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)?
     var onBootstrapPresentationRefresh: (() -> Void)?
     var onResumeIncomingAfterBootstrap: (() async -> Void)?
+#if DEBUG
+    var onOrdinaryTargetMutationReadyForTesting: (() async -> Void)?
+    var onCheckedPublicationLeaseAcquiredForTesting: (() async -> Void)?
+#endif
 
     private let serviceType = "myram-sync"
     private let peerID: MCPeerID
@@ -227,6 +248,9 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private var pendingLegacyFlushAfterActiveSend = false
     private var outboundFlushRequestedWhileRecoverySuspended = false
     private var isOutboundSuspendedForRecovery = false
+    private var targetMutationTails: [String: TargetMutationTail] = [:]
+    private var checkedPublicationLeaseCount = 0
+    private var recoveryRequested = false
     private var hasStartedNetworking = false
     private var pendingIncomingBatchWork: [IncomingBatchWork] = []
     private var isProcessingIncomingBatchWork = false
@@ -402,7 +426,17 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         payload: Data,
         updatedAt: Date
     ) {
-        Task {
+        let targetKey = targetMutationKey(entityType: entityType, entityID: entityID)
+        let predecessor = targetMutationTails[targetKey]?.task
+        let operationID = UUID()
+        let operationTask = Task { @MainActor [weak self] in
+            if let predecessor {
+                await predecessor.value
+            }
+            guard let self else { return }
+#if DEBUG
+            await onOrdinaryTargetMutationReadyForTesting?()
+#endif
             _ = await syncEngine.recordLocalChange(
                 entityType: entityType,
                 entityID: entityID,
@@ -413,6 +447,81 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             await updatePendingCount()
             await debouncedSender.schedule()
         }
+        targetMutationTails[targetKey] = TargetMutationTail(
+            operationID: operationID,
+            task: operationTask
+        )
+        Task { @MainActor [weak self] in
+            await operationTask.value
+            guard let self,
+                  targetMutationTails[targetKey]?.operationID == operationID else { return }
+            targetMutationTails[targetKey] = nil
+        }
+    }
+
+    func publishConflictResolutionChecked(_ payload: MyRAMSyncConflictPayload) async throws {
+        guard payload.action == .resolved,
+              let data = try? MyRAMSyncPayloadCoding.encode(payload) else {
+            throw CheckedConflictPublicationError.queueAdmissionNotDurable
+        }
+        let targetKey = targetMutationKey(entityType: .conflict, entityID: payload.conflictID.uuidString)
+        let predecessor = targetMutationTails[targetKey]?.task
+        let operationID = UUID()
+        let operation = Task { @MainActor [weak self] () throws -> Void in
+            if let predecessor {
+                await predecessor.value
+            }
+            guard let self else { throw CheckedConflictPublicationError.queueAdmissionNotDurable }
+            try await self.performCheckedConflictPublication(payload: payload, data: data)
+        }
+        let tail = Task { @MainActor in
+            _ = try? await operation.value
+        }
+        targetMutationTails[targetKey] = TargetMutationTail(operationID: operationID, task: tail)
+        defer {
+            if targetMutationTails[targetKey]?.operationID == operationID {
+                targetMutationTails[targetKey] = nil
+            }
+        }
+        try await operation.value
+    }
+
+    private func performCheckedConflictPublication(
+        payload: MyRAMSyncConflictPayload,
+        data: Data
+    ) async throws {
+        guard !recoveryRequested, !isOutboundSuspendedForRecovery else {
+            throw CheckedConflictPublicationError.recoveryInProgress
+        }
+        checkedPublicationLeaseCount += 1
+        defer {
+            checkedPublicationLeaseCount -= 1
+            pendingLegacyFlushAfterActiveSend = true
+            Task { await requestLegacyFlush() }
+        }
+#if DEBUG
+        await onCheckedPublicationLeaseAcquiredForTesting?()
+#endif
+        let admitted = await syncEngine.recordLocalChange(
+            entityType: .conflict,
+            entityID: payload.conflictID.uuidString,
+            operation: .upsert,
+            payload: data,
+            updatedAt: payload.updatedAt
+        )
+        let snapshot = await syncEngine.queueSnapshot()
+        let health = await syncEngine.queuePersistenceHealth()
+        guard health == .healthy else {
+            throw CheckedConflictPublicationError.queueAdmissionNotDurable
+        }
+        guard snapshot.pendingChanges.contains(admitted),
+              let exact = snapshot.pendingChanges.first(where: {
+                  $0.entityType == admitted.entityType && $0.entityID == admitted.entityID
+              }),
+              exact == admitted else {
+            throw CheckedConflictPublicationError.queueAdmissionSuperseded
+        }
+        await updatePendingCount()
     }
 
     func flushPendingChanges() {
@@ -435,7 +544,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func requestLegacyFlush() async {
-        if isOutboundSuspendedForRecovery {
+        if isOutboundSuspendedForRecovery || recoveryRequested || checkedPublicationLeaseCount > 0 {
             outboundFlushRequestedWhileRecoverySuspended = true
             await updatePendingCount()
             return
@@ -456,7 +565,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             return
         }
 
-        guard let envelope = await syncEngine.nextEnvelope() else {
+        guard checkedPublicationLeaseCount == 0, !recoveryRequested,
+              let envelope = await syncEngine.nextEnvelope() else {
             await updatePendingCount()
             finishLegacyFlushAndSchedulePendingIfNeeded()
             return
@@ -1183,12 +1293,14 @@ extension MyRAMSyncController: MyRAMSyncBootstrapConfiguring {}
 
 extension MyRAMSyncController: PendingSyncQueueAdministrating {
     func suspendOutboundForRecovery() {
+        recoveryRequested = true
         isOutboundSuspendedForRecovery = true
     }
 
     func resumeOutboundAfterRecovery() {
         let shouldFlush = outboundFlushRequestedWhileRecoverySuspended
         isOutboundSuspendedForRecovery = false
+        recoveryRequested = false
         outboundFlushRequestedWhileRecoverySuspended = false
         if shouldFlush {
             flushAllOutboundWork()
@@ -1196,16 +1308,30 @@ extension MyRAMSyncController: PendingSyncQueueAdministrating {
     }
 
     func legacyQueueSnapshot() async -> SyncQueueSnapshot {
-        await syncEngine.queueSnapshot()
+        await waitForTargetMutations()
+        return await syncEngine.queueSnapshot()
     }
 
     func legacyQueueHealth() async -> SyncQueuePersistenceHealth {
-        await syncEngine.queuePersistenceHealth()
+        await waitForTargetMutations()
+        return await syncEngine.queuePersistenceHealth()
     }
 
     func replaceLegacyQueueSnapshot(_ snapshot: SyncQueueSnapshot) async throws {
+        await waitForTargetMutations()
         try await syncEngine.replaceQueueSnapshot(snapshot)
         await updatePendingCount()
+    }
+
+    private func waitForTargetMutations() async {
+        let tails = targetMutationTails.values.map(\.task)
+        for tail in tails {
+            await tail.value
+        }
+    }
+
+    private func targetMutationKey(entityType: SyncEntityType, entityID: String) -> String {
+        "\(entityType.rawValue):\(entityID.lowercased())"
     }
 
     func unsentBatchQueueSnapshot() -> FileBackedSyncBatchQueueSnapshot {

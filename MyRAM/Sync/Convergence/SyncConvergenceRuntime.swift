@@ -120,6 +120,7 @@ final class SyncConvergenceRuntime {
         store: SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container)),
         queueCleanupAdapter: convergenceQueue,
         anchoredRecoveryAdapter: anchoredRecoveryStore,
+        lifecycleConflictAdapter: conflictStore as? SyncConvergenceLifecycleConflictAdapter,
         presentationAdapter: presentationAdapter
     )
     private lazy var pendingPostCommitSource = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
@@ -368,7 +369,6 @@ final class SyncConvergenceRuntime {
                 )
                 switch planning {
                 case .planned(let incorporationInput):
-                    preserveLifecycleConflicts(in: incorporationInput.plan)
                     let incorporation = incorporationExecutor.incorporate(
                         input: incorporationInput,
                         transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
@@ -515,21 +515,6 @@ final class SyncConvergenceRuntime {
             }
         } while drainRequestedWhileActive
         return .drained(appliedBatchIDs: appliedBatchIDs)
-    }
-
-    private func preserveLifecycleConflicts(in plan: SyncConvergenceBatchPlan) {
-        for notePlan in plan.affectedNotePlans {
-            guard let effect = notePlan.lifecycleEffect, effect.verdict == .preserveLiveNote else { continue }
-            let noteID = effect.noteID
-            guard let note = try? context.fetch(FetchDescriptor<Note>(predicate: #Predicate { $0.id == noteID })).first else { continue }
-            let expiry = Date().addingTimeInterval(30 * 24 * 60 * 60)
-            if note.title != effect.title {
-                _ = conflictStore.preserve(SyncConflictVersion(entityType: .note, entityID: note.id, noteID: note.id, field: .noteTitle, localText: note.title, remoteText: effect.title, remoteModifiedAt: effect.modifiedAt, expiresAt: expiry))
-            }
-            if note.content != effect.body {
-                _ = conflictStore.preserve(SyncConflictVersion(entityType: .note, entityID: note.id, noteID: note.id, field: .noteContent, localText: note.content, remoteText: effect.body, remoteModifiedAt: effect.modifiedAt, expiresAt: expiry))
-            }
-        }
     }
 
     /// Defers presentation-only work by note while preserving globally blocking durability failures.

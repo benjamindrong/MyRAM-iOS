@@ -179,6 +179,17 @@ struct SyncConvergenceLifecycleEffect: Equatable {
     let resultEvidence: SyncConvergenceResultEvidence
 }
 
+enum SyncConvergenceLifecycleConflictIntentEligibility {
+    static func isEligible(_ verdict: SyncConvergenceLifecycleEffect.Verdict) -> Bool {
+        switch verdict {
+        case .apply:
+            false
+        case .preserveLiveNote:
+            true
+        }
+    }
+}
+
 struct SyncConvergenceCreationEffect: Equatable {
     enum Verdict: Equatable {
         case create
@@ -395,8 +406,18 @@ struct SyncConvergenceMutableNoteRecord: Equatable {
     let createdAt: Date
     let modifiedAt: Date
     let deletedAt: Date?
+    let richTextContentData: Data?
 
-    init(noteID: UUID, folderID: UUID?, title: String, body: String, createdAt: Date, modifiedAt: Date, deletedAt: Date? = nil) {
+    init(
+        noteID: UUID,
+        folderID: UUID?,
+        title: String,
+        body: String,
+        createdAt: Date,
+        modifiedAt: Date,
+        deletedAt: Date? = nil,
+        richTextContentData: Data? = nil
+    ) {
         self.noteID = noteID
         self.folderID = folderID
         self.title = title
@@ -404,6 +425,7 @@ struct SyncConvergenceMutableNoteRecord: Equatable {
         self.createdAt = createdAt
         self.modifiedAt = modifiedAt
         self.deletedAt = deletedAt
+        self.richTextContentData = richTextContentData
     }
 }
 

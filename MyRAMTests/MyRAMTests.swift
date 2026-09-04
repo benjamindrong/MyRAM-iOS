@@ -108,6 +108,19 @@ final class MyRAMTests: XCTestCase {
             )
         }
 
+        func publishConflictResolutionChecked(_ payload: MyRAMSyncConflictPayload) async throws {
+            guard payload.action == .resolved else {
+                throw CheckedConflictPublicationError.queueAdmissionNotDurable
+            }
+            recordLocalChange(
+                entityType: .conflict,
+                entityID: payload.conflictID.uuidString,
+                operation: .upsert,
+                payload: try MyRAMSyncPayloadCoding.encode(payload),
+                updatedAt: payload.updatedAt
+            )
+        }
+
         func acceptLocalBatch(_ batch: SyncBatch) async throws {
             recordedBatches.append(batch)
         }
@@ -2061,7 +2074,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(note.content, "Mac kept local")
     }
 
-    func testSaveMergedSyncConflictWritesEditableTextAndOnlyEmitsResolvedMetadata() throws {
+    func testSaveMergedSyncConflictWritesEditableTextAndOnlyEmitsResolvedMetadata() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let conflictFileURL = temporarySyncConflictFileURL()
@@ -2089,6 +2102,11 @@ final class MyRAMTests: XCTestCase {
         let mergedText = "Local-only text\nVersion to Sync"
 
         vm.saveMergedSyncConflict(conflict, mergedText: mergedText)
+        try await waitUntil("merged sync conflict resolves") {
+            note.content == mergedText
+                && conflictStore.activeConflicts().isEmpty
+                && recorder.recordedChanges.count == 1
+        }
 
         XCTAssertEqual(note.content, mergedText)
         XCTAssertNil(note.richTextContentData)
@@ -2685,6 +2703,7 @@ final class MyRAMTests: XCTestCase {
             pendingLocalConvergenceBatchQueueFileURL: nil,
             resumesPendingConvergenceOnInit: false
         )
+        let fileExistsCallsBeforeIncoming = probe.fileExistsCalls
 
         noteB.content = "Unsaved local B"
         XCTAssertTrue(context.hasChanges)
@@ -2703,7 +2722,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(dispositions, [LegacyIncomingChangeResult(changeID: change.id, disposition: .retryRequired)])
         XCTAssertEqual(noteA.content, "A body")
         XCTAssertEqual(noteB.content, "Unsaved local B")
-        XCTAssertEqual(probe.fileExistsCalls, 0)
+        XCTAssertEqual(probe.fileExistsCalls, fileExistsCallsBeforeIncoming)
         XCTAssertTrue(context.hasChanges)
     }
 
@@ -5700,7 +5719,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(recorder.recordedChanges.map(\.entityType), [.conflict])
     }
 
-    func testKeepLocalConflictPreservesTextTypedAfterConflictCreation() throws {
+    func testKeepLocalConflictPreservesTextTypedAfterConflictCreation() async throws {
         let fixture = try makeActiveNoteContentConflictFixture()
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
         let typedAfterConflict = "Local before conflict\nTyped after conflict"
@@ -5712,6 +5731,10 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(fixture.recorder.recordedChanges.isEmpty)
 
         fixture.vm.markSyncConflictReviewed(fixture.conflict)
+        try await waitUntil("keep-local conflict resolution completes") {
+            fixture.conflictStore.activeConflicts().isEmpty
+                && fixture.recorder.recordedChanges.count == 1
+        }
 
         XCTAssertEqual(fixture.note.content, typedAfterConflict)
         XCTAssertTrue(fixture.conflictStore.activeConflicts().isEmpty)
@@ -5733,7 +5756,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(payload.baseText, fixture.conflict.remoteText)
     }
 
-    func testRestoreConflictReplacesTextTypedAfterConflictOnlyWhenIncomingIsSelected() throws {
+    func testRestoreConflictReplacesTextTypedAfterConflictOnlyWhenIncomingIsSelected() async throws {
         let staleIncomingRichTextData = Data("incoming rtf with explicit black foreground".utf8)
         let fixture = try makeActiveNoteContentConflictFixture(remoteRichTextContentData: staleIncomingRichTextData)
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
@@ -5746,6 +5769,11 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(fixture.recorder.recordedChanges.isEmpty)
 
         fixture.vm.restoreSyncConflict(fixture.conflict)
+        try await waitUntil("incoming conflict resolution completes") {
+            fixture.note.content == fixture.conflict.remoteText
+                && fixture.conflictStore.activeConflicts().isEmpty
+                && fixture.recorder.recordedChanges.count == 1
+        }
 
         XCTAssertEqual(fixture.note.content, fixture.conflict.remoteText)
         XCTAssertNil(fixture.note.richTextContentData)
@@ -5768,7 +5796,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(payload.baseText, fixture.conflict.localText)
     }
 
-    func testRestoreConflictPreservesRichTextFormattingWithoutDefaultTextColor() throws {
+    func testRestoreConflictPreservesRichTextFormattingWithoutDefaultTextColor() async throws {
         let remoteText = "Version to Sync"
         let incomingRichTextData = try makeConflictRichTextData(text: remoteText)
         let fixture = try makeActiveNoteContentConflictFixture(
@@ -5778,6 +5806,10 @@ final class MyRAMTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
 
         fixture.vm.restoreSyncConflict(fixture.conflict)
+        try await waitUntil("formatted incoming conflict resolution completes") {
+            fixture.conflictStore.activeConflicts().isEmpty
+                && fixture.recorder.recordedChanges.count == 1
+        }
 
         let richTextData = try XCTUnwrap(fixture.note.richTextContentData)
         let attributedText = try decodeRichTextData(richTextData)
@@ -5794,7 +5826,7 @@ final class MyRAMTests: XCTestCase {
         )
     }
 
-    func testRestoreConflictPreservesBoldItalicAndUnderlineFormatting() throws {
+    func testRestoreConflictPreservesBoldItalicAndUnderlineFormatting() async throws {
         let remoteText = "Bold Italic Underline"
         let incomingRichTextData = try makeStyledConflictRichTextData(text: remoteText)
         let fixture = try makeActiveNoteContentConflictFixture(
@@ -5804,6 +5836,10 @@ final class MyRAMTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
 
         fixture.vm.restoreSyncConflict(fixture.conflict)
+        try await waitUntil("formatted incoming conflict resolution completes") {
+            fixture.conflictStore.activeConflicts().isEmpty
+                && fixture.recorder.recordedChanges.count == 1
+        }
 
         let richTextData = try XCTUnwrap(fixture.note.richTextContentData)
         let attributedText = try decodeRichTextData(richTextData)
@@ -5811,7 +5847,7 @@ final class MyRAMTests: XCTestCase {
         try assertStyledConflictFormattingSurvives(in: attributedText)
     }
 
-    func testSaveMergedConflictUsesMergedTextAfterPostConflictTyping() throws {
+    func testSaveMergedConflictUsesMergedTextAfterPostConflictTyping() async throws {
         let fixture = try makeActiveNoteContentConflictFixture()
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
         let typedAfterConflict = "Local before conflict\nTyped after conflict"
@@ -5823,6 +5859,11 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(fixture.recorder.recordedChanges.isEmpty)
 
         fixture.vm.saveMergedSyncConflict(fixture.conflict, mergedText: mergedText)
+        try await waitUntil("post-conflict merged resolution completes") {
+            fixture.note.content == mergedText
+                && fixture.conflictStore.activeConflicts().isEmpty
+                && fixture.recorder.recordedChanges.count == 1
+        }
 
         XCTAssertEqual(fixture.note.content, mergedText)
         XCTAssertNotEqual(fixture.note.content, fixture.conflict.localText)
@@ -5845,13 +5886,17 @@ final class MyRAMTests: XCTestCase {
         XCTAssertEqual(payload.baseText, fixture.conflict.remoteText)
     }
 
-    func testSaveMergedConflictPreservesCompatibleExistingRichTextWhenResolvedDataIsNil() throws {
+    func testSaveMergedConflictPreservesCompatibleExistingRichTextWhenResolvedDataIsNil() async throws {
         let fixture = try makeActiveNoteContentConflictFixture()
         defer { try? FileManager.default.removeItem(at: fixture.conflictFileURL.deletingLastPathComponent()) }
         let mergedText = "Bold Italic Underline\nVersion to Sync"
         fixture.note.richTextContentData = try makeStyledConflictRichTextData(text: mergedText)
 
         fixture.vm.saveMergedSyncConflict(fixture.conflict, mergedText: mergedText)
+        try await waitUntil("formatted merged conflict resolution completes") {
+            fixture.conflictStore.activeConflicts().isEmpty
+                && fixture.recorder.recordedChanges.count == 1
+        }
 
         let richTextData = try XCTUnwrap(fixture.note.richTextContentData)
         let attributedText = try decodeRichTextData(richTextData)

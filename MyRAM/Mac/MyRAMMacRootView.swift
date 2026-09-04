@@ -2,12 +2,19 @@
 import AppKit
 import SwiftUI
 
-struct MyRAMMacRootView: View {
-    @StateObject private var startupCoordinator = MacStartupCoordinator()
-    @StateObject private var syncController = MacSyncBatchController(
+@MainActor
+enum MyRAMMacProcessSyncCompositionRoot {
+    static let conflictStore = SyncConflictStore()
+    static let syncController = MacSyncBatchController(
         context: PersistenceManager.shared.context,
+        conflictStore: conflictStore,
         startsNetworking: false
     )
+}
+
+struct MyRAMMacRootView: View {
+    @StateObject private var startupCoordinator = MacStartupCoordinator()
+    @StateObject private var syncController: MacSyncBatchController
     @StateObject private var editorSyncBridge = MacEditorSyncBridge()
     @State private var syncConvergenceCoordinator: MacSyncConvergenceCoordinator?
     @State private var notes: [Note] = []
@@ -31,6 +38,14 @@ struct MyRAMMacRootView: View {
     @State private var markdownSceneID = UUID()
     @State private var fileOperationState = MacSceneLocalFileOperationState()
     @State private var activeExternalFileRequestID: UUID?
+
+    init() {
+        _syncController = StateObject(wrappedValue: MyRAMMacProcessSyncCompositionRoot.syncController)
+    }
+
+    private var syncConflictStore: SyncConflictStore {
+        syncController.conflictStore
+    }
 
     // MYR-195 Slice 2: scene-local mode state. Not persisted, not Codable, not added to Note.
     // Each window/scene owns its mode independently.
@@ -117,6 +132,8 @@ struct MyRAMMacRootView: View {
                 selectedNoteID: selectedNoteID,
                 syncController: syncController,
                 widgetCoordinator: widgetCoordinator,
+                conflictStore: syncConflictStore,
+                resolveConflict: resolveMacSyncConflict,
                 onSelect: selectNote,
                 onCreateNote: createNote
             )
@@ -352,9 +369,43 @@ struct MyRAMMacRootView: View {
         syncConvergenceCoordinator = MacSyncConvergenceCoordinator(
             context: PersistenceManager.shared.context,
             syncController: syncController,
+            conflictStore: syncConflictStore,
             presentationSurface: presentationSurface,
             incomingBoundarySurface: boundarySurface
         )
+    }
+
+    private func resolveMacSyncConflict(
+        _ conflict: SyncConflictVersion,
+        action: MacSyncConflictResolutionAction
+    ) async throws {
+        if selectedNoteID == conflict.noteID ||
+            (conflict.entityType == .note && selectedNoteID == conflict.entityID) {
+            guard await flushPendingSave() else {
+                throw MyRAMSyncConflictResolutionError.modelSaveFailed
+            }
+        }
+        let service = MyRAMSyncConflictService(
+            context: PersistenceManager.shared.context,
+            store: syncConflictStore
+        )
+        switch action {
+        case .keepLocal:
+            _ = try await service.keepLocalChecked(conflict, activeNoteID: selectedNoteID)
+        case .acceptIncoming:
+            _ = try await service.acceptIncomingChecked(conflict, activeNoteID: selectedNoteID)
+        case .saveMerged(let text):
+            _ = try await service.saveMergedTextChecked(
+                conflict,
+                text: text,
+                activeNoteID: selectedNoteID
+            )
+        }
+        loadNotesKeepingSelection()
+        if selectedNoteID == conflict.noteID ||
+            (conflict.entityType == .note && selectedNoteID == conflict.entityID) {
+            reloadSelectedEditor(reason: .unsafeIncrementalApply)
+        }
     }
 
     private func resumeSyncConvergence() {
@@ -977,6 +1028,8 @@ private struct MacNoteListView: View {
     let selectedNoteID: UUID?
     @ObservedObject var syncController: MacSyncBatchController
     @ObservedObject var widgetCoordinator: MyRAMWidgetHostCoordinator
+    let conflictStore: SyncConflictStore
+    let resolveConflict: (SyncConflictVersion, MacSyncConflictResolutionAction) async throws -> Void
     let onSelect: (Note) -> Void
     let onCreateNote: () -> Void
 
@@ -984,6 +1037,14 @@ private struct MacNoteListView: View {
         List(selection: selectedBinding) {
             Section {
                 MacSyncStatusView(syncController: syncController)
+            }
+
+            Section {
+                MacSyncConflictSummaryView(
+                    store: conflictStore,
+                    refreshToken: syncController.lastSyncAt,
+                    resolve: resolveConflict
+                )
             }
 
             ForEach(notes, id: \.id) { note in

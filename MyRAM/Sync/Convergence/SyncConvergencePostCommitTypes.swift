@@ -18,11 +18,11 @@ struct SyncConvergencePostCommitRequest: Equatable, Sendable {
     let persistedIncorporationIdentity: SyncConvergencePersistedIncorporationIdentity
 
     init(result: SyncConvergenceIncorporationResult) {
-        self.sourceBatchID = result.batchID
-        self.affectedNoteIDs = result.affectedNoteIDs
-        self.cleanupPlan = result.cleanupPlan
-        self.presentationPlan = result.presentationPlan
-        self.persistedIncorporationIdentity = result.persistedIncorporationIdentity
+        sourceBatchID = result.batchID
+        affectedNoteIDs = result.affectedNoteIDs
+        cleanupPlan = result.cleanupPlan
+        presentationPlan = result.presentationPlan
+        persistedIncorporationIdentity = result.persistedIncorporationIdentity
     }
 
     init(
@@ -42,8 +42,6 @@ struct SyncConvergencePostCommitRequest: Equatable, Sendable {
 
 enum SyncConvergencePostCommitOutcome: Equatable, Sendable {
     case complete
-    /// `blocking` identifies the gate that prevented this execution from finishing;
-    /// `outstanding` retains every remaining gate for diagnostics and retries.
     case pending(
         blocking: SyncConvergencePostCommitPendingWork,
         outstanding: Set<SyncConvergencePostCommitPendingWork>
@@ -53,6 +51,8 @@ enum SyncConvergencePostCommitOutcome: Equatable, Sendable {
 
 enum SyncConvergencePostCommitPendingWork: Hashable, Sendable {
     case anchoredRecoveryPersistence
+    case lifecycleMaterialization
+    case lifecyclePublication
     case queueCleanup
     case legacyCleanup
     case presentationRefresh
@@ -68,6 +68,7 @@ enum SyncConvergencePostCommitFailure: Error, Equatable, Sendable {
     case malformedPostCommitWorkPayload(batchID: UUID)
     case contradictoryPostCommitWorkPayload(batchID: UUID)
     case missingLegacyCleanupAdapter(batchID: UUID)
+    case missingLifecycleConflictAdapter(batchID: UUID)
     case persistence
     case unexpected
 }
@@ -136,6 +137,7 @@ struct SyncConvergencePostCommitFullRootState: Equatable {
     let postCommitWorkPayload: SyncConvergencePostCommitWorkPayloadV1?
     let postCommitWorkPayloadData: Data?
     let anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition]
+    let lifecycleIntents: [SyncLifecycleConflictIntent]
 
     init(
         root: SyncConvergenceIncorporatedRootProjection,
@@ -143,7 +145,8 @@ struct SyncConvergencePostCommitFullRootState: Equatable {
         postCommitStatePayloadData: Data,
         postCommitWorkPayload: SyncConvergencePostCommitWorkPayloadV1?,
         postCommitWorkPayloadData: Data?,
-        anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition] = []
+        anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition] = [],
+        lifecycleIntents: [SyncLifecycleConflictIntent] = []
     ) {
         self.root = root
         self.postCommitState = postCommitState
@@ -151,6 +154,7 @@ struct SyncConvergencePostCommitFullRootState: Equatable {
         self.postCommitWorkPayload = postCommitWorkPayload
         self.postCommitWorkPayloadData = postCommitWorkPayloadData
         self.anchoredRecoveryTransitions = anchoredRecoveryTransitions
+        self.lifecycleIntents = lifecycleIntents
     }
 }
 
@@ -188,6 +192,19 @@ protocol SyncConvergenceAnchoredRecoveryAdapter {
     ) -> SyncConvergencePostCommitAdapterResult
 }
 
+protocol SyncConvergenceLifecycleConflictAdapter: AnyObject {
+    func materializeLifecycleConflicts(
+        _ intents: [SyncLifecycleConflictIntent],
+        now: Date
+    ) -> SyncConvergencePostCommitAdapterResult
+
+    func authorizeLifecyclePublication(
+        _ intents: [SyncLifecycleConflictIntent]
+    ) -> SyncConvergencePostCommitAdapterResult
+}
+
+extension SyncConflictStore: SyncConvergenceLifecycleConflictAdapter {}
+
 protocol SyncConvergencePresentationAdapter {
     func refreshPresentation(for request: SyncConvergencePresentationRequest) async -> SyncConvergencePostCommitAdapterResult
 }
@@ -201,6 +218,12 @@ extension SyncConvergencePostCommitState {
         var work: Set<SyncConvergencePostCommitPendingWork> = []
         if anchoredRecoveryPending {
             work.insert(.anchoredRecoveryPersistence)
+        }
+        if lifecycleMaterializationPending {
+            work.insert(.lifecycleMaterialization)
+        }
+        if lifecyclePublicationPending {
+            work.insert(.lifecyclePublication)
         }
         if queueCleanupPending {
             work.insert(.queueCleanup)
@@ -232,7 +255,7 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
         legacyCleanupRequired: Bool,
         presentationEntries: [PresentationEntry]
     ) {
-        self.formatVersion = Self.supportedFormatVersion
+        formatVersion = Self.supportedFormatVersion
         self.queueCleanupBatchIDs = queueCleanupBatchIDs.sortedByUUIDString()
         self.legacyCleanupRequired = legacyCleanupRequired
         self.presentationEntries = presentationEntries.sorted { $0.noteID.uuidString < $1.noteID.uuidString }
@@ -265,6 +288,12 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
             throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
         }
         if state.presentationRefreshPending && presentationEntries.isEmpty {
+            throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+        }
+        if state.lifecycleMaterializationPending {
+            throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+        }
+        if state.lifecyclePublicationPending {
             throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
         }
     }
@@ -423,7 +452,6 @@ struct SyncConvergencePostCommitWorkPayloadV1: Codable, Equatable, Sendable {
     }
 }
 
-
 struct SyncConvergencePostCommitWorkPayloadV2: Codable, Equatable, Sendable {
     static let supportedFormatVersion = 2
 
@@ -435,7 +463,7 @@ struct SyncConvergencePostCommitWorkPayloadV2: Codable, Equatable, Sendable {
         legacyWorkPayload: SyncConvergencePostCommitWorkPayloadV1,
         anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition]
     ) throws {
-        self.formatVersion = Self.supportedFormatVersion
+        formatVersion = Self.supportedFormatVersion
         self.legacyWorkPayload = legacyWorkPayload
         self.anchoredRecoveryTransitions = try anchoredRecoveryTransitions
             .map(AnchoredRecoveryTransitionPayload.init)
@@ -556,23 +584,99 @@ struct SyncConvergencePostCommitWorkPayloadV2: Codable, Equatable, Sendable {
     }
 }
 
+struct SyncConvergencePostCommitWorkPayloadV3: Codable, Equatable, Sendable {
+    static let supportedFormatVersion = 3
+
+    let formatVersion: Int
+    let legacyWorkPayload: SyncConvergencePostCommitWorkPayloadV1
+    let anchoredRecoveryTransitions: [SyncConvergencePostCommitWorkPayloadV2.AnchoredRecoveryTransitionPayload]
+    let lifecycleIntents: [SyncLifecycleConflictIntent]
+
+    init(
+        legacyWorkPayload: SyncConvergencePostCommitWorkPayloadV1,
+        anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition],
+        lifecycleIntents: [SyncLifecycleConflictIntent]
+    ) throws {
+        formatVersion = Self.supportedFormatVersion
+        self.legacyWorkPayload = legacyWorkPayload
+        self.anchoredRecoveryTransitions = try anchoredRecoveryTransitions
+            .map(SyncConvergencePostCommitWorkPayloadV2.AnchoredRecoveryTransitionPayload.init)
+            .sorted { try $0.validatedKey() < $1.validatedKey() }
+        self.lifecycleIntents = lifecycleIntents.sorted { $0.conflictID.uuidString < $1.conflictID.uuidString }
+        try validate()
+    }
+
+    func encodedPayloadData() throws -> Data {
+        try validate()
+        return try SyncConvergenceStableEncoding.encode(self)
+    }
+
+    static func decodePayloadData(_ data: Data) throws -> Self {
+        let payload = try SyncConvergenceStableEncoding.decode(Self.self, from: data)
+        try payload.validate()
+        return payload
+    }
+
+    func decodedRecoveryTransitions() throws -> [SyncBatchAnchoredRecoveryStoreTransition] {
+        try anchoredRecoveryTransitions.map { try $0.decodedTransition() }
+    }
+
+    func validate() throws {
+        guard formatVersion == Self.supportedFormatVersion,
+              !lifecycleIntents.isEmpty else {
+            throw SyncConvergencePostCommitWorkPayloadError.unsupportedVersion
+        }
+        try legacyWorkPayload.validate()
+        let recoveryKeys = try anchoredRecoveryTransitions.map { try $0.validatedKey() }
+        guard recoveryKeys.count == Set(recoveryKeys).count else {
+            throw SyncConvergencePostCommitWorkPayloadError.duplicateAnchoredRecoveryTransitionKeys
+        }
+        var conflictIDs: Set<UUID> = []
+        var materializationIDs: Set<UUID> = []
+        for intent in lifecycleIntents {
+            try intent.validate()
+            guard conflictIDs.insert(intent.conflictID).inserted,
+                  materializationIDs.insert(intent.materializationID).inserted else {
+                throw SyncConvergencePostCommitWorkPayloadError.duplicateLifecycleIntentIDs
+            }
+        }
+    }
+}
+
 enum SyncConvergenceVersionedPostCommitWorkPayload {
     struct Decoded: Equatable, Sendable {
         let legacyWorkPayload: SyncConvergencePostCommitWorkPayloadV1
         let anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition]
+        let lifecycleIntents: [SyncLifecycleConflictIntent]
 
         func derivedInitialState() -> SyncConvergencePostCommitState {
             SyncConvergencePostCommitState(
                 queueCleanupPending: !legacyWorkPayload.queueCleanupBatchIDs.isEmpty,
                 legacyCleanupPending: legacyWorkPayload.legacyCleanupRequired,
-                presentationRefreshPending: !legacyWorkPayload.presentationEntries.isEmpty,
-                anchoredRecoveryPending: !anchoredRecoveryTransitions.isEmpty
+                presentationRefreshPending: !legacyWorkPayload.presentationEntries.isEmpty || !lifecycleIntents.isEmpty,
+                anchoredRecoveryPending: !anchoredRecoveryTransitions.isEmpty,
+                lifecycleMaterializationPending: !lifecycleIntents.isEmpty,
+                lifecyclePublicationPending: !lifecycleIntents.isEmpty
             )
         }
 
         func validateCurrentState(_ state: SyncConvergencePostCommitState) throws {
-            try legacyWorkPayload.validateCurrentState(state)
+            if state.queueCleanupPending && legacyWorkPayload.queueCleanupBatchIDs.isEmpty {
+                throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+            }
+            if state.legacyCleanupPending && !legacyWorkPayload.legacyCleanupRequired {
+                throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+            }
             if state.anchoredRecoveryPending && anchoredRecoveryTransitions.isEmpty {
+                throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+            }
+            if state.lifecycleMaterializationPending && lifecycleIntents.isEmpty {
+                throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+            }
+            if state.lifecyclePublicationPending && lifecycleIntents.isEmpty {
+                throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
+            }
+            if state.presentationRefreshPending && legacyWorkPayload.presentationEntries.isEmpty && lifecycleIntents.isEmpty {
                 throw SyncConvergencePostCommitWorkPayloadError.contradictoryState
             }
         }
@@ -584,8 +688,16 @@ enum SyncConvergenceVersionedPostCommitWorkPayload {
 
     static func encodedPayloadData(
         legacyWorkPayload: SyncConvergencePostCommitWorkPayloadV1,
-        anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition]
+        anchoredRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition],
+        lifecycleIntents: [SyncLifecycleConflictIntent] = []
     ) throws -> Data {
+        if !lifecycleIntents.isEmpty {
+            return try SyncConvergencePostCommitWorkPayloadV3(
+                legacyWorkPayload: legacyWorkPayload,
+                anchoredRecoveryTransitions: anchoredRecoveryTransitions,
+                lifecycleIntents: lifecycleIntents
+            ).encodedPayloadData()
+        }
         guard !anchoredRecoveryTransitions.isEmpty else {
             return try legacyWorkPayload.encodedPayloadData()
         }
@@ -601,13 +713,22 @@ enum SyncConvergenceVersionedPostCommitWorkPayload {
         case SyncConvergencePostCommitWorkPayloadV1.supportedFormatVersion:
             return Decoded(
                 legacyWorkPayload: try SyncConvergencePostCommitWorkPayloadV1.decodePayloadData(data),
-                anchoredRecoveryTransitions: []
+                anchoredRecoveryTransitions: [],
+                lifecycleIntents: []
             )
         case SyncConvergencePostCommitWorkPayloadV2.supportedFormatVersion:
             let payload = try SyncConvergencePostCommitWorkPayloadV2.decodePayloadData(data)
             return Decoded(
                 legacyWorkPayload: payload.legacyWorkPayload,
-                anchoredRecoveryTransitions: try payload.decodedRecoveryTransitions()
+                anchoredRecoveryTransitions: try payload.decodedRecoveryTransitions(),
+                lifecycleIntents: []
+            )
+        case SyncConvergencePostCommitWorkPayloadV3.supportedFormatVersion:
+            let payload = try SyncConvergencePostCommitWorkPayloadV3.decodePayloadData(data)
+            return Decoded(
+                legacyWorkPayload: payload.legacyWorkPayload,
+                anchoredRecoveryTransitions: try payload.decodedRecoveryTransitions(),
+                lifecycleIntents: payload.lifecycleIntents
             )
         default:
             throw SyncConvergencePostCommitWorkPayloadError.unsupportedVersion
@@ -660,6 +781,7 @@ enum SyncConvergencePostCommitWorkPayloadError: Error, Equatable {
     case contradictoryAnchoredRecoveryTransition
     case duplicatePresentationNoteIDs
     case duplicateOperationIndices
+    case duplicateLifecycleIntentIDs
     case contradictoryState
     case contradictoryPresentationEntry
 }

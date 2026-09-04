@@ -43,7 +43,8 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
                     postCommitStatePayloadData: root.postCommitStatePayloadData,
                     postCommitWorkPayload: workPayload?.legacyWorkPayload,
                     postCommitWorkPayloadData: root.postCommitWorkPayloadData,
-                    anchoredRecoveryTransitions: workPayload?.anchoredRecoveryTransitions ?? []
+                    anchoredRecoveryTransitions: workPayload?.anchoredRecoveryTransitions ?? [],
+                    lifecycleIntents: workPayload?.lifecycleIntents ?? []
                 ))
             } catch {
                 if let failure = error as? SyncConvergencePostCommitFailure {
@@ -145,13 +146,17 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
         let decodedWorkPayload = try reloaded.postCommitWorkPayloadData.map(
             SyncConvergenceVersionedPostCommitWorkPayload.decodePayloadData
         )
+        if let decodedWorkPayload {
+            try validateLifecycleIntents(decodedWorkPayload.lifecycleIntents, against: reloaded)
+        }
         return SyncConvergencePostCommitFullRootState(
             root: reloaded,
             postCommitState: reloadedState,
             postCommitStatePayloadData: encodedState,
             postCommitWorkPayload: decodedWorkPayload?.legacyWorkPayload,
             postCommitWorkPayloadData: reloaded.postCommitWorkPayloadData,
-            anchoredRecoveryTransitions: decodedWorkPayload?.anchoredRecoveryTransitions ?? []
+            anchoredRecoveryTransitions: decodedWorkPayload?.anchoredRecoveryTransitions ?? [],
+            lifecycleIntents: decodedWorkPayload?.lifecycleIntents ?? []
         )
     }
 
@@ -167,6 +172,7 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
             let payload = try SyncConvergenceVersionedPostCommitWorkPayload.decodePayloadData(data)
             try payload.validateCurrentState(state)
             try validateWorkPayload(payload.legacyWorkPayload, againstAuthoritativeRowsFor: root)
+            try validateLifecycleIntents(payload.lifecycleIntents, against: root)
             return payload
         } catch let failure as SyncConvergencePostCommitFailure {
             throw failure
@@ -176,8 +182,28 @@ final class SwiftDataSyncConvergencePostCommitStore: SyncConvergencePostCommitSt
             throw SyncConvergencePostCommitFailure.contradictoryPostCommitWorkPayload(batchID: root.batchID)
         } catch SyncConvergencePostCommitWorkPayloadError.duplicateAnchoredRecoveryTransitionKeys {
             throw SyncConvergencePostCommitFailure.contradictoryPostCommitWorkPayload(batchID: root.batchID)
+        } catch SyncConvergencePostCommitWorkPayloadError.duplicateLifecycleIntentIDs {
+            throw SyncConvergencePostCommitFailure.contradictoryPostCommitWorkPayload(batchID: root.batchID)
+        } catch SyncLifecycleConflictStoreError.contradictoryIdentity {
+            throw SyncConvergencePostCommitFailure.contradictoryPostCommitWorkPayload(batchID: root.batchID)
         } catch {
             throw SyncConvergencePostCommitFailure.malformedPostCommitWorkPayload(batchID: root.batchID)
+        }
+    }
+
+    private func validateLifecycleIntents(
+        _ intents: [SyncLifecycleConflictIntent],
+        against root: SyncConvergenceIncorporatedRootProjection
+    ) throws {
+        let sourceIdentity = SyncLifecycleSourceIncorporationIdentity(root.persistedIdentity)
+        for intent in intents {
+            try intent.validate()
+            guard intent.sourceIdentity == sourceIdentity,
+                  intent.identity.sourceBatchID == root.batchID,
+                  intent.identity.canonicalPayloadDigest == root.canonicalPayloadDigest,
+                  intent.identity.canonicalPayloadDigestFormatVersion == root.canonicalPayloadDigestFormatVersion else {
+                throw SyncConvergencePostCommitFailure.contradictoryPostCommitWorkPayload(batchID: root.batchID)
+            }
         }
     }
 
@@ -334,9 +360,7 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
                 $0.hasPendingPostCommitWork == true ||
                 $0.hasPendingPostCommitWork == nil
             },
-            sortBy: [
-                SortDescriptor(\.committedAt)
-            ]
+            sortBy: [SortDescriptor(\.committedAt)]
         )
         let candidates = try context.fetch(descriptor)
             .sorted {
@@ -362,7 +386,6 @@ extension SwiftDataSyncConvergencePostCommitStore: SyncConvergencePendingPostCom
         }
 
         guard !backfillAssignments.isEmpty else { return requests }
-        // The public loader uses a dedicated context; this guard proves phase one stayed read-only.
         guard !context.hasChanges else {
             throw SyncConvergencePostCommitFailure.persistence
         }
