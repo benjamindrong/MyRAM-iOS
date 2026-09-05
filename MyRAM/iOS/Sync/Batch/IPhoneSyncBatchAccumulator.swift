@@ -13,7 +13,7 @@ actor IPhoneSyncBatchAccumulator {
 
     init(
         originDeviceID: SyncBatchDeviceID,
-        quietWindow: TimeInterval = 3,
+        quietWindow: TimeInterval = MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() ? 0.25 : 3,
         batchIDProvider: @escaping @Sendable () -> SyncBatchID = { UUID() },
         batchSequenceProvider: (@Sendable () -> SyncBatchSequenceReservation)? = nil,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = { interval in
@@ -162,7 +162,7 @@ actor IPhoneSyncBatchAccumulator {
     }
 
     private func removeContinuation(id: UUID) {
-        continuations[id] = nil
+        continuations[streamID] = nil
     }
 
     private func scheduleReadyEmission(batchID: SyncBatchID?, readyAt: Date?) {
