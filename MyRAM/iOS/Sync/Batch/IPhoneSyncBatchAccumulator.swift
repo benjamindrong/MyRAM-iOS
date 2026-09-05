@@ -162,7 +162,7 @@ actor IPhoneSyncBatchAccumulator {
     }
 
     private func removeContinuation(id: UUID) {
-        continuations[streamID] = nil
+        continuations[id] = nil
     }
 
     private func scheduleReadyEmission(batchID: SyncBatchID?, readyAt: Date?) {
