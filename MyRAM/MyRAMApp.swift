@@ -15,6 +15,9 @@ struct MyRAMApp: App {
     private let usesBareTextViewProfiling = ProcessInfo.processInfo.arguments.contains("MYR_PROFILE_BARE_TEXTVIEW")
 
     init() {
+#if DEBUG && !targetEnvironment(macCatalyst)
+        MyRAMSyncBenchmarkEnduranceIOSIsolation.activateOrFailIfRequested()
+#endif
         let context = PersistenceManager.shared.context
         _notesState = StateObject(wrappedValue: NotesListState(context: context))
 #if !targetEnvironment(macCatalyst)
