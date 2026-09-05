@@ -3,6 +3,12 @@ import SwiftUI
 
 @main
 struct MyRAMMacApp: App {
+    init() {
+#if DEBUG
+        MyRAMSyncBenchmarkEnduranceMacIsolation.activateOrFailIfRequested()
+#endif
+    }
+
     var body: some Scene {
         WindowGroup {
             MyRAMMacAppRootFactory.makeRoot(
