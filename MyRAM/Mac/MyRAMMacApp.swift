@@ -66,6 +66,9 @@ private struct MyRAMMacProductionRoot: View {
             .environmentObject(widgetCoordinator)
             .onAppear {
                 widgetCoordinator.start()
+#if DEBUG
+                MyRAMSyncBenchmarkEnduranceMacDriver.shared.startIfNeeded()
+#endif
             }
     }
 }
