@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import MultipeerConnectivity
 
 actor IPhoneSyncBatchAccumulator {
     private let originDeviceID: SyncBatchDeviceID
@@ -191,6 +192,15 @@ private struct PendingBatch {
 }
 
 #if DEBUG && os(iOS)
+enum MyRAMSyncBenchmarkEnduranceIOSRoutingGate {
+    static func isReady(
+        connectedPeerDeviceIDs: [String],
+        ordinarySyncReady: (String) -> Bool
+    ) -> Bool {
+        connectedPeerDeviceIDs.contains(where: ordinarySyncReady)
+    }
+}
+
 @MainActor
 final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
     static let shared = MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver()
@@ -227,7 +237,7 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
     ) async {
         let recorder = MyRAMSyncBenchmarkEnduranceRecorder(runID: launch.runID, platform: .iOS)
         let startedAt = Date()
-        recorder.record(.launch, outcome: "accepted", detail: "durationSeconds=\(launch.durationSeconds);routingGate=v2")
+        recorder.record(.launch, outcome: "accepted", detail: "durationSeconds=\(launch.durationSeconds);routingGate=v3")
 
         guard await waitForBootstrapAndRoutingReady(state: state, timeoutSeconds: 60) else {
             finishFailure(
@@ -506,10 +516,19 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
     }
 
     private func ordinaryRoutingReady(state: NotesListState) -> Bool {
-        guard state.syncController.hasConnectedPeers else { return false }
-        return state.syncController.availablePeers.contains { peer in
-            state.syncController.isOrdinarySyncReadyForTesting(peerDeviceID: peer.deviceID)
+        let children = Mirror(reflecting: state.syncController).children
+        guard let session = children.first(where: { $0.label == "session" })?.value as? MCSession else {
+            return false
         }
+        let connectedPeerDeviceIDs = session.connectedPeers.map {
+            MyRAMPeerIdentity(peerID: $0).deviceID
+        }
+        return MyRAMSyncBenchmarkEnduranceIOSRoutingGate.isReady(
+            connectedPeerDeviceIDs: connectedPeerDeviceIDs,
+            ordinarySyncReady: { peerDeviceID in
+                state.syncController.isOrdinarySyncReadyForTesting(peerDeviceID: peerDeviceID)
+            }
+        )
     }
 
     private func benchmarkDigests(
