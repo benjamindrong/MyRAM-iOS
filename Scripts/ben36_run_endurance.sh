@@ -23,6 +23,7 @@ IOS_LAUNCH_JSON="$EVIDENCE_ROOT/ios-launch.json"
 IOS_POLL_RESULT="$EVIDENCE_ROOT/ios-result-poll.json"
 STATE_FILE="$EVIDENCE_ROOT/state.txt"
 MAC_PID=""
+MAC_LAUNCHER_PID=""
 IOS_PID=""
 IOS_BUNDLE_ID=""
 DEVICE_ID=""
@@ -45,6 +46,10 @@ cleanup() {
     kill "$MAC_PID" 2>/dev/null || true
     wait "$MAC_PID" 2>/dev/null || true
   fi
+  if [[ -n "$MAC_LAUNCHER_PID" ]] && kill -0 "$MAC_LAUNCHER_PID" 2>/dev/null; then
+    kill "$MAC_LAUNCHER_PID" 2>/dev/null || true
+    wait "$MAC_LAUNCHER_PID" 2>/dev/null || true
+  fi
   if [[ -n "$DEVICE_ID" && -n "$IOS_PID" ]]; then
     xcrun devicectl device process terminate --device "$DEVICE_ID" --pid "$IOS_PID" >/dev/null 2>&1 || true
   fi
@@ -59,7 +64,7 @@ record_stage preflight
 [[ "$DURATION_SECONDS" =~ ^[0-9]+$ ]] || fail "MYRAM_DURATION_SECONDS must be an integer"
 (( DURATION_SECONDS >= 300 && DURATION_SECONDS <= 900 )) || fail "duration must be between 300 and 900 seconds"
 
-for command in git xcodebuild xcrun python3 shasum /usr/libexec/PlistBuddy; do
+for command in git xcodebuild xcrun python3 shasum /usr/bin/open /usr/bin/pgrep /usr/libexec/PlistBuddy; do
   command -v "$command" >/dev/null 2>&1 || fail "required command not found: $command"
 done
 
@@ -131,14 +136,26 @@ IOS_BENCH_REL="Library/MyRAMSyncEndurance/$RUN_ID/Home/Library/Application Suppo
 IOS_RESULT_REL="$IOS_BENCH_REL/Endurance/$RUN_ID/endurance-result-iOS.json"
 
 record_stage launch
-(
-  export MYRAM_SYNC_BENCHMARK_LOGGING=1
-  export MYRAM_SYNC_BENCHMARK_RUN_ID="$RUN_ID"
-  export MYRAM_SYNC_BENCHMARK_ENDURANCE=1
-  export MYRAM_SYNC_BENCHMARK_ENDURANCE_SECONDS="$DURATION_SECONDS"
-  exec "$MAC_EXECUTABLE" UITEST_MODE
-) > "$LOG_DIR/macos-app.log" 2>&1 &
-MAC_PID=$!
+/usr/bin/open \
+  --new \
+  --wait-apps \
+  --stdout "$LOG_DIR/macos-app.log" \
+  --stderr "$LOG_DIR/macos-app.log" \
+  --env MYRAM_SYNC_BENCHMARK_LOGGING=1 \
+  --env MYRAM_SYNC_BENCHMARK_RUN_ID="$RUN_ID" \
+  --env MYRAM_SYNC_BENCHMARK_ENDURANCE=1 \
+  --env MYRAM_SYNC_BENCHMARK_ENDURANCE_SECONDS="$DURATION_SECONDS" \
+  "$MAC_APP" \
+  --args UITEST_MODE > "$LOG_DIR/macos-launch.txt" 2>&1 &
+MAC_LAUNCHER_PID=$!
+
+for _ in {1..20}; do
+  MAC_PID="$(/usr/bin/pgrep -f "$MAC_EXECUTABLE" | head -1 || true)"
+  [[ -n "$MAC_PID" ]] && break
+  kill -0 "$MAC_LAUNCHER_PID" 2>/dev/null || fail "macOS endurance app launch failed"
+  sleep 0.5
+done
+[[ -n "$MAC_PID" ]] || fail "macOS endurance app launch did not produce a process identifier"
 
 xcrun devicectl device process launch \
   --device "$DEVICE_ID" \
@@ -201,6 +218,10 @@ if kill -0 "$MAC_PID" 2>/dev/null; then
   wait "$MAC_PID" 2>/dev/null || true
 fi
 MAC_PID=""
+if kill -0 "$MAC_LAUNCHER_PID" 2>/dev/null; then
+  wait "$MAC_LAUNCHER_PID" 2>/dev/null || true
+fi
+MAC_LAUNCHER_PID=""
 
 mkdir -p "$IOS_EVIDENCE/SyncBenchmarks" "$MAC_EVIDENCE"
 xcrun devicectl device copy from \
