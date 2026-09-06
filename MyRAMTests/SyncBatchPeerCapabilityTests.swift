@@ -20,6 +20,17 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertFalse(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
     }
 
+    func testDiscoveryFallbackDoesNotDowngradeV2BoundToLiveSession() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordDiscoveryValue("1,2", forPeerDeviceID: "peer")
+        registry.bindCurrentCapabilityToSession(forPeerDeviceID: "peer")
+
+        registry.recordDiscoveryValue(nil, forPeerDeviceID: "peer")
+        registry.bindCurrentCapabilityToSession(forPeerDeviceID: "peer")
+
+        XCTAssertTrue(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+    }
+
     func testCanonicalEncoding() throws {
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.encode(.v1Only),

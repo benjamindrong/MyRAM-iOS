@@ -273,9 +273,15 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
 
     mutating func bindCurrentCapabilityToSession(forPeerDeviceID peerDeviceID: String) {
         if evidenceByPeerDeviceID[peerDeviceID] != nil {
-            sessionCapabilityByPeerDeviceID[peerDeviceID] = negotiatedCapability(
-                forPeerDeviceID: peerDeviceID
-            )
+            let negotiated = negotiatedCapability(forPeerDeviceID: peerDeviceID)
+            let bound = sessionCapabilityByPeerDeviceID[peerDeviceID]
+            // Discovery callbacks are independent of the live MCSession and can
+            // later omit discoveryInfo. Once V2 was positively bound to this
+            // session, that browser fallback must not revoke it. A later positive
+            // observation may still upgrade an initially conservative binding.
+            if bound?.supportsV2 != true || negotiated.supportsV2 {
+                sessionCapabilityByPeerDeviceID[peerDeviceID] = negotiated
+            }
         }
         if bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported {
             bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] = .v1Supported
