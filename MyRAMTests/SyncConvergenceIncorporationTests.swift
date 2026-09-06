@@ -1,6 +1,7 @@
 import XCTest
 import SwiftData
 import CryptoKit
+import AnchoredSequenceCore
 #if os(macOS)
 @testable import MyRAMMac
 #else
@@ -8,6 +9,76 @@ import CryptoKit
 #endif
 
 final class SyncConvergenceIncorporationTests: XCTestCase {
+    func testBEN36SwiftDataIncorporatesCreatedNoteWithAnchoredBodyInsert() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000036101")
+        let deviceID = uuid("00000000-0000-0000-0000-000000036102")
+        let createdAt = date(1)
+        let modifiedAt = date(2)
+        let initialState = try NoteSequenceStateBootstrapAdapter.makeInitialState(
+            noteID: noteID,
+            body: ""
+        )
+        let anchoredInsert = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 0,
+            text: "Body",
+            modifiedAt: modifiedAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            operationID: SyncOperationID(deviceID: deviceID, localCounter: 0),
+            state: initialState
+        )
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000036103"),
+            originDeviceID: deviceID,
+            createdAt: modifiedAt,
+            batchSequence: 1,
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "",
+                    body: "",
+                    folderID: nil,
+                    createdAt: createdAt,
+                    modifiedAt: createdAt
+                )),
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteID,
+                    title: "Title",
+                    modifiedAt: modifiedAt
+                )),
+                anchoredInsert
+            ]
+        )
+        let planning = SyncConvergencePlanner().plan(input: SyncConvergencePlanningInput(
+            incomingBatch: batch,
+            anchoredRecoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot(
+                records: [],
+                health: .healthy
+            )
+        ))
+        guard case .planned(let input) = planning else {
+            return XCTFail("Expected planned batch, got \(planning)")
+        }
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: input,
+            transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
+            committedAt: date(3)
+        )
+
+        guard case .incorporated = outcome else {
+            return XCTFail("Expected incorporation, got \(outcome)")
+        }
+        let note = try XCTUnwrap(context.fetch(FetchDescriptor<Note>()).first)
+        XCTAssertEqual(note.title, "Title")
+        XCTAssertEqual(note.content, "Body")
+    }
+
     func testDivergedLifecycleDeleteIncorporatesWithoutChangingDeletedAt() {
         let noteID = uuid("00000000-0000-0000-0000-000000165201")
         let initial = SyncConvergenceMutableNoteRecord(

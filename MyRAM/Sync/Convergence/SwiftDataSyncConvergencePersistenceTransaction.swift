@@ -3,13 +3,14 @@ import SwiftData
 
 final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersistenceTransaction {
     private let context: ModelContext
+    private var stagedNotesByID: [UUID: Note] = [:]
 
     init(context: ModelContext) {
         self.context = context
     }
 
     func loadNote(id: UUID) throws -> SyncConvergenceMutableNoteRecord? {
-        try fetchOne(Note.self, #Predicate { $0.id == id }).map {
+        try note(id: id).map {
             SyncConvergenceMutableNoteRecord(
                 noteID: $0.id,
                 folderID: $0.folder?.id,
@@ -39,11 +40,12 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
             in: context
         )
         note.folder = destinationFolder
+        stagedNotesByID[record.noteID] = note
     }
 
     func updateNote(_ record: SyncConvergenceUpdatedNoteRecord) throws {
         let noteID = record.noteID
-        guard let note = try fetchOne(Note.self, #Predicate { $0.id == noteID }) else {
+        guard let note = try note(id: noteID) else {
             throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: record.noteID)
         }
         let clearsRichText = note.content != record.body
@@ -66,7 +68,7 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
 
     func updateAnchoredNote(_ record: SyncConvergenceAnchoredUpdatedNoteRecord) throws {
         let noteID = record.noteID
-        guard let note = try fetchOne(Note.self, #Predicate { $0.id == noteID }),
+        guard let note = try note(id: noteID),
               note.content == record.expectedSnapshot.body else {
             throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: noteID)
         }
@@ -330,10 +332,19 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
 
     func save() throws {
         try context.save()
+        stagedNotesByID.removeAll()
     }
 
     func rollback() {
         context.rollback()
+        stagedNotesByID.removeAll()
+    }
+
+    private func note(id: UUID) throws -> Note? {
+        if let staged = stagedNotesByID[id] {
+            return staged
+        }
+        return try fetchOne(Note.self, #Predicate { $0.id == id })
     }
 
     private func folder(id: UUID?) throws -> Folder? {
