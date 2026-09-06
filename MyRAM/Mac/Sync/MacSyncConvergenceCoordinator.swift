@@ -158,9 +158,9 @@ final class MacSyncConvergenceCoordinator {
 
 @MainActor
 final class MacSyncIncomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter {
-    private let surface: MacSyncIncomingLocalBoundarySurface
+    private let surface: MacSyncConvergencePresentationSurface
 
-    init(surface: MacSyncIncomingLocalBoundarySurface) {
+    init(surface: MacSyncConvergencePresentationSurface) {
         self.surface = surface
     }
 
@@ -215,7 +215,7 @@ struct MacIncomingBoundaryPreparer {
     let takePendingObligation: (UUID) async -> SyncConvergenceLocalObligation?
 
     func prepare(affecting noteIDs: Set<UUID>) async -> MacIncomingBoundaryResult {
-        for noteID in affectingNoteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+        for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             if selectedNoteID() == noteID, hasUnsavedChanges() {
                 let result = await saveSelectedNoteForBoundary(noteID)
                 switch result {
