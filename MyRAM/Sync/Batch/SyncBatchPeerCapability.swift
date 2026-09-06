@@ -177,6 +177,8 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
 
     private var evidenceByPeerDeviceID:
         [String: [EvidenceSource: NormalizedEvidence]] = [:]
+    private var sessionCapabilityByPeerDeviceID:
+        [String: SyncBatchPeerCapability] = [:]
     private var bootstrapDiscoveryEvidenceByPeerDeviceID:
         [String: BootstrapCapabilityEvidence] = [:]
     private var bootstrapSessionEvidenceByPeerDeviceID:
@@ -244,6 +246,7 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
 
     mutating func clearEvidence(forPeerDeviceID peerDeviceID: String) {
         evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        sessionCapabilityByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
@@ -262,13 +265,29 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
     func effectiveCapability(
         forPeerDeviceID peerDeviceID: String
     ) -> SyncBatchPeerCapability {
-        guard let evidence = evidenceByPeerDeviceID[peerDeviceID],
-              let first = evidence.values.first else {
+        if let sessionCapability = sessionCapabilityByPeerDeviceID[peerDeviceID] {
+            return sessionCapability
+        }
+        return negotiatedCapability(forPeerDeviceID: peerDeviceID)
+    }
+
+    mutating func bindCurrentCapabilityToSession(forPeerDeviceID peerDeviceID: String) {
+        guard evidenceByPeerDeviceID[peerDeviceID] != nil else { return }
+        sessionCapabilityByPeerDeviceID[peerDeviceID] = negotiatedCapability(
+            forPeerDeviceID: peerDeviceID
+        )
+    }
+
+    private func negotiatedCapability(
+        forPeerDeviceID peerDeviceID: String
+    ) -> SyncBatchPeerCapability {
+        let capabilities = evidenceByPeerDeviceID[peerDeviceID]?.values.map(\.capability) ?? []
+        guard let first = capabilities.first else {
             return .v1Only
         }
 
-        return evidence.values.dropFirst().reduce(first.capability) {
-            $0.intersecting($1.capability)
+        return capabilities.dropFirst().reduce(first) {
+            $0.intersecting($1)
         }
     }
 

@@ -873,6 +873,9 @@ extension MacSyncBatchController: MCSessionDelegate {
                 handlePeerDisconnect(peerDeviceID: identity.deviceID)
             }
             if state == .connected {
+                peerCapabilityRegistry.bindCurrentCapabilityToSession(
+                    forPeerDeviceID: identity.deviceID
+                )
                 remember(peerID)
                 sendBootstrapCapabilityAnnouncement(to: peerID)
                 beginBootstrap(to: peerID)
@@ -1012,6 +1015,9 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
                 bootstrapCapabilityResolutionTasks.removeValue(forKey: identity.deviceID)?.cancel()
             }
             if connectedPeersProvider().contains(peerID) {
+                peerCapabilityRegistry.bindCurrentCapabilityToSession(
+                    forPeerDeviceID: identity.deviceID
+                )
                 if peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                     forPeerDeviceID: identity.deviceID
                 ) {

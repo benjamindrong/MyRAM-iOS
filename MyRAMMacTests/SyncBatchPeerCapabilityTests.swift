@@ -8,6 +8,22 @@ import XCTest
 final class SyncBatchPeerCapabilityTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
+    func testDiscoveryLossPreservesV2CapabilityBoundToLiveSession() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordDiscoveryValue(nil, forPeerDeviceID: "peer")
+        registry.bindCurrentCapabilityToSession(forPeerDeviceID: "peer")
+        XCTAssertFalse(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+
+        registry.recordDiscoveryValue("1,2", forPeerDeviceID: "peer")
+        registry.bindCurrentCapabilityToSession(forPeerDeviceID: "peer")
+
+        registry.clearDiscoveryEvidence(forPeerDeviceID: "peer")
+
+        XCTAssertTrue(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+        registry.clearEvidence(forPeerDeviceID: "peer")
+        XCTAssertFalse(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+    }
+
     func testCanonicalEncoding() throws {
         XCTAssertEqual(SyncBatchPeerCapabilityCodec.encode(.v1Only), "1")
         XCTAssertEqual(SyncBatchPeerCapabilityCodec.encode(.v2Only), "2")

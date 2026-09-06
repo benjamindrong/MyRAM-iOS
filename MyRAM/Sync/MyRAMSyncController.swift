@@ -1380,6 +1380,9 @@ extension MyRAMSyncController: MCSessionDelegate {
             }
 
             if state == .connected {
+                peerCapabilityRegistry.bindCurrentCapabilityToSession(
+                    forPeerDeviceID: identity.deviceID
+                )
                 rememberTrustedPeer(peerID)
                 await sendBootstrapCapabilityAnnouncement(to: peerID)
                 await beginBootstrap(to: peerID)
@@ -1596,6 +1599,9 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
                 bootstrapCapabilityResolutionTasks.removeValue(forKey: identity.deviceID)?.cancel()
             }
             if (await transport.connectedPeers()).contains(peerID) {
+                peerCapabilityRegistry.bindCurrentCapabilityToSession(
+                    forPeerDeviceID: identity.deviceID
+                )
                 if peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                     forPeerDeviceID: identity.deviceID
                 ) {
