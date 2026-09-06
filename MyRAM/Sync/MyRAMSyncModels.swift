@@ -1126,8 +1126,10 @@ final class MyRAMSyncBenchmarkEnduranceIOSDriver {
 @MainActor
 final class MyRAMSyncBenchmarkEnduranceMacDriver {
     static let shared = MyRAMSyncBenchmarkEnduranceMacDriver()
+    private static let invitationRetryInterval: TimeInterval = 12
     private var task: Task<Void, Never>?
     private var convergenceCoordinator: MacSyncConvergenceCoordinator?
+    private var lastInvitationAt: Date?
 
     private init() {}
 
@@ -1253,6 +1255,10 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
                     outcome: networkEnabled ? "resumed" : "suspended",
                     detail: "elapsedSeconds=\(elapsedSeconds)"
                 )
+            }
+
+            if networkEnabled, !controller.hasConnectedPeers {
+                inviteMacPeerIfDue(controller: controller)
             }
 
             let noteID = noteIDs[operation % noteIDs.count]
@@ -1386,8 +1392,7 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
         while Date() < deadline, !Task.isCancelled {
             if controller.hasConnectedPeers { return true }
-            // The iPhone is the sole endurance-session initiator. Mac remains the
-            // accepting peer so simultaneous repeated invitations cannot churn MCSession.
+            inviteMacPeerIfDue(controller: controller)
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         return false
@@ -1401,6 +1406,9 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         var stableZeroSamples = 0
         var lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
         while Date() < deadline, !Task.isCancelled {
+            if !controller.hasConnectedPeers {
+                inviteMacPeerIfDue(controller: controller)
+            }
             lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
             if lastDepth == 0 && controller.hasConnectedPeers {
                 stableZeroSamples += 1
@@ -1411,6 +1419,17 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
         return lastDepth
+    }
+
+    private func inviteMacPeerIfDue(controller: MacSyncBatchController) {
+        let now = Date()
+        if let lastInvitationAt,
+           now.timeIntervalSince(lastInvitationAt) < Self.invitationRetryInterval {
+            return
+        }
+        guard let peer = controller.availablePeers.first else { return }
+        lastInvitationAt = now
+        controller.invite(peer)
     }
 
     private func finishFailure(
