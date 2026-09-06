@@ -15,7 +15,7 @@ actor MacSyncBatchAccumulator {
 
     init(
         originDeviceID: MacSyncDeviceID,
-        quietWindow: TimeInterval = 3,
+        quietWindow: TimeInterval = MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() ? 0.25 : 3,
         batchIDProvider: @escaping @Sendable () -> MacSyncBatchID = { UUID() },
         batchSequenceProvider: (@Sendable () -> SyncBatchSequenceReservation)? = nil,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = { interval in

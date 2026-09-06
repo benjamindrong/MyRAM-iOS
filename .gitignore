@@ -9,6 +9,7 @@ build/
 *.swp
 *.DS_Store
 Implementation Docs/
+.local-completion/
 
 # Swift Package Manager
 .build/
