@@ -2,6 +2,7 @@
 set -euo pipefail
 
 EXPECTED_BRANCH="BEN-36-MyRAM-sync-endurance-harness"
+BASE_SHA="6f61235ec67876c26d3af045e1eeabd81aefc12f"
 DURATION_SECONDS="${MYRAM_DURATION_SECONDS:-720}"
 RUN_ID="${MYRAM_RUN_ID:-BEN36-$(date -u +%Y%m%dT%H%M%SZ)}"
 EXPECTED_HEAD="${MYRAM_EXPECTED_HEAD:-}"
@@ -25,6 +26,7 @@ MAC_PID=""
 IOS_PID=""
 IOS_BUNDLE_ID=""
 DEVICE_ID=""
+XCODE_DEVICE_ID=""
 
 fail() {
   echo "ERROR: $*" >&2
@@ -66,15 +68,16 @@ CURRENT_HEAD="$(git rev-parse HEAD)"
 [[ "$CURRENT_BRANCH" == "$EXPECTED_BRANCH" ]] || fail "expected branch $EXPECTED_BRANCH, found $CURRENT_BRANCH"
 [[ "$CURRENT_HEAD" == "$EXPECTED_HEAD" ]] || fail "expected head $EXPECTED_HEAD, found $CURRENT_HEAD"
 [[ -z "$(git status --porcelain)" ]] || fail "working tree must be clean"
+git merge-base --is-ancestor "$BASE_SHA" "$CURRENT_HEAD" || fail "current head does not descend from approved base $BASE_SHA"
 python3 -m py_compile Scripts/ben36_validate_endurance.py
 
-git diff --check "$EXPECTED_HEAD^" "$EXPECTED_HEAD" > "$LOG_DIR/git-diff-check.txt" 2>&1 || fail "git diff --check failed"
+git diff --check "$BASE_SHA" "$CURRENT_HEAD" > "$LOG_DIR/git-diff-check.txt" 2>&1 || fail "git diff --check failed"
 xcodebuild -version > "$LOG_DIR/xcode-version.txt"
 xcrun devicectl --version > "$LOG_DIR/devicectl-version.txt" 2>&1 || true
 
 record_stage resolve-device
 xcrun devicectl list devices --json-output "$DEVICE_JSON" > "$LOG_DIR/devicectl-list.txt" 2>&1 || fail "devicectl could not list devices"
-DEVICE_ID="$(python3 - "$DEVICE_JSON" "$REQUESTED_DEVICE_ID" <<'PY'
+DEVICE_RECORD="$(python3 - "$DEVICE_JSON" "$REQUESTED_DEVICE_ID" <<'PY'
 import json, sys
 path, requested = sys.argv[1], sys.argv[2]
 obj = json.load(open(path, encoding='utf-8'))
@@ -86,7 +89,8 @@ def value(d, *paths):
         ok = True
         for part in path.split('.'):
             if not isinstance(cur, dict) or part not in cur:
-                ok = False; break
+                ok = False
+                break
             cur = cur[part]
         if ok and cur not in (None, ''):
             return cur
@@ -97,39 +101,42 @@ for d in devices:
     if not isinstance(d, dict):
         continue
     identifier = str(d.get('identifier', ''))
+    udid = str(value(d, 'properties.udid', 'hardwareProperties.udid') or identifier)
     name = str(value(d, 'properties.name', 'deviceProperties.name') or 'unknown')
     platform = str(value(d, 'properties.platform', 'hardwareProperties.platform') or '')
     product = str(value(d, 'properties.productType', 'hardwareProperties.productType') or '')
-    tunnel = str(value(d, 'properties.tunnelState', 'connectionProperties.tunnelState') or '')
     pairing = str(value(d, 'properties.pairingState', 'connectionProperties.pairingState') or '')
+    visibility = str(value(d, 'properties.state.visibilityClass', 'visibilityClass') or '')
     looks_ios = 'ios' in platform.lower() or product.lower().startswith('iphone')
-    available = tunnel in ('connected', 'available', '') and pairing in ('paired', '')
-    if looks_ios and available and identifier:
-        candidates.append((identifier, name))
+    visible = visibility in ('', 'default')
+    paired = pairing in ('', 'paired')
+    if looks_ios and visible and paired and identifier:
+        candidates.append((identifier, udid, name))
 
 if requested:
-    matches = [item for item in candidates if item[0] == requested or item[1] == requested]
+    matches = [item for item in candidates if requested in item]
     if len(matches) != 1:
-        print('')
         sys.exit(3)
-    print(matches[0][0])
+    print('\t'.join(matches[0]))
     sys.exit(0)
 
 if len(candidates) != 1:
-    print('')
     sys.exit(4)
-print(candidates[0][0])
+print('\t'.join(candidates[0]))
 PY
 )" || fail "could not resolve exactly one available physical iPhone; set MYRAM_DEVICE_ID if multiple devices are present"
-[[ -n "$DEVICE_ID" ]] || fail "no available physical iPhone resolved"
+IFS=$'\t' read -r DEVICE_ID XCODE_DEVICE_ID DEVICE_NAME <<< "$DEVICE_RECORD"
+[[ -n "$DEVICE_ID" && -n "$XCODE_DEVICE_ID" ]] || fail "no available physical iPhone resolved"
 printf '%s\n' "$DEVICE_ID" > "$EVIDENCE_ROOT/device-id.txt"
+printf '%s\n' "$XCODE_DEVICE_ID" > "$EVIDENCE_ROOT/xcode-device-id.txt"
+printf '%s\n' "$DEVICE_NAME" > "$EVIDENCE_ROOT/device-name.txt"
 
 record_stage build
 xcodebuild \
   -project MyRAM.xcodeproj \
   -scheme MyRAM \
   -configuration Debug \
-  -destination "id=$DEVICE_ID" \
+  -destination "id=$XCODE_DEVICE_ID" \
   -derivedDataPath "$DERIVED_DATA" \
   build > "$LOG_DIR/xcodebuild-ios.log" 2>&1 || fail "iOS Debug build failed"
 
@@ -284,15 +291,16 @@ python3 Scripts/ben36_validate_endurance.py \
     fail "deterministic cross-device validation failed"
   }
 
-python3 - "$EVIDENCE_ROOT/metadata.json" "$RUN_ID" "$DURATION_SECONDS" "$CURRENT_HEAD" "$DEVICE_ID" "$IOS_BUNDLE_ID" <<'PY'
+python3 - "$EVIDENCE_ROOT/metadata.json" "$RUN_ID" "$DURATION_SECONDS" "$CURRENT_HEAD" "$DEVICE_ID" "$XCODE_DEVICE_ID" "$IOS_BUNDLE_ID" <<'PY'
 import json, platform, sys
-out, run_id, duration, head, device, bundle = sys.argv[1:]
+out, run_id, duration, head, device, xcode_device, bundle = sys.argv[1:]
 metadata = {
     'schemaVersion': 1,
     'runID': run_id,
     'durationSeconds': int(duration),
     'gitHead': head,
     'deviceIdentifier': device,
+    'xcodeDestinationIdentifier': xcode_device,
     'iOSBundleIdentifier': bundle,
     'host': platform.platform(),
 }
