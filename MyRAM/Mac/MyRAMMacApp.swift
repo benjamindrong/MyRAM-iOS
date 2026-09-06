@@ -7,7 +7,7 @@ struct MyRAMMacApp: App {
 #if DEBUG
         MyRAMSyncBenchmarkEnduranceMacIsolation.activateOrFailIfRequested()
         if MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() {
-            MyRAMSyncBenchmarkEnduranceMacDriver.shared.startIfNeeded()
+            MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver.shared.startIfNeeded()
         }
 #endif
     }
