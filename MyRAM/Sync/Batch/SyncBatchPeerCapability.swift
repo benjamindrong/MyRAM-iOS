@@ -272,10 +272,14 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
     }
 
     mutating func bindCurrentCapabilityToSession(forPeerDeviceID peerDeviceID: String) {
-        guard evidenceByPeerDeviceID[peerDeviceID] != nil else { return }
-        sessionCapabilityByPeerDeviceID[peerDeviceID] = negotiatedCapability(
-            forPeerDeviceID: peerDeviceID
-        )
+        if evidenceByPeerDeviceID[peerDeviceID] != nil {
+            sessionCapabilityByPeerDeviceID[peerDeviceID] = negotiatedCapability(
+                forPeerDeviceID: peerDeviceID
+            )
+        }
+        if bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported {
+            bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] = .v1Supported
+        }
     }
 
     private func negotiatedCapability(

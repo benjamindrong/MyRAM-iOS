@@ -239,6 +239,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         await Task.yield()
 
         XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "invited-v2"))
+        XCTAssertTrue(controller.isBootstrapCapabilityResolvedForTesting(peerDeviceID: "invited-v2"))
     }
 
     func testLateBootstrapAnnouncementSupersedesSessionFallback() {
