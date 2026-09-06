@@ -17,8 +17,7 @@ extension MacSyncBatchController {
 
         let children = Mirror(reflecting: self).children
         guard let session = children.first(where: { $0.label == "session" })?.value as? MCSession,
-              let advertiser = children.first(where: { $0.label == "advertiser" })?.value as? MCNearbyServiceAdvertiser,
-              let browser = children.first(where: { $0.label == "browser" })?.value as? MCNearbyServiceBrowser else {
+              let advertiser = children.first(where: { $0.label == "advertiser" })?.value as? MCNearbyServiceAdvertiser else {
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .peerObserved,
                 outcome: "enduranceNetworkControlUnavailable"
@@ -28,10 +27,8 @@ extension MacSyncBatchController {
 
         if enabled {
             advertiser.startAdvertisingPeer()
-            browser.startBrowsingForPeers()
         } else {
             advertiser.stopAdvertisingPeer()
-            browser.stopBrowsingForPeers()
             session.disconnect()
         }
         return true

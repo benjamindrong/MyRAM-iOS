@@ -1075,6 +1075,10 @@ final class MacSyncBatchControllerTests: XCTestCase {
             source.contains("controller.invite("),
             "the BEN-36 Mac driver must advertise and accept while iOS owns reconnect initiation"
         )
+        XCTAssertFalse(
+            source.contains("browser.stopBrowsingForPeers()"),
+            "the BEN-36 outage must not cancel the live browser; CFNetwork can assert while cancelling it"
+        )
     }
 
     func testSyncTargetMembershipIncludesSharedCaptureAndMacPresentationTests() throws {
