@@ -1061,6 +1061,22 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertFalse(coordinatorSource.contains("kind: .corruptHistory"))
     }
 
+    func testBEN36MacDriverLeavesReconnectInitiationToIOS() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        try ProtectedRepositoryAuditPolicy.skipIfNeeded(repositoryURL: repo)
+        let source = try String(
+            contentsOf: repo.appendingPathComponent("MyRAM/Mac/Sync/MacSyncSeenBatchStore.swift"),
+            encoding: .utf8
+        )
+
+        XCTAssertFalse(
+            source.contains("controller.invite("),
+            "the BEN-36 Mac driver must advertise and accept while iOS owns reconnect initiation"
+        )
+    }
+
     func testSyncTargetMembershipIncludesSharedCaptureAndMacPresentationTests() throws {
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
