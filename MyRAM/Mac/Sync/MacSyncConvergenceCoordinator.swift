@@ -158,9 +158,9 @@ final class MacSyncConvergenceCoordinator {
 
 @MainActor
 final class MacSyncIncomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter {
-    private let surface: MacSyncConvergencePresentationSurface
+    private let surface: MacSyncIncomingLocalBoundarySurface
 
-    init(surface: MacSyncConvergencePresentationSurface) {
+    init(surface: MacSyncIncomingLocalBoundarySurface) {
         self.surface = surface
     }
 
