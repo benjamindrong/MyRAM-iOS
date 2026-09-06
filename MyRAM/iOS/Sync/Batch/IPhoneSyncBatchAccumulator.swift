@@ -242,7 +242,11 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
         let startedAt = Date()
         recorder.record(.launch, outcome: "accepted", detail: "durationSeconds=\(launch.durationSeconds);routingGate=v3")
 
-        guard await waitForBootstrapAndRoutingReady(state: state, timeoutSeconds: 60) else {
+        guard await waitForBootstrapAndRoutingReady(
+            state: state,
+            recorder: recorder,
+            timeoutSeconds: 60
+        ) else {
             finishFailure(
                 recorder: recorder,
                 launch: launch,
@@ -473,10 +477,22 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
 
     private func waitForBootstrapAndRoutingReady(
         state: NotesListState,
+        recorder: MyRAMSyncBenchmarkEnduranceRecorder,
         timeoutSeconds: Int
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        var lastProbe: String?
         while Date() < deadline, !Task.isCancelled {
+            let probe = initialRoutingProbe(state: state)
+            if probe != lastProbe {
+                recorder.record(
+                    .phase,
+                    phase: "initialRoutingProbe",
+                    outcome: "waiting",
+                    detail: probe
+                )
+                lastProbe = probe
+            }
             if state.bootstrapState == .ready,
                state.syncController.hasConnectedPeers,
                ordinaryRoutingReady(state: state) {
@@ -490,6 +506,24 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         return false
+    }
+
+    private func initialRoutingProbe(state: NotesListState) -> String {
+        let children = Mirror(reflecting: state.syncController).children
+        let connectedPeerDeviceIDs = (children.first { $0.label == "session" }?.value as? MCSession)?
+            .connectedPeers
+            .map { MyRAMPeerIdentity(peerID: $0).deviceID }
+            ?? []
+        let peerStates = connectedPeerDeviceIDs.sorted().map { peerDeviceID in
+            let ordinary = state.syncController.isOrdinarySyncReadyForTesting(
+                peerDeviceID: peerDeviceID
+            )
+            let v2 = state.syncController.hasExplicitPeerV2Support(
+                forPeerDeviceID: peerDeviceID
+            )
+            return "\(peerDeviceID):ordinary=\(ordinary),v2=\(v2)"
+        }.joined(separator: "|")
+        return "startup=\(state.bootstrapState);connected=\(connectedPeerDeviceIDs.count);\(peerStates)"
     }
 
     private func waitForIOSDrain(
