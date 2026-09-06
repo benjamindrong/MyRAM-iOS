@@ -235,6 +235,11 @@ enum MyRAMSyncBenchmarkEventType: String, Codable, Sendable {
     case batchAcknowledgementSent
     case batchAcknowledgementSendFailed
     case batchAcknowledgementReceived
+    case bootstrapSnapshotSent
+    case bootstrapSnapshotReceived
+    case bootstrapSnapshotApplyFailed
+    case bootstrapAcknowledgementSent
+    case bootstrapAcknowledgementReceived
 }
 
 struct MyRAMSyncBenchmarkEvent: Codable, Equatable, Sendable {

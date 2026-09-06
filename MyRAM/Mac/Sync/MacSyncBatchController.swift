@@ -579,6 +579,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 payload: payload
             )
             try sendBatchDataOperation(data, [peerID], .reliable)
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .bootstrapSnapshotSent,
+                peerDeviceID: identity.deviceID,
+                itemCount: state.snapshot.notes.count,
+                outcome: String(describing: state.snapshot.id),
+                detail: "retryAttempt=\(state.retryAttempt)"
+            )
             lastErrorMessage = nil
         } catch {
             lastErrorMessage = "Unable to send nearby bootstrap state."
@@ -629,10 +636,23 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         _ snapshot: SyncPeerBootstrapSnapshot,
         from peerID: MCPeerID
     ) async {
+        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .bootstrapSnapshotReceived,
+            peerDeviceID: peerDeviceID,
+            itemCount: snapshot.notes.count,
+            outcome: String(describing: snapshot.id)
+        )
         let disposition: SyncPeerBootstrapApplyDisposition
         do {
             disposition = try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: context)
         } catch {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .bootstrapSnapshotApplyFailed,
+                peerDeviceID: peerDeviceID,
+                outcome: String(describing: snapshot.id),
+                detail: String(describing: error)
+            )
             lastErrorMessage = "Unable to apply nearby bootstrap state."
             return
         }
@@ -652,6 +672,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 payload: payload
             )
             try sendBatchDataOperation(data, [peerID], .reliable)
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .bootstrapAcknowledgementSent,
+                peerDeviceID: peerDeviceID,
+                itemCount: acknowledgement.coveredBatchIDs.count,
+                outcome: String(describing: acknowledgement.snapshotID)
+            )
         } catch {
             lastErrorMessage = "Unable to confirm nearby bootstrap state."
             return
@@ -666,6 +692,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         from peerID: MCPeerID
     ) async {
         let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .bootstrapAcknowledgementReceived,
+            peerDeviceID: deviceID,
+            itemCount: acknowledgement.coveredBatchIDs.count,
+            outcome: String(describing: acknowledgement.snapshotID)
+        )
         guard var state = bootstrapStateByPeerDeviceID[deviceID],
               state.snapshotID == acknowledgement.snapshotID,
               acknowledgement.coveredBatchIDs.isSubset(of: state.coveredBatchIDs) else { return }
