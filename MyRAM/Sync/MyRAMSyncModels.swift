@@ -1255,12 +1255,6 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
                 )
             }
 
-            if networkEnabled,
-               !controller.hasConnectedPeers,
-               let peer = controller.availablePeers.first {
-                controller.invite(peer)
-            }
-
             let noteID = noteIDs[operation % noteIDs.count]
             attempted += 1
             do {
@@ -1392,9 +1386,8 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
         while Date() < deadline, !Task.isCancelled {
             if controller.hasConnectedPeers { return true }
-            if let peer = controller.availablePeers.first {
-                controller.invite(peer)
-            }
+            // The iPhone is the sole endurance-session initiator. Mac remains the
+            // accepting peer so simultaneous repeated invitations cannot churn MCSession.
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         return false
@@ -1408,10 +1401,6 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         var stableZeroSamples = 0
         var lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
         while Date() < deadline, !Task.isCancelled {
-            if !controller.hasConnectedPeers,
-               let peer = controller.availablePeers.first {
-                controller.invite(peer)
-            }
             lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
             if lastDepth == 0 && controller.hasConnectedPeers {
                 stableZeroSamples += 1
