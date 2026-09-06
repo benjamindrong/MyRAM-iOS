@@ -41,9 +41,12 @@ extension MacSyncBatchController {
 enum MyRAMSyncBenchmarkEnduranceMacRoutingGate {
     static func isReady(
         connectedPeerDeviceIDs: [String],
-        ordinarySyncReady: (String) -> Bool
+        ordinarySyncReady: (String) -> Bool,
+        hasExplicitV2Support: (String) -> Bool
     ) -> Bool {
-        connectedPeerDeviceIDs.contains(where: ordinarySyncReady)
+        connectedPeerDeviceIDs.contains {
+            ordinarySyncReady($0) && hasExplicitV2Support($0)
+        }
     }
 }
 
@@ -465,6 +468,9 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver {
             connectedPeerDeviceIDs: connectedPeerDeviceIDs,
             ordinarySyncReady: { peerDeviceID in
                 controller.bootstrapStateForTesting(peerDeviceID: peerDeviceID)?.ordinarySyncReady == true
+            },
+            hasExplicitV2Support: { peerDeviceID in
+                controller.hasExplicitPeerV2Support(forPeerDeviceID: peerDeviceID)
             }
         )
     }

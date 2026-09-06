@@ -195,9 +195,12 @@ private struct PendingBatch {
 enum MyRAMSyncBenchmarkEnduranceIOSRoutingGate {
     static func isReady(
         connectedPeerDeviceIDs: [String],
-        ordinarySyncReady: (String) -> Bool
+        ordinarySyncReady: (String) -> Bool,
+        hasExplicitV2Support: (String) -> Bool
     ) -> Bool {
-        connectedPeerDeviceIDs.contains(where: ordinarySyncReady)
+        connectedPeerDeviceIDs.contains {
+            ordinarySyncReady($0) && hasExplicitV2Support($0)
+        }
     }
 }
 
@@ -527,6 +530,9 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
             connectedPeerDeviceIDs: connectedPeerDeviceIDs,
             ordinarySyncReady: { peerDeviceID in
                 state.syncController.isOrdinarySyncReadyForTesting(peerDeviceID: peerDeviceID)
+            },
+            hasExplicitV2Support: { peerDeviceID in
+                state.syncController.hasExplicitPeerV2Support(forPeerDeviceID: peerDeviceID)
             }
         )
     }
