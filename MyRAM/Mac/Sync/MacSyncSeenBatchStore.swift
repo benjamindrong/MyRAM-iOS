@@ -51,11 +51,13 @@ enum MyRAMSyncBenchmarkEnduranceMacRoutingGate {
 final class MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver {
     static let shared = MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver()
 
+    private static let invitationRetryInterval: TimeInterval = 12
     private static let syntheticQueueHighWatermark = 80
     private static let initialSeedDrainSeconds = 45
 
     private var task: Task<Void, Never>?
     private var convergenceCoordinator: MacSyncConvergenceCoordinator?
+    private var lastInvitationAt: Date?
 
     private init() {}
 
@@ -212,6 +214,7 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver {
                 networkEnabled = shouldNetworkBeEnabled
                 if networkEnabled {
                     waitingForReconnectRouting = true
+                    lastInvitationAt = nil
                 } else {
                     waitingForReconnectRouting = false
                 }
@@ -240,6 +243,7 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver {
                             outcome: "disconnected"
                         )
                     }
+                    inviteMacPeerIfDue(controller: controller)
                     try? await Task.sleep(nanoseconds: 250_000_000)
                     continue
                 }
@@ -321,6 +325,7 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver {
         }
 
         if !networkEnabled {
+            lastInvitationAt = nil
             controller.setBenchmarkEnduranceNetworkingEnabled(true)
             recorder.record(.network, phase: "finalDrain", operationCount: operation, outcome: "resumed")
         }
@@ -415,6 +420,9 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver {
                ordinaryRoutingReady(controller: controller) {
                 return true
             }
+            if !controller.hasConnectedPeers {
+                inviteMacPeerIfDue(controller: controller)
+            }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         return false
@@ -428,6 +436,9 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver {
         var stableZeroSamples = 0
         var lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
         while Date() < deadline, !Task.isCancelled {
+            if !controller.hasConnectedPeers {
+                inviteMacPeerIfDue(controller: controller)
+            }
             lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
             if lastDepth == 0,
                controller.hasConnectedPeers,
@@ -456,6 +467,17 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver {
                 controller.bootstrapStateForTesting(peerDeviceID: peerDeviceID)?.ordinarySyncReady == true
             }
         )
+    }
+
+    private func inviteMacPeerIfDue(controller: MacSyncBatchController) {
+        let now = Date()
+        if let lastInvitationAt,
+           now.timeIntervalSince(lastInvitationAt) < Self.invitationRetryInterval {
+            return
+        }
+        guard let peer = controller.availablePeers.first else { return }
+        lastInvitationAt = now
+        controller.invite(peer)
     }
 
     private func benchmarkDigests(
