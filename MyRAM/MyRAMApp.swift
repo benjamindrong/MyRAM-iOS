@@ -56,7 +56,7 @@ struct MyRAMApp: App {
                                 }
                             }
 #if DEBUG
-                            MyRAMSyncBenchmarkEnduranceIOSDriver.shared.startIfNeeded(state: notesState)
+                            MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver.shared.startIfNeeded(state: notesState)
 #endif
                         }
                         .onChange(of: notesState.bootstrapState) { _, state in
