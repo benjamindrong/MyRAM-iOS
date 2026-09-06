@@ -1043,7 +1043,7 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
     }
 }
 
-private struct MacSyncPeerIdentity {
+struct MacSyncPeerIdentity {
     let displayName: String
     let deviceID: String
 
