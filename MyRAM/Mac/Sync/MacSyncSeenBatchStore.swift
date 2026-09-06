@@ -38,6 +38,15 @@ extension MacSyncBatchController {
     }
 }
 
+enum MyRAMSyncBenchmarkEnduranceMacRoutingGate {
+    static func isReady(
+        connectedPeerDeviceIDs: [String],
+        ordinarySyncReady: (String) -> Bool
+    ) -> Bool {
+        connectedPeerDeviceIDs.contains(where: ordinarySyncReady)
+    }
+}
+
 @MainActor
 final class MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver {
     static let shared = MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver()
@@ -83,7 +92,7 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver {
         recorder.record(
             .launch,
             outcome: "accepted",
-            detail: "durationSeconds=\(launch.durationSeconds);routingGate=v2"
+            detail: "durationSeconds=\(launch.durationSeconds);routingGate=v3"
         )
 
         guard await waitForMacRoutingReady(controller: controller, timeoutSeconds: 60) else {
@@ -445,10 +454,19 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver {
     }
 
     private func ordinaryRoutingReady(controller: MacSyncBatchController) -> Bool {
-        guard controller.hasConnectedPeers else { return false }
-        return controller.availablePeers.contains { peer in
-            controller.bootstrapStateForTesting(peerDeviceID: peer.deviceID)?.ordinarySyncReady == true
+        let children = Mirror(reflecting: controller).children
+        guard let session = children.first(where: { $0.label == "session" })?.value as? MCSession else {
+            return false
         }
+        let connectedPeerDeviceIDs = session.connectedPeers.map {
+            MacSyncPeerIdentity(peerID: $0).deviceID
+        }
+        return MyRAMSyncBenchmarkEnduranceMacRoutingGate.isReady(
+            connectedPeerDeviceIDs: connectedPeerDeviceIDs,
+            ordinarySyncReady: { peerDeviceID in
+                controller.bootstrapStateForTesting(peerDeviceID: peerDeviceID)?.ordinarySyncReady == true
+            }
+        )
     }
 
     private func inviteMacPeerIfDue(controller: MacSyncBatchController) {
