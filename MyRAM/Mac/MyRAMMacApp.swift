@@ -6,6 +6,10 @@ struct MyRAMMacApp: App {
     init() {
 #if DEBUG
         MyRAMSyncBenchmarkEnduranceMacIsolation.activateOrFailIfRequested()
+        if MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() {
+            MyRAMMacProcessSyncCompositionRoot.syncController.startNetworkingIfNeeded()
+            MyRAMSyncBenchmarkEnduranceMacDriver.shared.startIfNeeded()
+        }
 #endif
     }
 
@@ -72,9 +76,6 @@ private struct MyRAMMacProductionRoot: View {
             .environmentObject(widgetCoordinator)
             .onAppear {
                 widgetCoordinator.start()
-#if DEBUG
-                MyRAMSyncBenchmarkEnduranceMacDriver.shared.startIfNeeded()
-#endif
             }
     }
 }
