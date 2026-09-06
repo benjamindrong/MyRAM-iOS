@@ -59,6 +59,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private var hasStartedNetworking = false
     private var pendingIncomingBatchWork: [IncomingBatchWork] = []
     private var isProcessingIncomingBatchWork = false
+    private var isFlushingUnsentBatches = false
 
     init(
         context: ModelContext,
@@ -453,6 +454,15 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     private func flushUnsentBatches() async {
+        if isFlushingUnsentBatches {
+            return
+        }
+
+        isFlushingUnsentBatches = true
+        defer {
+            isFlushingUnsentBatches = false
+        }
+
         guard !unsentBatches.isEmpty else { return }
         let connectedPeers = connectedPeersProvider()
 
@@ -779,6 +789,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
             remember(work.peerID)
             lastConnectionEvent = "Received sync from \(displayName(for: work.peerID))"
+            // Keep local mutation and ready-batch tasks progressing under a
+            // sustained reliable-transport receive backlog.
+            await Task.yield()
         }
 
         isProcessingIncomingBatchWork = false

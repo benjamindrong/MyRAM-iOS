@@ -246,6 +246,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private let unsentBatches: FileBackedSyncBatchQueue
     private var isFlushingLegacy = false
     private var pendingLegacyFlushAfterActiveSend = false
+    private var isFlushingUnsentBatches = false
     private var outboundFlushRequestedWhileRecoverySuspended = false
     private var isOutboundSuspendedForRecovery = false
     private var targetMutationTails: [String: TargetMutationTail] = [:]
@@ -843,6 +844,15 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func flushUnsentBatches() async {
+        if isFlushingUnsentBatches {
+            return
+        }
+
+        isFlushingUnsentBatches = true
+        defer {
+            isFlushingUnsentBatches = false
+        }
+
         if isOutboundSuspendedForRecovery {
             outboundFlushRequestedWhileRecoverySuspended = true
             await updatePendingCount()
@@ -946,6 +956,10 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             rememberTrustedPeer(work.peerID)
             lastConnectionEvent = "Received sync from \(displayName(for: work.peerID))"
             await updatePendingCount()
+            // A sustained reliable-transport backlog must not monopolize the main
+            // actor. Local mutation and accumulator-readiness tasks need a chance
+            // to form and publish outbound batches while inbound work is draining.
+            await Task.yield()
         }
 
         isProcessingIncomingBatchWork = false
