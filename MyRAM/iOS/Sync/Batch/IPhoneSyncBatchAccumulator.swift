@@ -14,7 +14,7 @@ actor IPhoneSyncBatchAccumulator {
 
     init(
         originDeviceID: SyncBatchDeviceID,
-        quietWindow: TimeInterval = MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() ? 0.25 : 3,
+        quietWindow: TimeInterval = MyRAMSyncBenchmarkConfiguration.batchQuietWindow(),
         batchIDProvider: @escaping @Sendable () -> SyncBatchID = { UUID() },
         batchSequenceProvider: (@Sendable () -> SyncBatchSequenceReservation)? = nil,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = { interval in

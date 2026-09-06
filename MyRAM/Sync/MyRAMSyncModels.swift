@@ -495,12 +495,22 @@ extension MyRAMSyncBenchmarkConfiguration {
     static var enduranceDefaultDurationSeconds: Int { 720 }
     static var enduranceMinimumDurationSeconds: Int { 300 }
     static var enduranceMaximumDurationSeconds: Int { 900 }
+    static var productionBatchQuietWindow: TimeInterval { 3 }
+    static var enduranceBatchQuietWindow: TimeInterval { 0.25 }
 
     static func isEnduranceRequested(
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Bool {
         guard let rawValue = environment[enduranceEnvironmentKey] else { return false }
         return ["1", "true", "yes", "on"].contains(rawValue.lowercased())
+    }
+
+    static func batchQuietWindow(
+        environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> TimeInterval {
+        isEnduranceRequested(environment: environment)
+            ? enduranceBatchQuietWindow
+            : productionBatchQuietWindow
     }
 
     static func enduranceLaunchValidation(
