@@ -823,7 +823,8 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         let transport = CapabilityRecordingTransport()
         let controller = makeController(transport: transport)
         let localPeerID = MCPeerID(displayName: "Local|local-device")
-        let remotePeerID = MCPeerID(displayName: "Remote|capability-peer")
+        let remoteDeviceID = "capability-\(UUID().uuidString)"
+        let remotePeerID = MCPeerID(displayName: "Remote|\(remoteDeviceID)")
         let browser = MCNearbyServiceBrowser(
             peer: localPeerID,
             serviceType: "myram-sync"
@@ -849,7 +850,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         await Task.yield()
         XCTAssertTrue(
             controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "capability-peer"
+                forPeerDeviceID: remoteDeviceID
             )
         )
 
@@ -862,7 +863,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         await Task.yield()
         XCTAssertEqual(
             controller.effectivePeerCapability(
-                forPeerDeviceID: "capability-peer"
+                forPeerDeviceID: remoteDeviceID
             ),
             .v1Only
         )
@@ -876,7 +877,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         await Task.yield()
         XCTAssertTrue(
             controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "capability-peer"
+                forPeerDeviceID: remoteDeviceID
             )
         )
 
@@ -884,7 +885,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         await Task.yield()
         XCTAssertFalse(
             controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "capability-peer"
+                forPeerDeviceID: remoteDeviceID
             )
         )
 
@@ -898,15 +899,22 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         await Task.yield()
         XCTAssertTrue(
             controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "capability-peer"
+                forPeerDeviceID: remoteDeviceID
             )
         )
 
         controller.browser(browser, lostPeer: remotePeerID)
         await Task.yield()
+        XCTAssertTrue(
+            controller.hasExplicitPeerV2Support(
+                forPeerDeviceID: remoteDeviceID
+            )
+        )
+        controller.session(session, peer: remotePeerID, didChange: .notConnected)
+        await Task.yield()
         XCTAssertFalse(
             controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "capability-peer"
+                forPeerDeviceID: remoteDeviceID
             )
         )
     }
