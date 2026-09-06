@@ -216,6 +216,31 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
+    func testInvitationBindsDiscoveredV2BeforeDiscoveryLoss() async {
+        let transport = CapabilityRecordingTransport()
+        let controller = makeController(transport: transport)
+        let localPeerID = MCPeerID(displayName: "Local|local-device")
+        let remotePeerID = MCPeerID(displayName: "Remote|invited-v2")
+        let browser = MCNearbyServiceBrowser(peer: localPeerID, serviceType: "myram-sync")
+
+        controller.browser(
+            browser,
+            foundPeer: remotePeerID,
+            withDiscoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
+        )
+        await Task.yield()
+        controller.invite(MyRAMDiscoveredPeer(
+            peerID: remotePeerID,
+            deviceID: "invited-v2",
+            displayName: "Remote",
+            isTrusted: false
+        ))
+        controller.browser(browser, lostPeer: remotePeerID)
+        await Task.yield()
+
+        XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "invited-v2"))
+    }
+
     func testLateBootstrapAnnouncementSupersedesSessionFallback() {
         var registry = SyncBatchPeerCapabilityRegistry()
         registry.recordBootstrapSessionFallbackUnsupported(forPeerDeviceID: "peer")

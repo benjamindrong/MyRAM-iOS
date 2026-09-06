@@ -246,6 +246,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func invite(_ peer: MacSyncDiscoveredPeer) {
+        peerCapabilityRegistry.bindCurrentCapabilityToSession(
+            forPeerDeviceID: peer.deviceID
+        )
         lastConnectionEvent = "Inviting \(peer.displayName)"
         invitePeerOperation(
             peer.peerID,

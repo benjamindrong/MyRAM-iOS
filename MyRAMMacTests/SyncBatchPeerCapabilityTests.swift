@@ -381,6 +381,29 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(invitationContexts, [Data("1,2".utf8)])
     }
 
+    func testMacInvitationBindsDiscoveredV2BeforeDiscoveryLoss() async throws {
+        let controller = try makeController()
+        let localPeerID = MCPeerID(displayName: "Local|local-device")
+        let remotePeerID = MCPeerID(displayName: "Remote|invited-v2")
+        let browser = MCNearbyServiceBrowser(peer: localPeerID, serviceType: "myram-sync")
+
+        controller.browser(
+            browser,
+            foundPeer: remotePeerID,
+            withDiscoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
+        )
+        await Task.yield()
+        controller.invite(MacSyncDiscoveredPeer(
+            peerID: remotePeerID,
+            deviceID: "invited-v2",
+            displayName: "Remote"
+        ))
+        controller.browser(browser, lostPeer: remotePeerID)
+        await Task.yield()
+
+        XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "invited-v2"))
+    }
+
     func testControllerIntersectsDiscoveryAndInvitationEvidenceAndClearsIt() async throws {
         let controller = try makeController()
         let localPeerID = MCPeerID(displayName: "Local|local-device")

@@ -410,6 +410,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     func invite(_ peer: MyRAMDiscoveredPeer) {
         guard let attempt = reconnectTracker.beginConnecting(to: peer.deviceID) else { return }
 
+        // Starting a session attempt consumes the discovery evidence. Bind it
+        // before discovery can disappear independently of the pending/live
+        // MCSession; a failed attempt clears it through the notConnected path.
+        peerCapabilityRegistry.bindCurrentCapabilityToSession(
+            forPeerDeviceID: peer.deviceID
+        )
         lastConnectionEvent = "Inviting \(peer.displayName)"
         let timeout: TimeInterval = 12
         transport.invite(
