@@ -1127,6 +1127,7 @@ final class MyRAMSyncBenchmarkEnduranceIOSDriver {
 final class MyRAMSyncBenchmarkEnduranceMacDriver {
     static let shared = MyRAMSyncBenchmarkEnduranceMacDriver()
     private var task: Task<Void, Never>?
+    private var convergenceCoordinator: MacSyncConvergenceCoordinator?
 
     private init() {}
 
@@ -1152,6 +1153,8 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
 
     private func run(launch: MyRAMSyncBenchmarkEnduranceLaunch) async {
         let controller = MyRAMMacProcessSyncCompositionRoot.syncController
+        configureConvergenceIfNeeded(controller: controller)
+        controller.startNetworkingIfNeeded()
         let recorder = MyRAMSyncBenchmarkEnduranceRecorder(runID: launch.runID, platform: .macOS)
         let adapter = MacNotePersistenceAdapter()
         let startedAt = Date()
@@ -1342,6 +1345,44 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         )
         recorder.writeResult(result)
         recorder.record(.completed, outcome: result.outcome)
+    }
+
+    private func configureConvergenceIfNeeded(controller: MacSyncBatchController) {
+        guard convergenceCoordinator == nil else { return }
+
+        let presentationSurface = MacSyncConvergencePresentationSurface(
+            selectedNoteID: { nil },
+            hasUnsavedChanges: { false },
+            refreshNotesList: {},
+            closeRemovedSelectedEditor: { _ in },
+            applyIncremental: { _, _, _ in
+                EditorRemoteBatchApplyResult(
+                    appliedCount: 0,
+                    disposition: .noApplicableMutations
+                )
+            },
+            reloadSelectedEditor: { _, _ in true },
+            currentEditorBody: { nil }
+        )
+        let boundarySurface = MacSyncIncomingLocalBoundarySurface(
+            prepareForIncomingBodyMutation: { noteIDs in
+                for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+                    if let obligation = await controller.takePendingLocalObligationIfAffecting(
+                        noteID: noteID
+                    ) {
+                        return .localObligation(obligation)
+                    }
+                }
+                return .ready
+            }
+        )
+        convergenceCoordinator = MacSyncConvergenceCoordinator(
+            context: PersistenceManager.shared.context,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: presentationSurface,
+            incomingBoundarySurface: boundarySurface
+        )
     }
 
     private func waitForMacConnection(
