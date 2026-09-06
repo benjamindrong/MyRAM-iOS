@@ -69,7 +69,8 @@ CURRENT_HEAD="$(git rev-parse HEAD)"
 [[ "$CURRENT_HEAD" == "$EXPECTED_HEAD" ]] || fail "expected head $EXPECTED_HEAD, found $CURRENT_HEAD"
 [[ -z "$(git status --porcelain)" ]] || fail "working tree must be clean"
 git merge-base --is-ancestor "$BASE_SHA" "$CURRENT_HEAD" || fail "current head does not descend from approved base $BASE_SHA"
-python3 -m py_compile Scripts/ben36_validate_endurance.py
+python3 -m py_compile Scripts/ben36_select_device.py Scripts/ben36_validate_endurance.py
+python3 Scripts/test_ben36_select_device.py
 
 git diff --check "$BASE_SHA" "$CURRENT_HEAD" > "$LOG_DIR/git-diff-check.txt" 2>&1 || fail "git diff --check failed"
 xcodebuild -version > "$LOG_DIR/xcode-version.txt"
@@ -77,54 +78,8 @@ xcrun devicectl --version > "$LOG_DIR/devicectl-version.txt" 2>&1 || true
 
 record_stage resolve-device
 xcrun devicectl list devices --json-output "$DEVICE_JSON" > "$LOG_DIR/devicectl-list.txt" 2>&1 || fail "devicectl could not list devices"
-DEVICE_RECORD="$(python3 - "$DEVICE_JSON" "$REQUESTED_DEVICE_ID" <<'PY'
-import json, sys
-path, requested = sys.argv[1], sys.argv[2]
-obj = json.load(open(path, encoding='utf-8'))
-devices = obj.get('result', {}).get('devices', [])
-
-def value(d, *paths):
-    for path in paths:
-        cur = d
-        ok = True
-        for part in path.split('.'):
-            if not isinstance(cur, dict) or part not in cur:
-                ok = False
-                break
-            cur = cur[part]
-        if ok and cur not in (None, ''):
-            return cur
-    return None
-
-candidates = []
-for d in devices:
-    if not isinstance(d, dict):
-        continue
-    identifier = str(d.get('identifier', ''))
-    udid = str(value(d, 'properties.udid', 'hardwareProperties.udid') or identifier)
-    name = str(value(d, 'properties.name', 'deviceProperties.name') or 'unknown')
-    platform = str(value(d, 'properties.platform', 'hardwareProperties.platform') or '')
-    product = str(value(d, 'properties.productType', 'hardwareProperties.productType') or '')
-    pairing = str(value(d, 'properties.pairingState', 'connectionProperties.pairingState') or '')
-    visibility = str(value(d, 'properties.state.visibilityClass', 'visibilityClass') or '')
-    looks_ios = 'ios' in platform.lower() or product.lower().startswith('iphone')
-    visible = visibility in ('', 'default')
-    paired = pairing in ('', 'paired')
-    if looks_ios and visible and paired and identifier:
-        candidates.append((identifier, udid, name))
-
-if requested:
-    matches = [item for item in candidates if requested in item]
-    if len(matches) != 1:
-        sys.exit(3)
-    print('\t'.join(matches[0]))
-    sys.exit(0)
-
-if len(candidates) != 1:
-    sys.exit(4)
-print('\t'.join(candidates[0]))
-PY
-)" || fail "could not resolve exactly one available physical iPhone; set MYRAM_DEVICE_ID if multiple devices are present"
+DEVICE_RECORD="$(python3 Scripts/ben36_select_device.py "$DEVICE_JSON" "$REQUESTED_DEVICE_ID")" \
+  || fail "could not resolve a physical iPhone"
 IFS=$'\t' read -r DEVICE_ID XCODE_DEVICE_ID DEVICE_NAME <<< "$DEVICE_RECORD"
 [[ -n "$DEVICE_ID" && -n "$XCODE_DEVICE_ID" ]] || fail "no available physical iPhone resolved"
 printf '%s\n' "$DEVICE_ID" > "$EVIDENCE_ROOT/device-id.txt"
