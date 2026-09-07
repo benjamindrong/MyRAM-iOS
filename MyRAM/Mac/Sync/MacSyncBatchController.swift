@@ -60,6 +60,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private var pendingIncomingBatchWork: [IncomingBatchWork] = []
     private var isProcessingIncomingBatchWork = false
     private var isFlushingUnsentBatches = false
+#if DEBUG
+    private var benchmarkEnduranceAcceptsInvitations = true
+
+    func setBenchmarkEnduranceInvitationAcceptanceEnabled(_ enabled: Bool) {
+        benchmarkEnduranceAcceptsInvitations = enabled
+    }
+#endif
 
     init(
         context: ModelContext,
@@ -1026,6 +1033,12 @@ extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
         invitationHandler: @escaping (Bool, MCSession?) -> Void
     ) {
         Task { @MainActor in
+#if DEBUG
+            guard benchmarkEnduranceAcceptsInvitations else {
+                invitationHandler(false, nil)
+                return
+            }
+#endif
             let identity = MacSyncPeerIdentity(peerID: peerID)
             peerCapabilityRegistry.recordInvitationContext(
                 context,
