@@ -4,6 +4,19 @@ import XCTest
 
 @MainActor
 final class SyncBatchPeerCapabilityTests: XCTestCase {
+    func testDisconnectRetainsDiscoveryForExplicitReconnectRebind() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordDiscoveryValue("1,2", forPeerDeviceID: "peer")
+        registry.bindCurrentCapabilityToSession(forPeerDeviceID: "peer")
+        XCTAssertTrue(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+
+        registry.clearSessionEvidencePreservingDiscovery(forPeerDeviceID: "peer")
+        XCTAssertFalse(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+
+        registry.bindCurrentCapabilityToSession(forPeerDeviceID: "peer")
+        XCTAssertTrue(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+    }
+
     func testDiscoveryLossPreservesV2CapabilityBoundToLiveSession() {
         var registry = SyncBatchPeerCapabilityRegistry()
         registry.recordDiscoveryValue(nil, forPeerDeviceID: "peer")
@@ -896,6 +909,14 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
                 SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"
             ]
         )
+        await Task.yield()
+        XCTAssertFalse(
+            controller.hasExplicitPeerV2Support(
+                forPeerDeviceID: remoteDeviceID
+            )
+        )
+
+        controller.session(session, peer: remotePeerID, didChange: .connected)
         await Task.yield()
         XCTAssertTrue(
             controller.hasExplicitPeerV2Support(

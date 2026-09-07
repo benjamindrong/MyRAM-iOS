@@ -492,6 +492,14 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             ]
         )
         await Task.yield()
+        XCTAssertFalse(
+            controller.hasExplicitPeerV2Support(
+                forPeerDeviceID: "capability-peer"
+            )
+        )
+
+        controller.session(session, peer: remotePeerID, didChange: .connected)
+        await Task.yield()
         XCTAssertTrue(
             controller.hasExplicitPeerV2Support(
                 forPeerDeviceID: "capability-peer"
@@ -500,7 +508,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
 
         controller.browser(browser, lostPeer: remotePeerID)
         await Task.yield()
-        XCTAssertFalse(
+        XCTAssertTrue(
             controller.hasExplicitPeerV2Support(
                 forPeerDeviceID: "capability-peer"
             )

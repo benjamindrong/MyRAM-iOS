@@ -183,6 +183,7 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         [String: BootstrapCapabilityEvidence] = [:]
     private var bootstrapSessionEvidenceByPeerDeviceID:
         [String: BootstrapSessionEvidence] = [:]
+    private var peersAwaitingSessionRebind: Set<String> = []
 
     mutating func recordBootstrapDiscoveryValue(
         _ value: String?,
@@ -249,6 +250,19 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         sessionCapabilityByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        peersAwaitingSessionRebind.remove(peerDeviceID)
+    }
+
+    mutating func clearSessionEvidencePreservingDiscovery(
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        sessionCapabilityByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        evidenceByPeerDeviceID[peerDeviceID]?.removeValue(forKey: .invitationContext)
+        if evidenceByPeerDeviceID[peerDeviceID]?.isEmpty == true {
+            evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        }
+        bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        peersAwaitingSessionRebind.insert(peerDeviceID)
     }
 
     mutating func clearDiscoveryEvidence(forPeerDeviceID peerDeviceID: String) {
@@ -268,6 +282,9 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         if let sessionCapability = sessionCapabilityByPeerDeviceID[peerDeviceID] {
             return sessionCapability
         }
+        guard !peersAwaitingSessionRebind.contains(peerDeviceID) else {
+            return .v1Only
+        }
         return negotiatedCapability(forPeerDeviceID: peerDeviceID)
     }
 
@@ -283,6 +300,7 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
                 sessionCapabilityByPeerDeviceID[peerDeviceID] = negotiated
             }
         }
+        peersAwaitingSessionRebind.remove(peerDeviceID)
         if bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported {
             bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] = .v1Supported
         }
@@ -325,7 +343,10 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
     }
 
     func isBootstrapCapabilityResolved(forPeerDeviceID peerDeviceID: String) -> Bool {
-        bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] != nil
+        guard !peersAwaitingSessionRebind.contains(peerDeviceID) else {
+            return false
+        }
+        return bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] != nil
             || bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] != nil
     }
 
