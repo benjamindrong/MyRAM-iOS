@@ -3,6 +3,15 @@ import SwiftUI
 
 @main
 struct MyRAMMacApp: App {
+    init() {
+#if DEBUG
+        MyRAMSyncBenchmarkEnduranceMacIsolation.activateOrFailIfRequested()
+        if MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() {
+            MyRAMSyncBenchmarkEnduranceRoutingGatedMacDriver.shared.startIfNeeded()
+        }
+#endif
+    }
+
     var body: some Scene {
         WindowGroup {
             MyRAMMacAppRootFactory.makeRoot(

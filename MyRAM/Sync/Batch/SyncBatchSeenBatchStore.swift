@@ -9,7 +9,7 @@ struct SyncBatchSeenBatchStore {
 
     init(
         defaults: UserDefaults = .standard,
-        key: String = Self.defaultSeenBatchIDsKey,
+        key: String = MyRAMSyncBenchmarkConfiguration.enduranceUserDefaultsKey(Self.defaultSeenBatchIDsKey),
         maximumStoredBatchIDs: Int = 2_000
     ) {
         self.defaults = defaults

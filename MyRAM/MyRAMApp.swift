@@ -13,8 +13,15 @@ struct MyRAMApp: App {
 #endif
     private let isUITestMode = ProcessInfo.processInfo.arguments.contains("UITEST_MODE")
     private let usesBareTextViewProfiling = ProcessInfo.processInfo.arguments.contains("MYR_PROFILE_BARE_TEXTVIEW")
+    private let isSyncEnduranceMode = MyRAMSyncBenchmarkConfiguration.isEnduranceRequested()
 
     init() {
+#if DEBUG && !targetEnvironment(macCatalyst)
+        MyRAMSyncBenchmarkEnduranceIOSIsolation.activateOrFailIfRequested()
+        if MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() {
+            UIApplication.shared.isIdleTimerDisabled = true
+        }
+#endif
         let context = PersistenceManager.shared.context
         _notesState = StateObject(wrappedValue: NotesListState(context: context))
 #if !targetEnvironment(macCatalyst)
@@ -42,13 +49,18 @@ struct MyRAMApp: App {
                         .environmentObject(externalOpenDispatcher)
                         .environmentObject(widgetCoordinator)
                         .onAppear {
-                            widgetCoordinator.start()
-                            if notesState.bootstrapState == .ready {
-                                widgetCoordinator.publishNow()
+                            if !isSyncEnduranceMode {
+                                widgetCoordinator.start()
+                                if notesState.bootstrapState == .ready {
+                                    widgetCoordinator.publishNow()
+                                }
                             }
+#if DEBUG
+                            MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver.shared.startIfNeeded(state: notesState)
+#endif
                         }
                         .onChange(of: notesState.bootstrapState) { _, state in
-                            guard state == .ready else { return }
+                            guard !isSyncEnduranceMode, state == .ready else { return }
                             widgetCoordinator.publishNow()
                         }
 #endif

@@ -1,10 +1,116 @@
 import AnchoredSequenceCore
+import Foundation
 import SwiftData
 import XCTest
 @testable import MyRAMMac
 
 @MainActor
 final class MacSyncConvergenceCoordinatorTests: XCTestCase {
+    func testBEN36RuntimeOutcomeDiagnosticDistinguishesCollapsedStates() {
+        let batchID = Self.uuid(40)
+        let cases: [(SyncConvergenceRuntimeOutcome, String)] = [
+            (.alreadyDraining, "runtimeAlreadyDraining"),
+            (.pending([.queueCleanup]), "runtimePending"),
+            (.blocked(.init(batchID: batchID, kind: .persistence)), "runtimeBlocked"),
+            (.quarantined(.init(items: [])), "runtimeQuarantined"),
+            (.deferred(.init(incoming: [], localObligations: [], postCommit: [])), "runtimeDeferred"),
+            (.drained(appliedBatchIDs: [batchID]), "runtimeDrainedApplied"),
+            (.drained(appliedBatchIDs: []), "runtimeDrainedUnapplied")
+        ]
+
+        for (outcome, expectedLabel) in cases {
+            XCTAssertEqual(
+                MacSyncConvergenceCoordinator.benchmarkRuntimeOutcomeLabel(
+                    for: outcome,
+                    batchID: batchID
+                ),
+                expectedLabel
+            )
+        }
+
+        XCTAssertEqual(
+            MacSyncConvergenceCoordinator.benchmarkRuntimeOutcomeDetail(
+                for: .blocked(.init(batchID: batchID, kind: .persistence)),
+                batchID: batchID
+            ),
+            "failureKind=persistence"
+        )
+        XCTAssertEqual(
+            MacSyncConvergenceCoordinator.benchmarkRuntimeOutcomeDetail(
+                for: .deferred(.init(
+                    incoming: [SyncConvergenceDeferredItem(
+                        domain: .incoming,
+                        batchID: batchID,
+                        affectedNoteIDs: [],
+                        reason: .transportUnavailable
+                    )],
+                    localObligations: [],
+                    postCommit: []
+                )),
+                batchID: batchID
+            ),
+            "incomingReason=transportUnavailable"
+        )
+    }
+
+    func testBEN36RemoteSubmissionWritesUnderlyingRuntimeOutcomeTelemetry() async throws {
+        let outputDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let recorder = MyRAMSyncBenchmarkRecorder(
+            enabled: true,
+            platform: .macOS,
+            deviceID: "BEN-36-mac-test",
+            runID: "BEN-36-runtime-outcome",
+            outputDirectoryURL: outputDirectory
+        )
+        MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(recorder)
+        defer { MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(nil) }
+
+        let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let noteID = Self.uuid(41)
+        let note = Note(title: "Shared", content: "local")
+        note.id = noteID
+        context.insert(note)
+        try context.save()
+        let controller = try makeController()
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: readyBoundarySurface(),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil
+        )
+        let batch = bodyInsertBatch(
+            idSuffix: 42,
+            noteID: noteID,
+            base: "base",
+            inserted: " remote"
+        )
+
+        _ = await coordinator.submitRemoteBatch(batch)
+        MyRAMSyncBenchmarkTelemetry.shared.flushForTesting()
+
+        let artifactURL = try XCTUnwrap(recorder.artifactURL)
+        let lines = try String(contentsOf: artifactURL, encoding: .utf8)
+            .split(separator: "\n")
+        let events: [[String: Any]] = try lines.map { line in
+            try XCTUnwrap(
+                JSONSerialization.jsonObject(with: Data(line.utf8)) as? [String: Any]
+            )
+        }
+        let runtimeEvent = try XCTUnwrap(events.first { event in
+            event["eventType"] as? String == "batchConvergenceCompleted"
+                && event["batchID"] as? String == String(describing: batch.id)
+                && (event["outcome"] as? String)?.hasPrefix("runtime") == true
+        })
+
+        XCTAssertEqual(runtimeEvent["outcome"] as? String, "runtimeDeferred")
+        XCTAssertTrue((runtimeEvent["detail"] as? String)?.hasPrefix("incomingReason=") == true)
+    }
+
     func testPendingIncomingSurvivesCoordinatorReconstruction() async throws {
         let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
         let container = try makeInMemoryContainer()
