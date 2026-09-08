@@ -1093,8 +1093,8 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertTrue(macTestSources.contains("SyncBatchAnchoredInsertReplayTests.swift in Sources"))
         XCTAssertTrue(iosTestSources.contains("SyncBatchAnchoredPayloadTests.swift in Sources"))
         XCTAssertFalse(macTestSources.contains("SyncBatchAnchoredPayloadTests.swift in Sources"))
-        XCTAssertTrue(macAppSources.contains("MacSyncBatchApplier.swift in Sources"))
-        XCTAssertTrue(macTestSources.contains("MacSyncBatchApplierTests.swift in Sources"))
+        XCTAssertFalse(macAppSources.contains("MacSyncBatchApplier.swift in Sources"))
+        XCTAssertFalse(macTestSources.contains("MacSyncBatchApplierTests.swift in Sources"))
     }
 
     func testMyRAMMacSchemeScopesHostedTestModeToTestAction() throws {
