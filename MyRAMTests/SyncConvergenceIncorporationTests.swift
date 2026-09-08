@@ -2668,6 +2668,145 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertFalse(transaction.saveCalled)
     }
 
+
+    func testIncorporatedBatchTombstoneSurvivesPostCommitCleanupOnDiskRestartAndPreventsDuplicateReapplication() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-185-Incorporation-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("MyRAM.store")
+        let queueURL = directory.appendingPathComponent("convergence-queue.json")
+        let fixture = try makeFixture()
+        let tombstone = try tombstoneProjection(matching: fixture)
+        let identity = SyncConvergencePersistedIncorporationIdentity(
+            batchID: tombstone.batchID,
+            canonicalPayloadDigest: tombstone.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: tombstone.canonicalPayloadDigestFormatVersion,
+            committedResultDigest: tombstone.committedResultDigest,
+            committedResultDigestFormatVersion: tombstone.committedResultDigestFormatVersion
+        )
+
+        do {
+            let container = try makeMYR185IncorporationDiskContainer(storeURL: storeURL)
+            let context = ModelContext(container)
+            let note = Note(title: fixture.initialNote.title, content: fixture.initialNote.body)
+            note.id = fixture.initialNote.noteID
+            note.createdAt = fixture.initialNote.createdAt
+            note.modifiedAt = fixture.initialNote.modifiedAt
+            note.deletedAt = fixture.initialNote.deletedAt
+            context.insert(note)
+            context.insert(try IncorporatedBatchTombstone.makeValidated(
+                batchID: tombstone.batchID,
+                originDeviceID: tombstone.originDeviceID,
+                canonicalPayloadDigest: tombstone.canonicalPayloadDigest,
+                canonicalPayloadDigestFormatVersion: tombstone.canonicalPayloadDigestFormatVersion,
+                schemaVersion: tombstone.schemaVersion,
+                committedResultDigest: tombstone.committedResultDigest,
+                committedResultDigestFormatVersion: tombstone.committedResultDigestFormatVersion,
+                committedAtOrderingPayloadData: tombstone.committedAtOrderingPayloadData,
+                tombstoneFormatVersion: tombstone.tombstoneFormatVersion
+            ))
+            try context.save()
+
+            let queue = FileBackedSyncBatchQueue(fileURL: queueURL, limit: 10)
+            try queue.enqueueDurably(fixture.batch)
+            XCTAssertTrue(queue.contains(fixture.batch.id))
+
+            let postCommitStore = SwiftDataSyncConvergencePostCommitStore(
+                context: ModelContext(container)
+            )
+            let request = SyncConvergencePostCommitRequest(
+                sourceBatchID: identity.batchID,
+                affectedNoteIDs: [],
+                cleanupPlan: SyncConvergenceCleanupPlan(
+                    batchIDs: [identity.batchID],
+                    retryQueueCleanup: true,
+                    retryLegacyCleanup: false,
+                    retryPresentationRefresh: false
+                ),
+                presentationPlan: SyncConvergencePresentationPlan(noteRoutings: [:]),
+                persistedIncorporationIdentity: identity
+            )
+            let executor = SyncConvergencePostCommitExecutor(
+                store: postCommitStore,
+                queueCleanupAdapter: queue,
+                presentationAdapter: FakePresentationAdapter(result: .verifiedComplete)
+            )
+
+            let postCommitOutcome = await executor.execute(request)
+            XCTAssertEqual(postCommitOutcome, .complete)
+            XCTAssertFalse(queue.contains(fixture.batch.id))
+
+            let verificationContext = ModelContext(container)
+            let noteID = fixture.noteID
+            let persistedNote = try XCTUnwrap(
+                verificationContext.fetch(FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == noteID }
+                )).first
+            )
+            XCTAssertEqual(persistedNote.id, fixture.initialNote.noteID)
+            XCTAssertEqual(persistedNote.folder?.id, fixture.initialNote.folderID)
+            XCTAssertEqual(persistedNote.title, fixture.initialNote.title)
+            XCTAssertEqual(persistedNote.content, fixture.initialNote.body)
+            XCTAssertEqual(persistedNote.createdAt, fixture.initialNote.createdAt)
+            XCTAssertEqual(persistedNote.modifiedAt, fixture.initialNote.modifiedAt)
+            XCTAssertEqual(persistedNote.deletedAt, fixture.initialNote.deletedAt)
+            XCTAssertTrue(try verificationContext.fetch(FetchDescriptor<IncorporatedSyncBatch>()).isEmpty)
+            let tombstones = try verificationContext.fetch(FetchDescriptor<IncorporatedBatchTombstone>())
+            XCTAssertEqual(tombstones.count, 1)
+            XCTAssertNoThrow(try tombstones[0].validateForPersistence())
+        }
+
+        do {
+            let reopenedContainer = try makeMYR185IncorporationDiskContainer(storeURL: storeURL)
+            let reopenedStore = SwiftDataSyncConvergencePostCommitStore(
+                context: ModelContext(reopenedContainer)
+            )
+            guard case .tombstone(let reopenedTombstone) = try reopenedStore.loadState(matching: identity) else {
+                return XCTFail("Expected matching incorporated-batch tombstone after restart")
+            }
+            XCTAssertEqual(reopenedTombstone, tombstone)
+
+            let replayContext = ModelContext(reopenedContainer)
+            let replay = SyncConvergenceIncorporationExecutor().incorporate(
+                input: fixture.validatedInput,
+                transaction: SwiftDataSyncConvergencePersistenceTransaction(context: replayContext),
+                committedAt: fixture.committedAt
+            )
+            guard case .alreadyIncorporated(let result) = replay else {
+                return XCTFail("Expected durable tombstone to prevent duplicate reapplication, got \(replay)")
+            }
+            XCTAssertEqual(result.batchID, fixture.batch.id)
+
+            let noteID = fixture.noteID
+            let replayedNote = try XCTUnwrap(
+                replayContext.fetch(FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == noteID }
+                )).first
+            )
+            XCTAssertEqual(replayedNote.id, fixture.initialNote.noteID)
+            XCTAssertEqual(replayedNote.folder?.id, fixture.initialNote.folderID)
+            XCTAssertEqual(replayedNote.title, fixture.initialNote.title)
+            XCTAssertEqual(replayedNote.content, fixture.initialNote.body)
+            XCTAssertEqual(replayedNote.createdAt, fixture.initialNote.createdAt)
+            XCTAssertEqual(replayedNote.modifiedAt, fixture.initialNote.modifiedAt)
+            XCTAssertEqual(replayedNote.deletedAt, fixture.initialNote.deletedAt)
+            XCTAssertTrue(try replayContext.fetch(FetchDescriptor<IncorporatedSyncBatch>()).isEmpty)
+
+            let durableTombstones = try replayContext.fetch(FetchDescriptor<IncorporatedBatchTombstone>())
+            XCTAssertEqual(durableTombstones.count, 1)
+            XCTAssertNoThrow(try durableTombstones[0].validateForPersistence())
+            let durableProjection = try XCTUnwrap(
+                try SwiftDataSyncConvergencePersistenceTransaction(context: replayContext)
+                    .loadTombstone(batchID: fixture.batch.id)
+            )
+            XCTAssertEqual(durableProjection, tombstone)
+        }
+    }
+
     func testMatchingRootAndTombstoneDuplicateComparesCommittedOrdering() throws {
         let fixture = try makeFixture()
         let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
@@ -3973,6 +4112,18 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             committedAt: committedAt,
             priorWinner: nil
         )
+    }
+
+
+    private func makeMYR185IncorporationDiskContainer(storeURL: URL) throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR-185-Incorporation",
+            schema: schema,
+            url: storeURL,
+            cloudKitDatabase: .none
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
     }
 
     private func tombstoneProjection(
