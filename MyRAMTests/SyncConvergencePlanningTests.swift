@@ -1806,6 +1806,84 @@ final class SyncConvergencePlanningTests: XCTestCase {
         XCTAssertEqual(outcome, .deferred(.historyPressure(noteID: noteID, blockingBatchID: nil)))
     }
 
+    func testMYR221AppliedEquivalentBootstrapOwnershipCanCrossSoftEvidencePressureForCleanup() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000221001")
+        let deviceID = uuid("00000000-0000-0000-0000-000000221002")
+        let initialState = try NoteSequenceStateBootstrapAdapter.makeInitialState(
+            noteID: noteID,
+            body: "AB"
+        )
+        let operationID = SyncOperationID(deviceID: deviceID, localCounter: 630)
+        let change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 1,
+            text: "X",
+            modifiedAt: date(2),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "AB"),
+            operationID: operationID,
+            state: initialState
+        )
+        guard case .noteBodyTextInsertedAnchored(let insertion) = change else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let recoveryChange = SyncBatchAnchoredRecoveryChange.insertion(insertion)
+        let committedState = try SyncBatchAnchoredRecoveryReplay.apply(
+            recoveryChange,
+            to: initialState
+        )
+        let ownership = try SyncBatchAnchoredRecoveryRecord(
+            key: recoveryChange.recordKey,
+            change: recoveryChange,
+            lifecycle: .bootstrapOwned
+        )
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000221003"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000221004"),
+            createdAt: date(1),
+            batchSequence: 971,
+            changes: [change]
+        )
+
+        let outcome = SyncConvergencePlanner().planCore(
+            input: SyncConvergencePlanningInput(
+                incomingBatch: batch,
+                currentNotes: [projectedNote(noteID: noteID, body: "AXB")],
+                historyStates: [SyncConvergenceHistoryAccountingProjection(
+                    noteID: noteID,
+                    snapshotCount: 0,
+                    retainedOperationCount: 9,
+                    snapshotBytes: 0,
+                    retainedOperationBytes: 43,
+                    explicitDeleteProvenanceCount: 0,
+                    explicitDeleteProvenanceBytes: 0,
+                    fullIncorporationEvidenceBytes: 261_732,
+                    diagnosticEvidenceBytes: 0,
+                    cleanupEvidenceBytes: 0,
+                    completedReconciliationEpisodeCount: 0,
+                    activeReconciliationEpisodeCount: 0,
+                    reconciliationEvidenceBytes: 0
+                )],
+                anchoredSequenceSnapshots: [.init(
+                    noteID: noteID,
+                    body: "AXB",
+                    revision: 1,
+                    state: committedState
+                )],
+                anchoredRecoverySnapshot: .init(records: [ownership], health: .healthy)
+            ),
+            activationEnabled: true
+        )
+
+        guard case .planned(let input) = outcome,
+              case .anchoredStructural(let anchored) = input.plan.affectedNotePlans.first?.bodyEffect else {
+            return XCTFail("Expected cleanup-only plan, got \(outcome)")
+        }
+        XCTAssertFalse(anchored.didChangeApplicationState)
+        XCTAssertEqual(anchored.reviewedNoApplicationChangeReason, .appliedEquivalentRecovery)
+        XCTAssertEqual(anchored.recoveryTransitions, [.removeCommitted(expected: ownership)])
+        XCTAssertEqual(input.plan.historyPlan.pressureNotes, [noteID])
+    }
+
     func testEarlierMultiNoteEvidenceBatchBlocksItsOtherNotes() {
         let noteA = uuid("00000000-0000-0000-0000-000000132731")
         let noteB = uuid("00000000-0000-0000-0000-000000132732")
