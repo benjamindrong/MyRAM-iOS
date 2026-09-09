@@ -491,12 +491,22 @@ enum SyncPeerBootstrapSnapshotPersistence {
             }
             changesByKey[key] = change
             if let existing = snapshot.record(for: key) {
-                guard existing.change == change,
-                      !existing.lifecycle.isTerminal else {
+                guard existing.change == change else {
                     throw SyncPeerBootstrapError.anchoredRecoveryConflict(key)
                 }
                 switch existing.lifecycle {
                 case .waiting, .bootstrapOwned:
+                    continue
+                case .terminalStructuralFailure(let failure)
+                    where failure.code == .duplicateRun
+                        && failure.evidence.operationID == key.operationID:
+                    // The exact peer run match above turns this historical duplicate
+                    // quarantine into positive, restart-safe cleanup ownership.
+                    let replacement = try SyncBatchAnchoredRecoveryRecord(
+                        change: change,
+                        lifecycle: .bootstrapOwned
+                    )
+                    transitions.append(.replace(expected: existing, replacement: replacement))
                     continue
                 case .terminalStructuralFailure, .bootstrapContentConflict:
                     throw SyncPeerBootstrapError.anchoredRecoveryConflict(key)

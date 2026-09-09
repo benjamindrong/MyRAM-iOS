@@ -810,6 +810,33 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
             deletionPlan.recoveryStoreTransitions,
             [.removeCommitted(expected: persistedDeletion)]
         )
+
+        let duplicateRunStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("duplicate-run-recovery.json")
+        )
+        let duplicateRunRecord = try SyncBatchAnchoredRecoveryRecord(
+            change: .insertion(queuedChange),
+            lifecycle: .terminalStructuralFailure(
+                try SyncBatchAnchoredStructuralFailure(
+                    code: .duplicateRun,
+                    evidence: .init(operationID: queuedChange.payload.operationID)
+                )
+            )
+        )
+        try duplicateRunStore.apply([.insertExpectedAbsent(duplicateRunRecord)])
+
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+            to: destinationContext,
+            pendingIncomingBatches: queue,
+            anchoredRecoveryStore: duplicateRunStore
+        )
+
+        let upgradedOwnership = try XCTUnwrap(
+            duplicateRunStore.snapshot().record(for: duplicateRunRecord.key)
+        )
+        XCTAssertEqual(upgradedOwnership.change, duplicateRunRecord.change)
+        XCTAssertEqual(upgradedOwnership.lifecycle, .bootstrapOwned)
     }
 
     func testBootstrapStructuralOnlyUnionPreservesRichText() throws {
