@@ -59,13 +59,48 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertEqual(rerun.statePayloadData, payload)
     }
 
-    func testMigrationReestablishesValidStaleRows() async throws {
+    func testActivatedMigrationStopsAtValidStaleRowWithoutReplacingLineage() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Old", in: container)
+        try await makeMigrator(container).runToCompletion()
+        let original = try XCTUnwrap(fetchRecords(in: container).first)
+        let originalPayload = original.statePayloadData
+        try updateNote(noteID: noteID, body: "Current", in: container)
+
+        do {
+            try await makeMigrator(container).runToCompletion()
+            XCTFail("Expected activated migration to preserve the established lineage and stop")
+        } catch {
+            XCTAssertEqual(error as? NoteSequenceStateStoreError, .corruptState)
+        }
+
+        let persisted = try XCTUnwrap(fetchRecords(in: container).first)
+        XCTAssertEqual(persisted.revision, 0)
+        XCTAssertEqual(persisted.statePayloadData, originalPayload)
+        let state = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(record: persisted, noteID: noteID)
+        XCTAssertEqual(state.visibleText, "Old")
+
+        let verificationContext = ModelContext(container)
+        let requestedID = noteID
+        let note = try XCTUnwrap(
+            verificationContext.fetch(
+                FetchDescriptor<Note>(predicate: #Predicate { $0.id == requestedID })
+            ).first
+        )
+        XCTAssertEqual(note.content, "Current")
+    }
+
+    func testMigrationReestablishesValidStaleRowsWhenExplicitlyAllowed() async throws {
         let container = try makeContainer()
         let noteID = try insertNote(body: "Old", in: container)
         try await makeMigrator(container).runToCompletion()
         try updateNote(noteID: noteID, body: "Current", in: container)
 
-        try await makeMigrator(container).runToCompletion()
+        try await makeMigrator(
+            container,
+            allowsExistingStateReplacement: true
+        ).runToCompletion()
 
         let record = try XCTUnwrap(fetchRecords(in: container).first)
         XCTAssertEqual(record.revision, 1)
@@ -139,10 +174,12 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
 
     private func makeMigrator(
         _ container: ModelContainer,
+        allowsExistingStateReplacement: Bool = !SyncBatchAnchoredPayloadCapability.isEnabled,
         beforeEachNote: @escaping @Sendable (UUID) throws -> Void = { _ in }
     ) async -> NoteSequenceStateBootstrapMigrator {
         await NoteSequenceStateBootstrapMigrator(
             container: container,
+            allowsExistingStateReplacement: allowsExistingStateReplacement,
             beforeEachNote: beforeEachNote
         )
     }
