@@ -237,6 +237,7 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
     context.insert(existing)
     try context.save()
     let queueAndStore = try makeBootstrapQueueAndStore(change: fixture.change)
+    let recoveryChange = SyncBatchAnchoredRecoveryChange.insertion(fixture.change)
 
     let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
       fixture.snapshot,
@@ -248,7 +249,7 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
     XCTAssertEqual(disposition.coveredNoteIDs, [noteSnapshot.id])
     XCTAssertTrue(disposition.insertedNoteIDs.isEmpty)
     let ownership = try XCTUnwrap(
-      queueAndStore.store.snapshot().record(for: fixture.change.recordKey)
+      queueAndStore.store.snapshot().record(for: recoveryChange.recordKey)
     )
     XCTAssertEqual(ownership.lifecycle, .bootstrapOwned)
     let record = try XCTUnwrap(
@@ -259,7 +260,7 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
       noteID: noteSnapshot.id
     )
     let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
-      change: .insertion(fixture.change),
+      change: recoveryChange,
       sequenceState: state,
       recoverySnapshot: queueAndStore.store.snapshot()
     )
@@ -274,6 +275,7 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
     let context = ModelContext(destination)
     let noteSnapshot = try XCTUnwrap(fixture.snapshot.notes.first)
     let queueAndStore = try makeBootstrapQueueAndStore(change: fixture.change)
+    let recoveryChange = SyncBatchAnchoredRecoveryChange.insertion(fixture.change)
 
     let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
       fixture.snapshot,
@@ -285,7 +287,7 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
     XCTAssertEqual(disposition.coveredNoteIDs, [noteSnapshot.id])
     XCTAssertEqual(disposition.insertedNoteIDs, [noteSnapshot.id])
     let ownership = try XCTUnwrap(
-      queueAndStore.store.snapshot().record(for: fixture.change.recordKey)
+      queueAndStore.store.snapshot().record(for: recoveryChange.recordKey)
     )
     XCTAssertEqual(ownership.lifecycle, .bootstrapOwned)
     let record = try XCTUnwrap(
@@ -296,7 +298,7 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
       noteID: noteSnapshot.id
     )
     let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
-      change: .insertion(fixture.change),
+      change: recoveryChange,
       sequenceState: state,
       recoverySnapshot: queueAndStore.store.snapshot()
     )
