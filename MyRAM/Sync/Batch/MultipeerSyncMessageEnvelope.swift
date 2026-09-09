@@ -101,6 +101,7 @@ struct SyncPeerBootstrapAcknowledgement: Codable, Equatable, Sendable {
     let snapshotID: UUID
     let coveredBatchIDs: Set<SyncBatchID>
     /// Exact note sequence-state baselines established while applying the snapshot.
+    /// This is deliberately distinct from full snapshot coverage used to prune batches.
     /// Optional decoding preserves v1 wire compatibility; a missing value cannot
     /// authorize anchored synchronization for a nonempty snapshot.
     let coveredNoteIDs: Set<SyncBatchNoteID>?
@@ -118,6 +119,8 @@ struct SyncPeerBootstrapAcknowledgement: Codable, Equatable, Sendable {
 
 struct SyncPeerBootstrapApplyDisposition: Equatable, Sendable {
     let coveredBatchIDs: Set<SyncBatchID>
+    /// Notes whose exact structural sequence baseline is safe for anchored replay.
+    /// This does not imply that title, pin, folder, or other snapshot metadata matched.
     let coveredNoteIDs: Set<SyncBatchNoteID>
     let insertedNoteIDs: Set<UUID>
     let presentationRefreshRequired: Bool
@@ -273,7 +276,8 @@ enum SyncPeerBootstrapSnapshotPersistence {
         var foldersByID = Dictionary(uniqueKeysWithValues: existingFolders.map { ($0.id, $0) })
         let notesByID = Dictionary(uniqueKeysWithValues: existingNotes.map { ($0.id, $0) })
         let recordsByNoteID = Dictionary(grouping: existingRecords, by: \.noteID)
-        var coveredNoteIDs: Set<SyncBatchNoteID> = []
+        var fullyCoveredNoteIDs: Set<SyncBatchNoteID> = []
+        var sequenceBaselineCoveredNoteIDs: Set<SyncBatchNoteID> = []
         var insertedNoteIDs: Set<UUID> = []
         var didMutate = false
 
@@ -334,17 +338,20 @@ enum SyncPeerBootstrapSnapshotPersistence {
                         )
                         let exactSequenceBaseline = recordExactlyMatches(record, noteSnapshot)
                         if localBodyMatchesState && exactSequenceBaseline {
-                            coveredNoteIDs.insert(note.id)
+                            sequenceBaselineCoveredNoteIDs.insert(note.id)
                         }
-                        if !visibleEquivalent || !exactSequenceBaseline {
-                            continue
+                        if visibleEquivalent && exactSequenceBaseline {
+                            fullyCoveredNoteIDs.insert(note.id)
                         }
                     } else if records.isEmpty {
                         guard bodyEquivalent else {
                             throw SyncPeerBootstrapError.conflictingMissingSequenceState(note.id)
                         }
                         context.insert(snapshotRecord)
-                        coveredNoteIDs.insert(note.id)
+                        sequenceBaselineCoveredNoteIDs.insert(note.id)
+                        if visibleEquivalent {
+                            fullyCoveredNoteIDs.insert(note.id)
+                        }
                         didMutate = true
                     } else {
                         throw SyncPeerBootstrapError.invalidSequenceState(note.id)
@@ -363,7 +370,8 @@ enum SyncPeerBootstrapSnapshotPersistence {
                     context.insert(note)
                     context.insert(snapshotRecord)
                     insertedNoteIDs.insert(note.id)
-                    coveredNoteIDs.insert(note.id)
+                    fullyCoveredNoteIDs.insert(note.id)
+                    sequenceBaselineCoveredNoteIDs.insert(note.id)
                     didMutate = true
                 }
             }
@@ -386,11 +394,11 @@ enum SyncPeerBootstrapSnapshotPersistence {
 
         return SyncPeerBootstrapApplyDisposition(
             coveredBatchIDs: Set(snapshot.historyCoverage.compactMap { coverage in
-                coverage.noteIDs.isSubset(of: coveredNoteIDs)
+                coverage.noteIDs.isSubset(of: fullyCoveredNoteIDs)
                     ? coverage.batchID
                     : nil
             }),
-            coveredNoteIDs: coveredNoteIDs,
+            coveredNoteIDs: sequenceBaselineCoveredNoteIDs,
             insertedNoteIDs: insertedNoteIDs,
             presentationRefreshRequired: didMutate
         )
