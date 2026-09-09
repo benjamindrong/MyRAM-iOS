@@ -174,11 +174,25 @@ enum NoteSequenceStateFullBodyIntegration {
 
         let previousRevision = record.revision
         let nextRevision = try nextRevision(after: previousRevision)
-        let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
-            noteID: note.id,
-            body: note.content
-        )
-        prepared.apply(to: record, revision: nextRevision)
+        if SyncBatchAnchoredPayloadCapability.isEnabled {
+            let finalState = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+                noteID: note.id,
+                currentState: state,
+                body: note.content
+            )
+            try apply(
+                finalState,
+                to: record,
+                noteID: note.id,
+                revision: nextRevision
+            )
+        } else {
+            let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+                noteID: note.id,
+                body: note.content
+            )
+            prepared.apply(to: record, revision: nextRevision)
+        }
         return .replaced(
             previousRevision: previousRevision,
             revision: nextRevision
@@ -204,14 +218,6 @@ enum NoteSequenceStateFullBodyIntegration {
                 note.content = authoritativeBody
                 return .unchanged(revision: record.revision)
             }
-            if SyncBatchAnchoredPayloadCapability.isEnabled {
-                guard NoteSequenceStateExactText.matches(state.visibleText, note.content) else {
-                    throw NoteSequenceStateStoreError.visibleBodyChanged(
-                        expected: state.visibleText,
-                        actual: note.content
-                    )
-                }
-            }
 
             let previousRevision = record.revision
             let nextRevision = try nextRevision(after: previousRevision)
@@ -221,19 +227,12 @@ enum NoteSequenceStateFullBodyIntegration {
                     currentState: state,
                     body: authoritativeBody
                 )
-                guard NoteSequenceStateExactText.matches(finalState.visibleText, authoritativeBody) else {
-                    throw NoteSequenceStateStoreError.newStateBodyMismatch
-                }
-                let payload = try NoteSequenceStatePersistenceCodec.encode(
-                    state: finalState,
-                    noteID: note.id
+                try apply(
+                    finalState,
+                    to: record,
+                    noteID: note.id,
+                    revision: nextRevision
                 )
-                record.formatVersion = NoteSequenceStatePersistenceCodec.formatVersion
-                record.revision = nextRevision
-                record.visibleUTF16Count = finalState.visibleUTF16Count
-                record.tombstonedUTF16Count = finalState.tombstonedUTF16Count
-                record.payloadByteCount = payload.count
-                record.statePayloadData = payload
             } else {
                 let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
                     noteID: note.id,
@@ -255,6 +254,24 @@ enum NoteSequenceStateFullBodyIntegration {
         context.insert(prepared.makeRevisionZeroRecord())
         note.content = authoritativeBody
         return .inserted(revision: 0)
+    }
+
+    private static func apply(
+        _ state: SyncTextSequenceState,
+        to record: NoteSequenceStateRecord,
+        noteID: UUID,
+        revision: UInt64
+    ) throws {
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: state,
+            noteID: noteID
+        )
+        record.formatVersion = NoteSequenceStatePersistenceCodec.formatVersion
+        record.revision = revision
+        record.visibleUTF16Count = state.visibleUTF16Count
+        record.tombstonedUTF16Count = state.tombstonedUTF16Count
+        record.payloadByteCount = payload.count
+        record.statePayloadData = payload
     }
 
     private static func requireManaged(
