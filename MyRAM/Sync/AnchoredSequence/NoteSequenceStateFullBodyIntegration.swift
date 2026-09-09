@@ -125,6 +125,7 @@ enum NoteSequenceStateFullBodyIntegration {
         record.payloadByteCount = payload.count
         record.statePayloadData = payload
     }
+
     static func insertNewNote(
         _ note: Note,
         preparedState: PreparedInitialNoteSequenceState,
@@ -196,6 +197,14 @@ enum NoteSequenceStateFullBodyIntegration {
                 record: record,
                 noteID: note.id
             )
+            if SyncBatchAnchoredPayloadCapability.isEnabled {
+                guard NoteSequenceStateExactText.matches(state.visibleText, note.content) else {
+                    throw NoteSequenceStateStoreError.visibleBodyChanged(
+                        expected: state.visibleText,
+                        actual: note.content
+                    )
+                }
+            }
             guard !NoteSequenceStateExactText.matches(
                 state.visibleText,
                 authoritativeBody
@@ -206,11 +215,32 @@ enum NoteSequenceStateFullBodyIntegration {
 
             let previousRevision = record.revision
             let nextRevision = try nextRevision(after: previousRevision)
-            let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
-                noteID: note.id,
-                body: authoritativeBody
-            )
-            prepared.apply(to: record, revision: nextRevision)
+            if SyncBatchAnchoredPayloadCapability.isEnabled {
+                let finalState = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+                    noteID: note.id,
+                    currentState: state,
+                    body: authoritativeBody
+                )
+                guard NoteSequenceStateExactText.matches(finalState.visibleText, authoritativeBody) else {
+                    throw NoteSequenceStateStoreError.newStateBodyMismatch
+                }
+                let payload = try NoteSequenceStatePersistenceCodec.encode(
+                    state: finalState,
+                    noteID: note.id
+                )
+                record.formatVersion = NoteSequenceStatePersistenceCodec.formatVersion
+                record.revision = nextRevision
+                record.visibleUTF16Count = finalState.visibleUTF16Count
+                record.tombstonedUTF16Count = finalState.tombstonedUTF16Count
+                record.payloadByteCount = payload.count
+                record.statePayloadData = payload
+            } else {
+                let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+                    noteID: note.id,
+                    body: authoritativeBody
+                )
+                prepared.apply(to: record, revision: nextRevision)
+            }
             note.content = authoritativeBody
             return .replaced(
                 previousRevision: previousRevision,
