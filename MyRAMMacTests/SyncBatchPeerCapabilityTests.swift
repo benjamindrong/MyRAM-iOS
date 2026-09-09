@@ -277,7 +277,26 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(kinds, [.bootstrapSnapshot])
 
         await controller.handleBootstrapAcknowledgementForTesting(
-            SyncPeerBootstrapAcknowledgement(snapshotID: state.snapshotID, coveredBatchIDs: []),
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: state.snapshotID,
+                coveredBatchIDs: [],
+                coveredNoteIDs: []
+            ),
+            from: peer
+        )
+
+        XCTAssertFalse(
+            controller.bootstrapStateForTesting(peerDeviceID: "behind-mac")?.ordinarySyncReady == true
+        )
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [historical])
+        XCTAssertEqual(kinds, [.bootstrapSnapshot])
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: state.snapshotID,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [noteID]
+            ),
             from: peer
         )
 
