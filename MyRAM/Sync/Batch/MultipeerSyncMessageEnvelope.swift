@@ -379,8 +379,18 @@ enum SyncPeerBootstrapSnapshotPersistence {
                         guard bodyEquivalent else {
                             throw SyncPeerBootstrapError.conflictingMissingSequenceState(note.id)
                         }
+                        let snapshotState: SyncTextSequenceState
+                        do {
+                            snapshotState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+                                record: snapshotRecord,
+                                noteID: note.id
+                            )
+                        } catch {
+                            throw SyncPeerBootstrapError.invalidSequenceState(note.id)
+                        }
                         context.insert(snapshotRecord)
                         sequenceBaselineCoveredNoteIDs.insert(note.id)
+                        bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
                         if visibleEquivalent {
                             fullyCoveredNoteIDs.insert(note.id)
                         }
@@ -389,6 +399,15 @@ enum SyncPeerBootstrapSnapshotPersistence {
                         throw SyncPeerBootstrapError.invalidSequenceState(note.id)
                     }
                 } else {
+                    let snapshotState: SyncTextSequenceState
+                    do {
+                        snapshotState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+                            record: snapshotRecord,
+                            noteID: noteSnapshot.id
+                        )
+                    } catch {
+                        throw SyncPeerBootstrapError.invalidSequenceState(noteSnapshot.id)
+                    }
                     let note = Note(
                         title: noteSnapshot.title,
                         content: noteSnapshot.body,
@@ -404,6 +423,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
                     insertedNoteIDs.insert(note.id)
                     fullyCoveredNoteIDs.insert(note.id)
                     sequenceBaselineCoveredNoteIDs.insert(note.id)
+                    bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
                     didMutate = true
                 }
             }
