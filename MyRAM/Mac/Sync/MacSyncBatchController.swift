@@ -633,7 +633,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
         let acknowledgement = SyncPeerBootstrapAcknowledgement(
             snapshotID: snapshot.id,
-            coveredBatchIDs: disposition.coveredBatchIDs
+            coveredBatchIDs: disposition.coveredBatchIDs,
+            coveredNoteIDs: disposition.coveredNoteIDs
         )
 
         do {
@@ -660,6 +661,15 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         guard var state = bootstrapStateByPeerDeviceID[deviceID],
               state.snapshotID == acknowledgement.snapshotID,
               acknowledgement.coveredBatchIDs.isSubset(of: state.coveredBatchIDs) else { return }
+
+        let requiredNoteIDs = Set(state.snapshot.notes.map(\.id))
+        let coveredNoteIDs = acknowledgement.coveredNoteIDs ?? []
+        guard coveredNoteIDs.isSubset(of: requiredNoteIDs),
+              requiredNoteIDs.isSubset(of: coveredNoteIDs) else {
+            lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
+            return
+        }
+
         do {
             try unsentBatches.removeBatches(withIDs: acknowledgement.coveredBatchIDs)
         } catch {
