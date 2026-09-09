@@ -1,5 +1,6 @@
 import AnchoredSequenceCore
 import Foundation
+import SwiftData
 import XCTest
 
 @testable import MyRAM
@@ -219,6 +220,88 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
     XCTAssertThrowsError(
       try SyncBatchAnchoredRecoveryRecord(change: bootstrap, lifecycle: .bootstrapOwned)
     )
+  }
+
+  @MainActor
+  func testBootstrapExistingNoteMissingSequenceStatePersistsQueuedOwnership() throws {
+    let fixture = try makeBootstrapOwnershipFixture()
+    let destination = try makeBootstrapModelContainer()
+    let context = ModelContext(destination)
+    let noteSnapshot = try XCTUnwrap(fixture.snapshot.notes.first)
+    let existing = Note(title: noteSnapshot.title, content: noteSnapshot.body)
+    existing.id = noteSnapshot.id
+    existing.isPinned = noteSnapshot.isPinned
+    existing.createdAt = noteSnapshot.createdAt
+    existing.modifiedAt = noteSnapshot.modifiedAt
+    existing.deletedAt = noteSnapshot.deletedAt
+    context.insert(existing)
+    try context.save()
+    let queueAndStore = try makeBootstrapQueueAndStore(change: fixture.change)
+
+    let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+      fixture.snapshot,
+      to: context,
+      pendingIncomingBatches: queueAndStore.queue,
+      anchoredRecoveryStore: queueAndStore.store
+    )
+
+    XCTAssertEqual(disposition.coveredNoteIDs, [noteSnapshot.id])
+    XCTAssertTrue(disposition.insertedNoteIDs.isEmpty)
+    let ownership = try XCTUnwrap(
+      queueAndStore.store.snapshot().record(for: fixture.change.recordKey)
+    )
+    XCTAssertEqual(ownership.lifecycle, .bootstrapOwned)
+    let record = try XCTUnwrap(
+      context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+    )
+    let state = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+      record: record,
+      noteID: noteSnapshot.id
+    )
+    let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: .insertion(fixture.change),
+      sequenceState: state,
+      recoverySnapshot: queueAndStore.store.snapshot()
+    )
+    XCTAssertEqual(plan.appliedRecords, [ownership])
+    XCTAssertEqual(plan.recoveryStoreTransitions, [.removeCommitted(expected: ownership)])
+  }
+
+  @MainActor
+  func testBootstrapMissingNotePersistsQueuedOwnership() throws {
+    let fixture = try makeBootstrapOwnershipFixture()
+    let destination = try makeBootstrapModelContainer()
+    let context = ModelContext(destination)
+    let noteSnapshot = try XCTUnwrap(fixture.snapshot.notes.first)
+    let queueAndStore = try makeBootstrapQueueAndStore(change: fixture.change)
+
+    let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+      fixture.snapshot,
+      to: context,
+      pendingIncomingBatches: queueAndStore.queue,
+      anchoredRecoveryStore: queueAndStore.store
+    )
+
+    XCTAssertEqual(disposition.coveredNoteIDs, [noteSnapshot.id])
+    XCTAssertEqual(disposition.insertedNoteIDs, [noteSnapshot.id])
+    let ownership = try XCTUnwrap(
+      queueAndStore.store.snapshot().record(for: fixture.change.recordKey)
+    )
+    XCTAssertEqual(ownership.lifecycle, .bootstrapOwned)
+    let record = try XCTUnwrap(
+      context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+    )
+    let state = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+      record: record,
+      noteID: noteSnapshot.id
+    )
+    let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+      change: .insertion(fixture.change),
+      sequenceState: state,
+      recoverySnapshot: queueAndStore.store.snapshot()
+    )
+    XCTAssertEqual(plan.appliedRecords, [ownership])
+    XCTAssertEqual(plan.recoveryStoreTransitions, [.removeCommitted(expected: ownership)])
   }
 
   func testFileLocationResolvesExpectedHostPaths() throws {
@@ -840,6 +923,93 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
     )
   }
 
+  @MainActor
+  private func makeBootstrapOwnershipFixture() throws -> (
+    snapshot: SyncPeerBootstrapSnapshot,
+    change: SyncBatchNoteBodyTextInsertedAnchoredChange
+  ) {
+    let container = try makeBootstrapModelContainer()
+    let context = ModelContext(container)
+    context.autosaveEnabled = false
+    let note = Note(content: "AB")
+    let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+      noteID: note.id,
+      body: note.content
+    )
+    context.insert(note)
+    context.insert(prepared.makeRevisionZeroRecord())
+    try context.save()
+    let mutationSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+      for: note,
+      in: context
+    )
+    guard case .noteBodyTextInsertedAnchored(let change) = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+      noteID: note.id,
+      utf16Offset: 1,
+      text: "S",
+      modifiedAt: Date(timeIntervalSince1970: 221),
+      baseContentHash: nil,
+      operationID: SyncOperationID(deviceID: UUID(), localCounter: 221),
+      state: mutationSnapshot.state
+    ) else {
+      throw BootstrapFixtureError.unexpectedChange
+    }
+    let finalState = try mutationSnapshot.state.incorporating(
+      insert: change.payload,
+      insertedText: change.text
+    )
+    _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+      of: note,
+      expected: mutationSnapshot,
+      newBody: finalState.visibleText,
+      finalState: finalState,
+      in: context
+    )
+    try context.save()
+    return (
+      snapshot: try SyncPeerBootstrapSnapshotPersistence.build(from: context),
+      change: change
+    )
+  }
+
+  @MainActor
+  private func makeBootstrapQueueAndStore(
+    change: SyncBatchNoteBodyTextInsertedAnchoredChange
+  ) throws -> (
+    queue: FileBackedSyncBatchQueue,
+    store: FileBackedSyncBatchAnchoredRecoveryStore
+  ) {
+    let directory = FileManager.default.temporaryDirectory
+      .appendingPathComponent("MYR-221-bootstrap-\(UUID().uuidString)", isDirectory: true)
+    let queue = FileBackedSyncBatchQueue(
+      fileURL: directory.appendingPathComponent("pending-incoming.json")
+    )
+    let store = FileBackedSyncBatchAnchoredRecoveryStore(
+      fileURL: directory.appendingPathComponent("anchored-recovery.json")
+    )
+    try queue.enqueueIncomingCore(
+      SyncBatch(
+        id: UUID(),
+        originDeviceID: UUID(),
+        createdAt: Date(timeIntervalSince1970: 221),
+        changes: [.noteBodyTextInsertedAnchored(change)]
+      ),
+      activationEnabled: true
+    )
+    return (queue, store)
+  }
+
+  @MainActor
+  private func makeBootstrapModelContainer() throws -> ModelContainer {
+    let schema = Schema(MyRAMModelRegistry.models)
+    let configuration = ModelConfiguration(
+      "MYR-221-bootstrap-\(UUID().uuidString)",
+      schema: schema,
+      isStoredInMemoryOnly: true
+    )
+    return try ModelContainer(for: schema, configurations: configuration)
+  }
+
   private func makeWaitingRecord(
     counter: UInt64,
     dependencyCounter: UInt64
@@ -878,5 +1048,9 @@ final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
 
   private enum InjectedError: Error {
     case failure
+  }
+
+  private enum BootstrapFixtureError: Error {
+    case unexpectedChange
   }
 }
