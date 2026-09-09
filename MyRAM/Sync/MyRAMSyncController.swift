@@ -41,6 +41,7 @@ protocol MyRAMSyncTransporting: AnyObject {
         timeout: TimeInterval
     )
     func connectedPeers() async -> [MCPeerID]
+    func hasConnectedPeer(_ peerID: MCPeerID) -> Bool
     func send(_ data: Data, toPeers peers: [MCPeerID], mode: MCSessionSendDataMode) async throws
 }
 
@@ -76,6 +77,10 @@ private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
                 continuation.resume(returning: session.connectedPeers)
             }
         }
+    }
+
+    func hasConnectedPeer(_ peerID: MCPeerID) -> Bool {
+        session.connectedPeers.contains(peerID)
     }
 
     func send(_ data: Data, toPeers peers: [MCPeerID], mode: MCSessionSendDataMode) async throws {
@@ -407,6 +412,10 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func invite(_ peer: MyRAMDiscoveredPeer) {
+        guard !transport.hasConnectedPeer(peer.peerID) else {
+            lastConnectionEvent = "Connected: \(peer.displayName)"
+            return
+        }
         guard let attempt = reconnectTracker.beginConnecting(to: peer.deviceID) else { return }
 
         lastConnectionEvent = "Inviting \(peer.displayName)"

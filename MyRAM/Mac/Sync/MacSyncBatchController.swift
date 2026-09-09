@@ -245,6 +245,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func invite(_ peer: MacSyncDiscoveredPeer) {
+        guard !connectedPeersProvider().contains(peer.peerID) else {
+            lastConnectionEvent = "Connected: \(peer.displayName)"
+            return
+        }
         lastConnectionEvent = "Inviting \(peer.displayName)"
         invitePeerOperation(
             peer.peerID,

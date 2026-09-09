@@ -8,6 +8,27 @@ import XCTest
 final class MacSyncBatchControllerTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
+    func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
+        let peerID = MCPeerID(displayName: "remote|connected-mac")
+        var invitedPeerIDs: [MCPeerID] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peerID] },
+            invitePeerOperation: { peerID, _, _ in invitedPeerIDs.append(peerID) }
+        )
+        let peer = MacSyncDiscoveredPeer(
+            peerID: peerID,
+            deviceID: "connected-mac",
+            displayName: "Remote"
+        )
+
+        controller.invite(peer)
+
+        XCTAssertTrue(invitedPeerIDs.isEmpty)
+        XCTAssertEqual(controller.lastConnectionEvent, "Connected: Remote")
+    }
+
     func testBootstrapBarrierPositiveAckPrunesCapturedBatchesAndPreservesNewerWork() async throws {
         let peer = MCPeerID(displayName: "remote|bootstrap-mac")
         var sends: [Data] = []
@@ -1232,7 +1253,9 @@ final class MacSyncBatchControllerTests: XCTestCase {
         unsentBatchQueue: FileBackedSyncBatchQueue?,
         connectedPeersProvider: (() -> [MCPeerID])? = nil,
         sendBatchDataOperation:
-            ((Data, [MCPeerID], MCSessionSendDataMode) throws -> Void)? = nil
+            ((Data, [MCPeerID], MCSessionSendDataMode) throws -> Void)? = nil,
+        invitePeerOperation:
+            ((MCPeerID, Data, TimeInterval) -> Void)? = nil
     ) throws -> MacSyncBatchController {
         let resolvedContext: ModelContext
         if let context {
@@ -1248,7 +1271,8 @@ final class MacSyncBatchControllerTests: XCTestCase {
             unsentBatchQueue: unsentBatchQueue,
             startsNetworking: false,
             connectedPeersProvider: connectedPeersProvider,
-            sendBatchDataOperation: sendBatchDataOperation
+            sendBatchDataOperation: sendBatchDataOperation,
+            invitePeerOperation: invitePeerOperation
         )
     }
 

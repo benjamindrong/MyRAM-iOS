@@ -1061,6 +1061,10 @@ private final class CapabilityRecordingTransport: MyRAMSyncTransporting {
         connectedPeerValues
     }
 
+    func hasConnectedPeer(_ peerID: MCPeerID) -> Bool {
+        connectedPeerValues.contains(peerID)
+    }
+
     func send(
         _ data: Data,
         toPeers peers: [MCPeerID],

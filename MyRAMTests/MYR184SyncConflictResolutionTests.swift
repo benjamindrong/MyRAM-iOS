@@ -243,6 +243,10 @@ private final class MYR184NoopSyncTransport: MyRAMSyncTransporting {
         []
     }
 
+    func hasConnectedPeer(_ peerID: MCPeerID) -> Bool {
+        false
+    }
+
     func send(
         _ data: Data,
         toPeers peers: [MCPeerID],
