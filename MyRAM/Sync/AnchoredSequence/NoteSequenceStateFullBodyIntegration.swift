@@ -256,6 +256,40 @@ enum NoteSequenceStateFullBodyIntegration {
         return .inserted(revision: 0)
     }
 
+    /// Installs the deterministic union of two established anchored histories
+    /// without replacing either side's operation identities.
+    static func mergeRetainedLineage(
+        of note: Note,
+        with remoteState: SyncTextSequenceState,
+        in context: ModelContext
+    ) throws -> NoteSequenceStateFullBodyIntegrationResult {
+        try requireManaged(note, in: context)
+        guard let record = try fetchRecord(noteID: note.id, in: context) else {
+            throw NoteSequenceStateStoreError.expectedRowButRowIsMissing
+        }
+        let localState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record,
+            noteID: note.id
+        )
+        guard NoteSequenceStateExactText.matches(localState.visibleText, note.content) else {
+            throw NoteSequenceStateStoreError.visibleBodyChanged(
+                expected: localState.visibleText,
+                actual: note.content
+            )
+        }
+
+        let mergedState = try localState.mergingRetainedLineage(with: remoteState)
+        guard mergedState != localState else {
+            return .unchanged(revision: record.revision)
+        }
+
+        let previousRevision = record.revision
+        let nextRevision = try nextRevision(after: previousRevision)
+        try apply(mergedState, to: record, noteID: note.id, revision: nextRevision)
+        note.content = mergedState.visibleText
+        return .replaced(previousRevision: previousRevision, revision: nextRevision)
+    }
+
     private static func apply(
         _ state: SyncTextSequenceState,
         to record: NoteSequenceStateRecord,

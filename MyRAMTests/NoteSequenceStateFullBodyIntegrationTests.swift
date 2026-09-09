@@ -537,6 +537,81 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
         XCTAssertEqual(try fetchNotes(in: destination).only?.content, "Newer local state")
     }
 
+    func testBootstrapMergesSharedDivergentLineageAndCoversSequenceBaseline() throws {
+        let source = try makeSeededFixture(body: "AB")
+        let destination = try makeContainer()
+        let destinationContext = ModelContext(destination)
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+            to: destinationContext
+        )
+
+        let sourceSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: source.note,
+            in: source.context
+        )
+        let destinationNote = try fetchNote(source.note.id, in: destinationContext)
+        let destinationSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: destinationNote,
+            in: destinationContext
+        )
+        let rootID = try XCTUnwrap(sourceSnapshot.state.runs.first?.operationID)
+        let left = try SyncTextElementID(operationID: rootID, elementOffset: 0)
+        let right = try SyncTextElementID(operationID: rootID, elementOffset: 1)
+        let anchor = try SyncOperationAnchor.between(left: left, right: right)
+        let sourceState = try sourceSnapshot.state.incorporating(
+            insert: SyncTextInsertOperationPayload(
+                operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+                anchor: anchor
+            ),
+            insertedText: "S"
+        )
+        let destinationState = try destinationSnapshot.state.incorporating(
+            insert: SyncTextInsertOperationPayload(
+                operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+                anchor: anchor
+            ),
+            insertedText: "D"
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: source.note,
+            expected: sourceSnapshot,
+            newBody: sourceState.visibleText,
+            finalState: sourceState,
+            in: source.context
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: destinationNote,
+            expected: destinationSnapshot,
+            newBody: destinationState.visibleText,
+            finalState: destinationState,
+            in: destinationContext
+        )
+        try source.context.save()
+        try destinationContext.save()
+        let batchID = UUID()
+        let snapshot = withHistoryCoverage(
+            try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+            batchID: batchID,
+            noteIDs: [source.note.id]
+        )
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: destinationContext)
+        let mergedRecord = try XCTUnwrap(fetchRecords(in: destinationContext).only)
+        let mergedState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: mergedRecord,
+            noteID: source.note.id
+        )
+
+        XCTAssertEqual(disposition.coveredNoteIDs, [source.note.id])
+        XCTAssertTrue(disposition.coveredBatchIDs.isEmpty)
+        XCTAssertTrue(disposition.presentationRefreshRequired)
+        XCTAssertTrue(mergedState.visibleText.contains("S"))
+        XCTAssertTrue(mergedState.visibleText.contains("D"))
+        XCTAssertEqual(destinationNote.content, mergedState.visibleText)
+        XCTAssertEqual(mergedState.runs.count, 3)
+    }
+
     func testBootstrapCoversOnlyExactNoteBatchAndRejectsMixedDivergentBatch() throws {
         let source = try makeSeededFixture(body: "Exact authoritative")
         let divergentSourceNote = Note(content: "Divergent authoritative")

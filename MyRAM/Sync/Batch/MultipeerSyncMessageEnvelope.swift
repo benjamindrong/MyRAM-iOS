@@ -324,9 +324,14 @@ enum SyncPeerBootstrapSnapshotPersistence {
                     let records = recordsByNoteID[note.id] ?? []
                     if records.count == 1, let record = records.first {
                         let localState: SyncTextSequenceState
+                        let snapshotState: SyncTextSequenceState
                         do {
                             localState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
                                 record: record,
+                                noteID: note.id
+                            )
+                            snapshotState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+                                record: snapshotRecord,
                                 noteID: note.id
                             )
                         } catch {
@@ -339,6 +344,22 @@ enum SyncPeerBootstrapSnapshotPersistence {
                         let exactSequenceBaseline = recordExactlyMatches(record, noteSnapshot)
                         if localBodyMatchesState && exactSequenceBaseline {
                             sequenceBaselineCoveredNoteIDs.insert(note.id)
+                        } else if localBodyMatchesState {
+                            do {
+                                let mergeResult = try NoteSequenceStateFullBodyIntegration.mergeRetainedLineage(
+                                    of: note,
+                                    with: snapshotState,
+                                    in: context
+                                )
+                                sequenceBaselineCoveredNoteIDs.insert(note.id)
+                                if case .replaced = mergeResult {
+                                    note.richTextContentData = nil
+                                    note.modifiedAt = max(note.modifiedAt, noteSnapshot.modifiedAt)
+                                    didMutate = true
+                                }
+                            } catch SyncTextSequenceMergeError.noSharedRetainedLineage {
+                                // Independent histories have no safe structural union.
+                            }
                         }
                         if visibleEquivalent && exactSequenceBaseline {
                             fullyCoveredNoteIDs.insert(note.id)
