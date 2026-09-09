@@ -283,6 +283,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
         var fullyCoveredNoteIDs: Set<SyncBatchNoteID> = []
         var sequenceBaselineCoveredNoteIDs: Set<SyncBatchNoteID> = []
         var insertedNoteIDs: Set<UUID> = []
+        var bootstrapOwnershipStatesByNoteID: [SyncBatchNoteID: SyncTextSequenceState] = [:]
         var didMutate = false
 
         do {
@@ -348,17 +349,10 @@ enum SyncPeerBootstrapSnapshotPersistence {
                         let exactSequenceBaseline = recordExactlyMatches(record, noteSnapshot)
                         if localBodyMatchesState && exactSequenceBaseline {
                             sequenceBaselineCoveredNoteIDs.insert(note.id)
+                            bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
                         } else if localBodyMatchesState {
                             do {
                                 _ = try localState.mergingRetainedLineage(with: snapshotState)
-                                if let pendingIncomingBatches, let anchoredRecoveryStore {
-                                    try persistBootstrapOwnership(
-                                        for: note.id,
-                                        peerSnapshotState: snapshotState,
-                                        pendingIncomingBatches: pendingIncomingBatches,
-                                        anchoredRecoveryStore: anchoredRecoveryStore
-                                    )
-                                }
                                 let visibleBodyBeforeMerge = note.content
                                 let mergeResult = try NoteSequenceStateFullBodyIntegration.mergeRetainedLineage(
                                     of: note,
@@ -373,6 +367,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
                                     note.modifiedAt = max(note.modifiedAt, noteSnapshot.modifiedAt)
                                     didMutate = true
                                 }
+                                bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
                             } catch SyncTextSequenceMergeError.noSharedRetainedLineage {
                                 // Independent histories have no safe structural union.
                             }
@@ -426,6 +421,18 @@ enum SyncPeerBootstrapSnapshotPersistence {
                 guard insertedNoteIDs.isSubset(of: committedNoteIDs),
                       insertedNoteIDs.isSubset(of: committedRecordIDs) else {
                     throw SyncPeerBootstrapError.commitVerificationFailed
+                }
+            }
+            if let pendingIncomingBatches, let anchoredRecoveryStore {
+                for (noteID, peerSnapshotState) in bootstrapOwnershipStatesByNoteID.sorted(by: {
+                    $0.key.uuidString < $1.key.uuidString
+                }) {
+                    try persistBootstrapOwnership(
+                        for: noteID,
+                        peerSnapshotState: peerSnapshotState,
+                        pendingIncomingBatches: pendingIncomingBatches,
+                        anchoredRecoveryStore: anchoredRecoveryStore
+                    )
                 }
             }
         } catch {

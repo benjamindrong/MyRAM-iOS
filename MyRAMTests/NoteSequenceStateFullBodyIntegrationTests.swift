@@ -615,7 +615,7 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
         XCTAssertEqual(mergedState.runs.count, 3)
     }
 
-    func testBootstrapPersistsQueuedInsertionOwnershipBeforeUnionAndPlannerCleansIt() throws {
+    func testBootstrapPersistsQueuedInsertionOwnershipAfterUnionCommitAndPlannerCleansIt() throws {
         let source = try makeSeededFixture(body: "AB")
         let destination = try makeContainer()
         let destinationContext = ModelContext(destination)
@@ -709,28 +709,6 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
         )
         try queue.enqueueIncomingCore(batch, activationEnabled: true)
 
-        let beforeFailedOwnership = try XCTUnwrap(fetchRecords(in: destinationContext).only)
-            .statePayloadData
-        let failingStore = FileBackedSyncBatchAnchoredRecoveryStore(
-            fileURL: temporaryDirectory.appendingPathComponent("failing-recovery.json"),
-            atomicWriter: { _, _ in
-                throw NSError(domain: "MYR221InjectedRecoveryWriteFailure", code: 1)
-            }
-        )
-        XCTAssertThrowsError(
-            try SyncPeerBootstrapSnapshotPersistence.apply(
-                try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
-                to: destinationContext,
-                pendingIncomingBatches: queue,
-                anchoredRecoveryStore: failingStore
-            )
-        )
-        XCTAssertEqual(
-            try XCTUnwrap(fetchRecords(in: destinationContext).only).statePayloadData,
-            beforeFailedOwnership
-        )
-        XCTAssertFalse(destinationContext.hasChanges)
-
         let abortedStore = FileBackedSyncBatchAnchoredRecoveryStore(
             fileURL: temporaryDirectory.appendingPathComponent("aborted-recovery.json")
         )
@@ -749,8 +727,7 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
             noteID: source.note.id,
             operationID: queuedChange.payload.operationID
         )
-        let abortedOwnership = try XCTUnwrap(abortedStore.snapshot().record(for: abortedKey))
-        XCTAssertEqual(abortedOwnership.lifecycle, .bootstrapOwned)
+        XCTAssertNil(abortedStore.snapshot().record(for: abortedKey))
         let rolledBackRecord = try XCTUnwrap(fetchRecords(in: destinationContext).only)
         let rolledBackState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
             record: rolledBackRecord,
@@ -763,11 +740,8 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
             recoverySnapshot: abortedStore.snapshot()
         )
         XCTAssertTrue(replayPlan.didChangeApplicationState)
-        XCTAssertEqual(replayPlan.appliedRecords, [abortedOwnership])
-        XCTAssertEqual(
-            replayPlan.recoveryStoreTransitions,
-            [.removeCommitted(expected: abortedOwnership)]
-        )
+        XCTAssertTrue(replayPlan.appliedRecords.isEmpty)
+        XCTAssertTrue(replayPlan.recoveryStoreTransitions.isEmpty)
 
         _ = try SyncPeerBootstrapSnapshotPersistence.apply(
             try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
@@ -793,6 +767,28 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
             record: finalRecord,
             noteID: source.note.id
         )
+        let failingStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("failing-recovery.json"),
+            atomicWriter: { _, _ in
+                throw NSError(domain: "MYR221InjectedRecoveryWriteFailure", code: 1)
+            }
+        )
+        XCTAssertThrowsError(
+            try SyncPeerBootstrapSnapshotPersistence.apply(
+                try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+                to: destinationContext,
+                pendingIncomingBatches: queue,
+                anchoredRecoveryStore: failingStore
+            )
+        )
+        let stateAfterFailedOwnership = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: try XCTUnwrap(fetchRecords(in: destinationContext).only),
+            noteID: source.note.id
+        )
+        XCTAssertEqual(stateAfterFailedOwnership, finalState)
+        XCTAssertNil(failingStore.snapshot().record(for: key))
+        XCTAssertFalse(destinationContext.hasChanges)
+
         let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
             change: .insertion(queuedChange),
             sequenceState: finalState,
