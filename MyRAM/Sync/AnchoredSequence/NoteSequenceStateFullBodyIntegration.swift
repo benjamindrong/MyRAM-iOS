@@ -197,6 +197,13 @@ enum NoteSequenceStateFullBodyIntegration {
                 record: record,
                 noteID: note.id
             )
+            guard !NoteSequenceStateExactText.matches(
+                state.visibleText,
+                authoritativeBody
+            ) else {
+                note.content = authoritativeBody
+                return .unchanged(revision: record.revision)
+            }
             if SyncBatchAnchoredPayloadCapability.isEnabled {
                 guard NoteSequenceStateExactText.matches(state.visibleText, note.content) else {
                     throw NoteSequenceStateStoreError.visibleBodyChanged(
@@ -204,13 +211,6 @@ enum NoteSequenceStateFullBodyIntegration {
                         actual: note.content
                     )
                 }
-            }
-            guard !NoteSequenceStateExactText.matches(
-                state.visibleText,
-                authoritativeBody
-            ) else {
-                note.content = authoritativeBody
-                return .unchanged(revision: record.revision)
             }
 
             let previousRevision = record.revision
