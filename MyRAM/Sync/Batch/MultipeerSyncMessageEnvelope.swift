@@ -100,12 +100,39 @@ struct SyncPeerBootstrapNoteSnapshot: Codable, Equatable, Sendable {
 struct SyncPeerBootstrapAcknowledgement: Codable, Equatable, Sendable {
     let snapshotID: UUID
     let coveredBatchIDs: Set<SyncBatchID>
+    /// Exact note sequence-state baselines established while applying the snapshot.
+    /// Optional decoding preserves v1 wire compatibility; a missing value cannot
+    /// authorize anchored synchronization for a nonempty snapshot.
+    let coveredNoteIDs: Set<SyncBatchNoteID>?
+
+    init(
+        snapshotID: UUID,
+        coveredBatchIDs: Set<SyncBatchID>,
+        coveredNoteIDs: Set<SyncBatchNoteID>? = nil
+    ) {
+        self.snapshotID = snapshotID
+        self.coveredBatchIDs = coveredBatchIDs
+        self.coveredNoteIDs = coveredNoteIDs
+    }
 }
 
 struct SyncPeerBootstrapApplyDisposition: Equatable, Sendable {
     let coveredBatchIDs: Set<SyncBatchID>
+    let coveredNoteIDs: Set<SyncBatchNoteID>
     let insertedNoteIDs: Set<UUID>
     let presentationRefreshRequired: Bool
+
+    init(
+        coveredBatchIDs: Set<SyncBatchID>,
+        coveredNoteIDs: Set<SyncBatchNoteID> = [],
+        insertedNoteIDs: Set<UUID>,
+        presentationRefreshRequired: Bool
+    ) {
+        self.coveredBatchIDs = coveredBatchIDs
+        self.coveredNoteIDs = coveredNoteIDs
+        self.insertedNoteIDs = insertedNoteIDs
+        self.presentationRefreshRequired = presentationRefreshRequired
+    }
 }
 
 struct SyncPeerBootstrapPendingState: Equatable, Sendable {
@@ -280,28 +307,40 @@ enum SyncPeerBootstrapSnapshotPersistence {
                     guard note.createdAt == noteSnapshot.createdAt else {
                         throw SyncPeerBootstrapError.conflictingNoteIdentity(noteSnapshot.id)
                     }
+                    let bodyEquivalent = NoteSequenceStateExactText.matches(
+                        note.content,
+                        noteSnapshot.body
+                    )
                     let visibleEquivalent = note.title == noteSnapshot.title
-                        && NoteSequenceStateExactText.matches(note.content, noteSnapshot.body)
+                        && bodyEquivalent
                         && (note.isPinned ?? false) == noteSnapshot.isPinned
                         && note.modifiedAt == noteSnapshot.modifiedAt
                         && note.deletedAt == noteSnapshot.deletedAt
                         && note.folder?.id == noteSnapshot.folderID
                     let records = recordsByNoteID[note.id] ?? []
                     if records.count == 1, let record = records.first {
+                        let localState: SyncTextSequenceState
                         do {
-                            _ = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+                            localState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
                                 record: record,
                                 noteID: note.id
                             )
                         } catch {
                             throw SyncPeerBootstrapError.invalidSequenceState(note.id)
                         }
-                        if !visibleEquivalent || !recordExactlyMatches(record, noteSnapshot) {
+                        let localBodyMatchesState = NoteSequenceStateExactText.matches(
+                            localState.visibleText,
+                            note.content
+                        )
+                        let exactSequenceBaseline = recordExactlyMatches(record, noteSnapshot)
+                        if localBodyMatchesState && exactSequenceBaseline {
+                            coveredNoteIDs.insert(note.id)
+                        }
+                        if !visibleEquivalent || !exactSequenceBaseline {
                             continue
                         }
-                        coveredNoteIDs.insert(note.id)
                     } else if records.isEmpty {
-                        guard visibleEquivalent else {
+                        guard bodyEquivalent else {
                             throw SyncPeerBootstrapError.conflictingMissingSequenceState(note.id)
                         }
                         context.insert(snapshotRecord)
@@ -351,6 +390,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
                     ? coverage.batchID
                     : nil
             }),
+            coveredNoteIDs: coveredNoteIDs,
             insertedNoteIDs: insertedNoteIDs,
             presentationRefreshRequired: didMutate
         )
