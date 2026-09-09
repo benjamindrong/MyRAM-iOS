@@ -622,7 +622,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     ) async {
         let disposition: SyncPeerBootstrapApplyDisposition
         do {
-            disposition = try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: context)
+            guard let convergenceCoordinator else {
+                lastErrorMessage = "Unable to apply nearby bootstrap state."
+                return
+            }
+            disposition = try convergenceCoordinator.applyBootstrapSnapshot(snapshot, to: context)
         } catch {
             lastErrorMessage = "Unable to apply nearby bootstrap state."
             return

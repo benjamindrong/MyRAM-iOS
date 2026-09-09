@@ -201,6 +201,7 @@ enum SyncPeerBootstrapError: Error, Equatable {
     case conflictingMissingSequenceState(UUID)
     case destinationContextHasPendingChanges
     case commitVerificationFailed
+    case anchoredRecoveryConflict(SyncBatchAnchoredRecoveryRecordKey)
 }
 
 @MainActor
@@ -263,7 +264,10 @@ enum SyncPeerBootstrapSnapshotPersistence {
 
     static func apply(
         _ snapshot: SyncPeerBootstrapSnapshot,
-        to context: ModelContext
+        to context: ModelContext,
+        pendingIncomingBatches: FileBackedSyncBatchQueue? = nil,
+        anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore? = nil,
+        saveContext: (() throws -> Void)? = nil
     ) throws -> SyncPeerBootstrapApplyDisposition {
         try validate(snapshot)
         guard !context.hasChanges else {
@@ -346,6 +350,16 @@ enum SyncPeerBootstrapSnapshotPersistence {
                             sequenceBaselineCoveredNoteIDs.insert(note.id)
                         } else if localBodyMatchesState {
                             do {
+                                _ = try localState.mergingRetainedLineage(with: snapshotState)
+                                if let pendingIncomingBatches, let anchoredRecoveryStore {
+                                    try persistBootstrapOwnership(
+                                        for: note.id,
+                                        peerSnapshotState: snapshotState,
+                                        pendingIncomingBatches: pendingIncomingBatches,
+                                        anchoredRecoveryStore: anchoredRecoveryStore
+                                    )
+                                }
+                                let visibleBodyBeforeMerge = note.content
                                 let mergeResult = try NoteSequenceStateFullBodyIntegration.mergeRetainedLineage(
                                     of: note,
                                     with: snapshotState,
@@ -353,7 +367,9 @@ enum SyncPeerBootstrapSnapshotPersistence {
                                 )
                                 sequenceBaselineCoveredNoteIDs.insert(note.id)
                                 if case .replaced = mergeResult {
-                                    note.richTextContentData = nil
+                                    if !NoteSequenceStateExactText.matches(note.content, visibleBodyBeforeMerge) {
+                                        note.richTextContentData = nil
+                                    }
                                     note.modifiedAt = max(note.modifiedAt, noteSnapshot.modifiedAt)
                                     didMutate = true
                                 }
@@ -398,7 +414,11 @@ enum SyncPeerBootstrapSnapshotPersistence {
             }
 
             if didMutate {
-                try context.save()
+                if let saveContext {
+                    try saveContext()
+                } else {
+                    try context.save()
+                }
                 let committedNotes = try context.fetch(FetchDescriptor<Note>())
                 let committedRecords = try context.fetch(FetchDescriptor<NoteSequenceStateRecord>())
                 let committedNoteIDs = Set(committedNotes.map(\.id))
@@ -423,6 +443,72 @@ enum SyncPeerBootstrapSnapshotPersistence {
             insertedNoteIDs: insertedNoteIDs,
             presentationRefreshRequired: didMutate
         )
+    }
+
+    private static func persistBootstrapOwnership(
+        for noteID: SyncBatchNoteID,
+        peerSnapshotState: SyncTextSequenceState,
+        pendingIncomingBatches: FileBackedSyncBatchQueue,
+        anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore
+    ) throws {
+        let changes = pendingIncomingBatches.pendingBatches.flatMap(\.changes).compactMap {
+            change -> SyncBatchAnchoredRecoveryChange? in
+            switch change {
+            case .noteBodyTextInsertedAnchored(let insertion) where insertion.noteID == noteID:
+                let matchingRun = peerSnapshotState.runs.first {
+                    $0.operationID == insertion.payload.operationID
+                }
+                guard let matchingRun,
+                      matchingRun.origin.leftElementID == insertion.payload.anchor.leftElementID,
+                      matchingRun.origin.rightElementID == insertion.payload.anchor.rightElementID,
+                      matchingRun.text == insertion.text else { return nil }
+                return .insertion(insertion)
+            case .noteBodyTextDeletedAnchored(let deletion) where deletion.noteID == noteID:
+                guard let replayed = try? SyncBatchAnchoredDeleteReplay.applying(
+                    deletion,
+                    to: peerSnapshotState
+                ).sequenceState,
+                      replayed == peerSnapshotState else { return nil }
+                return .deletion(deletion)
+            default:
+                return nil
+            }
+        }
+
+        let snapshot = anchoredRecoveryStore.snapshot()
+        guard snapshot.health.permitsOrdinaryMutation else {
+            throw SyncBatchAnchoredRecoveryStoreError.unhealthyPersistence
+        }
+        var transitions: [SyncBatchAnchoredRecoveryStoreTransition] = []
+        var changesByKey: [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryChange] = [:]
+        for change in changes {
+            let key = change.recordKey
+            if let queued = changesByKey[key] {
+                guard queued == change else {
+                    throw SyncPeerBootstrapError.anchoredRecoveryConflict(key)
+                }
+                continue
+            }
+            changesByKey[key] = change
+            if let existing = snapshot.record(for: key) {
+                guard existing.change == change,
+                      !existing.lifecycle.isTerminal else {
+                    throw SyncPeerBootstrapError.anchoredRecoveryConflict(key)
+                }
+                switch existing.lifecycle {
+                case .waiting, .bootstrapOwned:
+                    continue
+                case .terminalStructuralFailure, .bootstrapContentConflict:
+                    throw SyncPeerBootstrapError.anchoredRecoveryConflict(key)
+                }
+            }
+            let record = try SyncBatchAnchoredRecoveryRecord(
+                change: change,
+                lifecycle: .bootstrapOwned
+            )
+            transitions.append(.insertExpectedAbsent(record))
+        }
+        _ = try anchoredRecoveryStore.apply(transitions)
     }
 
     private static func validate(_ snapshot: SyncPeerBootstrapSnapshot) throws {

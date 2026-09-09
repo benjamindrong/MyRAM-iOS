@@ -178,6 +178,49 @@ enum SyncBatchAnchoredRecoveryTestFactory {
 }
 
 final class SyncBatchAnchoredRecoveryStoreTests: XCTestCase {
+  func testBootstrapOwnedLifecycleRoundTripsAndSurvivesStoreReopen() throws {
+    let fileURL = temporaryFileURL()
+    let change = try SyncBatchAnchoredRecoveryTestFactory.insertionChange(
+      state: .empty,
+      offset: 0,
+      text: "owned",
+      operationID: SyncBatchAnchoredRecoveryTestFactory.operation(221)
+    )
+    let record = try SyncBatchAnchoredRecoveryRecord(
+      change: change,
+      lifecycle: .bootstrapOwned
+    )
+
+    XCTAssertFalse(record.lifecycle.isWaiting)
+    XCTAssertFalse(record.lifecycle.isTerminal)
+    try FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL).apply([
+      .insertExpectedAbsent(record)
+    ])
+
+    let reopened = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: fileURL)
+    XCTAssertEqual(reopened.snapshot().records, [record])
+    XCTAssertEqual(
+      try JSONDecoder().decode(
+        SyncBatchAnchoredRecoveryRecord.self,
+        from: JSONEncoder().encode(record)
+      ),
+      record
+    )
+  }
+
+  func testBootstrapOwnedRejectsBootstrapChangeShape() throws {
+    let bootstrap = SyncBatchAnchoredRecoveryChange.bootstrap(
+      try SyncBatchAnchoredBootstrapChange(
+        noteID: SyncBatchAnchoredRecoveryTestFactory.noteID,
+        body: "body"
+      )
+    )
+
+    XCTAssertThrowsError(
+      try SyncBatchAnchoredRecoveryRecord(change: bootstrap, lifecycle: .bootstrapOwned)
+    )
+  }
+
   func testFileLocationResolvesExpectedHostPaths() throws {
     let supportDirectory = URL(fileURLWithPath: "/tmp/myram-application-support", isDirectory: true)
 

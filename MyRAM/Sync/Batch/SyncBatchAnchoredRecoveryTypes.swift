@@ -796,6 +796,7 @@ enum SyncBatchAnchoredRecoveryErrorClassification: Equatable, Sendable {
 }
 
 enum SyncBatchAnchoredRecoveryLifecycle: Equatable, Sendable {
+  case bootstrapOwned
   case waiting(SyncBatchAnchoredMissingDependency)
   case terminalStructuralFailure(SyncBatchAnchoredStructuralFailure)
   case bootstrapContentConflict(SyncBatchAnchoredBootstrapConflict)
@@ -809,7 +810,7 @@ enum SyncBatchAnchoredRecoveryLifecycle: Equatable, Sendable {
     switch self {
     case .terminalStructuralFailure, .bootstrapContentConflict:
       true
-    case .waiting:
+    case .bootstrapOwned, .waiting:
       false
     }
   }
@@ -827,11 +828,14 @@ extension SyncBatchAnchoredRecoveryLifecycle: Codable {
     case waiting
     case terminalStructuralFailure
     case bootstrapContentConflict
+    case bootstrapOwned
   }
 
   func encode(to encoder: Encoder) throws {
     var container = encoder.container(keyedBy: CodingKeys.self)
     switch self {
+    case .bootstrapOwned:
+      try container.encode(Kind.bootstrapOwned.rawValue, forKey: .kind)
     case .waiting(let dependency):
       try container.encode(Kind.waiting.rawValue, forKey: .kind)
       try container.encode(dependency, forKey: .waiting)
@@ -851,6 +855,14 @@ extension SyncBatchAnchoredRecoveryLifecycle: Codable {
       throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
     }
     switch kind {
+    case .bootstrapOwned:
+      guard !container.contains(.waiting),
+        !container.contains(.terminalStructuralFailure),
+        !container.contains(.bootstrapContentConflict)
+      else {
+        throw SyncBatchAnchoredRecoveryCodingError.unsupportedRecordShape
+      }
+      self = .bootstrapOwned
     case .waiting:
       guard container.contains(.waiting),
         !container.contains(.terminalStructuralFailure),
@@ -909,12 +921,15 @@ struct SyncBatchAnchoredRecoveryRecord: Codable, Equatable, Sendable {
     }
     switch (change, lifecycle) {
     case (.bootstrap, .bootstrapContentConflict),
+      (.insertion, .bootstrapOwned),
+      (.deletion, .bootstrapOwned),
       (.insertion, .waiting(.insertionAnchor)),
       (.deletion, .waiting(.deletionTarget)),
       (.insertion, .terminalStructuralFailure),
       (.deletion, .terminalStructuralFailure):
       break
     case (.bootstrap, .waiting),
+      (.bootstrap, .bootstrapOwned),
       (.bootstrap, .terminalStructuralFailure),
       (.insertion, .waiting(.deletionTarget)),
       (.deletion, .waiting(.insertionAnchor)),

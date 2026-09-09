@@ -106,6 +106,8 @@ enum SyncBatchAnchoredActivationPlanner {
     ) throws -> SyncBatchAnchoredActivationRoute {
         if let lifecycle = finalLifecycle(for: source.recordKey, plan: plan, existing: existing) {
             switch lifecycle {
+            case .bootstrapOwned:
+                throw SyncBatchAnchoredActivationPlannerError.ambiguousNoApplicationChange
             case .waiting(let dependency):
                 try requireNonSuccessTransitionOwnership(plan)
                 return .waiting(plan, dependency: dependency)
