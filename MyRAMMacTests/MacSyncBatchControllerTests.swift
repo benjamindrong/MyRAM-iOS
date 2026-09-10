@@ -604,10 +604,14 @@ final class MacSyncBatchControllerTests: XCTestCase {
         noteA.id = UUID(uuidString: "17800000-0000-0000-0000-000000000241")!
         let noteB = Note(title: "FIFO target", content: "B0")
         noteB.id = UUID(uuidString: "17800000-0000-0000-0000-000000000242")!
+        let noteC = Note(title: "Unrelated deferred target", content: "C0")
+        noteC.id = UUID(uuidString: "17800000-0000-0000-0000-000000000243")!
         receiverContext.insert(noteA)
         receiverContext.insert(noteB)
+        receiverContext.insert(noteC)
         try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: noteA, in: receiverContext)
         try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: noteB, in: receiverContext)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: noteC, in: receiverContext)
         try receiverContext.save()
 
         let boundaryReached = expectation(description: "Batch A holds the active drain")
@@ -644,6 +648,17 @@ final class MacSyncBatchControllerTests: XCTestCase {
             base: "B0",
             inserted: "-once"
         )
+        let unrelatedDeferredBatch = SyncBatch(
+            id: UUID(uuidString: "17800000-0000-0000-0000-000000000243")!,
+            originDeviceID: UUID(uuidString: "17800000-0000-0000-0000-000000000244")!,
+            createdAt: Date(timeIntervalSince1970: 243),
+            changes: [.noteBodyTextInserted(.init(
+                noteID: noteC.id,
+                utf16Offset: noteC.content.utf16.count,
+                text: "-deferred",
+                modifiedAt: Date(timeIntervalSince1970: 243)
+            ))]
+        )
         let receiverSession = MCSession(
             peer: MCPeerID(displayName: "local|compatible-redelivery-receiver"),
             securityIdentity: nil,
@@ -662,6 +677,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         try await sender.acceptLocalBatch(batchB)
         await waitUntil { senderSends.count == 1 }
         receiver.session(receiverSession, didReceive: senderSends[0], fromPeer: senderPeerID)
+        XCTAssertTrue(coordinator.durablyCaptureIncomingBatch(unrelatedDeferredBatch))
         try await Task.sleep(nanoseconds: 50_000_000)
 
         XCTAssertTrue(FileBackedSyncBatchQueue(fileURL: receiverPendingURL).contains(batchB.id))
@@ -732,8 +748,13 @@ final class MacSyncBatchControllerTests: XCTestCase {
         }
         XCTAssertEqual(batchBAcknowledgementCount, 1)
         XCTAssertEqual(noteB.content, "B0-once")
-        _ = await activeDrain.value
-        XCTAssertEqual(receiver.lastSyncAt, batchB.createdAt)
+        let activeDrainDisposition = await activeDrain.value
+        XCTAssertEqual(activeDrainDisposition, .acknowledgementPermitted)
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: receiverPendingURL).pendingBatches,
+            [unrelatedDeferredBatch]
+        )
+        XCTAssertNil(receiver.lastSyncAt)
         _ = coordinator
     }
 

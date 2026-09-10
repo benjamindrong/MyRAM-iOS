@@ -71,12 +71,12 @@ final class MacSyncConvergenceCoordinator {
         guard (try? SyncBatchAnchoredPayloadPolicy.validateConvergence(batch)) != nil else {
             return .acknowledgementPermitted
         }
-        var outcome = await runtime.submitRemoteBatch(batch)
-        if case .alreadyDraining = outcome,
-           let completedOutcome = await runtime.awaitActiveDrainCompletion() {
-            outcome = completedOutcome
-        }
+        let completion = await runtime.submitRemoteBatchAwaitingDrainOwnership(batch)
+        let outcome = completion.outcome
         await handle(outcome: outcome, sourceBatch: batch)
+        if completion.successfullyCompletedBatchIDs.contains(batch.id) {
+            return .acknowledgementPermitted
+        }
         return SyncConvergenceRemoteBatchDispositionPolicy.disposition(
             for: outcome,
             batchID: batch.id

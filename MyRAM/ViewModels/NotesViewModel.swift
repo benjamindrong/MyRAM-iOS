@@ -2449,12 +2449,12 @@ final class NotesViewModel: ObservableObject {
             return .acknowledgementPermitted
         }
         guard !batch.changes.isEmpty else { return .acknowledgementPermitted }
-        var outcome = await syncConvergenceRuntime.submitRemoteBatch(batch)
-        if case .alreadyDraining = outcome,
-           let completedOutcome = await syncConvergenceRuntime.awaitActiveDrainCompletion() {
-            outcome = completedOutcome
-        }
+        let completion = await syncConvergenceRuntime.submitRemoteBatchAwaitingDrainOwnership(batch)
+        let outcome = completion.outcome
         await handleConvergenceRuntimeOutcome(outcome)
+        if completion.successfullyCompletedBatchIDs.contains(batch.id) {
+            return .acknowledgementPermitted
+        }
         return SyncConvergenceRemoteBatchDispositionPolicy.disposition(
             for: outcome,
             batchID: batch.id

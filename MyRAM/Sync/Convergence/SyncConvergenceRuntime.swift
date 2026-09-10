@@ -11,6 +11,11 @@ enum SyncConvergenceRuntimeOutcome {
     case blocked(SyncBatchDrainFailure)
 }
 
+struct SyncConvergenceDrainCompletion {
+    let outcome: SyncConvergenceRuntimeOutcome
+    let successfullyCompletedBatchIDs: Set<UUID>
+}
+
 
 enum SyncConvergenceRemoteBatchDisposition: Equatable, Sendable {
     case acknowledgementPermitted
@@ -126,8 +131,10 @@ final class SyncConvergenceRuntime {
     private lazy var pendingPostCommitSource = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
     private var isDraining = false
     private var drainRequestedWhileActive = false
-    private var activeDrainWaiters: [CheckedContinuation<SyncConvergenceRuntimeOutcome, Never>] = []
-    private var lastCompletedDrainOutcome: SyncConvergenceRuntimeOutcome?
+    private var activeDrainWaiters: [CheckedContinuation<SyncConvergenceDrainCompletion, Never>] = []
+    private var activeDrainSuccessfullyCompletedBatchIDs: Set<UUID> = []
+    private var lastCompletedDrainCompletion: SyncConvergenceDrainCompletion?
+    private var completedDrainGeneration: UInt64 = 0
     private let localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics?
     private weak var incomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter?
     private let conflictStore: SyncConflictStoring
@@ -171,6 +178,22 @@ final class SyncConvergenceRuntime {
             batch,
             activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
         )
+    }
+
+    func submitRemoteBatchAwaitingDrainOwnership(
+        _ batch: SyncBatch
+    ) async -> SyncConvergenceDrainCompletion {
+        let startingGeneration = completedDrainGeneration
+        let outcome = await submitRemoteBatch(batch)
+        if case .alreadyDraining = outcome,
+           let completion = await awaitActiveDrainCompletion() {
+            return completion
+        }
+        if completedDrainGeneration != startingGeneration,
+           let completion = lastCompletedDrainCompletion {
+            return completion
+        }
+        return SyncConvergenceDrainCompletion(outcome: outcome, successfullyCompletedBatchIDs: [])
     }
 
 #if DEBUG
@@ -277,20 +300,26 @@ final class SyncConvergenceRuntime {
             return .alreadyDraining
         }
         isDraining = true
-        lastCompletedDrainOutcome = nil
+        lastCompletedDrainCompletion = nil
+        activeDrainSuccessfullyCompletedBatchIDs = []
         let outcome = await performOwnedDrain(activationEnabled: activationEnabled)
         isDraining = false
-        lastCompletedDrainOutcome = outcome
+        let completion = SyncConvergenceDrainCompletion(
+            outcome: outcome,
+            successfullyCompletedBatchIDs: activeDrainSuccessfullyCompletedBatchIDs
+        )
+        completedDrainGeneration &+= 1
+        lastCompletedDrainCompletion = completion
         let waiters = activeDrainWaiters
         activeDrainWaiters.removeAll()
         for waiter in waiters {
-            waiter.resume(returning: outcome)
+            waiter.resume(returning: completion)
         }
         return outcome
     }
 
-    func awaitActiveDrainCompletion() async -> SyncConvergenceRuntimeOutcome? {
-        guard isDraining else { return lastCompletedDrainOutcome }
+    func awaitActiveDrainCompletion() async -> SyncConvergenceDrainCompletion? {
+        guard isDraining else { return lastCompletedDrainCompletion }
         return await withCheckedContinuation { continuation in
             activeDrainWaiters.append(continuation)
         }
@@ -414,6 +443,7 @@ final class SyncConvergenceRuntime {
                         }
                         if case .complete = postCommit {
                             appliedBatchIDs.insert(result.batchID)
+                            activeDrainSuccessfullyCompletedBatchIDs.insert(result.batchID)
                         }
                     case .alreadyIncorporated(let result):
                         madeIncomingProgress = true
@@ -431,6 +461,7 @@ final class SyncConvergenceRuntime {
                         }
                         if case .complete = postCommit {
                             appliedBatchIDs.insert(result.batchID)
+                            activeDrainSuccessfullyCompletedBatchIDs.insert(result.batchID)
                         }
                     case .failedBeforeCommit(let failure), .failedAndRolledBack(let failure):
                         return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
@@ -452,6 +483,7 @@ final class SyncConvergenceRuntime {
                                 }
                                 if case .complete = outcome {
                                     appliedBatchIDs.insert(cleanupBatchID)
+                                    activeDrainSuccessfullyCompletedBatchIDs.insert(cleanupBatchID)
                                 }
                             case .completed:
                                 try convergenceQueue.removeBatches(withIDs: [cleanupBatchID])
@@ -460,6 +492,7 @@ final class SyncConvergenceRuntime {
                                 }
                                 madeIncomingProgress = true
                                 appliedBatchIDs.insert(cleanupBatchID)
+                                activeDrainSuccessfullyCompletedBatchIDs.insert(cleanupBatchID)
                             case .missing:
                                 return .blocked(SyncBatchDrainFailure(batchID: cleanupBatchID, kind: .persistence))
                             }
