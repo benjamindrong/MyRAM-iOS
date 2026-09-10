@@ -51,15 +51,34 @@ struct SyncPeerBootstrapSnapshot: Codable, Equatable, Sendable {
 struct SyncPeerBootstrapHistoryBatchCoverage: Codable, Equatable, Sendable {
     let batchID: SyncBatchID
     let noteIDs: Set<SyncBatchNoteID>
+    let anchoredRecoveryChanges: [SyncBatchAnchoredRecoveryChange]?
 
     init(batchID: SyncBatchID, noteIDs: Set<SyncBatchNoteID>) {
         self.batchID = batchID
         self.noteIDs = noteIDs
+        anchoredRecoveryChanges = nil
+    }
+
+    init(
+        batchID: SyncBatchID,
+        noteIDs: Set<SyncBatchNoteID>,
+        anchoredRecoveryChanges: [SyncBatchAnchoredRecoveryChange]?
+    ) {
+        self.batchID = batchID
+        self.noteIDs = noteIDs
+        self.anchoredRecoveryChanges = anchoredRecoveryChanges
     }
 
     init(batch: SyncBatch) {
         batchID = batch.id
         noteIDs = Set(batch.changes.map(\.noteID))
+        anchoredRecoveryChanges = batch.changes.compactMap { change in
+            switch change {
+            case .noteBodyTextInsertedAnchored(let insertion): return .insertion(insertion)
+            case .noteBodyTextDeletedAnchored(let deletion): return .deletion(deletion)
+            default: return nil
+            }
+        }
     }
 }
 
@@ -193,6 +212,8 @@ enum SyncPeerBootstrapError: Error, Equatable {
     case duplicateNoteID(UUID)
     case duplicateHistoryBatchID(SyncBatchID)
     case historyReferencesMissingNote(SyncBatchNoteID)
+    case historyContainsBootstrapRecoveryChange(SyncBatchID)
+    case historyEvidenceReferencesUndeclaredNote(SyncBatchNoteID)
     case missingFolder(UUID)
     case missingSequenceState(UUID)
     case invalidSequenceState(UUID)
@@ -284,6 +305,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
         var sequenceBaselineCoveredNoteIDs: Set<SyncBatchNoteID> = []
         var insertedNoteIDs: Set<UUID> = []
         var bootstrapOwnershipStatesByNoteID: [SyncBatchNoteID: SyncTextSequenceState] = [:]
+        var coveredBatchIDs: Set<SyncBatchID> = []
         var didMutate = false
 
         do {
@@ -443,14 +465,30 @@ enum SyncPeerBootstrapSnapshotPersistence {
                     throw SyncPeerBootstrapError.commitVerificationFailed
                 }
             }
-            if let pendingIncomingBatches, let anchoredRecoveryStore {
+            coveredBatchIDs = Set(snapshot.historyCoverage.compactMap { coverage in
+                coverage.noteIDs.isSubset(of: fullyCoveredNoteIDs)
+                    ? coverage.batchID
+                    : nil
+            })
+            if let anchoredRecoveryStore {
                 for (noteID, peerSnapshotState) in bootstrapOwnershipStatesByNoteID.sorted(by: {
                     $0.key.uuidString < $1.key.uuidString
                 }) {
+                    if let pendingIncomingBatches {
+                        try persistBootstrapOwnership(
+                            changes: pendingIncomingBatches.pendingBatches.flatMap(\.changes).compactMap {
+                                recoveryChange(from: $0, for: noteID)
+                            },
+                            peerSnapshotState: peerSnapshotState,
+                            anchoredRecoveryStore: anchoredRecoveryStore
+                        )
+                    }
                     try persistBootstrapOwnership(
-                        for: noteID,
+                        changes: snapshot.historyCoverage
+                            .filter { !coveredBatchIDs.contains($0.batchID) }
+                            .flatMap { $0.anchoredRecoveryChanges ?? [] }
+                            .filter { $0.noteID == noteID },
                         peerSnapshotState: peerSnapshotState,
-                        pendingIncomingBatches: pendingIncomingBatches,
                         anchoredRecoveryStore: anchoredRecoveryStore
                     )
                 }
@@ -461,11 +499,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
         }
 
         return SyncPeerBootstrapApplyDisposition(
-            coveredBatchIDs: Set(snapshot.historyCoverage.compactMap { coverage in
-                coverage.noteIDs.isSubset(of: fullyCoveredNoteIDs)
-                    ? coverage.batchID
-                    : nil
-            }),
+            coveredBatchIDs: coveredBatchIDs,
             coveredNoteIDs: sequenceBaselineCoveredNoteIDs,
             insertedNoteIDs: insertedNoteIDs,
             presentationRefreshRequired: didMutate
@@ -473,15 +507,13 @@ enum SyncPeerBootstrapSnapshotPersistence {
     }
 
     private static func persistBootstrapOwnership(
-        for noteID: SyncBatchNoteID,
+        changes: [SyncBatchAnchoredRecoveryChange],
         peerSnapshotState: SyncTextSequenceState,
-        pendingIncomingBatches: FileBackedSyncBatchQueue,
         anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore
     ) throws {
-        let changes = pendingIncomingBatches.pendingBatches.flatMap(\.changes).compactMap {
-            change -> SyncBatchAnchoredRecoveryChange? in
+        let peerProvenChanges = changes.compactMap { change -> SyncBatchAnchoredRecoveryChange? in
             switch change {
-            case .noteBodyTextInsertedAnchored(let insertion) where insertion.noteID == noteID:
+            case .insertion(let insertion):
                 let matchingRun = peerSnapshotState.runs.first {
                     $0.operationID == insertion.payload.operationID
                 }
@@ -490,15 +522,15 @@ enum SyncPeerBootstrapSnapshotPersistence {
                       matchingRun.origin.rightElementID == insertion.payload.anchor.rightElementID,
                       matchingRun.text == insertion.text else { return nil }
                 return .insertion(insertion)
-            case .noteBodyTextDeletedAnchored(let deletion) where deletion.noteID == noteID:
+            case .deletion(let deletion):
                 guard let replayed = try? SyncBatchAnchoredDeleteReplay.applying(
                     deletion,
                     to: peerSnapshotState
                 ).sequenceState,
                       replayed == peerSnapshotState else { return nil }
                 return .deletion(deletion)
-            default:
-                return nil
+            case .bootstrap:
+                preconditionFailure("Bootstrap recovery evidence is rejected during snapshot validation")
             }
         }
 
@@ -508,7 +540,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
         }
         var transitions: [SyncBatchAnchoredRecoveryStoreTransition] = []
         var changesByKey: [SyncBatchAnchoredRecoveryRecordKey: SyncBatchAnchoredRecoveryChange] = [:]
-        for change in changes {
+        for change in peerProvenChanges {
             let key = change.recordKey
             if let queued = changesByKey[key] {
                 guard queued == change else {
@@ -548,6 +580,20 @@ enum SyncPeerBootstrapSnapshotPersistence {
         _ = try anchoredRecoveryStore.apply(transitions)
     }
 
+    private static func recoveryChange(
+        from change: SyncBatchChange,
+        for noteID: SyncBatchNoteID
+    ) -> SyncBatchAnchoredRecoveryChange? {
+        switch change {
+        case .noteBodyTextInsertedAnchored(let insertion) where insertion.noteID == noteID:
+            return .insertion(insertion)
+        case .noteBodyTextDeletedAnchored(let deletion) where deletion.noteID == noteID:
+            return .deletion(deletion)
+        default:
+            return nil
+        }
+    }
+
     private static func validate(_ snapshot: SyncPeerBootstrapSnapshot) throws {
         let folderIDs = Set(snapshot.folders.map(\.id))
         guard folderIDs.count == snapshot.folders.count else {
@@ -568,6 +614,14 @@ enum SyncPeerBootstrapSnapshotPersistence {
         for coverage in snapshot.historyCoverage {
             if let missingNoteID = coverage.noteIDs.first(where: { !noteIDs.contains($0) }) {
                 throw SyncPeerBootstrapError.historyReferencesMissingNote(missingNoteID)
+            }
+            for change in coverage.anchoredRecoveryChanges ?? [] {
+                if case .bootstrap = change {
+                    throw SyncPeerBootstrapError.historyContainsBootstrapRecoveryChange(coverage.batchID)
+                }
+                guard coverage.noteIDs.contains(change.noteID) else {
+                    throw SyncPeerBootstrapError.historyEvidenceReferencesUndeclaredNote(change.noteID)
+                }
             }
         }
         for folder in snapshot.folders {
