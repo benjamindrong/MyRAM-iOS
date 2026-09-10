@@ -126,6 +126,8 @@ final class SyncConvergenceRuntime {
     private lazy var pendingPostCommitSource = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
     private var isDraining = false
     private var drainRequestedWhileActive = false
+    private var activeDrainWaiters: [CheckedContinuation<SyncConvergenceRuntimeOutcome, Never>] = []
+    private var lastCompletedDrainOutcome: SyncConvergenceRuntimeOutcome?
     private let localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics?
     private weak var incomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter?
     private let conflictStore: SyncConflictStoring
@@ -275,7 +277,28 @@ final class SyncConvergenceRuntime {
             return .alreadyDraining
         }
         isDraining = true
-        defer { isDraining = false }
+        lastCompletedDrainOutcome = nil
+        let outcome = await performOwnedDrain(activationEnabled: activationEnabled)
+        isDraining = false
+        lastCompletedDrainOutcome = outcome
+        let waiters = activeDrainWaiters
+        activeDrainWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: outcome)
+        }
+        return outcome
+    }
+
+    func awaitActiveDrainCompletion() async -> SyncConvergenceRuntimeOutcome? {
+        guard isDraining else { return lastCompletedDrainOutcome }
+        return await withCheckedContinuation { continuation in
+            activeDrainWaiters.append(continuation)
+        }
+    }
+
+    private func performOwnedDrain(
+        activationEnabled: Bool
+    ) async -> SyncConvergenceRuntimeOutcome {
         var appliedBatchIDs: Set<UUID> = []
 
         repeat {

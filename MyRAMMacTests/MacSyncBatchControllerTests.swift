@@ -572,7 +572,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.lastSyncAt, batch.createdAt)
     }
 
-    func testInboundBatchPipelineSerializesConvergenceAndAcknowledgesQueuedBatchWithoutRedelivery() async throws {
+    func testMYR221BatchAcceptedDuringActiveDrainRetainsAcknowledgementOwnership() async throws {
         let senderPeerID = MCPeerID(displayName: "remote|compatible-redelivery-sender")
         let receiverPeerID = MCPeerID(displayName: "remote|compatible-redelivery-receiver")
         let senderUnsentURL = temporaryQueueFileURL(named: "mac-unsent-batch-queue.json")
@@ -606,6 +606,8 @@ final class MacSyncBatchControllerTests: XCTestCase {
         noteB.id = UUID(uuidString: "17800000-0000-0000-0000-000000000242")!
         receiverContext.insert(noteA)
         receiverContext.insert(noteB)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: noteA, in: receiverContext)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: noteB, in: receiverContext)
         try receiverContext.save()
 
         let boundaryReached = expectation(description: "Batch A holds the active drain")
@@ -653,11 +655,8 @@ final class MacSyncBatchControllerTests: XCTestCase {
             encryptionPreference: .required
         )
 
-        receiver.session(
-            receiverSession,
-            didReceive: try MultipeerSyncMessageCoding.encodeBatch(batchA),
-            fromPeer: senderPeerID
-        )
+        XCTAssertTrue(coordinator.durablyCaptureIncomingBatch(batchA))
+        let activeDrain = Task { await coordinator.submitRemoteBatch(batchA) }
         await fulfillment(of: [boundaryReached], timeout: 1)
 
         try await sender.acceptLocalBatch(batchB)
@@ -665,7 +664,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         receiver.session(receiverSession, didReceive: senderSends[0], fromPeer: senderPeerID)
         try await Task.sleep(nanoseconds: 50_000_000)
 
-        XCTAssertFalse(FileBackedSyncBatchQueue(fileURL: receiverPendingURL).contains(batchB.id))
+        XCTAssertTrue(FileBackedSyncBatchQueue(fileURL: receiverPendingURL).contains(batchB.id))
         XCTAssertTrue(
             receiverSends.allSatisfy { data in
                 guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
@@ -733,6 +732,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         }
         XCTAssertEqual(batchBAcknowledgementCount, 1)
         XCTAssertEqual(noteB.content, "B0-once")
+        _ = await activeDrain.value
         XCTAssertEqual(receiver.lastSyncAt, batchB.createdAt)
         _ = coordinator
     }
