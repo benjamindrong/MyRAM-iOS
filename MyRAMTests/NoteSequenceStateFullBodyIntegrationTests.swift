@@ -926,6 +926,65 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
             fileURL: temporaryDirectory.appendingPathComponent("anchored-recovery.json")
         )
 
+        let terminalStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("terminal-recovery.json")
+        )
+        let terminalRecord = try SyncBatchAnchoredRecoveryRecord(
+            change: .insertion(manifestedInsertion),
+            lifecycle: .terminalStructuralFailure(
+                .identityCollision(operationID: manifestedInsertion.payload.operationID)
+            )
+        )
+        try terminalStore.apply([.insertExpectedAbsent(terminalRecord)])
+        XCTAssertThrowsError(
+            try SyncPeerBootstrapSnapshotPersistence.apply(
+                snapshot,
+                to: destinationContext,
+                pendingIncomingBatches: emptyQueue,
+                anchoredRecoveryStore: terminalStore
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? SyncPeerBootstrapError,
+                .anchoredRecoveryConflict(terminalRecord.key)
+            )
+        }
+        XCTAssertEqual(terminalStore.snapshot().record(for: terminalRecord.key), terminalRecord)
+
+        guard case .noteBodyTextInsertedAnchored(let conflictingInsertion) = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: source.note.id,
+            utf16Offset: 1,
+            text: "conflict",
+            modifiedAt: manifestedInsertion.modifiedAt,
+            baseContentHash: nil,
+            operationID: manifestedInsertion.payload.operationID,
+            state: sourceSnapshot.state
+        ) else {
+            return XCTFail("Expected conflicting anchored insertion")
+        }
+        let conflictingStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("conflicting-recovery.json")
+        )
+        let conflictingRecord = try SyncBatchAnchoredRecoveryRecord(
+            change: .insertion(conflictingInsertion),
+            lifecycle: .bootstrapOwned
+        )
+        try conflictingStore.apply([.insertExpectedAbsent(conflictingRecord)])
+        XCTAssertThrowsError(
+            try SyncPeerBootstrapSnapshotPersistence.apply(
+                snapshot,
+                to: destinationContext,
+                pendingIncomingBatches: emptyQueue,
+                anchoredRecoveryStore: conflictingStore
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? SyncPeerBootstrapError,
+                .anchoredRecoveryConflict(conflictingRecord.key)
+            )
+        }
+        XCTAssertEqual(conflictingStore.snapshot().record(for: conflictingRecord.key), conflictingRecord)
+
         let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
             snapshot,
             to: destinationContext,
