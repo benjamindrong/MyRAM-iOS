@@ -4117,7 +4117,7 @@ enum CanonicalCommittedResultV1: Equatable, Comparable {
     }
 }
 
-private enum CanonicalDigestEncoderV1 {
+enum CanonicalDigestEncoderV1 {
     static func digest(data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }

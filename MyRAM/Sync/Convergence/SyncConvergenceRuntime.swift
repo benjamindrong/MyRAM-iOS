@@ -421,6 +421,17 @@ final class SyncConvergenceRuntime {
                 )
                 switch planning {
                 case .planned(let incorporationInput):
+                    if !incorporationInput.plan.historyPlan.pressureNotes.isEmpty {
+                        do {
+                            _ = try compactCompletedIncorporationHistory(
+                                affecting: incorporationInput.plan.historyPlan.pressureNotes
+                            )
+                        } catch let failure as SyncConvergenceTransactionFailure {
+                            return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
+                        } catch {
+                            return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
+                        }
+                    }
                     let incorporation = incorporationExecutor.incorporate(
                         input: incorporationInput,
                         transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
@@ -500,6 +511,28 @@ final class SyncConvergenceRuntime {
                     } catch {
                         return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
                     }
+                case .deferred(.historyPressure(let noteID, let blockingBatchID)):
+                    do {
+                        let compacted = try compactCompletedIncorporationHistory(affecting: [noteID])
+                        if !compacted.isEmpty {
+                            attemptedBatchIDs.remove(batch.id)
+                            madeIncomingProgress = true
+                            continue
+                        }
+                    } catch let failure as SyncConvergenceTransactionFailure {
+                        return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
+                    } catch {
+                        return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
+                    }
+                    let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
+                    blockedNoteIDs.formUnion(affectedNoteIDs)
+                    blockedOrigins.insert(batch.originDeviceID)
+                    deferredItems.append(SyncConvergenceDeferredItem(
+                        domain: .incoming,
+                        batchID: batch.id,
+                        affectedNoteIDs: affectedNoteIDs,
+                        reason: .planning(.historyPressure(noteID: noteID, blockingBatchID: blockingBatchID))
+                    ))
                 case .deferred(let reason):
                     let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
                     blockedNoteIDs.formUnion(affectedNoteIDs)
@@ -792,6 +825,18 @@ final class SyncConvergenceRuntime {
             anchoredRecoverySnapshot: anchoredRecoverySnapshot,
             candidateQueuePosition: queued.first(where: { $0.batch.id == batch.id })?.queuePosition
         )
+    }
+
+    private func compactCompletedIncorporationHistory(
+        affecting noteIDs: Set<UUID>
+    ) throws -> Set<UUID> {
+        let protectedBatchIDs = Set(convergenceQueue.pendingBatches.map(\.id))
+            .union(localObligationQueue.pendingBatches.map(\.id))
+        return try SwiftDataSyncConvergencePersistenceTransaction(context: context)
+            .compactCompletedIncorporationHistory(
+                affecting: noteIDs,
+                protectedBatchIDs: protectedBatchIDs
+            )
     }
 
     private func loadAnchoredSequenceSnapshots(
