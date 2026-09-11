@@ -334,12 +334,24 @@ struct SyncConvergencePlanner {
         } catch {
             return .failedBeforeCommit(.invalidMergePlan(noteID: nil))
         }
+        let isAppliedEquivalentRecoveryCleanup = !notePlans.isEmpty &&
+            notePlans.values.allSatisfy { partial in
+                guard partial.creationEffect == nil,
+                      partial.titleEffect == nil,
+                      partial.lifecycleEffect == nil,
+                      case .anchoredStructural(let anchored)? = partial.bodyEffect else {
+                    return false
+                }
+                return !anchored.didChangeApplicationState &&
+                    anchored.reviewedNoApplicationChangeReason == .appliedEquivalentRecovery
+            }
         let historyResult = SyncConvergenceHistoryPolicy().plan(
             affectedNoteIDs: plannedAffectedNoteIDs,
             currentStates: input.historyStates,
             retainedOperationAdditions: retainedAdditions,
             snapshotAdditions: snapshotAdditions,
-            fullIncorporationEvidenceBytes: projectedFullEvidenceBytes
+            fullIncorporationEvidenceBytes: projectedFullEvidenceBytes,
+            permitsSoftPressureEvidenceGrowth: isAppliedEquivalentRecoveryCleanup
         )
         switch historyResult {
         case .success(let historyPlan):
@@ -2096,7 +2108,8 @@ private struct SyncConvergenceHistoryPolicy {
         currentStates: [SyncConvergenceHistoryAccountingProjection],
         retainedOperationAdditions: [SyncConvergencePlannedBodyOperation],
         snapshotAdditions: [SyncConvergenceSnapshotAddition],
-        fullIncorporationEvidenceBytes: Int
+        fullIncorporationEvidenceBytes: Int,
+        permitsSoftPressureEvidenceGrowth: Bool = false
     ) -> HistoryPlanningResult {
         var pressureNotes: Set<UUID> = []
         for noteID in affectedNoteIDs {
@@ -2119,7 +2132,7 @@ private struct SyncConvergenceHistoryPolicy {
             let projectedFullEvidenceBytes = current.fullIncorporationEvidenceBytes + fullIncorporationEvidenceBytes
             let addsBoundedEvidence = !addedSnapshots.isEmpty ||
                 !addedOperations.isEmpty ||
-                fullIncorporationEvidenceBytes > 0
+                (fullIncorporationEvidenceBytes > 0 && !permitsSoftPressureEvidenceGrowth)
 
             if projectedSnapshotCount > Limits.hardSnapshots ||
                 projectedOperationCount > Limits.hardRetainedOperations ||
@@ -4104,7 +4117,7 @@ enum CanonicalCommittedResultV1: Equatable, Comparable {
     }
 }
 
-private enum CanonicalDigestEncoderV1 {
+enum CanonicalDigestEncoderV1 {
     static func digest(data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }

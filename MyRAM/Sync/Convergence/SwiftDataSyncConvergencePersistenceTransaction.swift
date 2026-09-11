@@ -3,9 +3,14 @@ import SwiftData
 
 final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersistenceTransaction {
     private let context: ModelContext
+    private let saveContext: (ModelContext) throws -> Void
 
-    init(context: ModelContext) {
+    init(
+        context: ModelContext,
+        saveContext: @escaping (ModelContext) throws -> Void = { try $0.save() }
+    ) {
         self.context = context
+        self.saveContext = saveContext
     }
 
     func loadNote(id: UUID) throws -> SyncConvergenceMutableNoteRecord? {
@@ -329,11 +334,205 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
     }
 
     func save() throws {
-        try context.save()
+        try saveContext(context)
     }
 
     func rollback() {
         context.rollback()
+    }
+
+    /// Replaces completed, protection-free full incorporation records with their
+    /// permanent fixed-size duplicate identity. The tombstone and every deletion
+    /// are committed by the same save, so a failed save retains the full record.
+    func compactCompletedIncorporationHistory(
+        affecting noteIDs: Set<UUID>,
+        protectedBatchIDs: Set<UUID>
+    ) throws -> Set<UUID> {
+        guard !noteIDs.isEmpty else { return [] }
+        do {
+            let affectedEffects = try context.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>())
+                .filter { noteIDs.contains($0.noteID) }
+            let candidateIDs = Set(affectedEffects.map(\.batchID)).subtracting(protectedBatchIDs)
+            var compacted: Set<UUID> = []
+            for batchID in candidateIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+                guard let root = try fetchOne(IncorporatedSyncBatch.self, #Predicate { $0.batchID == batchID }) else {
+                    throw SyncConvergenceTransactionFailure.corruptHistory(noteID: nil)
+                }
+                let state = try SyncConvergencePostCommitState.decodePayloadData(root.postCommitStatePayloadData)
+                guard state == .none, root.hasPendingPostCommitWork == false else { continue }
+
+                let retained = try fetch(RetainedBodyOperation.self, #Predicate { $0.batchID == batchID })
+                let provenance = try fetch(ExplicitDeleteProvenance.self, #Predicate { $0.batchID == batchID })
+                let incorporationBlocking = try context.fetch(FetchDescriptor<IncorporationBlockingReference>())
+                    .filter { $0.batchID == batchID || $0.blockingBatchID == batchID }
+                let diagnosticBlocking = try fetch(ConvergenceBlockingBatchReference.self, #Predicate { $0.blockingBatchID == batchID })
+                let contradictions = try fetch(IncorporationContradictionDiagnostic.self, #Predicate { $0.batchID == batchID })
+                guard retained.isEmpty, provenance.isEmpty, incorporationBlocking.isEmpty,
+                      diagnosticBlocking.isEmpty, contradictions.isEmpty else { continue }
+
+                let effects = try fetch(IncorporatedBatchNoteEffect.self, #Predicate { $0.batchID == batchID })
+                let identities = try fetch(IncorporatedBatchOperationIdentity.self, #Predicate { $0.batchID == batchID })
+                let results = try fetch(IncorporatedBatchResultEvidence.self, #Predicate { $0.batchID == batchID })
+                let affected = try validateCompactionEvidence(
+                    root: root,
+                    effects: effects,
+                    identities: identities,
+                    results: results
+                )
+                guard try !hasIndependentlyProtectedIncorporationEvidence(
+                    batchID: batchID,
+                    affectedNoteIDs: affected
+                ) else { continue }
+
+                let ordering = try CommittedAtOrderingPayload(
+                    batchID: root.batchID,
+                    committedAt: root.committedAt
+                ).encodedEvidenceData()
+                if let existing = try fetchOne(IncorporatedBatchTombstone.self, #Predicate { $0.batchID == batchID }) {
+                    try existing.validateForPersistence()
+                    guard existing.originDeviceID == root.originDeviceID,
+                          existing.schemaVersion == root.schemaVersion,
+                          existing.canonicalPayloadDigest == root.canonicalPayloadDigest,
+                          existing.canonicalPayloadDigestFormatVersion == root.canonicalPayloadDigestFormatVersion,
+                          existing.committedResultDigest == root.committedResultDigest,
+                          existing.committedResultDigestFormatVersion == root.committedResultDigestFormatVersion,
+                          existing.committedAtOrderingPayloadData == ordering else {
+                        throw SyncConvergenceTransactionFailure.inconsistentIncorporationState(noteID: affected.first)
+                    }
+                } else {
+                    let tombstone = try IncorporatedBatchTombstone.makeValidated(
+                        batchID: root.batchID,
+                        originDeviceID: root.originDeviceID,
+                        canonicalPayloadDigest: root.canonicalPayloadDigest,
+                        canonicalPayloadDigestFormatVersion: root.canonicalPayloadDigestFormatVersion,
+                        schemaVersion: root.schemaVersion,
+                        committedResultDigest: root.committedResultDigest,
+                        committedResultDigestFormatVersion: root.committedResultDigestFormatVersion,
+                        committedAtOrderingPayloadData: ordering
+                    )
+                    try tombstone.validateForPersistence()
+                    context.insert(tombstone)
+                }
+                identities.forEach(context.delete)
+                effects.forEach(context.delete)
+                results.forEach(context.delete)
+                context.delete(root)
+                compacted.insert(batchID)
+            }
+            guard !compacted.isEmpty else { return [] }
+            try saveContext(context)
+            return compacted
+        } catch {
+            context.rollback()
+            throw error
+        }
+    }
+
+    private func hasIndependentlyProtectedIncorporationEvidence(
+        batchID: UUID,
+        affectedNoteIDs: Set<UUID>
+    ) throws -> Bool {
+        let titleWinners = try context.fetch(FetchDescriptor<NoteTitleWinner>())
+            .filter { affectedNoteIDs.contains($0.noteID) }
+        for winner in titleWinners {
+            do {
+                try SyncConvergencePersistenceValidation.validate(winner)
+                let identity = try OperationIdentityPayload.decodePayloadData(
+                    winner.operationIdentityPayloadData
+                )
+                if identity.batchIDLowercase == batchID.uuidString.lowercased() {
+                    return true
+                }
+            } catch {
+                throw SyncConvergenceTransactionFailure.corruptHistory(noteID: winner.noteID)
+            }
+        }
+
+        // Reconciliation payload schemas are durable episode evidence. Until an
+        // owner-specific release path proves an episode and all of its children no
+        // longer reference incorporation history, every root for that note stays
+        // whole. This also protects orphan candidate/completion evidence fail closed.
+        if try context.fetch(FetchDescriptor<ReconciliationEpisode>())
+            .contains(where: { affectedNoteIDs.contains($0.noteID) }) {
+            return true
+        }
+        if try context.fetch(FetchDescriptor<ReconciliationCandidateRecord>())
+            .contains(where: { affectedNoteIDs.contains($0.noteID) }) {
+            return true
+        }
+        return try context.fetch(FetchDescriptor<ReconciliationCompletionEvidenceRecord>())
+            .contains(where: { affectedNoteIDs.contains($0.noteID) })
+    }
+
+    private func validateCompactionEvidence(
+        root: IncorporatedSyncBatch,
+        effects: [IncorporatedBatchNoteEffect],
+        identities: [IncorporatedBatchOperationIdentity],
+        results: [IncorporatedBatchResultEvidence]
+    ) throws -> Set<UUID> {
+        try SyncConvergencePersistenceValidation.validate(root)
+        let declared = try SyncConvergenceAffectedNotesPayloadV1
+            .decodeData(root.affectedNotesPayloadData)
+            .noteIDs
+        var projections: [(kind: String, key: String, bytes: Data)] = []
+        var resultKinds: [UUID: [String]] = [:]
+        for result in results {
+            let evidence = try SyncConvergenceStableEncoding.decode(
+                SyncConvergenceResultEvidence.self,
+                from: result.resultEvidencePayloadData
+            )
+            guard evidence.batchID == root.batchID,
+                  evidence.noteID == result.noteID,
+                  evidence.kind.rawValue == result.resultKindRaw,
+                  result.payloadUTF8ByteCount == result.resultEvidencePayloadData.count else {
+                throw SyncConvergenceTransactionFailure.corruptHistory(noteID: result.noteID)
+            }
+            resultKinds[result.noteID, default: []].append(result.resultKindRaw)
+            var encoder = CanonicalPayloadDigestFormatV1()
+            try encoder.appendResultEvidence(evidence)
+            projections.append(("result", "\(result.noteID.uuidString.lowercased())|\(result.resultKindRaw)", encoder.data))
+        }
+        for effect in effects {
+            try SyncConvergencePersistenceValidation.validate(effect)
+            let kinds = resultKinds[effect.noteID] ?? []
+            guard SyncConvergenceNoteEffectKindMembership.validate(kinds) else {
+                throw SyncConvergenceTransactionFailure.corruptHistory(noteID: effect.noteID)
+            }
+            var encoder = CanonicalPayloadDigestFormatV1()
+            try encoder.appendProjectedNoteEffect(batchID: root.batchID, noteID: effect.noteID, kinds: kinds)
+            projections.append(("note-effect", effect.noteID.uuidString.lowercased(), encoder.data))
+        }
+        for identity in identities {
+            try SyncConvergencePersistenceValidation.validate(identity)
+            let payload = try OperationIdentityPayload.decodePayloadData(identity.operationIdentityPayloadData)
+            guard payload.batchIDLowercase == root.batchID.uuidString.lowercased(),
+                  identity.payloadUTF8ByteCount == identity.operationIdentityPayloadData.count
+                    + identity.canonicalReplayKeyPayloadData.count else {
+                throw SyncConvergenceTransactionFailure.corruptHistory(noteID: identity.noteID)
+            }
+            var encoder = CanonicalPayloadDigestFormatV1()
+            try encoder.appendOperationIdentity(payload)
+            projections.append(("operation", "\(payload.batchIDLowercase)|\(payload.operationIndex)", encoder.data))
+        }
+        let authoritative = Set(effects.map(\.noteID)).union(results.map(\.noteID))
+        guard !authoritative.isEmpty,
+              authoritative == declared,
+              resultKinds.keys.allSatisfy({ authoritative.contains($0) }) else {
+            throw SyncConvergenceTransactionFailure.corruptHistory(noteID: declared.first)
+        }
+        projections.sort { lhs, rhs in
+            lhs.kind == rhs.kind ? lhs.key < rhs.key : lhs.kind < rhs.kind
+        }
+        let bytes = projections.reduce(0) { $0 + $1.bytes.count }
+        let digest = CanonicalDigestEncoderV1.digest(
+            data: projections.reduce(into: Data()) { $0.append($1.bytes) }
+        )
+        guard root.authoritativeChildCount == projections.count,
+              root.authoritativeChildBytes == bytes,
+              root.authoritativeChildrenDigest == digest else {
+            throw SyncConvergenceTransactionFailure.corruptHistory(noteID: authoritative.first)
+        }
+        return authoritative
     }
 
     private func folder(id: UUID?) throws -> Folder? {

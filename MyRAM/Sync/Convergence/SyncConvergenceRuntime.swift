@@ -11,6 +11,11 @@ enum SyncConvergenceRuntimeOutcome {
     case blocked(SyncBatchDrainFailure)
 }
 
+struct SyncConvergenceDrainCompletion {
+    let outcome: SyncConvergenceRuntimeOutcome
+    let successfullyCompletedBatchIDs: Set<UUID>
+}
+
 
 enum SyncConvergenceRemoteBatchDisposition: Equatable, Sendable {
     case acknowledgementPermitted
@@ -126,6 +131,10 @@ final class SyncConvergenceRuntime {
     private lazy var pendingPostCommitSource = SwiftDataSyncConvergencePostCommitStore(context: ModelContext(container))
     private var isDraining = false
     private var drainRequestedWhileActive = false
+    private var activeDrainWaiters: [CheckedContinuation<SyncConvergenceDrainCompletion, Never>] = []
+    private var activeDrainSuccessfullyCompletedBatchIDs: Set<UUID> = []
+    private var lastCompletedDrainCompletion: SyncConvergenceDrainCompletion?
+    private var completedDrainGeneration: UInt64 = 0
     private let localEvidenceMetrics: SyncConvergenceLocalEvidenceMetrics?
     private weak var incomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBoundaryAdapter?
     private let conflictStore: SyncConflictStoring
@@ -169,6 +178,22 @@ final class SyncConvergenceRuntime {
             batch,
             activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
         )
+    }
+
+    func submitRemoteBatchAwaitingDrainOwnership(
+        _ batch: SyncBatch
+    ) async -> SyncConvergenceDrainCompletion {
+        let startingGeneration = completedDrainGeneration
+        let outcome = await submitRemoteBatch(batch)
+        if case .alreadyDraining = outcome,
+           let completion = await awaitActiveDrainCompletion() {
+            return completion
+        }
+        if completedDrainGeneration != startingGeneration,
+           let completion = lastCompletedDrainCompletion {
+            return completion
+        }
+        return SyncConvergenceDrainCompletion(outcome: outcome, successfullyCompletedBatchIDs: [])
     }
 
 #if DEBUG
@@ -275,7 +300,34 @@ final class SyncConvergenceRuntime {
             return .alreadyDraining
         }
         isDraining = true
-        defer { isDraining = false }
+        lastCompletedDrainCompletion = nil
+        activeDrainSuccessfullyCompletedBatchIDs = []
+        let outcome = await performOwnedDrain(activationEnabled: activationEnabled)
+        isDraining = false
+        let completion = SyncConvergenceDrainCompletion(
+            outcome: outcome,
+            successfullyCompletedBatchIDs: activeDrainSuccessfullyCompletedBatchIDs
+        )
+        completedDrainGeneration &+= 1
+        lastCompletedDrainCompletion = completion
+        let waiters = activeDrainWaiters
+        activeDrainWaiters.removeAll()
+        for waiter in waiters {
+            waiter.resume(returning: completion)
+        }
+        return outcome
+    }
+
+    func awaitActiveDrainCompletion() async -> SyncConvergenceDrainCompletion? {
+        guard isDraining else { return lastCompletedDrainCompletion }
+        return await withCheckedContinuation { continuation in
+            activeDrainWaiters.append(continuation)
+        }
+    }
+
+    private func performOwnedDrain(
+        activationEnabled: Bool
+    ) async -> SyncConvergenceRuntimeOutcome {
         var appliedBatchIDs: Set<UUID> = []
 
         repeat {
@@ -369,6 +421,17 @@ final class SyncConvergenceRuntime {
                 )
                 switch planning {
                 case .planned(let incorporationInput):
+                    if !incorporationInput.plan.historyPlan.pressureNotes.isEmpty {
+                        do {
+                            _ = try compactCompletedIncorporationHistory(
+                                affecting: incorporationInput.plan.historyPlan.pressureNotes
+                            )
+                        } catch let failure as SyncConvergenceTransactionFailure {
+                            return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
+                        } catch {
+                            return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
+                        }
+                    }
                     let incorporation = incorporationExecutor.incorporate(
                         input: incorporationInput,
                         transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
@@ -391,6 +454,7 @@ final class SyncConvergenceRuntime {
                         }
                         if case .complete = postCommit {
                             appliedBatchIDs.insert(result.batchID)
+                            activeDrainSuccessfullyCompletedBatchIDs.insert(result.batchID)
                         }
                     case .alreadyIncorporated(let result):
                         madeIncomingProgress = true
@@ -408,6 +472,7 @@ final class SyncConvergenceRuntime {
                         }
                         if case .complete = postCommit {
                             appliedBatchIDs.insert(result.batchID)
+                            activeDrainSuccessfullyCompletedBatchIDs.insert(result.batchID)
                         }
                     case .failedBeforeCommit(let failure), .failedAndRolledBack(let failure):
                         return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
@@ -429,6 +494,7 @@ final class SyncConvergenceRuntime {
                                 }
                                 if case .complete = outcome {
                                     appliedBatchIDs.insert(cleanupBatchID)
+                                    activeDrainSuccessfullyCompletedBatchIDs.insert(cleanupBatchID)
                                 }
                             case .completed:
                                 try convergenceQueue.removeBatches(withIDs: [cleanupBatchID])
@@ -437,6 +503,7 @@ final class SyncConvergenceRuntime {
                                 }
                                 madeIncomingProgress = true
                                 appliedBatchIDs.insert(cleanupBatchID)
+                                activeDrainSuccessfullyCompletedBatchIDs.insert(cleanupBatchID)
                             case .missing:
                                 return .blocked(SyncBatchDrainFailure(batchID: cleanupBatchID, kind: .persistence))
                             }
@@ -444,6 +511,28 @@ final class SyncConvergenceRuntime {
                     } catch {
                         return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
                     }
+                case .deferred(.historyPressure(let noteID, let blockingBatchID)):
+                    do {
+                        let compacted = try compactCompletedIncorporationHistory(affecting: [noteID])
+                        if !compacted.isEmpty {
+                            attemptedBatchIDs.remove(batch.id)
+                            madeIncomingProgress = true
+                            continue
+                        }
+                    } catch let failure as SyncConvergenceTransactionFailure {
+                        return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
+                    } catch {
+                        return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .persistence))
+                    }
+                    let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
+                    blockedNoteIDs.formUnion(affectedNoteIDs)
+                    blockedOrigins.insert(batch.originDeviceID)
+                    deferredItems.append(SyncConvergenceDeferredItem(
+                        domain: .incoming,
+                        batchID: batch.id,
+                        affectedNoteIDs: affectedNoteIDs,
+                        reason: .planning(.historyPressure(noteID: noteID, blockingBatchID: blockingBatchID))
+                    ))
                 case .deferred(let reason):
                     let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
                     blockedNoteIDs.formUnion(affectedNoteIDs)
@@ -736,6 +825,18 @@ final class SyncConvergenceRuntime {
             anchoredRecoverySnapshot: anchoredRecoverySnapshot,
             candidateQueuePosition: queued.first(where: { $0.batch.id == batch.id })?.queuePosition
         )
+    }
+
+    private func compactCompletedIncorporationHistory(
+        affecting noteIDs: Set<UUID>
+    ) throws -> Set<UUID> {
+        let protectedBatchIDs = Set(convergenceQueue.pendingBatches.map(\.id))
+            .union(localObligationQueue.pendingBatches.map(\.id))
+        return try SwiftDataSyncConvergencePersistenceTransaction(context: context)
+            .compactCompletedIncorporationHistory(
+                affecting: noteIDs,
+                protectedBatchIDs: protectedBatchIDs
+            )
     }
 
     private func loadAnchoredSequenceSnapshots(

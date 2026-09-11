@@ -125,6 +125,7 @@ enum NoteSequenceStateFullBodyIntegration {
         record.payloadByteCount = payload.count
         record.statePayloadData = payload
     }
+
     static func insertNewNote(
         _ note: Note,
         preparedState: PreparedInitialNoteSequenceState,
@@ -173,11 +174,25 @@ enum NoteSequenceStateFullBodyIntegration {
 
         let previousRevision = record.revision
         let nextRevision = try nextRevision(after: previousRevision)
-        let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
-            noteID: note.id,
-            body: note.content
-        )
-        prepared.apply(to: record, revision: nextRevision)
+        if SyncBatchAnchoredPayloadCapability.isEnabled {
+            let finalState = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+                noteID: note.id,
+                currentState: state,
+                body: note.content
+            )
+            try apply(
+                finalState,
+                to: record,
+                noteID: note.id,
+                revision: nextRevision
+            )
+        } else {
+            let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+                noteID: note.id,
+                body: note.content
+            )
+            prepared.apply(to: record, revision: nextRevision)
+        }
         return .replaced(
             previousRevision: previousRevision,
             revision: nextRevision
@@ -206,11 +221,25 @@ enum NoteSequenceStateFullBodyIntegration {
 
             let previousRevision = record.revision
             let nextRevision = try nextRevision(after: previousRevision)
-            let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
-                noteID: note.id,
-                body: authoritativeBody
-            )
-            prepared.apply(to: record, revision: nextRevision)
+            if SyncBatchAnchoredPayloadCapability.isEnabled {
+                let finalState = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+                    noteID: note.id,
+                    currentState: state,
+                    body: authoritativeBody
+                )
+                try apply(
+                    finalState,
+                    to: record,
+                    noteID: note.id,
+                    revision: nextRevision
+                )
+            } else {
+                let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+                    noteID: note.id,
+                    body: authoritativeBody
+                )
+                prepared.apply(to: record, revision: nextRevision)
+            }
             note.content = authoritativeBody
             return .replaced(
                 previousRevision: previousRevision,
@@ -225,6 +254,58 @@ enum NoteSequenceStateFullBodyIntegration {
         context.insert(prepared.makeRevisionZeroRecord())
         note.content = authoritativeBody
         return .inserted(revision: 0)
+    }
+
+    /// Installs the deterministic union of two established anchored histories
+    /// without replacing either side's operation identities.
+    static func mergeRetainedLineage(
+        of note: Note,
+        with remoteState: SyncTextSequenceState,
+        in context: ModelContext
+    ) throws -> NoteSequenceStateFullBodyIntegrationResult {
+        try requireManaged(note, in: context)
+        guard let record = try fetchRecord(noteID: note.id, in: context) else {
+            throw NoteSequenceStateStoreError.expectedRowButRowIsMissing
+        }
+        let localState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record,
+            noteID: note.id
+        )
+        guard NoteSequenceStateExactText.matches(localState.visibleText, note.content) else {
+            throw NoteSequenceStateStoreError.visibleBodyChanged(
+                expected: localState.visibleText,
+                actual: note.content
+            )
+        }
+
+        let mergedState = try localState.mergingRetainedLineage(with: remoteState)
+        guard mergedState != localState else {
+            return .unchanged(revision: record.revision)
+        }
+
+        let previousRevision = record.revision
+        let nextRevision = try nextRevision(after: previousRevision)
+        try apply(mergedState, to: record, noteID: note.id, revision: nextRevision)
+        note.content = mergedState.visibleText
+        return .replaced(previousRevision: previousRevision, revision: nextRevision)
+    }
+
+    private static func apply(
+        _ state: SyncTextSequenceState,
+        to record: NoteSequenceStateRecord,
+        noteID: UUID,
+        revision: UInt64
+    ) throws {
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: state,
+            noteID: noteID
+        )
+        record.formatVersion = NoteSequenceStatePersistenceCodec.formatVersion
+        record.revision = revision
+        record.visibleUTF16Count = state.visibleUTF16Count
+        record.tombstonedUTF16Count = state.tombstonedUTF16Count
+        record.payloadByteCount = payload.count
+        record.statePayloadData = payload
     }
 
     private static func requireManaged(

@@ -197,6 +197,111 @@ final class SyncTextLegacyBootstrapTests: XCTestCase {
         XCTAssertEqual(bytes[8] & 0xC0, 0x80)
     }
 
+    func testLineagePreservingTransitionTombstonesPriorVisibleRunAndUsesTargetBody() throws {
+        let noteID = noteID()
+        let initial = try SyncTextLegacyBootstrap.makeState(noteID: noteID, body: "Before")
+        let originalOperationID = try operationID(in: initial)
+        let originalFirstElement = try SyncTextElementID(
+            operationID: originalOperationID,
+            elementOffset: 0
+        )
+
+        let transitioned = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+            noteID: noteID,
+            currentState: initial,
+            body: "After"
+        )
+
+        XCTAssertEqual(Array(transitioned.visibleText.utf16), Array("After".utf16))
+        XCTAssertTrue(transitioned.runs.contains(where: { $0.operationID == originalOperationID }))
+        XCTAssertEqual(transitioned.visibility(of: originalFirstElement), .tombstone)
+        XCTAssertEqual(transitioned.tombstonedUTF16Count, "Before".utf16.count)
+        XCTAssertEqual(transitioned.runs.count, 2)
+    }
+
+    func testLineagePreservingTransitionIsDeterministic() throws {
+        let noteID = noteID()
+        let initial = try SyncTextLegacyBootstrap.makeState(noteID: noteID, body: "Before")
+
+        let first = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+            noteID: noteID,
+            currentState: initial,
+            body: "After"
+        )
+        let second = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+            noteID: noteID,
+            currentState: initial,
+            body: "After"
+        )
+
+        XCTAssertEqual(first, second)
+    }
+
+    func testLineagePreservingTransitionDistinguishesEqualVisibleTextWithDifferentLineages() throws {
+        let noteID = noteID()
+        let original = try SyncTextLegacyBootstrap.makeState(noteID: noteID, body: "Same")
+        let intermediate = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+            noteID: noteID,
+            currentState: original,
+            body: "Other"
+        )
+        let expanded = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+            noteID: noteID,
+            currentState: intermediate,
+            body: "Same"
+        )
+        XCTAssertEqual(original.visibleText, expanded.visibleText)
+        XCTAssertNotEqual(original, expanded)
+
+        let fromOriginal = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+            noteID: noteID,
+            currentState: original,
+            body: "Target"
+        )
+        let fromExpanded = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+            noteID: noteID,
+            currentState: expanded,
+            body: "Target"
+        )
+
+        XCTAssertEqual(fromOriginal.visibleText, "Target")
+        XCTAssertEqual(fromExpanded.visibleText, "Target")
+        XCTAssertNotEqual(fromOriginal, fromExpanded)
+    }
+
+    func testLineagePreservingTransitionUsesExactUTF16() throws {
+        let noteID = noteID()
+        let precomposed = "\u{00E9}"
+        let decomposed = "e\u{0301}"
+        let initial = try SyncTextLegacyBootstrap.makeState(noteID: noteID, body: precomposed)
+
+        let transitioned = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+            noteID: noteID,
+            currentState: initial,
+            body: decomposed
+        )
+
+        XCTAssertEqual(Array(transitioned.visibleText.utf16), Array(decomposed.utf16))
+        XCTAssertNotEqual(transitioned, initial)
+        XCTAssertEqual(transitioned.tombstonedUTF16Count, precomposed.utf16.count)
+    }
+
+    func testLineagePreservingTransitionToEmptyKeepsPriorStructureAsTombstones() throws {
+        let noteID = noteID()
+        let initial = try SyncTextLegacyBootstrap.makeState(noteID: noteID, body: "Before")
+        let originalOperationID = try operationID(in: initial)
+
+        let transitioned = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+            noteID: noteID,
+            currentState: initial,
+            body: ""
+        )
+
+        XCTAssertEqual(transitioned.visibleText, "")
+        XCTAssertTrue(transitioned.runs.contains(where: { $0.operationID == originalOperationID }))
+        XCTAssertEqual(transitioned.tombstonedUTF16Count, "Before".utf16.count)
+    }
+
     func testLargeBodyStillUsesOneRunAndOneFragment() throws {
         let body = String(repeating: "a", count: 65_536)
         let state = try SyncTextLegacyBootstrap.makeState(noteID: noteID(), body: body)

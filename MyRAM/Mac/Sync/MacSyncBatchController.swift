@@ -245,6 +245,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func invite(_ peer: MacSyncDiscoveredPeer) {
+        guard !connectedPeersProvider().contains(peer.peerID) else {
+            lastConnectionEvent = "Connected: \(peer.displayName)"
+            return
+        }
         lastConnectionEvent = "Inviting \(peer.displayName)"
         invitePeerOperation(
             peer.peerID,
@@ -618,7 +622,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     ) async {
         let disposition: SyncPeerBootstrapApplyDisposition
         do {
-            disposition = try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: context)
+            guard let convergenceCoordinator else {
+                lastErrorMessage = "Unable to apply nearby bootstrap state."
+                return
+            }
+            disposition = try convergenceCoordinator.applyBootstrapSnapshot(snapshot, to: context)
         } catch {
             lastErrorMessage = "Unable to apply nearby bootstrap state."
             return
@@ -629,7 +637,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
         let acknowledgement = SyncPeerBootstrapAcknowledgement(
             snapshotID: snapshot.id,
-            coveredBatchIDs: disposition.coveredBatchIDs
+            coveredBatchIDs: disposition.coveredBatchIDs,
+            coveredNoteIDs: disposition.coveredNoteIDs
         )
 
         do {
@@ -656,6 +665,15 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         guard var state = bootstrapStateByPeerDeviceID[deviceID],
               state.snapshotID == acknowledgement.snapshotID,
               acknowledgement.coveredBatchIDs.isSubset(of: state.coveredBatchIDs) else { return }
+
+        let requiredNoteIDs = Set(state.snapshot.notes.map(\.id))
+        let coveredNoteIDs = acknowledgement.coveredNoteIDs ?? []
+        guard coveredNoteIDs.isSubset(of: requiredNoteIDs),
+              requiredNoteIDs.isSubset(of: coveredNoteIDs) else {
+            lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
+            return
+        }
+
         do {
             try unsentBatches.removeBatches(withIDs: acknowledgement.coveredBatchIDs)
         } catch {

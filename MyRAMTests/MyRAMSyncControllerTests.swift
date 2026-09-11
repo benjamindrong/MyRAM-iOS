@@ -6,6 +6,79 @@ import XCTest
 
 @MainActor
 final class MyRAMSyncControllerTests: XCTestCase {
+    func testFailedConnectionRetryInvitesStillDiscoveredTrustedPeer() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let peer = MyRAMDiscoveredPeer(
+            peerID: Self.remotePeerID,
+            deviceID: "remote-device",
+            displayName: "Remote",
+            isTrusted: true
+        )
+
+        controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 0)
+
+        await waitUntil { transport.invitedPeerIDs == [Self.remotePeerID] }
+        XCTAssertEqual(controller.lastConnectionEvent, "Inviting Remote")
+    }
+
+    func testFailedConnectionRetryDoesNotInvitePeerThatReconnectedDuringBackoff() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let peer = MyRAMDiscoveredPeer(
+            peerID: Self.remotePeerID,
+            deviceID: "remote-device",
+            displayName: "Remote",
+            isTrusted: true
+        )
+
+        controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 20_000_000)
+        transport.connectedPeers = [Self.remotePeerID]
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
+        XCTAssertEqual(controller.lastConnectionEvent, "Connected: Remote")
+    }
+
+    func testNotConnectedCallbackSchedulesAnotherAttemptForVisibleTrustedPeer() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let peer = MyRAMDiscoveredPeer(
+            peerID: Self.remotePeerID,
+            deviceID: "remote-device",
+            displayName: "Remote",
+            isTrusted: true
+        )
+        let session = MCSession(
+            peer: MCPeerID(displayName: "local|retry-callback"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+
+        controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 0)
+        await waitUntil { transport.invitedPeerIDs.count == 1 }
+        controller.session(session, peer: Self.remotePeerID, didChange: .notConnected)
+        await waitUntil { transport.invitedPeerIDs.count == 2 }
+
+        XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID, Self.remotePeerID])
+    }
+
+    func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(transport: transport)
+        let peer = MyRAMDiscoveredPeer(
+            peerID: Self.remotePeerID,
+            deviceID: "remote-device",
+            displayName: "Remote",
+            isTrusted: true
+        )
+
+        controller.invite(peer)
+
+        XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
+        XCTAssertEqual(controller.lastConnectionEvent, "Connected: Remote")
+    }
+
     func testRecordedChangeIsSentAsLegacyEnvelopeOnManualFlush() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let controller = try makeController(transport: transport)
@@ -910,6 +983,7 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     private(set) var sentLegacyEnvelopes: [SyncEnvelope] = []
     private(set) var sentBatchEnvelopes: [SyncBatchEnvelope] = []
     private(set) var sentBatchAcknowledgements: [SyncBatchAcknowledgement] = []
+    private(set) var invitedPeerIDs: [MCPeerID] = []
     private(set) var activeLegacySendCount = 0
     private(set) var maximumConcurrentLegacySends = 0
     private var suspendedLegacySendContinuations: [CheckedContinuation<Void, Never>] = []
@@ -926,7 +1000,13 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
         _ peerID: MCPeerID,
         context: Data,
         timeout: TimeInterval
-    ) {}
+    ) {
+        invitedPeerIDs.append(peerID)
+    }
+
+    func hasConnectedPeer(_ peerID: MCPeerID) -> Bool {
+        connectedPeers.contains(peerID)
+    }
 
     func connectedPeers() async -> [MCPeerID] {
         connectedPeers

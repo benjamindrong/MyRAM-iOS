@@ -1,6 +1,7 @@
 import Foundation
 import SwiftData
 import XCTest
+import AnchoredSequenceCore
 
 #if os(macOS)
 @testable import MyRAMMac
@@ -59,13 +60,48 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertEqual(rerun.statePayloadData, payload)
     }
 
-    func testMigrationReestablishesValidStaleRows() async throws {
+    func testActivatedMigrationStopsAtValidStaleRowWithoutReplacingLineage() async throws {
+        let container = try makeContainer()
+        let noteID = try insertNote(body: "Old", in: container)
+        try await makeMigrator(container).runToCompletion()
+        let original = try XCTUnwrap(fetchRecords(in: container).first)
+        let originalPayload = original.statePayloadData
+        try updateNote(noteID: noteID, body: "Current", in: container)
+
+        do {
+            try await makeMigrator(container).runToCompletion()
+            XCTFail("Expected activated migration to preserve the established lineage and stop")
+        } catch {
+            XCTAssertEqual(error as? NoteSequenceStateStoreError, .corruptState)
+        }
+
+        let persisted = try XCTUnwrap(fetchRecords(in: container).first)
+        XCTAssertEqual(persisted.revision, 0)
+        XCTAssertEqual(persisted.statePayloadData, originalPayload)
+        let state = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(record: persisted, noteID: noteID)
+        XCTAssertEqual(state.visibleText, "Old")
+
+        let verificationContext = ModelContext(container)
+        let requestedID = noteID
+        let note = try XCTUnwrap(
+            verificationContext.fetch(
+                FetchDescriptor<Note>(predicate: #Predicate { $0.id == requestedID })
+            ).first
+        )
+        XCTAssertEqual(note.content, "Current")
+    }
+
+    func testMigrationReestablishesValidStaleRowsWhenExplicitlyAllowed() async throws {
         let container = try makeContainer()
         let noteID = try insertNote(body: "Old", in: container)
         try await makeMigrator(container).runToCompletion()
         try updateNote(noteID: noteID, body: "Current", in: container)
 
-        try await makeMigrator(container).runToCompletion()
+        try await makeMigrator(
+            container,
+            allowsExistingStateReplacement: true
+        ).runToCompletion()
 
         let record = try XCTUnwrap(fetchRecords(in: container).first)
         XCTAssertEqual(record.revision, 1)
@@ -139,10 +175,12 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
 
     private func makeMigrator(
         _ container: ModelContainer,
+        allowsExistingStateReplacement: Bool = !SyncBatchAnchoredPayloadCapability.isEnabled,
         beforeEachNote: @escaping @Sendable (UUID) throws -> Void = { _ in }
     ) async -> NoteSequenceStateBootstrapMigrator {
         await NoteSequenceStateBootstrapMigrator(
             container: container,
+            allowsExistingStateReplacement: allowsExistingStateReplacement,
             beforeEachNote: beforeEachNote
         )
     }
@@ -214,6 +252,185 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertEqual(persisted.noteID, noteID)
         XCTAssertEqual(persisted.statePayloadData, originalPayload)
         XCTAssertEqual(persisted.formatVersion, originalVersion)
+    }
+}
+
+@MainActor
+final class MYR221BootstrapOwnershipMonotonicityTests: XCTestCase {
+    func testRepeatedBootstrapDoesNotRecreateOwnershipAfterFullIncorporation() throws {
+        try assertRepeatedBootstrapDoesNotRecreateOwnership(after: .fullIncorporation)
+    }
+
+    func testRepeatedBootstrapDoesNotRecreateOwnershipAfterTombstone() throws {
+        try assertRepeatedBootstrapDoesNotRecreateOwnership(after: .tombstone)
+    }
+
+    private func assertRepeatedBootstrapDoesNotRecreateOwnership(
+        after durableProof: DurableProof
+    ) throws {
+        let source = try makeContainer()
+        let sourceContext = ModelContext(source)
+        sourceContext.autosaveEnabled = false
+        let note = Note(title: "Peer title", content: "AB")
+        sourceContext.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: sourceContext
+        )
+        try sourceContext.save()
+
+        let mutationSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: sourceContext
+        )
+        guard case .noteBodyTextInsertedAnchored(let insertion) = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: note.id,
+            utf16Offset: 1,
+            text: "S",
+            modifiedAt: Date(timeIntervalSinceReferenceDate: 221),
+            baseContentHash: nil,
+            operationID: SyncOperationID(
+                deviceID: UUID(uuidString: "00000000-0000-0000-0000-000000221001")!,
+                localCounter: 1
+            ),
+            state: mutationSnapshot.state
+        ) else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let peerState = try mutationSnapshot.state.incorporating(
+            insert: insertion.payload,
+            insertedText: insertion.text
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: note,
+            expected: mutationSnapshot,
+            newBody: peerState.visibleText,
+            finalState: peerState,
+            in: sourceContext
+        )
+        try sourceContext.save()
+
+        let batchID = UUID(uuidString: "00000000-0000-0000-0000-000000221002")!
+        let originDeviceID = UUID(uuidString: "00000000-0000-0000-0000-000000221003")!
+        let batch = SyncBatch(
+            id: batchID,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 222),
+            changes: [
+                .noteBodyTextInsertedAnchored(insertion),
+                .noteTitleChanged(
+                    SyncBatchNoteTitleChangedChange(
+                        noteID: note.id,
+                        title: "Peer title",
+                        modifiedAt: Date(timeIntervalSinceReferenceDate: 223)
+                    )
+                )
+            ]
+        )
+        let baseSnapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: sourceContext)
+        let staleSnapshot = baseSnapshot.attachingHistoryCoverage(for: [batch])
+
+        let destination = try makeContainer()
+        let destinationContext = ModelContext(destination)
+        destinationContext.autosaveEnabled = false
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            baseSnapshot,
+            to: destinationContext
+        )
+        let requestedNoteID = note.id
+        let destinationNote = try XCTUnwrap(
+            destinationContext.fetch(
+                FetchDescriptor<Note>(predicate: #Predicate { $0.id == requestedNoteID })
+            ).first
+        )
+        destinationNote.title = "Local title"
+        try destinationContext.save()
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-221-stale-bootstrap-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: directory.appendingPathComponent("anchored-recovery.json")
+        )
+        let firstApply = try SyncPeerBootstrapSnapshotPersistence.apply(
+            staleSnapshot,
+            to: destinationContext,
+            anchoredRecoveryStore: recoveryStore
+        )
+        XCTAssertFalse(firstApply.coveredBatchIDs.contains(batchID))
+
+        let recoveryChange = SyncBatchAnchoredRecoveryChange.insertion(insertion)
+        let owned = try XCTUnwrap(
+            recoveryStore.snapshot().record(for: recoveryChange.recordKey)
+        )
+        XCTAssertEqual(owned.lifecycle, .bootstrapOwned)
+        XCTAssertTrue(try recoveryStore.apply([.removeCommitted(expected: owned)]))
+        XCTAssertNil(recoveryStore.snapshot().record(for: recoveryChange.recordKey))
+
+        let committedAt = Date(timeIntervalSinceReferenceDate: 224)
+        switch durableProof {
+        case .fullIncorporation:
+            destinationContext.insert(IncorporatedSyncBatch(
+                batchID: batchID,
+                originDeviceID: originDeviceID,
+                createdAt: batch.createdAt,
+                batchSequence: batch.batchSequence,
+                schemaVersion: 1,
+                committedAt: committedAt,
+                canonicalPayloadDigest: String(repeating: "a", count: 64),
+                canonicalPayloadDigestFormatVersion: 1,
+                committedResultDigest: String(repeating: "b", count: 64),
+                committedResultDigestFormatVersion: 1,
+                affectedNotesPayloadData: Data(),
+                authoritativeChildCount: 0,
+                authoritativeChildBytes: 0,
+                authoritativeChildrenDigest: String(repeating: "c", count: 64),
+                postCommitStatePayloadData: Data(),
+                hasPendingPostCommitWork: false
+            ))
+        case .tombstone:
+            destinationContext.insert(try IncorporatedBatchTombstone.makeValidated(
+                batchID: batchID,
+                originDeviceID: originDeviceID,
+                canonicalPayloadDigest: String(repeating: "a", count: 64),
+                canonicalPayloadDigestFormatVersion: 1,
+                schemaVersion: 1,
+                committedResultDigest: String(repeating: "b", count: 64),
+                committedResultDigestFormatVersion: 1,
+                committedAtOrderingPayloadData: try CommittedAtOrderingPayload(
+                    batchID: batchID,
+                    committedAt: committedAt
+                ).encodedEvidenceData()
+            ))
+        }
+        try destinationContext.save()
+
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            staleSnapshot,
+            to: destinationContext,
+            anchoredRecoveryStore: recoveryStore
+        )
+
+        XCTAssertNil(
+            recoveryStore.snapshot().record(for: recoveryChange.recordKey),
+            "A stale bootstrap retry must not recreate ownership after durable incorporation."
+        )
+    }
+
+    private func makeContainer() throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR-221-BootstrapOwnership-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
+    }
+
+    private enum DurableProof {
+        case fullIncorporation
+        case tombstone
     }
 }
 

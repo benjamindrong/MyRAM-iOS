@@ -41,6 +41,7 @@ protocol MyRAMSyncTransporting: AnyObject {
         timeout: TimeInterval
     )
     func connectedPeers() async -> [MCPeerID]
+    func hasConnectedPeer(_ peerID: MCPeerID) -> Bool
     func send(_ data: Data, toPeers peers: [MCPeerID], mode: MCSessionSendDataMode) async throws
 }
 
@@ -76,6 +77,10 @@ private final class MyRAMMultipeerTransport: MyRAMSyncTransporting {
                 continuation.resume(returning: session.connectedPeers)
             }
         }
+    }
+
+    func hasConnectedPeer(_ peerID: MCPeerID) -> Bool {
+        session.connectedPeers.contains(peerID)
     }
 
     func send(_ data: Data, toPeers peers: [MCPeerID], mode: MCSessionSendDataMode) async throws {
@@ -231,6 +236,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private let browser: MCNearbyServiceBrowser
     private let transport: MyRAMSyncTransporting
     private var reconnectTracker = TrustedPeerReconnectTracker()
+    private var reconnectRetryTasks: [String: Task<Void, Never>] = [:]
+    private var reconnectRetryDelayNanoseconds: UInt64 = 1_000_000_000
     private var peerCapabilityRegistry = SyncBatchPeerCapabilityRegistry()
     private var bootstrapStateByPeerDeviceID: [String: SyncPeerBootstrapPendingState] = [:]
     private var bootstrapCapabilityResolutionTasks: [String: Task<Void, Never>] = [:]
@@ -308,6 +315,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     deinit {
+        reconnectRetryTasks.values.forEach { $0.cancel() }
         advertiser.stopAdvertisingPeer()
         browser.stopBrowsingForPeers()
         session.disconnect()
@@ -407,7 +415,13 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     func invite(_ peer: MyRAMDiscoveredPeer) {
+        guard !transport.hasConnectedPeer(peer.peerID) else {
+            cancelReconnectRetry(for: peer.deviceID)
+            lastConnectionEvent = "Connected: \(peer.displayName)"
+            return
+        }
         guard let attempt = reconnectTracker.beginConnecting(to: peer.deviceID) else { return }
+        cancelReconnectRetry(for: peer.deviceID)
 
         lastConnectionEvent = "Inviting \(peer.displayName)"
         let timeout: TimeInterval = 12
@@ -658,9 +672,54 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         Task { [weak self] in
             let nanoseconds = UInt64((timeout + 1) * 1_000_000_000)
             try? await Task.sleep(nanoseconds: nanoseconds)
-            self?.clearConnectingState(for: attempt)
+            guard !Task.isCancelled, let self else { return }
+            self.clearConnectingState(for: attempt)
+            self.scheduleReconnectIfPossible(for: attempt.peerID)
         }
     }
+
+    private func scheduleReconnectIfPossible(for deviceID: String) {
+        guard let peer = availablePeers.first(where: {
+            $0.deviceID == deviceID && $0.isTrusted
+        }) else { return }
+        scheduleReconnect(to: peer)
+    }
+
+    private func scheduleReconnect(to peer: MyRAMDiscoveredPeer) {
+        guard reconnectRetryTasks[peer.deviceID] == nil,
+              !transport.hasConnectedPeer(peer.peerID) else { return }
+
+        let delay = reconnectRetryDelayNanoseconds
+        reconnectRetryTasks[peer.deviceID] = Task { @MainActor [weak self] in
+            if delay > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.reconnectRetryTasks.removeValue(forKey: peer.deviceID)
+            guard self.availablePeers.contains(where: {
+                $0.deviceID == peer.deviceID && $0.peerID == peer.peerID && $0.isTrusted
+            }) else { return }
+            self.invite(peer)
+        }
+    }
+
+    private func cancelReconnectRetry(for deviceID: String) {
+        reconnectRetryTasks.removeValue(forKey: deviceID)?.cancel()
+    }
+
+#if DEBUG
+    func scheduleReconnectForTesting(to peer: MyRAMDiscoveredPeer, delayNanoseconds: UInt64) {
+        reconnectRetryDelayNanoseconds = delayNanoseconds
+        if !availablePeers.contains(where: { $0.deviceID == peer.deviceID }) {
+            availablePeers.append(peer)
+        }
+        scheduleReconnect(to: peer)
+    }
+#endif
 
     private func clearConnectingState(for deviceID: String) {
         reconnectTracker.finishConnecting(to: deviceID)
@@ -1090,7 +1149,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
         let acknowledgement = SyncPeerBootstrapAcknowledgement(
             snapshotID: snapshot.id,
-            coveredBatchIDs: disposition.coveredBatchIDs
+            coveredBatchIDs: disposition.coveredBatchIDs,
+            coveredNoteIDs: disposition.coveredNoteIDs
         )
 
         do {
@@ -1117,6 +1177,15 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         guard var state = bootstrapStateByPeerDeviceID[deviceID],
               state.snapshotID == acknowledgement.snapshotID,
               acknowledgement.coveredBatchIDs.isSubset(of: state.coveredBatchIDs) else { return }
+
+        let requiredNoteIDs = Set(state.snapshot.notes.map(\.id))
+        let coveredNoteIDs = acknowledgement.coveredNoteIDs ?? []
+        guard coveredNoteIDs.isSubset(of: requiredNoteIDs),
+              requiredNoteIDs.isSubset(of: coveredNoteIDs) else {
+            lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
+            return
+        }
+
         do {
             try unsentBatches.removeBatches(withIDs: acknowledgement.coveredBatchIDs)
         } catch {
@@ -1377,9 +1446,11 @@ extension MyRAMSyncController: MCSessionDelegate {
 
             if state == .notConnected {
                 handlePeerDisconnect(peerDeviceID: identity.deviceID)
+                scheduleReconnectIfPossible(for: identity.deviceID)
             }
 
             if state == .connected {
+                cancelReconnectRetry(for: identity.deviceID)
                 rememberTrustedPeer(peerID)
                 await sendBootstrapCapabilityAnnouncement(to: peerID)
                 await beginBootstrap(to: peerID)
@@ -1629,6 +1700,7 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             )
             availablePeers.removeAll { $0.deviceID == identity.deviceID }
             clearConnectingState(for: identity.deviceID)
+            cancelReconnectRetry(for: identity.deviceID)
         }
     }
 

@@ -752,6 +752,10 @@ private final class BenchmarkRecordingTransport: MyRAMSyncTransporting {
         connectedPeers
     }
 
+    func hasConnectedPeer(_ peerID: MCPeerID) -> Bool {
+        connectedPeers.contains(peerID)
+    }
+
     func send(
         _ data: Data,
         toPeers peers: [MCPeerID],

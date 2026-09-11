@@ -193,6 +193,7 @@ final class NotesViewModel: ObservableObject {
     private let commitLegacyIncomingEffects: (LegacyIncomingBufferedEffects) throws -> Void
     private let syncBatchAccumulator: IPhoneSyncBatchAccumulator
     private let pendingIncomingBatches: FileBackedSyncBatchQueue
+    private let anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore
     private let pendingLocalConvergenceBatches: FileBackedSyncConvergenceLocalObligationQueue
     private var refreshPendingSyncStatusForLocalConvergenceMutation: (() async -> Void)?
     private let bodyHashCapabilityEnabled: Bool
@@ -242,6 +243,7 @@ final class NotesViewModel: ObservableObject {
         syncConflictStore: SyncConflictStore = SyncConflictStore(),
         pendingIncomingBatchQueueFileURL: URL? = NotesViewModel.pendingIncomingBatchQueueFileURL(),
         pendingIncomingBatchQueueLimit: Int = 100,
+        anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore? = nil,
         pendingLocalConvergenceBatchQueueFileURL: URL? = NotesViewModel.pendingLocalConvergenceBatchQueueFileURL(),
         pendingLocalConvergenceBatchQueueLimit: Int = 100,
         bodyHashCapabilityEnabled: Bool = true,
@@ -264,6 +266,8 @@ final class NotesViewModel: ObservableObject {
             fileURL: pendingIncomingBatchQueueFileURL,
             limit: pendingIncomingBatchQueueLimit
         )
+        self.anchoredRecoveryStore = anchoredRecoveryStore
+            ?? Self.makeProductionAnchoredRecoveryStore()
         pendingLocalConvergenceBatches = FileBackedSyncConvergenceLocalObligationQueue(
             fileURL: pendingLocalConvergenceBatchQueueFileURL,
             limit: pendingLocalConvergenceBatchQueueLimit
@@ -307,8 +311,13 @@ final class NotesViewModel: ObservableObject {
             bootstrapController.buildBootstrapSnapshot = { [context] in
                 try SyncPeerBootstrapSnapshotPersistence.build(from: context)
             }
-            bootstrapController.applyBootstrapSnapshot = { [context] snapshot in
-                try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: context)
+            bootstrapController.applyBootstrapSnapshot = { [context, pendingIncomingBatches, anchoredRecoveryStore = self.anchoredRecoveryStore] snapshot in
+                try SyncPeerBootstrapSnapshotPersistence.apply(
+                    snapshot,
+                    to: context,
+                    pendingIncomingBatches: pendingIncomingBatches,
+                    anchoredRecoveryStore: anchoredRecoveryStore
+                )
             }
             bootstrapController.onBootstrapPresentationRefresh = { [weak self] in
                 guard let self else { return }
@@ -330,7 +339,8 @@ final class NotesViewModel: ObservableObject {
             presentationAdapter: NotesViewModelConvergencePresentationAdapter(viewModel: self),
             incomingLocalBoundaryAdapter: self,
             conflictStore: syncConflictStore,
-            anchoredRecoveryPlatform: .iPhone
+            anchoredRecoveryPlatform: .iPhone,
+            anchoredRecoveryStore: self.anchoredRecoveryStore
         )
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
@@ -2439,8 +2449,12 @@ final class NotesViewModel: ObservableObject {
             return .acknowledgementPermitted
         }
         guard !batch.changes.isEmpty else { return .acknowledgementPermitted }
-        let outcome = await syncConvergenceRuntime.submitRemoteBatch(batch)
+        let completion = await syncConvergenceRuntime.submitRemoteBatchAwaitingDrainOwnership(batch)
+        let outcome = completion.outcome
         await handleConvergenceRuntimeOutcome(outcome)
+        if completion.successfullyCompletedBatchIDs.contains(batch.id) {
+            return .acknowledgementPermitted
+        }
         return SyncConvergenceRemoteBatchDispositionPolicy.disposition(
             for: outcome,
             batchID: batch.id
@@ -2730,6 +2744,18 @@ final class NotesViewModel: ObservableObject {
 
     nonisolated private static func pendingLocalConvergenceBatchQueueFileURL() -> URL? {
         SyncBatchQueueFileLocation.pendingLocalConvergence(for: .iPhone)
+    }
+
+    nonisolated private static func makeProductionAnchoredRecoveryStore()
+        -> FileBackedSyncBatchAnchoredRecoveryStore
+    {
+        do {
+            return FileBackedSyncBatchAnchoredRecoveryStore(
+                fileURL: try SyncBatchAnchoredRecoveryStoreFileLocation.fileURL(for: .iPhone)
+            )
+        } catch {
+            preconditionFailure("The iPhone anchored recovery store requires Application Support.")
+        }
     }
 
     private func isIncomingTextUnsafe(

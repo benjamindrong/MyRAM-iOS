@@ -7,6 +7,7 @@ final class MacSyncConvergenceCoordinator {
     private let syncController: MacSyncBatchController
     private let pendingIncomingQueue: FileBackedSyncBatchQueue
     private let localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue
+    private let anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore
     private let presentationAdapter: MacSyncConvergencePresentationAdapter
     private let incomingBoundaryAdapter: MacSyncIncomingLocalBoundaryAdapter
     private let runtime: SyncConvergenceRuntime
@@ -18,11 +19,14 @@ final class MacSyncConvergenceCoordinator {
         presentationSurface: MacSyncConvergencePresentationSurface,
         incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface,
         pendingIncomingQueueFileURL: URL? = SyncBatchQueueFileLocation.pendingIncoming(for: .nativeMac),
-        localObligationQueueFileURL: URL? = SyncBatchQueueFileLocation.pendingLocalConvergence(for: .nativeMac)
+        localObligationQueueFileURL: URL? = SyncBatchQueueFileLocation.pendingLocalConvergence(for: .nativeMac),
+        anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore? = nil
     ) {
         self.syncController = syncController
         pendingIncomingQueue = FileBackedSyncBatchQueue(fileURL: pendingIncomingQueueFileURL)
         localObligationQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: localObligationQueueFileURL)
+        self.anchoredRecoveryStore = anchoredRecoveryStore
+            ?? Self.makeProductionAnchoredRecoveryStore()
         presentationAdapter = MacSyncConvergencePresentationAdapter(surface: presentationSurface)
         incomingBoundaryAdapter = MacSyncIncomingLocalBoundaryAdapter(surface: incomingBoundarySurface)
         runtime = SyncConvergenceRuntime(
@@ -33,7 +37,8 @@ final class MacSyncConvergenceCoordinator {
             presentationAdapter: presentationAdapter,
             incomingLocalBoundaryAdapter: incomingBoundaryAdapter,
             conflictStore: conflictStore,
-            anchoredRecoveryPlatform: .nativeMac
+            anchoredRecoveryPlatform: .nativeMac,
+            anchoredRecoveryStore: self.anchoredRecoveryStore
         )
         syncController.convergenceCoordinator = self
     }
@@ -66,8 +71,12 @@ final class MacSyncConvergenceCoordinator {
         guard (try? SyncBatchAnchoredPayloadPolicy.validateConvergence(batch)) != nil else {
             return .acknowledgementPermitted
         }
-        let outcome = await runtime.submitRemoteBatch(batch)
+        let completion = await runtime.submitRemoteBatchAwaitingDrainOwnership(batch)
+        let outcome = completion.outcome
         await handle(outcome: outcome, sourceBatch: batch)
+        if completion.successfullyCompletedBatchIDs.contains(batch.id) {
+            return .acknowledgementPermitted
+        }
         return SyncConvergenceRemoteBatchDispositionPolicy.disposition(
             for: outcome,
             batchID: batch.id
@@ -89,6 +98,18 @@ final class MacSyncConvergenceCoordinator {
         presentationAdapter.refreshAfterBootstrap()
     }
 
+    func applyBootstrapSnapshot(
+        _ snapshot: SyncPeerBootstrapSnapshot,
+        to context: ModelContext
+    ) throws -> SyncPeerBootstrapApplyDisposition {
+        try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: context,
+            pendingIncomingBatches: pendingIncomingQueue,
+            anchoredRecoveryStore: anchoredRecoveryStore
+        )
+    }
+
     private func handle(outcome: SyncConvergenceRuntimeOutcome, sourceBatch: SyncBatch?) async {
         switch outcome {
         case .drained:
@@ -99,6 +120,18 @@ final class MacSyncConvergenceCoordinator {
             syncController.markConvergenceBlocked(failure)
         case .quarantined(let work):
             syncController.markConvergenceQuarantined(work)
+        }
+    }
+
+    nonisolated private static func makeProductionAnchoredRecoveryStore()
+        -> FileBackedSyncBatchAnchoredRecoveryStore
+    {
+        do {
+            return FileBackedSyncBatchAnchoredRecoveryStore(
+                fileURL: try SyncBatchAnchoredRecoveryStoreFileLocation.fileURL(for: .nativeMac)
+            )
+        } catch {
+            preconditionFailure("The Mac anchored recovery store requires Application Support.")
         }
     }
 }

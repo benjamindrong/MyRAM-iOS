@@ -43,6 +43,11 @@ public enum SyncTextSequenceStateError: Error, Equatable, Sendable {
     case visibleRangeSplitsSurrogatePair(Int)
 }
 
+public enum SyncTextSequenceMergeError: Error, Equatable, Sendable {
+    case noSharedRetainedLineage
+    case conflictingRunDefinition(SyncOperationID)
+}
+
 public enum SyncOperationIDCanonicalOrder {
     public static func isOrderedBefore(
         _ lhs: SyncOperationID,
@@ -433,6 +438,110 @@ public struct SyncTextSequenceState: Equatable, Sendable {
             previousSelectedFragmentIndex = fragmentIndex
         }
         return result
+    }
+
+    /// Forms the lossless, deterministic union of two retained sequence histories.
+    ///
+    /// Inserted runs are immutable and deletion is monotonic, so an element is
+    /// tombstoned in the union when either input has tombstoned it. A matching
+    /// operation identity must always describe the same run; accepting a different
+    /// definition would silently alias two histories.
+    public func mergingRetainedLineage(
+        with other: SyncTextSequenceState
+    ) throws -> SyncTextSequenceState {
+        var runsByID = Dictionary(uniqueKeysWithValues: runs.map { ($0.operationID, $0) })
+        var sharesRetainedLineage = false
+        for run in other.runs {
+            if let existing = runsByID[run.operationID] {
+                guard existing == run else {
+                    throw SyncTextSequenceMergeError.conflictingRunDefinition(run.operationID)
+                }
+                sharesRetainedLineage = true
+            } else {
+                runsByID[run.operationID] = run
+            }
+        }
+        guard sharesRetainedLineage || (runs.isEmpty && other.runs.isEmpty) else {
+            throw SyncTextSequenceMergeError.noSharedRetainedLineage
+        }
+
+        let mergedRuns = runsByID.values.sorted {
+            SyncOperationIDCanonicalOrder.isOrderedBefore($0.operationID, $1.operationID)
+        }
+        let structuralSpans = try SyncTextSequenceStateValidator.projectStructuralSpans(
+            runs: mergedRuns
+        )
+        let lhsFragments = Dictionary(grouping: fragments, by: \.operationID)
+        let rhsFragments = Dictionary(grouping: other.fragments, by: \.operationID)
+        var mergedFragments: [SyncTextSequenceFragment] = []
+
+        func visibility(
+            at offset: Int,
+            in fragments: [SyncTextSequenceFragment]?
+        ) -> SyncTextSequenceElementVisibility? {
+            fragments?.first {
+                $0.startOffset <= offset && offset < $0.startOffset + $0.utf16Length
+            }?.visibility
+        }
+
+        func append(
+            operationID: SyncOperationID,
+            startOffset: Int,
+            utf16Length: Int,
+            visibility: SyncTextSequenceElementVisibility
+        ) throws {
+            guard utf16Length > 0 else { return }
+            if let previous = mergedFragments.last,
+               previous.operationID == operationID,
+               previous.visibility == visibility,
+               previous.startOffset + previous.utf16Length == startOffset {
+                mergedFragments[mergedFragments.count - 1] = try SyncTextSequenceFragment(
+                    operationID: operationID,
+                    startOffset: previous.startOffset,
+                    utf16Length: previous.utf16Length + utf16Length,
+                    visibility: visibility
+                )
+            } else {
+                mergedFragments.append(try SyncTextSequenceFragment(
+                    operationID: operationID,
+                    startOffset: startOffset,
+                    utf16Length: utf16Length,
+                    visibility: visibility
+                ))
+            }
+        }
+
+        for span in structuralSpans {
+            let spanEnd = span.startOffset + span.utf16Length
+            var boundaries = [span.startOffset, spanEnd]
+            for fragment in (lhsFragments[span.operationID] ?? [])
+                + (rhsFragments[span.operationID] ?? []) {
+                let fragmentEnd = fragment.startOffset + fragment.utf16Length
+                if span.startOffset < fragmentEnd, fragment.startOffset < spanEnd {
+                    boundaries.append(max(span.startOffset, fragment.startOffset))
+                    boundaries.append(min(spanEnd, fragmentEnd))
+                }
+            }
+            boundaries = Array(Set(boundaries)).sorted()
+
+            for index in boundaries.indices.dropLast() {
+                let start = boundaries[index]
+                let end = boundaries[index + 1]
+                let lhs = visibility(at: start, in: lhsFragments[span.operationID])
+                let rhs = visibility(at: start, in: rhsFragments[span.operationID])
+                guard lhs != nil || rhs != nil else {
+                    throw SyncTextSequenceStateError.fragmentReferencesUnknownRun(span.operationID)
+                }
+                try append(
+                    operationID: span.operationID,
+                    startOffset: start,
+                    utf16Length: end - start,
+                    visibility: lhs == .tombstone || rhs == .tombstone ? .tombstone : .visible
+                )
+            }
+        }
+
+        return try SyncTextSequenceState(runs: mergedRuns, fragments: mergedFragments)
     }
 
     /// Incorporates one validated structural insertion without mutating this state.
