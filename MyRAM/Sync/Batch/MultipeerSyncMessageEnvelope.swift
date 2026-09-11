@@ -475,17 +475,24 @@ enum SyncPeerBootstrapSnapshotPersistence {
                     $0.key.uuidString < $1.key.uuidString
                 }) {
                     if let pendingIncomingBatches {
+                        let ownershipEligibleBatches = try pendingIncomingBatches.pendingBatches.filter { batch in
+                            try !hasDurableIncorporationEvidence(for: batch.id, in: context)
+                        }
                         try persistBootstrapOwnership(
-                            changes: pendingIncomingBatches.pendingBatches.flatMap(\.changes).compactMap {
+                            changes: ownershipEligibleBatches.flatMap(\.changes).compactMap {
                                 recoveryChange(from: $0, for: noteID)
                             },
                             peerSnapshotState: peerSnapshotState,
                             anchoredRecoveryStore: anchoredRecoveryStore
                         )
                     }
+                    let ownershipEligibleCoverage = try snapshot.historyCoverage
+                        .filter { !coveredBatchIDs.contains($0.batchID) }
+                        .filter { coverage in
+                            try !hasDurableIncorporationEvidence(for: coverage.batchID, in: context)
+                        }
                     try persistBootstrapOwnership(
-                        changes: snapshot.historyCoverage
-                            .filter { !coveredBatchIDs.contains($0.batchID) }
+                        changes: ownershipEligibleCoverage
                             .flatMap { $0.anchoredRecoveryChanges ?? [] }
                             .filter { $0.noteID == noteID },
                         peerSnapshotState: peerSnapshotState,
@@ -504,6 +511,31 @@ enum SyncPeerBootstrapSnapshotPersistence {
             insertedNoteIDs: insertedNoteIDs,
             presentationRefreshRequired: didMutate
         )
+    }
+
+    private static func hasDurableIncorporationEvidence(
+        for batchID: SyncBatchID,
+        in context: ModelContext
+    ) throws -> Bool {
+        let requestedBatchID = batchID
+        var rootDescriptor = FetchDescriptor<IncorporatedSyncBatch>(
+            predicate: #Predicate { $0.batchID == requestedBatchID }
+        )
+        rootDescriptor.fetchLimit = 1
+        if let root = try context.fetch(rootDescriptor).first {
+            try SyncConvergencePersistenceValidation.validate(root)
+            return true
+        }
+
+        var tombstoneDescriptor = FetchDescriptor<IncorporatedBatchTombstone>(
+            predicate: #Predicate { $0.batchID == requestedBatchID }
+        )
+        tombstoneDescriptor.fetchLimit = 1
+        if let tombstone = try context.fetch(tombstoneDescriptor).first {
+            try SyncConvergencePersistenceValidation.validate(tombstone)
+            return true
+        }
+        return false
     }
 
     private static func persistBootstrapOwnership(
