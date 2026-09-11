@@ -379,9 +379,10 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
                     identities: identities,
                     results: results
                 )
-                let activeEpisodes = try context.fetch(FetchDescriptor<ReconciliationEpisode>())
-                    .contains { affected.contains($0.noteID) && $0.completedAtBitPattern == nil }
-                guard !activeEpisodes else { continue }
+                guard try !hasIndependentlyProtectedIncorporationEvidence(
+                    batchID: batchID,
+                    affectedNoteIDs: affected
+                ) else { continue }
 
                 let ordering = try CommittedAtOrderingPayload(
                     batchID: root.batchID,
@@ -425,6 +426,42 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
             context.rollback()
             throw error
         }
+    }
+
+    private func hasIndependentlyProtectedIncorporationEvidence(
+        batchID: UUID,
+        affectedNoteIDs: Set<UUID>
+    ) throws -> Bool {
+        let titleWinners = try context.fetch(FetchDescriptor<NoteTitleWinner>())
+            .filter { affectedNoteIDs.contains($0.noteID) }
+        for winner in titleWinners {
+            do {
+                try SyncConvergencePersistenceValidation.validate(winner)
+                let identity = try OperationIdentityPayload.decodePayloadData(
+                    winner.operationIdentityPayloadData
+                )
+                if identity.batchIDLowercase == batchID.uuidString.lowercased() {
+                    return true
+                }
+            } catch {
+                throw SyncConvergenceTransactionFailure.corruptHistory(noteID: winner.noteID)
+            }
+        }
+
+        // Reconciliation payload schemas are durable episode evidence. Until an
+        // owner-specific release path proves an episode and all of its children no
+        // longer reference incorporation history, every root for that note stays
+        // whole. This also protects orphan candidate/completion evidence fail closed.
+        if try context.fetch(FetchDescriptor<ReconciliationEpisode>())
+            .contains(where: { affectedNoteIDs.contains($0.noteID) }) {
+            return true
+        }
+        if try context.fetch(FetchDescriptor<ReconciliationCandidateRecord>())
+            .contains(where: { affectedNoteIDs.contains($0.noteID) }) {
+            return true
+        }
+        return try context.fetch(FetchDescriptor<ReconciliationCompletionEvidenceRecord>())
+            .contains(where: { affectedNoteIDs.contains($0.noteID) })
     }
 
     private func validateCompactionEvidence(
