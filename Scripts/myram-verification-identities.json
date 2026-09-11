@@ -1,0 +1,23 @@
+{
+  "environment": "verification",
+  "display_name": "MyRAM Verification",
+  "storage_root_name": "MyRAM Verification",
+  "swiftdata_store_name": "MyRAM_Verification",
+  "multipeer_service_type": "myram-verify",
+  "bonjour_service": "_myram-verify._tcp",
+  "ios": {
+    "app_bundle_identifier": "com.northsignalstudio.myram.verification",
+    "widget_bundle_identifier": "com.northsignalstudio.myram.verification.widget",
+    "widget_app_group_identifier": "group.com.northsignalstudio.myram.verification.widget",
+    "url_scheme": "myram-verification",
+    "export_type_identifier": "com.northsignalstudio.myram.verification.export",
+    "export_filename_extension": "myram-verification",
+    "export_mime_type": "application/vnd.northsignalstudio.myram-verification"
+  },
+  "macos": {
+    "app_bundle_identifier": "com.northsignalstudio.myram.mac.verification",
+    "widget_bundle_identifier": "com.northsignalstudio.myram.mac.verification.widget",
+    "widget_app_group_identifier": "group.com.northsignalstudio.myram.mac.verification.widget",
+    "url_scheme": "myram-mac-verification"
+  }
+}
