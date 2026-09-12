@@ -2,6 +2,9 @@ import Foundation
 import SwiftData
 import XCTest
 import AnchoredSequenceCore
+#if os(macOS)
+@preconcurrency import MultipeerConnectivity
+#endif
 
 #if os(macOS)
 @testable import MyRAMMac
@@ -431,6 +434,181 @@ final class MYR221BootstrapOwnershipMonotonicityTests: XCTestCase {
     private enum DurableProof {
         case fullIncorporation
         case tombstone
+    }
+}
+
+@MainActor
+final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
+#if os(macOS)
+    func testReconnectBootstrapIncludesDurablePendingLocalObligationHistory() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-222-failure-first-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let fixture = try await makeDisconnectedEditFixture()
+        let localQueueURL = directory.appendingPathComponent("local-obligations.json")
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: localQueueURL)
+        try localQueue.enqueue(fixture.obligation)
+        XCTAssertEqual(localQueue.pendingBatches.map(\.id), [fixture.obligation.batch.id])
+
+        let conflictStore = SyncConflictStore(
+            fileURL: directory.appendingPathComponent("conflicts.json")
+        )
+        let remotePeer = MCPeerID(displayName: "remote|myr222-peer")
+        var sentMessages: [Data] = []
+        let controller = MacSyncBatchController(
+            context: fixture.context,
+            conflictStore: conflictStore,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            startsNetworking: false,
+            identityProvider: {
+                MacSyncDeviceIdentity(
+                    id: UUID(uuidString: "22200000-0000-0000-0000-000000000010")!,
+                    displayName: "MYR222"
+                )
+            },
+            startAdvertisingOperation: {},
+            startBrowsingOperation: {},
+            connectedPeersProvider: { [remotePeer] },
+            sendBatchDataOperation: { data, _, _ in sentMessages.append(data) }
+        )
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: directory.appendingPathComponent("anchored-recovery.json")
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: fixture.context,
+            syncController: controller,
+            conflictStore: conflictStore,
+            presentationSurface: MacSyncConvergencePresentationSurface(
+                selectedNoteID: { nil },
+                hasUnsavedChanges: { false },
+                refreshNotesList: {},
+                closeRemovedSelectedEditor: { _ in },
+                applyIncremental: { _, _, _ in fatalError("Not used by bootstrap coverage regression") },
+                reloadSelectedEditor: { _, _ in true },
+                currentEditorBody: { nil }
+            ),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: localQueueURL,
+            anchoredRecoveryStore: recoveryStore
+        )
+        _ = coordinator
+
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "myr222-peer"
+        )
+        controller.beginBootstrapForTesting(to: remotePeer)
+
+        let wireData = try XCTUnwrap(sentMessages.first)
+        let message = try MultipeerSyncMessageCoding.decodeMessage(from: wireData)
+        XCTAssertEqual(message.kind, .bootstrapSnapshot)
+        let snapshot = try JSONDecoder().decode(
+            SyncPeerBootstrapSnapshot.self,
+            from: message.payload
+        )
+
+        XCTAssertEqual(
+            Set(snapshot.historyCoverage.map(\.batchID)),
+            [fixture.obligation.batch.id],
+            "Reconnect bootstrap must carry durable local-obligation ownership before ordinary sync can resume."
+        )
+    }
+#endif
+
+    private func makeDisconnectedEditFixture() async throws -> (
+        container: ModelContainer,
+        context: ModelContext,
+        obligation: SyncConvergenceLocalObligation
+    ) {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR-222-DisconnectedEdit-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
+        let context = container.mainContext
+        context.autosaveEnabled = false
+        let noteID = UUID(uuidString: "22200000-0000-0000-0000-000000000001")!
+        let note = Note(title: "", content: "AB")
+        note.id = noteID
+        context.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: context
+        )
+        try context.save()
+
+        let initial = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        )
+        let originDeviceID = UUID(uuidString: "22200000-0000-0000-0000-000000000002")!
+        let capture = try await SyncBatchAnchoredLocalCapture.capture(
+            noteID: noteID,
+            oldBody: "AB",
+            newBody: "AxB",
+            modifiedAt: Date(timeIntervalSinceReferenceDate: 222),
+            initialState: initial.state,
+            operationIDReserver: MYR222OperationIDReserver(
+                deviceID: originDeviceID,
+                nextCounter: 1
+            )
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: note,
+            expected: initial,
+            newBody: capture.finalState.visibleText,
+            finalState: capture.finalState,
+            in: context
+        )
+        note.modifiedAt = Date(timeIntervalSinceReferenceDate: 222)
+        try context.save()
+
+        let persisted = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        )
+        XCTAssertEqual(note.content, persisted.state.visibleText)
+        XCTAssertEqual(note.content, "AxB")
+
+        let batch = SyncBatch(
+            id: UUID(uuidString: "22200000-0000-0000-0000-000000000003")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 222),
+            batchSequence: 1,
+            changes: capture.capturedChanges.map(\.change)
+        )
+        return (
+            container,
+            context,
+            SyncConvergenceLocalObligation(
+                batch: batch,
+                capturedChanges: capture.capturedChanges
+            )
+        )
+    }
+}
+
+private actor MYR222OperationIDReserver: SyncOperationIDReserving {
+    private let deviceID: UUID
+    private var nextCounter: UInt64
+
+    init(deviceID: UUID, nextCounter: UInt64) {
+        self.deviceID = deviceID
+        self.nextCounter = nextCounter
+    }
+
+    func reserveOperationID() async throws -> SyncOperationID {
+        let operationID = SyncOperationID(deviceID: deviceID, localCounter: nextCounter)
+        nextCounter &+= 1
+        return operationID
     }
 }
 
