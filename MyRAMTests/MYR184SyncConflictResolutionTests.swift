@@ -1,11 +1,107 @@
+import AnchoredSequenceCore
 import Foundation
 @preconcurrency import MultipeerConnectivity
 import NearbySyncCore
+import SwiftData
 import XCTest
 @testable import MyRAM
 
 @MainActor
 final class MYR184SyncConflictResolutionTests: XCTestCase {
+    func testMYR222NonMergeableBootstrapRequiresDurableStructuralConflict() throws {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR-222-StructuralConflict-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
+        let context = container.mainContext
+        context.autosaveEnabled = false
+
+        let noteID = UUID(uuidString: "22200000-0000-0000-0000-000000000201")!
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_220)
+        let localModifiedAt = Date(timeIntervalSinceReferenceDate: 2_221)
+        let remoteModifiedAt = Date(timeIntervalSinceReferenceDate: 2_222)
+        let note = Note(title: "", content: "Local")
+        note.id = noteID
+        note.createdAt = createdAt
+        note.modifiedAt = localModifiedAt
+        context.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+
+        let localSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        )
+        let unrelatedRemote = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: UUID(uuidString: "22200000-0000-0000-0000-000000000299")!,
+            body: "Remote"
+        ).state
+        XCTAssertThrowsError(
+            try localSnapshot.state.mergingRetainedLineage(with: unrelatedRemote)
+        ) { error in
+            XCTAssertEqual(error as? SyncTextSequenceMergeError, .noSharedRetainedLineage)
+        }
+
+        let remotePayload = try NoteSequenceStatePersistenceCodec.encode(
+            state: unrelatedRemote,
+            noteID: noteID
+        )
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(uuidString: "22200000-0000-0000-0000-000000000202")!,
+            folders: [],
+            notes: [
+                SyncPeerBootstrapNoteSnapshot(
+                    id: noteID,
+                    title: "",
+                    body: "Remote",
+                    isPinned: false,
+                    createdAt: createdAt,
+                    modifiedAt: remoteModifiedAt,
+                    deletedAt: nil,
+                    folderID: nil,
+                    formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                    revision: 0,
+                    visibleUTF16Count: unrelatedRemote.visibleUTF16Count,
+                    tombstonedUTF16Count: unrelatedRemote.tombstonedUTF16Count,
+                    payloadByteCount: remotePayload.count,
+                    statePayloadData: remotePayload
+                )
+            ]
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-222-conflict-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SyncConflictStore(fileURL: directory.appendingPathComponent("conflicts.json"))
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: context)
+
+        let persisted = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        )
+        XCTAssertEqual(note.content, "Local")
+        XCTAssertEqual(persisted, localSnapshot)
+        XCTAssertFalse(disposition.coveredNoteIDs.contains(noteID))
+
+        let conflicts = store.activeConflicts()
+        XCTAssertEqual(
+            conflicts.count,
+            1,
+            "A non-mergeable bootstrap must preserve an actionable durable conflict instead of silently leaving the note uncovered."
+        )
+        let conflict = try XCTUnwrap(conflicts.first)
+        XCTAssertEqual(conflict.entityType, .note)
+        XCTAssertEqual(conflict.entityID, noteID)
+        XCTAssertEqual(conflict.noteID, noteID)
+        XCTAssertEqual(conflict.field, .noteContent)
+        XCTAssertEqual(conflict.localText, "Local")
+        XCTAssertEqual(conflict.remoteText, "Remote")
+    }
+
     func testDeferredResolutionExactRedeliveryIsIdempotentAndContradictionFailsClosed() throws {
         let store = makeStore()
         let id = UUID(uuidString: "12345678-1234-8234-9234-123456789abc")!
