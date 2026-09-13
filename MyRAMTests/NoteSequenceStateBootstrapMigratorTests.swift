@@ -331,7 +331,7 @@ final class MYR221BootstrapOwnershipMonotonicityTests: XCTestCase {
             ]
         )
         let baseSnapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: sourceContext)
-        let staleSnapshot = baseSnapshot.attachingHistoryCoverage(for: [batch])
+        let staleSnapshot = try baseSnapshot.attachingHistoryCoverage(for: [batch])
 
         let destination = try makeContainer()
         let destinationContext = ModelContext(destination)
@@ -439,6 +439,55 @@ final class MYR221BootstrapOwnershipMonotonicityTests: XCTestCase {
 
 @MainActor
 final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
+    func testReplayOwnedBootstrapHistoryStaysUncoveredUntilOrdinaryReplay() async throws {
+        let fixture = try await makeDisconnectedEditFixture()
+        let baseSnapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: fixture.context)
+        let localManifest = try baseSnapshot.attachingHistoryCoverage(
+            for: [fixture.obligation.batch],
+            requiresReplayOwnership: true
+        )
+        // The same batch can briefly exist in both durable ownership layers while
+        // local convergence hands it to transport. Replay ownership must win.
+        let snapshot = try localManifest.attachingHistoryCoverage(
+            for: [fixture.obligation.batch]
+        )
+        XCTAssertEqual(snapshot.historyCoverage.count, 1)
+        XCTAssertEqual(snapshot.historyCoverage.first?.requiresReplayOwnership, true)
+
+        let destination = try makeContainer(name: "MYR-222-ReplayOwnedDestination")
+        let destinationContext = destination.mainContext
+        destinationContext.autosaveEnabled = false
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-222-replay-owned-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: directory.appendingPathComponent("anchored-recovery.json")
+        )
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: destinationContext,
+            anchoredRecoveryStore: recoveryStore
+        )
+
+        XCTAssertEqual(disposition.coveredNoteIDs, Set([fixture.noteID]))
+        XCTAssertFalse(disposition.coveredBatchIDs.contains(fixture.obligation.batch.id))
+        let anchoredChange = try XCTUnwrap(
+            fixture.obligation.batch.changes.compactMap { change -> SyncBatchAnchoredRecoveryChange? in
+                switch change {
+                case .noteBodyTextInsertedAnchored(let insertion): return .insertion(insertion)
+                case .noteBodyTextDeletedAnchored(let deletion): return .deletion(deletion)
+                default: return nil
+                }
+            }.first
+        )
+        XCTAssertEqual(
+            recoveryStore.snapshot().record(for: anchoredChange.recordKey)?.lifecycle,
+            .bootstrapOwned
+        )
+    }
+
 #if os(macOS)
     func testReconnectBootstrapIncludesDurablePendingLocalObligationHistory() async throws {
         let directory = FileManager.default.temporaryDirectory
@@ -518,21 +567,17 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
             [fixture.obligation.batch.id],
             "Reconnect bootstrap must carry durable local-obligation ownership before ordinary sync can resume."
         )
+        XCTAssertEqual(snapshot.historyCoverage.first?.requiresReplayOwnership, true)
     }
 #endif
 
     private func makeDisconnectedEditFixture() async throws -> (
         container: ModelContainer,
         context: ModelContext,
+        noteID: UUID,
         obligation: SyncConvergenceLocalObligation
     ) {
-        let schema = Schema(MyRAMModelRegistry.models)
-        let configuration = ModelConfiguration(
-            "MYR-222-DisconnectedEdit-\(UUID().uuidString)",
-            schema: schema,
-            isStoredInMemoryOnly: true
-        )
-        let container = try ModelContainer(for: schema, configurations: configuration)
+        let container = try makeContainer(name: "MYR-222-DisconnectedEdit")
         let context = container.mainContext
         context.autosaveEnabled = false
         let noteID = UUID(uuidString: "22200000-0000-0000-0000-000000000001")!
@@ -588,11 +633,22 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
         return (
             container,
             context,
+            noteID,
             SyncConvergenceLocalObligation(
                 batch: batch,
                 capturedChanges: capture.capturedChanges
             )
         )
+    }
+
+    private func makeContainer(name: String) throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "\(name)-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
     }
 }
 
