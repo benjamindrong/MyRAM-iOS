@@ -308,12 +308,8 @@ final class NotesViewModel: ObservableObject {
             }
         }
         if let bootstrapController = syncController as? MyRAMSyncBootstrapConfiguring {
-            bootstrapController.buildBootstrapSnapshot = { [context, pendingLocalConvergenceBatches] in
+            bootstrapController.buildBootstrapSnapshot = { [context] in
                 try SyncPeerBootstrapSnapshotPersistence.build(from: context)
-                    .attachingHistoryCoverage(
-                        for: pendingLocalConvergenceBatches.pendingBatches,
-                        requiresReplayOwnership: true
-                    )
             }
             bootstrapController.applyBootstrapSnapshot = { [context, pendingIncomingBatches, anchoredRecoveryStore = self.anchoredRecoveryStore] snapshot in
                 try SyncPeerBootstrapSnapshotPersistence.apply(

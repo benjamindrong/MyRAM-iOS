@@ -31,51 +31,19 @@ struct SyncPeerBootstrapSnapshot: Codable, Equatable, Sendable {
         }
     }
 
-    /// Adds durable history to the frozen bootstrap snapshot without discarding
-    /// history already attached by another outbound ownership layer. A batch that
-    /// is still a local convergence obligation must remain replay-owned even if a
-    /// transport copy of the same exact batch appears during the handoff window.
-    func attachingHistoryCoverage(
-        for batches: [SyncBatch],
-        requiresReplayOwnership: Bool = false
-    ) throws -> Self {
+    func attachingHistoryCoverage(for batches: [SyncBatch]) -> Self {
         let representedNoteIDs = Set(notes.map(\.id))
-        var coverageByBatchID = Dictionary(uniqueKeysWithValues: historyCoverage.map {
-            ($0.batchID, $0)
-        })
-
-        for batch in batches {
-            let candidate = SyncPeerBootstrapHistoryBatchCoverage(
-                batch: batch,
-                requiresReplayOwnership: requiresReplayOwnership
-            )
-            guard candidate.noteIDs.isSubset(of: representedNoteIDs) else {
-                continue
-            }
-
-            if let existing = coverageByBatchID[candidate.batchID] {
-                guard existing.noteIDs == candidate.noteIDs,
-                      existing.anchoredRecoveryChanges == candidate.anchoredRecoveryChanges else {
-                    throw SyncPeerBootstrapError.duplicateHistoryBatchID(candidate.batchID)
-                }
-                coverageByBatchID[candidate.batchID] = SyncPeerBootstrapHistoryBatchCoverage(
-                    batchID: candidate.batchID,
-                    noteIDs: candidate.noteIDs,
-                    anchoredRecoveryChanges: candidate.anchoredRecoveryChanges,
-                    requiresReplayOwnership:
-                        existing.requiresReplayOwnership == true
-                            || candidate.requiresReplayOwnership == true
-                )
-                continue
-            }
-            coverageByBatchID[candidate.batchID] = candidate
-        }
-
         return Self(
             id: id,
             folders: folders,
             notes: notes,
-            historyCoverage: Array(coverageByBatchID.values)
+            historyCoverage: batches.compactMap { batch in
+                let coverage = SyncPeerBootstrapHistoryBatchCoverage(batch: batch)
+                guard coverage.noteIDs.isSubset(of: representedNoteIDs) else {
+                    return nil
+                }
+                return coverage
+            }
         )
     }
 }
@@ -84,36 +52,24 @@ struct SyncPeerBootstrapHistoryBatchCoverage: Codable, Equatable, Sendable {
     let batchID: SyncBatchID
     let noteIDs: Set<SyncBatchNoteID>
     let anchoredRecoveryChanges: [SyncBatchAnchoredRecoveryChange]?
-    /// True only while the sender still owns this batch in its local convergence
-    /// obligation queue. Such a batch must not be acknowledged as fully covered;
-    /// its ordinary replay is what consumes bootstrap ownership safely.
-    /// Optional encoding preserves bootstrap-v1 compatibility for older snapshots.
-    let requiresReplayOwnership: Bool?
 
-    init(
-        batchID: SyncBatchID,
-        noteIDs: Set<SyncBatchNoteID>,
-        requiresReplayOwnership: Bool = false
-    ) {
+    init(batchID: SyncBatchID, noteIDs: Set<SyncBatchNoteID>) {
         self.batchID = batchID
         self.noteIDs = noteIDs
         anchoredRecoveryChanges = nil
-        self.requiresReplayOwnership = requiresReplayOwnership ? true : nil
     }
 
     init(
         batchID: SyncBatchID,
         noteIDs: Set<SyncBatchNoteID>,
-        anchoredRecoveryChanges: [SyncBatchAnchoredRecoveryChange]?,
-        requiresReplayOwnership: Bool = false
+        anchoredRecoveryChanges: [SyncBatchAnchoredRecoveryChange]?
     ) {
         self.batchID = batchID
         self.noteIDs = noteIDs
         self.anchoredRecoveryChanges = anchoredRecoveryChanges
-        self.requiresReplayOwnership = requiresReplayOwnership ? true : nil
     }
 
-    init(batch: SyncBatch, requiresReplayOwnership: Bool = false) {
+    init(batch: SyncBatch) {
         batchID = batch.id
         noteIDs = Set(batch.changes.map(\.noteID))
         anchoredRecoveryChanges = batch.changes.compactMap { change in
@@ -123,7 +79,6 @@ struct SyncPeerBootstrapHistoryBatchCoverage: Codable, Equatable, Sendable {
             default: return nil
             }
         }
-        self.requiresReplayOwnership = requiresReplayOwnership ? true : nil
     }
 }
 
@@ -511,8 +466,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
                 }
             }
             coveredBatchIDs = Set(snapshot.historyCoverage.compactMap { coverage in
-                coverage.requiresReplayOwnership != true
-                    && coverage.noteIDs.isSubset(of: fullyCoveredNoteIDs)
+                coverage.noteIDs.isSubset(of: fullyCoveredNoteIDs)
                     ? coverage.batchID
                     : nil
             })

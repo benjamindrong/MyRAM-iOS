@@ -47,14 +47,6 @@ final class MacSyncConvergenceCoordinator {
         pendingIncomingQueue.pendingCount
     }
 
-    /// Durable local work that has already changed the anchored sequence state but
-    /// has not necessarily crossed the transport-admission boundary yet. Bootstrap
-    /// must manifest these batches so peer-side structural absorption also records
-    /// replay ownership before ordinary synchronization resumes.
-    var pendingLocalBootstrapBatches: [SyncBatch] {
-        localObligationQueue.pendingBatches
-    }
-
     /// Durably persists an incoming batch's raw bytes, independent of whatever
     /// `submitRemoteBatch` later does with them. This is what the transport layer
     /// checks before convergence. Durable capture is necessary but does not by
