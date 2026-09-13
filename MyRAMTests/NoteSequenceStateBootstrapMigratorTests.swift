@@ -503,7 +503,7 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
             "1",
             forPeerDeviceID: "myr222-peer"
         )
-        controller.beginBootstrapForTesting(to: remotePeer)
+        await controller.beginReconnectBootstrapForTesting(to: remotePeer)
 
         let wireData = try XCTUnwrap(sentMessages.first)
         let message = try MultipeerSyncMessageCoding.decodeMessage(from: wireData)
