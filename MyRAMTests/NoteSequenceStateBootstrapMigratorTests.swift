@@ -472,7 +472,11 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
             startAdvertisingOperation: {},
             startBrowsingOperation: {},
             connectedPeersProvider: { [remotePeer] },
-            sendBatchDataOperation: { data, _, _ in sentMessages.append(data) }
+            sendBatchDataOperation: { data, peers, _ in
+                if !peers.isEmpty {
+                    sentMessages.append(data)
+                }
+            }
         )
         let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(
             fileURL: directory.appendingPathComponent("anchored-recovery.json")
