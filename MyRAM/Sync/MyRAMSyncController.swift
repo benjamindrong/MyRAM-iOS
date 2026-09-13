@@ -1011,6 +1011,13 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func beginBootstrap(to peerID: MCPeerID) async {
+        // Body/state may already include a durable local convergence obligation
+        // that has not crossed into the transport queue yet (for example after a
+        // restart). Move that work through its normal admission path before the
+        // bootstrap snapshot freezes history coverage, so any structural operation
+        // the peer can absorb is represented by existing bootstrap ownership.
+        await onFlushLocalConvergenceRequested?()
+
         let identity = MyRAMPeerIdentity(peerID: peerID)
         guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
             forPeerDeviceID: identity.deviceID
