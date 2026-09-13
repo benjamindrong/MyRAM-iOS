@@ -520,8 +520,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
         do {
             let capturedBatches = unsentBatches.pendingBatches
+            let pendingLocalBatches = convergenceCoordinator?.pendingLocalBootstrapBatches ?? []
+            let manifestedBatches = try bootstrapHistoryBatches(
+                transportBatches: capturedBatches,
+                localObligationBatches: pendingLocalBatches
+            )
             let snapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: context)
-                .attachingHistoryCoverage(for: capturedBatches)
+                .attachingHistoryCoverage(for: manifestedBatches)
             bootstrapStateByPeerDeviceID[identity.deviceID] = SyncPeerBootstrapPendingState(
                 snapshot: snapshot,
                 coveredBatchIDs: Set(capturedBatches.map(\.id)),
@@ -536,6 +541,23 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         } catch {
             lastErrorMessage = "Unable to prepare nearby bootstrap state."
         }
+    }
+
+    private func bootstrapHistoryBatches(
+        transportBatches: [SyncBatch],
+        localObligationBatches: [SyncBatch]
+    ) throws -> [SyncBatch] {
+        var batchesByID: [SyncBatchID: SyncBatch] = [:]
+        for batch in localObligationBatches + transportBatches {
+            if let existing = batchesByID[batch.id] {
+                guard existing == batch else {
+                    throw SyncPeerBootstrapError.duplicateHistoryBatchID(batch.id)
+                }
+                continue
+            }
+            batchesByID[batch.id] = batch
+        }
+        return batchesByID.values.sorted { $0.id.uuidString < $1.id.uuidString }
     }
 
     private func attemptBootstrapSnapshotTransmission(
