@@ -1386,7 +1386,7 @@ final class MyRAMSyncConflictService {
         let descriptor = FetchDescriptor<PinnedThought>(
             predicate: #Predicate { thought in
                 thought.id == thoughtID
-            )
+            }
         )
         return (try? context.fetch(descriptor))?.first
     }
