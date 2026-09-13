@@ -892,11 +892,16 @@ extension MacSyncBatchController: MCSessionDelegate {
             }
             if state == .connected {
                 remember(peerID)
+                // A persisted local convergence obligation may already have changed
+                // the anchored sequence state before the reconnect. Admit that work
+                // into the durable unsent queue before freezing bootstrap so the
+                // snapshot's history manifest owns every structural operation it can
+                // absorb on the peer.
+                await convergenceCoordinator?.resumePendingWork()
                 sendBootstrapCapabilityAnnouncement(to: peerID)
                 beginBootstrap(to: peerID)
                 startBootstrapCapabilityResolution(for: peerID)
                 await flushUnsentBatches()
-                await convergenceCoordinator?.resumePendingWork()
             }
         }
     }
