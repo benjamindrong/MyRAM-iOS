@@ -1034,6 +1034,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             )
             return
         }
+        guard (localConvergencePendingCountProvider?() ?? 0) == 0 else {
+            lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
+            await updatePendingCount()
+            return
+        }
         guard let buildBootstrapSnapshot else {
             lastErrorMessage = "Unable to prepare nearby bootstrap state."
             return
