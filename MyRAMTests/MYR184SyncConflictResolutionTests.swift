@@ -102,6 +102,79 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
         XCTAssertEqual(conflict.remoteText, "Remote")
     }
 
+    func testMYR222StructuralSidecarMaterializesVisibleConflictWithExactRemoteState() throws {
+        let noteID = UUID(uuidString: "22200000-0000-0000-0000-000000000211")!
+        let bootstrapID = UUID(uuidString: "22200000-0000-0000-0000-000000000212")!
+        let localState = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: noteID,
+            body: "Local"
+        ).state
+        let remoteState = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: UUID(uuidString: "22200000-0000-0000-0000-000000000219")!,
+            body: "Remote"
+        ).state
+        XCTAssertThrowsError(try localState.mergingRetainedLineage(with: remoteState)) { error in
+            XCTAssertEqual(error as? SyncTextSequenceMergeError, .noSharedRetainedLineage)
+        }
+        let remotePayload = try NoteSequenceStatePersistenceCodec.encode(
+            state: remoteState,
+            noteID: noteID
+        )
+        let remoteSnapshot = SyncPeerBootstrapNoteSnapshot(
+            id: noteID,
+            title: "",
+            body: "Remote",
+            isPinned: false,
+            createdAt: Date(timeIntervalSinceReferenceDate: 2_210),
+            modifiedAt: Date(timeIntervalSinceReferenceDate: 2_211),
+            deletedAt: nil,
+            folderID: nil,
+            formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+            revision: 0,
+            visibleUTF16Count: remoteState.visibleUTF16Count,
+            tombstonedUTF16Count: remoteState.tombstonedUTF16Count,
+            payloadByteCount: remotePayload.count,
+            statePayloadData: remotePayload
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-222-sidecar-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SyncConflictStore(fileURL: directory.appendingPathComponent("conflicts.json"))
+        let sidecarURL = directory.appendingPathComponent("bootstrap-structural.json")
+
+        let conflict = try store.materializeBootstrapStructuralConflictChecked(
+            noteID: noteID,
+            localText: "Local",
+            localState: localState,
+            remoteSnapshot: remoteSnapshot,
+            bootstrapSnapshotID: bootstrapID,
+            sidecarFileURL: sidecarURL
+        )
+
+        XCTAssertEqual(store.activeConflicts(), [conflict])
+        XCTAssertEqual(conflict.localText, "Local")
+        XCTAssertEqual(conflict.remoteText, "Remote")
+        XCTAssertEqual(conflict.expiresAt, .distantFuture)
+        let record = try XCTUnwrap(store.bootstrapStructuralConflictRecordChecked(
+            id: conflict.id,
+            sidecarFileURL: sidecarURL
+        ))
+        XCTAssertEqual(record.lifecycle, .active)
+        XCTAssertEqual(record.bootstrapSnapshotID, bootstrapID)
+        XCTAssertEqual(record.remoteStatePayloadData, remotePayload)
+        XCTAssertEqual(record.remotePayloadByteCount, remotePayload.count)
+        XCTAssertEqual(
+            record.localStructuralFingerprint,
+            try SyncConflictStore.bootstrapStructuralFingerprint(noteID: noteID, state: localState)
+        )
+        XCTAssertEqual(
+            record.remoteStructuralFingerprint,
+            try SyncConflictStore.bootstrapStructuralFingerprint(noteID: noteID, state: remoteState)
+        )
+        XCTAssertEqual(try store.validatedBootstrapStructuralRemoteState(record), remoteState)
+    }
+
     func testDeferredResolutionExactRedeliveryIsIdempotentAndContradictionFailsClosed() throws {
         let store = makeStore()
         let id = UUID(uuidString: "12345678-1234-8234-9234-123456789abc")!
