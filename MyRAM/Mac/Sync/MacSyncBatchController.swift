@@ -188,7 +188,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func beginBootstrapForTesting(to peerID: MCPeerID) {
-        beginBootstrap(to: peerID)
+        beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
+    }
+
+    func beginReconnectBootstrapForTesting(to peerID: MCPeerID) async {
+        await beginBootstrap(to: peerID)
     }
 
     func handleBootstrapAcknowledgementForTesting(
@@ -218,10 +222,16 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func handleBootstrapCapabilityAnnouncementForTesting(from peerID: MCPeerID) {
-        handleBootstrapCapabilityAnnouncement(
-            SyncPeerBootstrapCapabilityAnnouncement(),
-            from: peerID
-        )
+        let announcement = SyncPeerBootstrapCapabilityAnnouncement()
+        guard announcement.version == SyncPeerBootstrapCapabilityAnnouncement.currentVersion else {
+            return
+        }
+        let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        peerCapabilityRegistry.recordBootstrapV1Announcement(forPeerDeviceID: deviceID)
+        bootstrapCapabilityResolutionTasks.removeValue(forKey: deviceID)?.cancel()
+        if connectedPeersProvider().contains(peerID) {
+            beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
+        }
     }
 
     func resolveBootstrapCapabilityFallbackForTesting(peerID: MCPeerID) async {
@@ -500,7 +510,32 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
     }
 
-    private func beginBootstrap(to peerID: MCPeerID) {
+    private func beginBootstrap(to peerID: MCPeerID) async {
+        let identity = MacSyncPeerIdentity(peerID: peerID)
+        guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
+            forPeerDeviceID: identity.deviceID
+        ) else {
+            beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
+            return
+        }
+        if bootstrapStateByPeerDeviceID[identity.deviceID] != nil {
+            beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
+            return
+        }
+        guard let convergenceCoordinator else {
+            lastErrorMessage = "Unable to prepare nearby bootstrap state."
+            return
+        }
+
+        await convergenceCoordinator.resumePendingWork()
+        guard convergenceCoordinator.pendingLocalObligationCount == 0 else {
+            lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
+            return
+        }
+        beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
+    }
+
+    private func beginBootstrapAfterLocalOwnershipPreflight(to peerID: MCPeerID) {
         let identity = MacSyncPeerIdentity(peerID: peerID)
         guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
             forPeerDeviceID: identity.deviceID
@@ -712,7 +747,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private func handleBootstrapCapabilityAnnouncement(
         _ announcement: SyncPeerBootstrapCapabilityAnnouncement,
         from peerID: MCPeerID
-    ) {
+    ) async {
         guard announcement.version == SyncPeerBootstrapCapabilityAnnouncement.currentVersion else {
             return
         }
@@ -720,7 +755,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         peerCapabilityRegistry.recordBootstrapV1Announcement(forPeerDeviceID: deviceID)
         bootstrapCapabilityResolutionTasks.removeValue(forKey: deviceID)?.cancel()
         if connectedPeersProvider().contains(peerID) {
-            beginBootstrap(to: peerID)
+            await beginBootstrap(to: peerID)
         }
     }
 
@@ -892,14 +927,8 @@ extension MacSyncBatchController: MCSessionDelegate {
             }
             if state == .connected {
                 remember(peerID)
-                // A persisted local convergence obligation may already have changed
-                // the anchored sequence state before the reconnect. Admit that work
-                // into the durable unsent queue before freezing bootstrap so the
-                // snapshot's history manifest owns every structural operation it can
-                // absorb on the peer.
-                await convergenceCoordinator?.resumePendingWork()
                 sendBootstrapCapabilityAnnouncement(to: peerID)
-                beginBootstrap(to: peerID)
+                await beginBootstrap(to: peerID)
                 startBootstrapCapabilityResolution(for: peerID)
                 await flushUnsentBatches()
             }
@@ -965,7 +994,7 @@ extension MacSyncBatchController: MCSessionDelegate {
                     SyncPeerBootstrapCapabilityAnnouncement.self,
                     from: message.payload
                 ) else { return }
-                handleBootstrapCapabilityAnnouncement(announcement, from: peerID)
+                await handleBootstrapCapabilityAnnouncement(announcement, from: peerID)
             case .bootstrapSnapshot:
                 guard let snapshot = try? JSONDecoder().decode(
                     SyncPeerBootstrapSnapshot.self,
@@ -1038,7 +1067,7 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
                 if peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                     forPeerDeviceID: identity.deviceID
                 ) {
-                    beginBootstrap(to: peerID)
+                    await beginBootstrap(to: peerID)
                 } else {
                     await flushUnsentBatches()
                 }
