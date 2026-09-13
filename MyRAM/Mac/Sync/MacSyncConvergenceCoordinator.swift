@@ -47,6 +47,10 @@ final class MacSyncConvergenceCoordinator {
         pendingIncomingQueue.pendingCount
     }
 
+    var pendingLocalObligationCount: Int {
+        localObligationQueue.pendingCount
+    }
+
     /// Durably persists an incoming batch's raw bytes, independent of whatever
     /// `submitRemoteBatch` later does with them. This is what the transport layer
     /// checks before convergence. Durable capture is necessary but does not by
