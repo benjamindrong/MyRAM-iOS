@@ -357,6 +357,23 @@ extension SyncConflictStore {
         ).records.first { $0.conflictID == id }
     }
 
+    func bootstrapStructuralConflictRecordChecked(
+        noteID: UUID,
+        sidecarFileURL: URL = SyncConflictStore.defaultBootstrapStructuralConflictFileURL(),
+        fileIO: SyncBootstrapStructuralConflictFileIO = .live
+    ) throws -> SyncBootstrapStructuralConflictRecord? {
+        let candidates = try loadBootstrapStructuralEnvelopeChecked(
+            fileURL: sidecarFileURL,
+            fileIO: fileIO
+        ).records.filter {
+            $0.noteID == noteID && ($0.lifecycle == .active || $0.lifecycle == .resolvedLocalAuthority)
+        }
+        guard candidates.count <= 1 else {
+            throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
+        }
+        return candidates.first
+    }
+
     func validatedBootstrapStructuralRemoteState(
         _ record: SyncBootstrapStructuralConflictRecord
     ) throws -> SyncTextSequenceState {
@@ -470,11 +487,17 @@ extension SyncConflictStore {
         envelope.records[index].lifecycle = .resolvedLocalAuthority
         envelope.records[index].visibleConflict = updatedVisible
         envelope.records[index].pendingResolution = nil
+        let originalEnvelope = try loadBootstrapStructuralEnvelopeChecked(fileURL: sidecarFileURL, fileIO: fileIO)
         try saveBootstrapStructuralEnvelopeChecked(envelope, fileURL: sidecarFileURL, fileIO: fileIO)
-        try replaceBootstrapStructuralVisibleConflictChecked(
-            previous: record.visibleConflict,
-            with: updatedVisible
-        )
+        do {
+            try replaceBootstrapStructuralVisibleConflictChecked(
+                previous: record.visibleConflict,
+                with: updatedVisible
+            )
+        } catch {
+            try? saveBootstrapStructuralEnvelopeChecked(originalEnvelope, fileURL: sidecarFileURL, fileIO: fileIO)
+            throw error
+        }
     }
 
     func finalizeBootstrapStructuralAcceptIncomingChecked(
@@ -506,7 +529,14 @@ extension SyncConflictStore {
             ),
             in: &envelope
         )
-        try saveBootstrapStructuralEnvelopeChecked(envelope, fileURL: sidecarFileURL, fileIO: fileIO)
+        let receiptEnvelope = envelope
+        try saveBootstrapStructuralEnvelopeChecked(receiptEnvelope, fileURL: sidecarFileURL, fileIO: fileIO)
+
+        var terminal = receiptEnvelope
+        terminal.records[index].lifecycle = .terminallySuperseded
+        terminal.records[index].visibleConflict = nil
+        terminal.records[index].pendingResolution = nil
+        try saveBootstrapStructuralEnvelopeChecked(terminal, fileURL: sidecarFileURL, fileIO: fileIO)
 
         if let visible = record.visibleConflict {
             do {
@@ -514,18 +544,10 @@ extension SyncConflictStore {
                     removedResolvedConflicts: [visible]
                 ))
             } catch {
+                try? saveBootstrapStructuralEnvelopeChecked(receiptEnvelope, fileURL: sidecarFileURL, fileIO: fileIO)
                 throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
             }
         }
-
-        var terminal = try loadBootstrapStructuralEnvelopeChecked(fileURL: sidecarFileURL, fileIO: fileIO)
-        guard let terminalIndex = terminal.records.firstIndex(where: { $0.conflictID == conflictID }) else {
-            throw SyncBootstrapStructuralConflictStoreError.missingStructuralConflict
-        }
-        terminal.records[terminalIndex].lifecycle = .terminallySuperseded
-        terminal.records[terminalIndex].visibleConflict = nil
-        terminal.records[terminalIndex].pendingResolution = nil
-        try saveBootstrapStructuralEnvelopeChecked(terminal, fileURL: sidecarFileURL, fileIO: fileIO)
     }
 
     func terminalizeBootstrapStructuralConflictIfPeerAdoptedChecked(
@@ -541,6 +563,8 @@ extension SyncConflictStore {
                 && envelope.records[$0].localStructuralFingerprint == adoptedFingerprint
         }
         guard !indices.isEmpty else { return }
+        let originalEnvelope = envelope
+        var visibleConflicts: [SyncConflictVersion] = []
         for index in indices {
             let record = envelope.records[index]
             guard let receipt = envelope.receipts.first(where: { $0.conflictID == record.conflictID }),
@@ -548,19 +572,21 @@ extension SyncConflictStore {
                 throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
             }
             if let visible = record.visibleConflict {
-                do {
-                    try commitLegacyIncomingEffectsChecked(LegacyIncomingBufferedEffects(
-                        removedResolvedConflicts: [visible]
-                    ))
-                } catch {
-                    throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
-                }
+                visibleConflicts.append(visible)
             }
             envelope.records[index].lifecycle = .terminallySuperseded
             envelope.records[index].visibleConflict = nil
             envelope.records[index].pendingResolution = nil
         }
         try saveBootstrapStructuralEnvelopeChecked(envelope, fileURL: sidecarFileURL, fileIO: fileIO)
+        do {
+            try commitLegacyIncomingEffectsChecked(LegacyIncomingBufferedEffects(
+                removedResolvedConflicts: visibleConflicts
+            ))
+        } catch {
+            try? saveBootstrapStructuralEnvelopeChecked(originalEnvelope, fileURL: sidecarFileURL, fileIO: fileIO)
+            throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
+        }
     }
 
     func bootstrapStructuralResolutionReceiptChecked(
@@ -954,11 +980,13 @@ final class MyRAMSyncConflictService {
                     fileIO: bootstrapStructuralConflictFileIO,
                     now: now
                 )
-                _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+                let previousRichTextContentData = note.richTextContentData
+                let previousModifiedAt = note.modifiedAt
+                _ = try NoteSequenceStateFullBodyIntegration.installAuthoritativeState(
                     of: note,
                     expected: current,
-                    newBody: record.remoteText,
-                    finalState: remoteState,
+                    body: record.remoteText,
+                    state: remoteState,
                     in: context
                 )
                 note.richTextContentData = nil
@@ -966,7 +994,15 @@ final class MyRAMSyncConflictService {
                 do {
                     try saveOperation(context)
                 } catch {
-                    context.rollback()
+                    try NoteSequenceStateFullBodyIntegration.restoreSuppliedStateMutationAfterFailedSave(
+                        of: note,
+                        expected: current,
+                        failedFinalState: remoteState,
+                        in: context
+                    )
+                    note.content = current.body
+                    note.richTextContentData = previousRichTextContentData
+                    note.modifiedAt = previousModifiedAt
                     throw MyRAMSyncConflictResolutionError.modelSaveFailed
                 }
             }
@@ -1018,9 +1054,18 @@ final class MyRAMSyncConflictService {
                 }
                 throw MyRAMSyncConflictResolutionError.staleStructuralConflict
             }
-            _ = try NoteSequenceStateFullBodyIntegration.replaceBody(
+            let mergedState = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+                noteID: note.id,
+                currentState: current.state,
+                body: text
+            )
+            let previousRichTextContentData = note.richTextContentData
+            let previousModifiedAt = note.modifiedAt
+            _ = try NoteSequenceStateFullBodyIntegration.installAuthoritativeState(
                 of: note,
-                with: text,
+                expected: current,
+                body: text,
+                state: mergedState,
                 in: context
             )
             note.richTextContentData = nil
@@ -1030,18 +1075,39 @@ final class MyRAMSyncConflictService {
                 noteID: note.id,
                 state: staged.state
             )
-            try store.prepareBootstrapStructuralResolutionChecked(
-                conflictID: conflict.id,
-                choice: .merged,
-                chosenFingerprint: stagedFingerprint,
-                sidecarFileURL: bootstrapStructuralConflictFileURL,
-                fileIO: bootstrapStructuralConflictFileIO,
-                now: now
-            )
+            do {
+                try store.prepareBootstrapStructuralResolutionChecked(
+                    conflictID: conflict.id,
+                    choice: .merged,
+                    chosenFingerprint: stagedFingerprint,
+                    sidecarFileURL: bootstrapStructuralConflictFileURL,
+                    fileIO: bootstrapStructuralConflictFileIO,
+                    now: now
+                )
+            } catch {
+                try NoteSequenceStateFullBodyIntegration.restoreSuppliedStateMutationAfterFailedSave(
+                    of: note,
+                    expected: current,
+                    failedFinalState: mergedState,
+                    in: context
+                )
+                note.content = current.body
+                note.richTextContentData = previousRichTextContentData
+                note.modifiedAt = previousModifiedAt
+                throw error
+            }
             do {
                 try saveOperation(context)
             } catch {
-                context.rollback()
+                try NoteSequenceStateFullBodyIntegration.restoreSuppliedStateMutationAfterFailedSave(
+                    of: note,
+                    expected: current,
+                    failedFinalState: mergedState,
+                    in: context
+                )
+                note.content = current.body
+                note.richTextContentData = previousRichTextContentData
+                note.modifiedAt = previousModifiedAt
                 throw MyRAMSyncConflictResolutionError.modelSaveFailed
             }
             try store.finalizeBootstrapStructuralLocalAuthorityChecked(

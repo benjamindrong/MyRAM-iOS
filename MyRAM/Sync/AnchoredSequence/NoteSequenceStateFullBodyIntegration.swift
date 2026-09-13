@@ -87,6 +87,25 @@ enum NoteSequenceStateFullBodyIntegration {
         return .replaced(previousRevision: snapshot.revision, revision: next)
     }
 
+    /// Installs a caller-validated authoritative body/state pair while preserving the
+    /// same optimistic body, revision, and structural guards as every supplied-state mutation.
+    @discardableResult
+    static func installAuthoritativeState(
+        of note: Note,
+        expected snapshot: NoteSequenceStateMutationSnapshot,
+        body: String,
+        state: SyncTextSequenceState,
+        in context: ModelContext
+    ) throws -> NoteSequenceStateFullBodyIntegrationResult {
+        try stageSuppliedStateMutation(
+            of: note,
+            expected: snapshot,
+            newBody: body,
+            finalState: state,
+            in: context
+        )
+    }
+
     static func restoreSuppliedStateMutationAfterFailedSave(
         of note: Note,
         expected snapshot: NoteSequenceStateMutationSnapshot,

@@ -277,6 +277,227 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
         XCTAssertEqual(try store.validatedBootstrapStructuralRemoteState(record), remoteState)
     }
 
+    func testMYR222AcceptIncomingInstallsExactRemoteStructuralStateAndTerminalizes() async throws {
+        let fixture = try makeStructuralResolutionFixture()
+        let service = MyRAMSyncConflictService(
+            context: fixture.context,
+            store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL
+        )
+
+        _ = try await service.acceptIncomingChecked(fixture.conflict, activeNoteID: fixture.note.id)
+
+        XCTAssertEqual(fixture.note.content, "Remote")
+        XCTAssertEqual(
+            try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+                for: fixture.note,
+                in: fixture.context
+            ).state,
+            fixture.remoteState,
+            "Accept Incoming must preserve the remote operation identities, not synthesize replacement operations."
+        )
+        XCTAssertTrue(fixture.store.activeConflicts().isEmpty)
+        let record = try XCTUnwrap(fixture.store.bootstrapStructuralConflictRecordChecked(
+            id: fixture.conflict.id,
+            sidecarFileURL: fixture.sidecarURL
+        ))
+        XCTAssertEqual(record.lifecycle, .terminallySuperseded)
+        XCTAssertEqual(
+            try fixture.store.bootstrapStructuralResolutionReceiptChecked(
+                conflictID: fixture.conflict.id,
+                sidecarFileURL: fixture.sidecarURL
+            )?.choice,
+            .acceptIncoming
+        )
+    }
+
+    func testMYR222StaleAcceptIncomingFailsClosedWithEvidenceIntact() async throws {
+        let fixture = try makeStructuralResolutionFixture()
+        _ = try NoteSequenceStateFullBodyIntegration.replaceBody(
+            of: fixture.note,
+            with: "Later local edit",
+            in: fixture.context
+        )
+        try fixture.context.save()
+        let service = MyRAMSyncConflictService(
+            context: fixture.context,
+            store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL
+        )
+
+        do {
+            _ = try await service.acceptIncomingChecked(fixture.conflict, activeNoteID: nil)
+            XCTFail("A stale local structural state must not be overwritten.")
+        } catch {
+            XCTAssertEqual(error as? MyRAMSyncConflictResolutionError, .staleStructuralConflict)
+        }
+        XCTAssertEqual(fixture.note.content, "Later local edit")
+        XCTAssertEqual(fixture.store.activeConflicts(), [fixture.conflict])
+        XCTAssertEqual(
+            try fixture.store.bootstrapStructuralConflictRecordChecked(
+                id: fixture.conflict.id,
+                sidecarFileURL: fixture.sidecarURL
+            )?.lifecycle,
+            .active
+        )
+    }
+
+    func testMYR222KeepLocalRetainsOneWaitingConflictAndCanSwitchToAcceptIncoming() async throws {
+        let fixture = try makeStructuralResolutionFixture()
+        let service = MyRAMSyncConflictService(
+            context: fixture.context,
+            store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL
+        )
+
+        _ = try await service.keepLocalChecked(fixture.conflict, activeNoteID: nil)
+
+        XCTAssertEqual(fixture.note.content, "Local")
+        XCTAssertEqual(fixture.store.activeConflicts().count, 1)
+        XCTAssertEqual(
+            try fixture.store.bootstrapStructuralResolutionReceiptChecked(
+                conflictID: fixture.conflict.id,
+                sidecarFileURL: fixture.sidecarURL
+            )?.choice,
+            .keepLocal
+        )
+        let waiting = try XCTUnwrap(fixture.store.activeConflicts().first)
+        _ = try await service.acceptIncomingChecked(waiting, activeNoteID: nil)
+        XCTAssertEqual(fixture.note.content, "Remote")
+        XCTAssertEqual(
+            try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+                for: fixture.note,
+                in: fixture.context
+            ).state,
+            fixture.remoteState
+        )
+        XCTAssertTrue(fixture.store.activeConflicts().isEmpty)
+    }
+
+    func testMYR222MergedResolutionIsDeterministicAndRetainsWaitingConflict() async throws {
+        let fixture = try makeStructuralResolutionFixture()
+        let service = MyRAMSyncConflictService(
+            context: fixture.context,
+            store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL
+        )
+
+        _ = try await service.saveMergedTextChecked(
+            fixture.conflict,
+            text: "Local + Remote",
+            activeNoteID: nil
+        )
+
+        let chosen = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: fixture.note,
+            in: fixture.context
+        )
+        let expected = try SyncTextLegacyBootstrap.makeLineagePreservingState(
+            noteID: fixture.note.id,
+            currentState: fixture.localState,
+            body: "Local + Remote"
+        )
+        XCTAssertEqual(chosen.state, expected)
+        XCTAssertEqual(fixture.store.activeConflicts().count, 1)
+        let receipt = try XCTUnwrap(fixture.store.bootstrapStructuralResolutionReceiptChecked(
+            conflictID: fixture.conflict.id,
+            sidecarFileURL: fixture.sidecarURL
+        ))
+        XCTAssertEqual(receipt.choice, .merged)
+        XCTAssertEqual(
+            receipt.chosenFingerprint,
+            try SyncConflictStore.bootstrapStructuralFingerprint(noteID: fixture.note.id, state: expected)
+        )
+    }
+
+    func testMYR222AcceptIncomingSaveFailurePreservesActionableEvidence() async throws {
+        let fixture = try makeStructuralResolutionFixture()
+        let service = MyRAMSyncConflictService(
+            context: fixture.context,
+            store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL,
+            saveOperation: { _ in throw CocoaError(.persistentStoreSave) }
+        )
+
+        do {
+            _ = try await service.acceptIncomingChecked(fixture.conflict, activeNoteID: nil)
+            XCTFail("The injected model save must fail.")
+        } catch {
+            XCTAssertEqual(error as? MyRAMSyncConflictResolutionError, .modelSaveFailed)
+        }
+        XCTAssertEqual(fixture.note.content, "Local")
+        XCTAssertEqual(fixture.store.activeConflicts(), [fixture.conflict])
+        XCTAssertEqual(
+            try fixture.store.bootstrapStructuralConflictRecordChecked(
+                id: fixture.conflict.id,
+                sidecarFileURL: fixture.sidecarURL
+            )?.pendingResolution?.choice,
+            .acceptIncoming
+        )
+    }
+
+    func testMYR222ExactPeerAdoptionTerminalizesWaitingLocalAuthorityAndPermitsCoverage() async throws {
+        let fixture = try makeStructuralResolutionFixture()
+        let service = MyRAMSyncConflictService(
+            context: fixture.context,
+            store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL
+        )
+        _ = try await service.keepLocalChecked(fixture.conflict, activeNoteID: nil)
+        let chosen = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: fixture.note,
+            in: fixture.context
+        )
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: chosen.state,
+            noteID: fixture.note.id
+        )
+        let batchID = UUID()
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(),
+            folders: [],
+            notes: [SyncPeerBootstrapNoteSnapshot(
+                id: fixture.note.id,
+                title: fixture.note.title,
+                body: fixture.note.content,
+                isPinned: fixture.note.isPinned ?? false,
+                createdAt: fixture.note.createdAt,
+                modifiedAt: fixture.note.modifiedAt,
+                deletedAt: fixture.note.deletedAt,
+                folderID: nil,
+                formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                revision: chosen.revision,
+                visibleUTF16Count: chosen.state.visibleUTF16Count,
+                tombstonedUTF16Count: chosen.state.tombstonedUTF16Count,
+                payloadByteCount: payload.count,
+                statePayloadData: payload
+            )],
+            historyCoverage: [SyncPeerBootstrapHistoryBatchCoverage(
+                batchID: batchID,
+                noteIDs: [fixture.note.id],
+                anchoredRecoveryChanges: nil
+            )]
+        )
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: fixture.context,
+            structuralConflictStore: fixture.store,
+            structuralConflictSidecarFileURL: fixture.sidecarURL
+        )
+
+        XCTAssertTrue(disposition.coveredNoteIDs.contains(fixture.note.id))
+        XCTAssertTrue(disposition.coveredBatchIDs.contains(batchID))
+        XCTAssertTrue(fixture.store.activeConflicts().isEmpty)
+        XCTAssertEqual(
+            try fixture.store.bootstrapStructuralConflictRecordChecked(
+                id: fixture.conflict.id,
+                sidecarFileURL: fixture.sidecarURL
+            )?.lifecycle,
+            .terminallySuperseded
+        )
+    }
+
     func testDeferredResolutionExactRedeliveryIsIdempotentAndContradictionFailsClosed() throws {
         let store = makeStore()
         let id = UUID(uuidString: "12345678-1234-8234-9234-123456789abc")!
@@ -441,6 +662,73 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
                 .appendingPathComponent(UUID().uuidString, isDirectory: true)
                 .appendingPathComponent("conflicts.json")
         )
+    }
+
+    private func makeStructuralResolutionFixture() throws -> (
+        container: ModelContainer,
+        context: ModelContext,
+        note: Note,
+        store: SyncConflictStore,
+        sidecarURL: URL,
+        conflict: SyncConflictVersion,
+        localState: SyncTextSequenceState,
+        remoteState: SyncTextSequenceState
+    ) {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR-222-Resolution-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
+        let context = container.mainContext
+        context.autosaveEnabled = false
+        let noteID = UUID()
+        let note = Note(title: "", content: "Local")
+        note.id = noteID
+        note.createdAt = Date(timeIntervalSinceReferenceDate: 2_220)
+        context.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+        let localState = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        ).state
+        let remoteState = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: UUID(),
+            body: "Remote"
+        ).state
+        let payload = try NoteSequenceStatePersistenceCodec.encode(state: remoteState, noteID: noteID)
+        let remoteSnapshot = SyncPeerBootstrapNoteSnapshot(
+            id: noteID,
+            title: "",
+            body: "Remote",
+            isPinned: false,
+            createdAt: note.createdAt,
+            modifiedAt: note.createdAt.addingTimeInterval(1),
+            deletedAt: nil,
+            folderID: nil,
+            formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+            revision: 0,
+            visibleUTF16Count: remoteState.visibleUTF16Count,
+            tombstonedUTF16Count: remoteState.tombstonedUTF16Count,
+            payloadByteCount: payload.count,
+            statePayloadData: payload
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-222-resolution-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let store = SyncConflictStore(fileURL: directory.appendingPathComponent("conflicts.json"))
+        let sidecarURL = directory.appendingPathComponent("bootstrap-structural.json")
+        let conflict = try store.materializeBootstrapStructuralConflictChecked(
+            noteID: noteID,
+            localText: note.content,
+            localState: localState,
+            remoteSnapshot: remoteSnapshot,
+            bootstrapSnapshotID: UUID(),
+            sidecarFileURL: sidecarURL
+        )
+        return (container, context, note, store, sidecarURL, conflict, localState, remoteState)
     }
 
     private func makeController() -> MyRAMSyncController {

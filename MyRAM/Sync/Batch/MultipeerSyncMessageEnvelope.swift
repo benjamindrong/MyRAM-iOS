@@ -369,11 +369,40 @@ enum SyncPeerBootstrapSnapshotPersistence {
                         } catch {
                             throw SyncPeerBootstrapError.invalidSequenceState(note.id)
                         }
+                        let exactSequenceBaseline = recordExactlyMatches(record, noteSnapshot)
+                        if let structuralConflictStore,
+                           let structuralConflict = try structuralConflictStore.bootstrapStructuralConflictRecordChecked(
+                            noteID: note.id,
+                            sidecarFileURL: structuralConflictSidecarFileURL,
+                            fileIO: structuralConflictFileIO
+                           ) {
+                            didMaterializeStructuralConflict = true
+                            let remoteFingerprint = try SyncConflictStore.bootstrapStructuralFingerprint(
+                                noteID: note.id,
+                                state: snapshotState
+                            )
+                            if structuralConflict.lifecycle == .resolvedLocalAuthority,
+                               remoteFingerprint == structuralConflict.localStructuralFingerprint {
+                                sequenceBaselineCoveredNoteIDs.insert(note.id)
+                                bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
+                                if visibleEquivalent && exactSequenceBaseline {
+                                    fullyCoveredNoteIDs.insert(note.id)
+                                }
+                                try structuralConflictStore.terminalizeBootstrapStructuralConflictIfPeerAdoptedChecked(
+                                    noteID: note.id,
+                                    adoptedFingerprint: remoteFingerprint,
+                                    sidecarFileURL: structuralConflictSidecarFileURL,
+                                    fileIO: structuralConflictFileIO
+                                )
+                            }
+                            // Any state other than exact peer adoption remains outside coverage while
+                            // this user-owned structural episode is waiting.
+                            continue
+                        }
                         let localBodyMatchesState = NoteSequenceStateExactText.matches(
                             localState.visibleText,
                             note.content
                         )
-                        let exactSequenceBaseline = recordExactlyMatches(record, noteSnapshot)
                         if localBodyMatchesState && exactSequenceBaseline {
                             sequenceBaselineCoveredNoteIDs.insert(note.id)
                             bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
