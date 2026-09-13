@@ -402,16 +402,20 @@ extension SyncConflictStore {
               chosenFingerprint.isSHA256Hex else {
             throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
         }
-        let intent = SyncBootstrapStructuralResolutionIntent(
+        if let existing = record.pendingResolution {
+            guard existing.choice == choice,
+                  existing.chosenFingerprint == chosenFingerprint,
+                  existing.rejectedFingerprint == record.remoteStructuralFingerprint else {
+                throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
+            }
+            return
+        }
+        envelope.records[index].pendingResolution = SyncBootstrapStructuralResolutionIntent(
             choice: choice,
             chosenFingerprint: chosenFingerprint,
             rejectedFingerprint: record.remoteStructuralFingerprint,
             preparedAt: now
         )
-        if let existing = record.pendingResolution, existing != intent {
-            throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
-        }
-        envelope.records[index].pendingResolution = intent
         try saveBootstrapStructuralEnvelopeChecked(envelope, fileURL: sidecarFileURL, fileIO: fileIO)
     }
 
@@ -467,18 +471,10 @@ extension SyncConflictStore {
         envelope.records[index].visibleConflict = updatedVisible
         envelope.records[index].pendingResolution = nil
         try saveBootstrapStructuralEnvelopeChecked(envelope, fileURL: sidecarFileURL, fileIO: fileIO)
-
-        do {
-            try commitLegacyIncomingEffectsChecked(LegacyIncomingBufferedEffects(
-                preservedConflicts: [updatedVisible],
-                removedConflictIDs: [conflictID]
-            ))
-        } catch {
-            throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
-        }
-        guard activeConflict(id: conflictID) == updatedVisible else {
-            throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
-        }
+        try replaceBootstrapStructuralVisibleConflictChecked(
+            previous: record.visibleConflict,
+            with: updatedVisible
+        )
     }
 
     func finalizeBootstrapStructuralAcceptIncomingChecked(
@@ -576,6 +572,35 @@ extension SyncConflictStore {
             .receipts.first { $0.conflictID == conflictID }
     }
 
+    private func replaceBootstrapStructuralVisibleConflictChecked(
+        previous: SyncConflictVersion?,
+        with updated: SyncConflictVersion
+    ) throws {
+        if activeConflict(id: updated.id) == updated { return }
+        let snapshot: SyncConflictStoreSnapshot
+        do {
+            snapshot = try self.snapshot()
+        } catch {
+            throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
+        }
+        do {
+            try commitLegacyIncomingEffectsChecked(LegacyIncomingBufferedEffects(
+                preservedConflicts: [updated],
+                removedConflictIDs: previous.map { [$0.id] } ?? []
+            ))
+            guard activeConflict(id: updated.id) == updated else {
+                throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
+            }
+        } catch {
+            do {
+                try restore(snapshot)
+            } catch {
+                throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
+            }
+            throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
+        }
+    }
+
     private func ensureBootstrapStructuralVisibleConflictChecked(
         _ record: SyncBootstrapStructuralConflictRecord
     ) throws -> SyncConflictVersion {
@@ -583,13 +608,10 @@ extension SyncConflictStore {
             throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
         }
         if activeConflict(id: record.conflictID) != visible {
-            do {
-                try commitLegacyIncomingEffectsChecked(LegacyIncomingBufferedEffects(
-                    preservedConflicts: [visible]
-                ))
-            } catch {
-                throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
-            }
+            try replaceBootstrapStructuralVisibleConflictChecked(
+                previous: activeConflict(id: record.conflictID),
+                with: visible
+            )
         }
         guard activeConflict(id: record.conflictID) == visible else {
             throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
@@ -1364,7 +1386,7 @@ final class MyRAMSyncConflictService {
         let descriptor = FetchDescriptor<PinnedThought>(
             predicate: #Predicate { thought in
                 thought.id == thoughtID
-            }
+            )
         )
         return (try? context.fetch(descriptor))?.first
     }
