@@ -49,6 +49,7 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
             state: unrelatedRemote,
             noteID: noteID
         )
+        let historicalBatchID = UUID(uuidString: "22200000-0000-0000-0000-000000000203")!
         let snapshot = SyncPeerBootstrapSnapshot(
             id: UUID(uuidString: "22200000-0000-0000-0000-000000000202")!,
             folders: [],
@@ -69,15 +70,26 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
                     payloadByteCount: remotePayload.count,
                     statePayloadData: remotePayload
                 )
-            ]
+            ],
+            historyCoverage: [SyncPeerBootstrapHistoryBatchCoverage(
+                batchID: historicalBatchID,
+                noteIDs: [noteID],
+                anchoredRecoveryChanges: nil
+            )]
         )
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MYR-222-conflict-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = SyncConflictStore(fileURL: directory.appendingPathComponent("conflicts.json"))
+        let sidecarURL = directory.appendingPathComponent("bootstrap-structural.json")
 
-        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: context)
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: context,
+            structuralConflictStore: store,
+            structuralConflictSidecarFileURL: sidecarURL
+        )
 
         let persisted = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
             for: note,
@@ -86,6 +98,8 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
         XCTAssertEqual(note.content, "Local")
         XCTAssertEqual(persisted, localSnapshot)
         XCTAssertFalse(disposition.coveredNoteIDs.contains(noteID))
+        XCTAssertFalse(disposition.coveredBatchIDs.contains(historicalBatchID))
+        XCTAssertTrue(disposition.presentationRefreshRequired)
 
         let conflicts = store.activeConflicts()
         XCTAssertEqual(
@@ -100,6 +114,94 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
         XCTAssertEqual(conflict.field, .noteContent)
         XCTAssertEqual(conflict.localText, "Local")
         XCTAssertEqual(conflict.remoteText, "Remote")
+        let record = try XCTUnwrap(store.bootstrapStructuralConflictRecordChecked(
+            id: conflict.id,
+            sidecarFileURL: sidecarURL
+        ))
+        XCTAssertEqual(record.remoteStatePayloadData, remotePayload)
+        XCTAssertEqual(try store.validatedBootstrapStructuralRemoteState(record), unrelatedRemote)
+
+        let replay = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: context,
+            structuralConflictStore: store,
+            structuralConflictSidecarFileURL: sidecarURL
+        )
+        XCTAssertFalse(replay.coveredNoteIDs.contains(noteID))
+        XCTAssertFalse(replay.coveredBatchIDs.contains(historicalBatchID))
+        XCTAssertTrue(replay.presentationRefreshRequired)
+        XCTAssertEqual(store.activeConflicts(), [conflict])
+        XCTAssertEqual(
+            try store.bootstrapStructuralConflictRecordChecked(id: conflict.id, sidecarFileURL: sidecarURL),
+            record
+        )
+    }
+
+    func testMYR222BootstrapStructuralConflictPersistenceFailureThrowsWithoutChangingLocalState() throws {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR-222-StructuralConflictFailure-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(for: schema, configurations: configuration)
+        let context = container.mainContext
+        context.autosaveEnabled = false
+        let noteID = UUID(uuidString: "22200000-0000-0000-0000-000000000221")!
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_220)
+        let note = Note(title: "", content: "Local")
+        note.id = noteID
+        note.createdAt = createdAt
+        context.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+        let localSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(for: note, in: context)
+        let remoteState = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: UUID(uuidString: "22200000-0000-0000-0000-000000000229")!,
+            body: "Remote"
+        ).state
+        let remotePayload = try NoteSequenceStatePersistenceCodec.encode(state: remoteState, noteID: noteID)
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(uuidString: "22200000-0000-0000-0000-000000000222")!,
+            folders: [],
+            notes: [SyncPeerBootstrapNoteSnapshot(
+                id: noteID,
+                title: "",
+                body: "Remote",
+                isPinned: false,
+                createdAt: createdAt,
+                modifiedAt: createdAt.addingTimeInterval(1),
+                deletedAt: nil,
+                folderID: nil,
+                formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                revision: 0,
+                visibleUTF16Count: remoteState.visibleUTF16Count,
+                tombstonedUTF16Count: remoteState.tombstonedUTF16Count,
+                payloadByteCount: remotePayload.count,
+                statePayloadData: remotePayload
+            )]
+        )
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-222-sidecar-failure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = SyncConflictStore(fileURL: directory.appendingPathComponent("conflicts.json"))
+        var failingFileIO = SyncBootstrapStructuralConflictFileIO.live
+        failingFileIO.writeData = { _, _ in throw CocoaError(.fileWriteUnknown) }
+
+        XCTAssertThrowsError(try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: context,
+            structuralConflictStore: store,
+            structuralConflictSidecarFileURL: directory.appendingPathComponent("bootstrap-structural.json"),
+            structuralConflictFileIO: failingFileIO
+        ))
+        XCTAssertEqual(note.content, "Local")
+        XCTAssertEqual(
+            try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(for: note, in: context),
+            localSnapshot
+        )
+        XCTAssertTrue(store.activeConflicts().isEmpty)
     }
 
     func testMYR222StructuralSidecarMaterializesVisibleConflictWithExactRemoteState() throws {

@@ -288,6 +288,9 @@ enum SyncPeerBootstrapSnapshotPersistence {
         to context: ModelContext,
         pendingIncomingBatches: FileBackedSyncBatchQueue? = nil,
         anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore? = nil,
+        structuralConflictStore: SyncConflictStore? = nil,
+        structuralConflictSidecarFileURL: URL = SyncConflictStore.defaultBootstrapStructuralConflictFileURL(),
+        structuralConflictFileIO: SyncBootstrapStructuralConflictFileIO = .live,
         saveContext: (() throws -> Void)? = nil
     ) throws -> SyncPeerBootstrapApplyDisposition {
         try validate(snapshot)
@@ -307,6 +310,8 @@ enum SyncPeerBootstrapSnapshotPersistence {
         var bootstrapOwnershipStatesByNoteID: [SyncBatchNoteID: SyncTextSequenceState] = [:]
         var coveredBatchIDs: Set<SyncBatchID> = []
         var didMutate = false
+        var stagedStructuralConflicts: [(noteID: UUID, localText: String, localState: SyncTextSequenceState, remoteSnapshot: SyncPeerBootstrapNoteSnapshot)] = []
+        var didMaterializeStructuralConflict = false
 
         do {
             for folderSnapshot in snapshot.folders {
@@ -391,7 +396,14 @@ enum SyncPeerBootstrapSnapshotPersistence {
                                 }
                                 bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
                             } catch SyncTextSequenceMergeError.noSharedRetainedLineage {
-                                // Independent histories have no safe structural union.
+                                if structuralConflictStore != nil {
+                                    stagedStructuralConflicts.append((
+                                        noteID: note.id,
+                                        localText: note.content,
+                                        localState: localState,
+                                        remoteSnapshot: noteSnapshot
+                                    ))
+                                }
                             }
                         }
                         if visibleEquivalent && exactSequenceBaseline {
@@ -465,6 +477,20 @@ enum SyncPeerBootstrapSnapshotPersistence {
                     throw SyncPeerBootstrapError.commitVerificationFailed
                 }
             }
+            if let structuralConflictStore {
+                for conflict in stagedStructuralConflicts {
+                    try structuralConflictStore.materializeBootstrapStructuralConflictChecked(
+                        noteID: conflict.noteID,
+                        localText: conflict.localText,
+                        localState: conflict.localState,
+                        remoteSnapshot: conflict.remoteSnapshot,
+                        bootstrapSnapshotID: snapshot.id,
+                        sidecarFileURL: structuralConflictSidecarFileURL,
+                        fileIO: structuralConflictFileIO
+                    )
+                    didMaterializeStructuralConflict = true
+                }
+            }
             coveredBatchIDs = Set(snapshot.historyCoverage.compactMap { coverage in
                 coverage.noteIDs.isSubset(of: fullyCoveredNoteIDs)
                     ? coverage.batchID
@@ -509,7 +535,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
             coveredBatchIDs: coveredBatchIDs,
             coveredNoteIDs: sequenceBaselineCoveredNoteIDs,
             insertedNoteIDs: insertedNoteIDs,
-            presentationRefreshRequired: didMutate
+            presentationRefreshRequired: didMutate || didMaterializeStructuralConflict
         )
     }
 

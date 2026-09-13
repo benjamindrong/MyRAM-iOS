@@ -8,6 +8,7 @@ final class MacSyncConvergenceCoordinator {
     private let pendingIncomingQueue: FileBackedSyncBatchQueue
     private let localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue
     private let anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore
+    private let conflictStore: SyncConflictStore
     private let presentationAdapter: MacSyncConvergencePresentationAdapter
     private let incomingBoundaryAdapter: MacSyncIncomingLocalBoundaryAdapter
     private let runtime: SyncConvergenceRuntime
@@ -23,6 +24,7 @@ final class MacSyncConvergenceCoordinator {
         anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore? = nil
     ) {
         self.syncController = syncController
+        self.conflictStore = conflictStore
         pendingIncomingQueue = FileBackedSyncBatchQueue(fileURL: pendingIncomingQueueFileURL)
         localObligationQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: localObligationQueueFileURL)
         self.anchoredRecoveryStore = anchoredRecoveryStore
@@ -110,7 +112,8 @@ final class MacSyncConvergenceCoordinator {
             snapshot,
             to: context,
             pendingIncomingBatches: pendingIncomingQueue,
-            anchoredRecoveryStore: anchoredRecoveryStore
+            anchoredRecoveryStore: anchoredRecoveryStore,
+            structuralConflictStore: conflictStore
         )
     }
 
