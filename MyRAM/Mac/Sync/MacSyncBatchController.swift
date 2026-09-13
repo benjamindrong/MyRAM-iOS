@@ -527,6 +527,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             )
             let snapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: context)
                 .attachingHistoryCoverage(for: manifestedBatches)
+                .attachingHistoryCoverage(
+                    for: pendingLocalBatches,
+                    requiresReplayOwnership: true
+                )
             bootstrapStateByPeerDeviceID[identity.deviceID] = SyncPeerBootstrapPendingState(
                 snapshot: snapshot,
                 coveredBatchIDs: Set(capturedBatches.map(\.id)),
