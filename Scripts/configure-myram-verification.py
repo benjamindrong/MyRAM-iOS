@@ -53,6 +53,7 @@ EXPECTED_STORAGE_ROOT_FILES = {
     "MyRAM/Sync/MyRAMSyncModels.swift",
     "MyRAM/Sync/Recovery/PendingSyncRecoveryJournal.swift",
     "MyRAM/Sync/SyncConflictStore.swift",
+    "MyRAM/Sync/MyRAMSyncConflictService.swift",
 }
 
 FIXED_CHANGED_FILES = {
