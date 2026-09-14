@@ -316,7 +316,8 @@ final class NotesViewModel: ObservableObject {
                     snapshot,
                     to: context,
                     pendingIncomingBatches: pendingIncomingBatches,
-                    anchoredRecoveryStore: anchoredRecoveryStore
+                    anchoredRecoveryStore: anchoredRecoveryStore,
+                    structuralConflictStore: self.syncConflictStore
                 )
             }
             bootstrapController.onBootstrapPresentationRefresh = { [weak self] in
@@ -326,6 +327,13 @@ final class NotesViewModel: ObservableObject {
                 refreshCurrentFolderContent()
                 currentNote = currentNoteID.flatMap(fetchNote(withID:))
                 currentFolder = currentFolderID.flatMap(fetchFolder(withID:))
+                syncConflicts = syncConflictStore.activeConflicts()
+                if mountedActiveEditorNoteID == currentNoteID {
+                    publishActiveEditorReload(
+                        noteID: currentNoteID,
+                        reason: .unsupportedIntegratedChange
+                    )
+                }
             }
             bootstrapController.onResumeIncomingAfterBootstrap = { [weak self] in
                 await self?.resumePendingConvergencePresentation()

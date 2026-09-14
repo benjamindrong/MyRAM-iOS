@@ -573,7 +573,8 @@ final class MyRAMSyncBenchmarkProductionTelemetryTests: XCTestCase {
         XCTAssertTrue(events.contains {
             $0.eventType == .batchSendSucceeded &&
             $0.batchID == batchID &&
-            $0.peerDeviceID == "telemetry-peer"
+            $0.peerDeviceID == "telemetry-peer" &&
+            $0.outcome == "awaitingAcknowledgement"
         })
         XCTAssertTrue(events.contains {
             $0.eventType == .batchAcknowledgementReceived &&
@@ -681,10 +682,47 @@ final class MyRAMSyncBenchmarkProductionTelemetryTests: XCTestCase {
             $0.eventType == .batchSendStarted && $0.batchID == batchID
         })
         XCTAssertTrue(events.contains {
-            $0.eventType == .batchSendFailed && $0.batchID == batchID
+            $0.eventType == .batchSendFailed &&
+            $0.batchID == batchID &&
+            $0.outcome == "transportFailed" &&
+            $0.detail?.contains("BenchmarkTransportError.injected") == true
         })
         XCTAssertFalse(events.contains {
             $0.eventType == .batchSendSucceeded && $0.batchID == batchID
+        })
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
+    }
+
+    func testControllerRecordsExactRoutingWithholdReason() async throws {
+        let directory = try benchmarkDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recorder = MyRAMSyncBenchmarkRecorder(
+            enabled: true,
+            platform: .iOS,
+            deviceID: "local-ios",
+            outputDirectoryURL: directory
+        )
+        MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(recorder)
+        defer { MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(nil) }
+
+        let transport = BenchmarkRecordingTransport(connectedPeers: [])
+        let controller = MyRAMSyncController(
+            unsentBatchQueueFileURL: directory.appendingPathComponent("unsent-withheld.json"),
+            pendingChangesFileURL: directory.appendingPathComponent("legacy-withheld.json"),
+            startsNetworking: false,
+            transport: transport
+        )
+        let batch = makeBatch(idSuffix: 2184)
+
+        try await controller.acceptLocalBatch(batch)
+
+        let events = try events(from: recorder)
+        let batchID = String(describing: batch.id)
+        XCTAssertTrue(events.contains {
+            $0.eventType == .batchSendDeferred &&
+            $0.batchID == batchID &&
+            $0.outcome == "routingWithheld:noConnectedPeers" &&
+            $0.detail == "none"
         })
         XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
     }

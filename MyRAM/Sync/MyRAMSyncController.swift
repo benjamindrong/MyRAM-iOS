@@ -1,6 +1,7 @@
 import Foundation
 @preconcurrency import MultipeerConnectivity
 import NearbySyncCore
+import OSLog
 
 // Keeps trusted-peer auto-reconnect idempotent while Multipeer is still negotiating.
 struct TrustedPeerReconnectTracker {
@@ -192,6 +193,11 @@ extension MyRAMSyncControlling {
 
 @MainActor
 final class MyRAMSyncController: NSObject, ObservableObject {
+    private static let transportLogger = Logger(
+        subsystem: Bundle.main.bundleIdentifier ?? "com.northsignalstudio.myram",
+        category: "SyncBatchTransport"
+    )
+
     private struct TargetMutationTail {
         let operationID: UUID
         let task: Task<Void, Never>
@@ -781,17 +787,31 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         _ batch: SyncBatch,
         connectedPeers: [MCPeerID]
     ) async -> Bool {
+        var eligibilityExclusions: [String] = []
         let eligiblePeers = connectedPeers.filter { peerID in
             let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
             guard peerCapabilityRegistry.isBootstrapCapabilityResolved(
                 forPeerDeviceID: deviceID
-            ) else { return false }
+            ) else {
+                eligibilityExclusions.append("\(deviceID):bootstrapCapabilityUnresolved")
+                return false
+            }
             guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                 forPeerDeviceID: deviceID
             ) else { return true }
-            guard let state = bootstrapStateByPeerDeviceID[deviceID],
-                  state.ordinarySyncReady else { return false }
-            return !state.withheldHistoricalBatchIDs.contains(batch.id)
+            guard let state = bootstrapStateByPeerDeviceID[deviceID] else {
+                eligibilityExclusions.append("\(deviceID):bootstrapStateMissing")
+                return false
+            }
+            guard state.ordinarySyncReady else {
+                eligibilityExclusions.append("\(deviceID):ordinarySyncNotReady")
+                return false
+            }
+            guard !state.withheldHistoricalBatchIDs.contains(batch.id) else {
+                eligibilityExclusions.append("\(deviceID):historicalBatchWithheld")
+                return false
+            }
+            return true
         }
         let plannerPeers = eligiblePeers.enumerated().map { index, peerID in
             let identity = MyRAMPeerIdentity(peerID: peerID)
@@ -825,17 +845,31 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 return false
             }
             recipients = [eligiblePeers[transportIndex]]
-        case .withhold:
+        case .withhold(let reason):
+            let reasonLabel = Self.routingWithholdReasonLabel(reason)
+            let detail = eligibilityExclusions.isEmpty
+                ? "none"
+                : eligibilityExclusions.joined(separator: ",")
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .batchSendDeferred,
                 batchID: String(describing: batch.id),
                 itemCount: connectedPeers.count,
-                outcome: "routingWithheld"
+                outcome: "routingWithheld:\(reasonLabel)",
+                detail: detail
+            )
+            Self.transportLogger.notice(
+                "batch=\(batch.id.uuidString, privacy: .public) outcome=routingWithheld reason=\(reasonLabel, privacy: .public) connectedPeers=\(connectedPeers.count) eligiblePeers=\(eligiblePeers.count) exclusions=\(detail, privacy: .public)"
             )
             return false
         }
 
         let recipientDeviceIDs = recipients.map { MyRAMPeerIdentity(peerID: $0).deviceID }
+        let recipientLabel = recipientDeviceIDs.isEmpty
+            ? "none"
+            : recipientDeviceIDs.joined(separator: ",")
+        Self.transportLogger.notice(
+            "batch=\(batch.id.uuidString, privacy: .public) outcome=sendAttempted targetPeers=\(recipientLabel, privacy: .public)"
+        )
         if recipientDeviceIDs.isEmpty {
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .batchSendStarted,
@@ -862,7 +896,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                     .batchSendSucceeded,
                     batchID: String(describing: batch.id),
                     itemCount: 0,
-                    outcome: "transportAcceptedNoRecipients"
+                    outcome: "awaitingAcknowledgement:noRecipients"
                 )
             } else {
                 for deviceID in recipientDeviceIDs {
@@ -870,20 +904,26 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                         .batchSendSucceeded,
                         batchID: String(describing: batch.id),
                         peerDeviceID: deviceID,
-                        itemCount: batch.changes.count
+                        itemCount: batch.changes.count,
+                        outcome: "awaitingAcknowledgement"
                     )
                 }
             }
+            Self.transportLogger.notice(
+                "batch=\(batch.id.uuidString, privacy: .public) outcome=sendSucceededAwaitingAcknowledgement targetPeers=\(recipientLabel, privacy: .public)"
+            )
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
             return true
         } catch {
+            let errorDescription = String(reflecting: error)
             if recipientDeviceIDs.isEmpty {
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchSendFailed,
                     batchID: String(describing: batch.id),
                     itemCount: 0,
-                    outcome: "transportFailed"
+                    outcome: "transportFailed",
+                    detail: errorDescription
                 )
             } else {
                 for deviceID in recipientDeviceIDs {
@@ -892,10 +932,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                         batchID: String(describing: batch.id),
                         peerDeviceID: deviceID,
                         itemCount: batch.changes.count,
-                        outcome: "transportFailed"
+                        outcome: "transportFailed",
+                        detail: errorDescription
                     )
                 }
             }
+            Self.transportLogger.error(
+                "batch=\(batch.id.uuidString, privacy: .public) outcome=sendFailed targetPeers=\(recipientLabel, privacy: .public) error=\(errorDescription, privacy: .public)"
+            )
             lastErrorMessage = "Unable to sync nearby batch changes."
             return false
         }
@@ -935,12 +979,34 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             batchID: String(describing: acknowledgement.batchID),
             peerDeviceID: peerDeviceID
         )
+        let wasQueued = unsentBatches.contains(acknowledgement.batchID)
         do {
             try unsentBatches.removeBatches(withIDs: [acknowledgement.batchID])
             await updatePendingCount()
+            if wasQueued, !unsentBatches.contains(acknowledgement.batchID) {
+                Self.transportLogger.notice(
+                    "batch=\(acknowledgement.batchID.uuidString, privacy: .public) outcome=acknowledgementDequeued peer=\(peerDeviceID, privacy: .public)"
+                )
+            } else {
+                Self.transportLogger.notice(
+                    "batch=\(acknowledgement.batchID.uuidString, privacy: .public) outcome=acknowledgementIgnoredNotQueued peer=\(peerDeviceID, privacy: .public)"
+                )
+            }
         } catch {
             lastErrorMessage = "Unable to update the unsent batch queue."
             await updatePendingCount()
+        }
+    }
+
+    private static func routingWithholdReasonLabel(
+        _ reason: SyncBatchOutboundRoutingDecision.WithholdReason
+    ) -> String {
+        switch reason {
+        case .noConnectedPeers: "noConnectedPeers"
+        case .anchoredPayloadDisabled: "anchoredPayloadDisabled"
+        case .requiresExactlyOneConnectedPeer: "requiresExactlyOneConnectedPeer"
+        case .peerLacksExplicitCurrentSessionV2Support: "peerLacksExplicitCurrentSessionV2Support"
+        case .mixedBodyOperationRepresentations: "mixedBodyOperationRepresentations"
         }
     }
 
@@ -1011,6 +1077,13 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func beginBootstrap(to peerID: MCPeerID) async {
+        // Body/state may already include a durable local convergence obligation
+        // that has not crossed into the transport queue yet (for example after a
+        // restart). Move that work through its normal admission path before the
+        // bootstrap snapshot freezes history coverage, so any structural operation
+        // the peer can absorb is represented by existing bootstrap ownership.
+        await onFlushLocalConvergenceRequested?()
+
         let identity = MyRAMPeerIdentity(peerID: peerID)
         guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
             forPeerDeviceID: identity.deviceID
@@ -1025,6 +1098,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 to: peerID,
                 expectedSnapshotID: state.snapshotID
             )
+            return
+        }
+        guard (localConvergencePendingCountProvider?() ?? 0) == 0 else {
+            lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
+            await updatePendingCount()
             return
         }
         guard let buildBootstrapSnapshot else {

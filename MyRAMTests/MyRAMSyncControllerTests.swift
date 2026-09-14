@@ -6,6 +6,63 @@ import XCTest
 
 @MainActor
 final class MyRAMSyncControllerTests: XCTestCase {
+    func testBootstrapPresentationRefreshPublishesSelectedMountedEditorReload() throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let container = try makeContainer()
+        let context = container.mainContext
+        let note = Note(title: "Selected", content: "before bootstrap")
+        context.insert(note)
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: controller,
+            pendingIncomingBatchQueueFileURL: temporaryQueueFileURL(),
+            pendingLocalConvergenceBatchQueueFileURL: temporaryQueueFileURL(),
+            resumesPendingConvergenceOnInit: false
+        )
+        viewModel.selectNote(note)
+        viewModel.registerActiveEditor(noteID: note.id)
+        defer { viewModel.unregisterActiveEditor(noteID: note.id) }
+
+        note.content = "after bootstrap"
+        try context.save()
+        controller.onBootstrapPresentationRefresh?()
+
+        XCTAssertEqual(viewModel.currentNote?.id, note.id)
+        XCTAssertEqual(viewModel.currentNote?.content, "after bootstrap")
+        XCTAssertEqual(viewModel.activeEditorSyncUpdate?.noteID, note.id)
+        XCTAssertEqual(
+            viewModel.activeEditorSyncUpdate?.disposition,
+            .reload(.unsupportedIntegratedChange)
+        )
+    }
+
+    func testBootstrapPresentationRefreshWithoutMountedEditorRemainsListOnly() throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let container = try makeContainer()
+        let context = container.mainContext
+        let note = Note(title: "Selected", content: "before bootstrap")
+        context.insert(note)
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: controller,
+            pendingIncomingBatchQueueFileURL: temporaryQueueFileURL(),
+            pendingLocalConvergenceBatchQueueFileURL: temporaryQueueFileURL(),
+            resumesPendingConvergenceOnInit: false
+        )
+        viewModel.selectNote(note)
+
+        note.content = "after bootstrap"
+        try context.save()
+        controller.onBootstrapPresentationRefresh?()
+
+        XCTAssertEqual(viewModel.currentNote?.content, "after bootstrap")
+        XCTAssertNil(viewModel.activeEditorSyncUpdate)
+    }
+
     func testFailedConnectionRetryInvitesStillDiscoveredTrustedPeer() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [])
         let controller = try makeController(transport: transport)
