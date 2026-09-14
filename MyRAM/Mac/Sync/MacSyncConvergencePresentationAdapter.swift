@@ -40,7 +40,7 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
 
         switch request.routing {
         case .none:
-            return .verifiedComplete
+            return refreshMetadataOnlyPresentation(for: request)
         case .noteRemoved:
             surface.closeRemovedSelectedEditor(request.noteID)
             return .verifiedComplete
@@ -51,6 +51,18 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
         case .structuralRefresh:
             return refreshStructuralPresentation(for: request)
         }
+    }
+
+    private func refreshMetadataOnlyPresentation(
+        for request: SyncConvergencePresentationRequest
+    ) -> SyncConvergencePostCommitAdapterResult {
+        if surface.currentEditorBody() == request.committedNote.body {
+            return .verifiedComplete
+        }
+        guard !surface.hasUnsavedChanges() else { return .stillPending }
+        guard surface.reloadSelectedEditor(request.noteID) else { return .stillPending }
+        guard surface.currentEditorBody() == request.committedNote.body else { return .failed }
+        return .verifiedComplete
     }
 
     private func refreshIncrementalPresentation(
