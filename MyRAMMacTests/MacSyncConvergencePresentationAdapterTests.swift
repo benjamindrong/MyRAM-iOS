@@ -121,9 +121,9 @@ final class MacSyncConvergencePresentationAdapterTests: XCTestCase {
         XCTAssertEqual(recorder.reloadCount, 1)
     }
 
-    func testNoneRefreshesMetadataWithoutRewritingSelectedEditorBody() async {
+    func testNoneForSelectedMatchingEditorCompletesWithoutReload() async {
         let noteID = Self.uuid(5)
-        let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "mounted")
+        let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "authoritative")
         let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
 
         let result = await adapter.refreshPresentation(for: request(noteID: noteID, routing: .none, body: "authoritative"))
@@ -132,6 +132,44 @@ final class MacSyncConvergencePresentationAdapterTests: XCTestCase {
         XCTAssertEqual(recorder.refreshCount, 1)
         XCTAssertTrue(recorder.appliedIncremental.isEmpty)
         XCTAssertEqual(recorder.reloadCount, 0)
+    }
+
+    func testNoneForSelectedStaleEditorReloadsAndVerifiesCommittedBody() async {
+        let noteID = Self.uuid(17)
+        let recorder = PresentationSurfaceRecorder(
+            selectedNoteID: noteID,
+            currentEditorBody: "stale",
+            reloadedEditorBody: "authoritative"
+        )
+        let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
+
+        let result = await adapter.refreshPresentation(
+            for: request(noteID: noteID, routing: .none, body: "authoritative")
+        )
+
+        XCTAssertEqual(result, .verifiedComplete)
+        XCTAssertEqual(recorder.refreshCount, 1)
+        XCTAssertEqual(recorder.reloadCount, 1)
+        XCTAssertEqual(recorder.currentEditorBodyValue, "authoritative")
+    }
+
+    func testNoneForSelectedStaleUnsavedEditorRemainsPending() async {
+        let noteID = Self.uuid(18)
+        let recorder = PresentationSurfaceRecorder(
+            selectedNoteID: noteID,
+            hasUnsavedChanges: true,
+            currentEditorBody: "local"
+        )
+        let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
+
+        let result = await adapter.refreshPresentation(
+            for: request(noteID: noteID, routing: .none, body: "authoritative")
+        )
+
+        XCTAssertEqual(result, .stillPending)
+        XCTAssertEqual(recorder.refreshCount, 1)
+        XCTAssertEqual(recorder.reloadCount, 0)
+        XCTAssertEqual(recorder.currentEditorBodyValue, "local")
     }
 
     func testRemovedSelectedNoteClosesEditorAfterRefreshingList() async {
@@ -354,14 +392,21 @@ private final class PresentationSurfaceRecorder {
     var reloadResult = true
     private let selectedNoteID: UUID?
     private let hasUnsavedChanges: Bool
-    private let currentEditorBody: String?
+    private var currentEditorBody: String?
+    private let reloadedEditorBody: String?
 
     var currentEditorBodyValue: String? { currentEditorBody }
 
-    init(selectedNoteID: UUID?, hasUnsavedChanges: Bool = false, currentEditorBody: String?) {
+    init(
+        selectedNoteID: UUID?,
+        hasUnsavedChanges: Bool = false,
+        currentEditorBody: String?,
+        reloadedEditorBody: String? = nil
+    ) {
         self.selectedNoteID = selectedNoteID
         self.hasUnsavedChanges = hasUnsavedChanges
         self.currentEditorBody = currentEditorBody
+        self.reloadedEditorBody = reloadedEditorBody
     }
 
     var reloadCount: Int { reloads.count }
@@ -379,7 +424,11 @@ private final class PresentationSurfaceRecorder {
             },
             reloadSelectedEditor: { noteID in
                 self.reloads.append(ReloadCall(noteID: noteID, authoritativeBody: self.currentEditorBody ?? ""))
-                return self.reloadResult
+                guard self.reloadResult else { return false }
+                if let reloadedEditorBody = self.reloadedEditorBody {
+                    self.currentEditorBody = reloadedEditorBody
+                }
+                return true
             },
             currentEditorBody: { self.currentEditorBody }
         )
