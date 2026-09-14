@@ -342,10 +342,9 @@ struct MyRAMMacRootView: View {
             applyIncremental: { actions, noteID, authoritativeBody in
                 editorSyncBridge.applyBatch(actions, selectedNoteID: noteID, authoritativeBody: authoritativeBody)
             },
-            reloadSelectedEditor: { noteID, authoritativeBody in
+            reloadSelectedEditor: { noteID in
                 guard selectedNoteID == noteID else { return true }
-                reloadSelectedEditor(reason: .unsafeIncrementalApply)
-                return attributedText.string == authoritativeBody
+                return reloadSelectedEditor(reason: .unsafeIncrementalApply)
             },
             currentEditorBody: { attributedText.string }
         )
@@ -412,7 +411,8 @@ struct MyRAMMacRootView: View {
         Task { await syncConvergenceCoordinator?.resumePendingWork() }
     }
 
-    private func reloadSelectedEditor(reason: MacSelectedEditorReloadReason) {
+    @discardableResult
+    private func reloadSelectedEditor(reason: MacSelectedEditorReloadReason) -> Bool {
         let outcome = MacSelectedEditorReloader.reload(
             hasUnsavedChanges: hasUnsavedChanges,
             selectedNote: selectedNote,
@@ -431,12 +431,13 @@ struct MyRAMMacRootView: View {
 
         guard outcome != .deferredForUnsavedChanges else {
             saveError = "Incoming sync is waiting for local edits to save."
-            return
+            return false
         }
 
-        guard outcome == .reloaded else { return }
+        guard outcome == .reloaded else { return false }
         editorRevision = UUID()
         saveError = nil
+        return true
     }
 
     private func selectNote(_ note: Note) {

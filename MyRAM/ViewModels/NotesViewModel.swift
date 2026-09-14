@@ -328,6 +328,12 @@ final class NotesViewModel: ObservableObject {
                 currentNote = currentNoteID.flatMap(fetchNote(withID:))
                 currentFolder = currentFolderID.flatMap(fetchFolder(withID:))
                 syncConflicts = syncConflictStore.activeConflicts()
+                if mountedActiveEditorNoteID == currentNoteID {
+                    publishActiveEditorReload(
+                        noteID: currentNoteID,
+                        reason: .unsupportedIntegratedChange
+                    )
+                }
             }
             bootstrapController.onResumeIncomingAfterBootstrap = { [weak self] in
                 await self?.resumePendingConvergencePresentation()

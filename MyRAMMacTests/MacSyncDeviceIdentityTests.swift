@@ -440,7 +440,7 @@ final class MyRAMMacSyncBenchmarkProductionTelemetryTests: XCTestCase {
                         disposition: .noApplicableMutations
                     )
                 },
-                reloadSelectedEditor: { _, _ in true },
+                reloadSelectedEditor: { _ in true },
                 currentEditorBody: { nil }
             ),
             incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(

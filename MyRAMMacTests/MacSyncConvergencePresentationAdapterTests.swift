@@ -3,6 +3,44 @@ import XCTest
 
 @MainActor
 final class MacSyncConvergencePresentationAdapterTests: XCTestCase {
+    func testBootstrapRefreshReloadsSelectedPersistedNote() {
+        let noteID = Self.uuid(14)
+        let recorder = PresentationSurfaceRecorder(selectedNoteID: noteID, currentEditorBody: "persisted")
+        let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
+
+        adapter.refreshAfterBootstrap()
+
+        XCTAssertEqual(recorder.refreshCount, 1)
+        XCTAssertEqual(recorder.reloads.map(\.noteID), [noteID])
+    }
+
+    func testBootstrapRefreshDoesNotMutateUnrelatedEditor() {
+        let recorder = PresentationSurfaceRecorder(selectedNoteID: nil, currentEditorBody: "unrelated")
+        let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
+
+        adapter.refreshAfterBootstrap()
+
+        XCTAssertEqual(recorder.refreshCount, 1)
+        XCTAssertEqual(recorder.reloadCount, 0)
+        XCTAssertEqual(recorder.currentEditorBodyValue, "unrelated")
+    }
+
+    func testBootstrapRefreshDoesNotOverwriteUnsavedSelectedEditor() {
+        let noteID = Self.uuid(16)
+        let recorder = PresentationSurfaceRecorder(
+            selectedNoteID: noteID,
+            hasUnsavedChanges: true,
+            currentEditorBody: "unsaved"
+        )
+        let adapter = MacSyncConvergencePresentationAdapter(surface: recorder.surface())
+
+        adapter.refreshAfterBootstrap()
+
+        XCTAssertEqual(recorder.refreshCount, 1)
+        XCTAssertEqual(recorder.reloadCount, 0)
+        XCTAssertEqual(recorder.currentEditorBodyValue, "unsaved")
+    }
+
     func testIncrementalForNonSelectedNoteRefreshesMetadataWithoutEditorMutation() async {
         let noteID = Self.uuid(1)
         let recorder = PresentationSurfaceRecorder(selectedNoteID: nil, currentEditorBody: nil)
@@ -318,6 +356,8 @@ private final class PresentationSurfaceRecorder {
     private let hasUnsavedChanges: Bool
     private let currentEditorBody: String?
 
+    var currentEditorBodyValue: String? { currentEditorBody }
+
     init(selectedNoteID: UUID?, hasUnsavedChanges: Bool = false, currentEditorBody: String?) {
         self.selectedNoteID = selectedNoteID
         self.hasUnsavedChanges = hasUnsavedChanges
@@ -337,8 +377,8 @@ private final class PresentationSurfaceRecorder {
                 XCTAssertFalse(actions.isEmpty)
                 return self.applyResult
             },
-            reloadSelectedEditor: { noteID, authoritativeBody in
-                self.reloads.append(ReloadCall(noteID: noteID, authoritativeBody: authoritativeBody))
+            reloadSelectedEditor: { noteID in
+                self.reloads.append(ReloadCall(noteID: noteID, authoritativeBody: self.currentEditorBody ?? ""))
                 return self.reloadResult
             },
             currentEditorBody: { self.currentEditorBody }

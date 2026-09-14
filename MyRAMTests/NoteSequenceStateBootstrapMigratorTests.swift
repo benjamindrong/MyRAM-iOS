@@ -617,7 +617,7 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
                 refreshNotesList: {},
                 closeRemovedSelectedEditor: { _ in },
                 applyIncremental: { _, _, _ in fatalError("Not used by bootstrap coverage regression") },
-                reloadSelectedEditor: { _, _ in true },
+                reloadSelectedEditor: { _ in true },
                 currentEditorBody: { nil }
             ),
             incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
