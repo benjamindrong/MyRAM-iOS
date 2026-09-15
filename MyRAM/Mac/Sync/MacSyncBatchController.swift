@@ -176,10 +176,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         isBenchmarkEnduranceNetworkingEnabled = enabled
         if enabled {
             advertiser.startAdvertisingPeer()
-            browser.startBrowsingForPeers()
         } else {
             advertiser.stopAdvertisingPeer()
-            browser.stopBrowsingForPeers()
             session.disconnect()
         }
         return true

@@ -1061,6 +1061,28 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
+    func testBenchmarkEnduranceOutageKeepsDiscoveryBrowserAlive() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        try ProtectedRepositoryAuditPolicy.skipIfNeeded(repositoryURL: repo)
+        let source = try String(
+            contentsOf: repo.appendingPathComponent("MyRAM/Mac/Sync/MacSyncBatchController.swift"),
+            encoding: .utf8
+        )
+
+        let start = try XCTUnwrap(
+            source.range(of: "func setBenchmarkEnduranceNetworkingEnabled(_ enabled: Bool) -> Bool")
+        )
+        let tail = source[start.lowerBound...]
+        let end = try XCTUnwrap(tail.range(of: "\n#endif"))
+        let methodSource = String(tail[..<end.lowerBound])
+
+        XCTAssertFalse(methodSource.contains("browser.stopBrowsingForPeers()"))
+        XCTAssertFalse(methodSource.contains("browser.startBrowsingForPeers()"))
+        XCTAssertTrue(methodSource.contains("session.disconnect()"))
+    }
+
     func testProductionMacSyncFilesDoNotConstructOldDrainEngine() throws {
         let repo = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
