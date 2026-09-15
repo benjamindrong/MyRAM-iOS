@@ -1316,6 +1316,7 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
 
             let queueDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
             if networkEnabled, waitingForReconnectRouting || !ordinaryRoutingReady(controller: controller) {
+                inviteExpectedIOSPeerIfNeeded(controller: controller)
                 guard ordinaryRoutingReady(controller: controller) else {
                     try? await Task.sleep(nanoseconds: 250_000_000)
                     continue
@@ -1478,6 +1479,7 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
         while Date() < deadline, !Task.isCancelled {
+            inviteExpectedIOSPeerIfNeeded(controller: controller)
             if ordinaryRoutingReady(controller: controller) { return true }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
@@ -1492,6 +1494,7 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         var stableZeroSamples = 0
         var lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
         while Date() < deadline, !Task.isCancelled {
+            inviteExpectedIOSPeerIfNeeded(controller: controller)
             lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
             if lastDepth == 0 && ordinaryRoutingReady(controller: controller) {
                 stableZeroSamples += 1
@@ -1515,6 +1518,15 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
                 controller.hasExplicitPeerV2Support(forPeerDeviceID: peerDeviceID)
             }
         )
+    }
+
+    private func inviteExpectedIOSPeerIfNeeded(controller: MacSyncBatchController) {
+        guard !controller.connectedPeerDeviceIDsForBenchmark().contains(
+            MyRAMSyncBenchmarkConfiguration.enduranceIOSDeviceID
+        ), let peer = controller.availablePeers.first(where: {
+            $0.deviceID == MyRAMSyncBenchmarkConfiguration.enduranceIOSDeviceID
+        }) else { return }
+        controller.invite(peer)
     }
 
     private func finishFailure(

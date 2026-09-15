@@ -691,6 +691,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func scheduleReconnectIfPossible(for deviceID: String) {
+        guard !MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() else { return }
         guard let peer = availablePeers.first(where: {
             $0.deviceID == deviceID && $0.isTrusted
         }) else { return }
@@ -1801,7 +1802,8 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             )
             addOrUpdateAvailablePeer(discoveredPeer)
 
-            if discoveredPeer.isTrusted {
+            if discoveredPeer.isTrusted,
+               !MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() {
                 invite(discoveredPeer)
             }
         }

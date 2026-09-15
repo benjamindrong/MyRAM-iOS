@@ -486,13 +486,6 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
                ordinaryRoutingReady(state: state) {
                 return true
             }
-            if state.bootstrapState == .ready,
-               !state.syncController.hasConnectedPeers,
-               let peer = state.syncController.availablePeers.first(where: {
-                   $0.deviceID == MyRAMSyncBenchmarkConfiguration.enduranceMacDeviceID
-               }) {
-                state.syncController.invite(peer)
-            }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         return false
@@ -520,12 +513,6 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
         var stableZeroSamples = 0
         var lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
         while Date() < deadline, !Task.isCancelled {
-            if !state.syncController.hasConnectedPeers,
-               let peer = state.syncController.availablePeers.first(where: {
-                   $0.deviceID == MyRAMSyncBenchmarkConfiguration.enduranceMacDeviceID
-               }) {
-                state.syncController.invite(peer)
-            }
             lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
             if lastDepth == 0,
                state.syncController.hasConnectedPeers,
