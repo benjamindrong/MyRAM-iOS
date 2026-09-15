@@ -321,8 +321,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             lastErrorMessage = "Unable to save nearby sync changes for retry."
             throw error
         }
-        let connectedPeers = connectedPeersProvider()
-        _ = await sendQueuedBatch(batch, connectedPeers: connectedPeers)
+        await flushUnsentBatches()
     }
 
     private func validateDurableAdmission(_ batch: SyncBatch) throws {
@@ -471,7 +470,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         let connectedPeers = connectedPeersProvider()
 
         for batch in unsentBatches.pendingBatches {
-            _ = await sendQueuedBatch(batch, connectedPeers: connectedPeers)
+            // A later anchored batch may depend on structure in this batch. Preserve
+            // durable queue order across reconnect failures instead of bypassing it.
+            guard await sendQueuedBatch(batch, connectedPeers: connectedPeers) else {
+                break
+            }
         }
     }
 
