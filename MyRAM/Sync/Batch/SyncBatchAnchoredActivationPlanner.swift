@@ -228,22 +228,21 @@ struct SyncConvergenceAnchoredBatchPlanner {
             throw SyncConvergenceAnchoredBatchPlannerError.invalidChange
         }
 
-        let wireOrderedChanges = indexedChanges.sorted(by: { $0.operationIndex < $1.operationIndex })
-        let identities = try wireOrderedChanges.map {
-            try operationIdentity(
-                for: $0.change,
-                batch: batch,
-                operationIndex: $0.operationIndex
-            )
-        }
-        let processingOrder = dependencyOrderedChanges(wireOrderedChanges)
-
         var speculativeRecovery = recoverySnapshot
         var speculativeState = expectedSnapshot.state
+        var identities: [OperationIdentityPayload] = []
         var successfulRecoveryTransitions: [SyncBatchAnchoredRecoveryStoreTransition] = []
         var sawAppliedEquivalent = false
 
-        for indexed in processingOrder {
+        for indexed in indexedChanges.sorted(by: { $0.operationIndex < $1.operationIndex }) {
+            identities.append(
+                try operationIdentity(
+                    for: indexed.change,
+                    batch: batch,
+                    operationIndex: indexed.operationIndex
+                )
+            )
+
             let key = try recoveryKey(for: indexed.change)
             let operationRecoverySnapshot = SyncBatchAnchoredRecoveryStoreSnapshot(
                 records: speculativeRecovery.records.filter { $0.key == key },
@@ -336,66 +335,6 @@ struct SyncConvergenceAnchoredBatchPlanner {
                 : (sawAppliedEquivalent ? .appliedEquivalentRecovery : .idempotentReplay),
             resultEvidence: evidence
         ))
-    }
-
-    private func dependencyOrderedChanges(
-        _ wireOrderedChanges: [(operationIndex: Int, change: SyncBatchChange)]
-    ) -> [(operationIndex: Int, change: SyncBatchChange)] {
-        var providerPositionByOperationID: [SyncOperationID: Int] = [:]
-        for (position, indexed) in wireOrderedChanges.enumerated() {
-            if case .noteBodyTextInsertedAnchored(let inserted) = indexed.change {
-                providerPositionByOperationID[inserted.payload.operationID] = position
-            }
-        }
-        guard !providerPositionByOperationID.isEmpty else {
-            return wireOrderedChanges
-        }
-
-        var remainingPositions = Array(wireOrderedChanges.indices)
-        var emittedProviderIDs = Set<SyncOperationID>()
-        var ordered: [(operationIndex: Int, change: SyncBatchChange)] = []
-        ordered.reserveCapacity(wireOrderedChanges.count)
-
-        while !remainingPositions.isEmpty {
-            guard let nextRemainingIndex = remainingPositions.firstIndex(where: { position in
-                let inBatchDependencies = anchoredDependencies(for: wireOrderedChanges[position].change)
-                    .filter { providerPositionByOperationID[$0] != nil }
-                return inBatchDependencies.allSatisfy { emittedProviderIDs.contains($0) }
-            }) else {
-                // Cyclic or otherwise malformed dependency graphs remain on the existing
-                // fail-closed planning path instead of inventing a structural order.
-                return wireOrderedChanges
-            }
-
-            let position = remainingPositions.remove(at: nextRemainingIndex)
-            let next = wireOrderedChanges[position]
-            ordered.append(next)
-            if case .noteBodyTextInsertedAnchored(let inserted) = next.change {
-                emittedProviderIDs.insert(inserted.payload.operationID)
-            }
-        }
-
-        return ordered
-    }
-
-    private func anchoredDependencies(for change: SyncBatchChange) -> Set<SyncOperationID> {
-        switch change {
-        case .noteBodyTextInsertedAnchored(let inserted):
-            var dependencies = Set<SyncOperationID>()
-            if let left = inserted.payload.anchor.leftElementID {
-                dependencies.insert(left.operationID)
-            }
-            if let right = inserted.payload.anchor.rightElementID {
-                dependencies.insert(right.operationID)
-            }
-            return dependencies
-
-        case .noteBodyTextDeletedAnchored(let deleted):
-            return Set(deleted.payload.deletedElementIDSpans.map(\.operationID))
-
-        default:
-            return []
-        }
     }
 
     private func recoveryKey(
