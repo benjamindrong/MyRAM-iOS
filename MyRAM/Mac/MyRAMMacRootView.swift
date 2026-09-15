@@ -1024,6 +1024,15 @@ struct MacSelectedEditorReloader {
     }
 }
 
+enum MacNoteListRowPlanFactory {
+    static func make(note: Note, bodyPreview: String) -> PinnedTextListPresentationPlan {
+        PinnedTextListPresentationPolicy().plan(
+            pinnedTexts: note.pinnedThoughts,
+            bodyPreview: bodyPreview
+        )
+    }
+}
+
 private struct MacNoteListView: View {
     let notes: [Note]
     let selectedNoteID: UUID?
@@ -1052,14 +1061,55 @@ private struct MacNoteListView: View {
                 Button {
                     onSelect(note)
                 } label: {
+                    let plan = rowPlan(for: note)
+
                     VStack(alignment: .leading, spacing: 4) {
                         Text(displayTitle(for: note))
                             .font(.headline)
                             .lineLimit(1)
-                        Text(displayPreview(for: note))
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(2)
+
+                        if let firstPinnedTextPreview = plan.firstPinnedTextPreview {
+                            Text(firstPinnedTextPreview)
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(.primary)
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        if let secondPinnedTextPreview = plan.secondPinnedTextPreview {
+                            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                                Text(secondPinnedTextPreview)
+                                    .font(.caption.weight(.semibold))
+                                    .foregroundStyle(.primary)
+                                    .lineLimit(1)
+                                    .truncationMode(.tail)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .layoutPriority(0)
+
+                                if let visibleCountText = plan.visibleCountText,
+                                   let accessibilityCountText = plan.accessibilityCountText,
+                                   let countAccessibilityIdentifier = plan.countAccessibilityIdentifier {
+                                    Text(visibleCountText)
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(1)
+                                        .fixedSize(horizontal: true, vertical: false)
+                                        .layoutPriority(1)
+                                        .accessibilityIdentifier(countAccessibilityIdentifier)
+                                        .accessibilityLabel(accessibilityCountText)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+
+                        if plan.bodyIsEligible, let bodyPreview = plan.bodyPreview {
+                            Text(bodyPreview)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(plan.bodyLineLimit)
+                                .truncationMode(.tail)
+                        }
                     }
                     .padding(.vertical, 6)
                     .padding(.horizontal, 8)
@@ -1112,6 +1162,13 @@ private struct MacNoteListView: View {
 
         let trimmedContent = note.content.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmedContent.isEmpty ? "Untitled" : trimmedContent
+    }
+
+    private func rowPlan(for note: Note) -> PinnedTextListPresentationPlan {
+        MacNoteListRowPlanFactory.make(
+            note: note,
+            bodyPreview: displayPreview(for: note)
+        )
     }
 
     private func displayPreview(for note: Note) -> String {

@@ -97,31 +97,28 @@ private struct MyRAMMacWidgetEntryView: View {
                     .truncationMode(.tail)
             }
 
-            ForEach(Array(entry.model.pinnedTexts.enumerated()), id: \.offset) { _, text in
+            MyRAMWidgetPinnedContentLayout(
+                pinnedTexts: entry.model.pinnedTexts,
+                bodyText: entry.model.bodyText,
+                verticalSpacing: layoutPolicy.rootSpacing
+            ) { text, variant in
                 HStack(spacing: layoutPolicy.pinSpacing) {
                     Image(systemName: "pin.fill")
                         .font(.caption2)
                         .foregroundStyle(.tint)
                     Text(text)
                         .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
+                        .lineLimit(variant.lineLimit)
                         .truncationMode(.tail)
                 }
-                .layoutPriority(1)
-            }
-
-            if let bodyText = entry.model.bodyText {
+            } bodyRow: { bodyText, isOneLineProbe in
                 Text(bodyText)
                     .font(.footnote)
                     .foregroundStyle(entry.model.state == .content ? .secondary : .primary)
+                    .lineLimit(isOneLineProbe ? 1 : nil)
                     .truncationMode(.tail)
-                    .frame(
-                        maxWidth: .infinity,
-                        maxHeight: .infinity,
-                        alignment: .topLeading
-                    )
-                    .layoutPriority(0)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(contentInsets)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
