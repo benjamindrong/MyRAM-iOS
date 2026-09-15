@@ -61,9 +61,35 @@ write_evidence_hashes() {
     | xargs -0 shasum -a 256 > "$EVIDENCE_ROOT/SHA256SUMS.txt"
 }
 
+collect_runtime_evidence_best_effort() {
+  mkdir -p "$IOS_EVIDENCE" "$MAC_EVIDENCE"
+
+  if [[ -n "${DEVICE_ID:-}" && -n "${IOS_BUNDLE_ID:-}" && -n "${IOS_BENCH_REL:-}" ]]; then
+    rm -rf "$IOS_EVIDENCE/SyncBenchmarks"
+    mkdir -p "$IOS_EVIDENCE/SyncBenchmarks"
+    xcrun devicectl device copy from \
+      --device "$DEVICE_ID" \
+      --domain-type appDataContainer \
+      --domain-identifier "$IOS_BUNDLE_ID" \
+      --source "$IOS_BENCH_REL" \
+      --destination "$IOS_EVIDENCE/SyncBenchmarks" \
+      > "$LOG_DIR/devicectl-copy-evidence-cleanup.txt" 2>&1 || true
+  fi
+
+  if [[ -n "${MAC_RUN_ROOT:-}" && -d "$MAC_RUN_ROOT" ]]; then
+    rm -rf "$MAC_EVIDENCE/SyncBenchmarks"
+    mkdir -p "$MAC_EVIDENCE"
+    cp -R "$MAC_RUN_ROOT" "$MAC_EVIDENCE/SyncBenchmarks" \
+      > "$LOG_DIR/macos-copy-evidence-cleanup.txt" 2>&1 || true
+  fi
+}
+
 cleanup() {
   local exit_status=$?
   set +e
+  if (( SCENARIO_STARTED == 1 )); then
+    collect_runtime_evidence_best_effort
+  fi
   if [[ -n "$MAC_PID" ]] && kill -0 "$MAC_PID" 2>/dev/null; then
     kill "$MAC_PID" 2>/dev/null || true
     wait "$MAC_PID" 2>/dev/null || true
