@@ -270,12 +270,51 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
         var committed = 0
         var failed = 0
 
-        for index in 1...MyRAMSyncBenchmarkEnduranceWorkload.notesPerPlatform {
+        for _ in 1...MyRAMSyncBenchmarkEnduranceWorkload.notesPerPlatform {
             guard let note = state.vm.createNewNote() else {
                 failed += 1
                 continue
             }
+            noteIDs.append(note.id)
+        }
+
+        guard noteIDs.count == MyRAMSyncBenchmarkEnduranceWorkload.notesPerPlatform else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                state: state,
+                detail: "unable to create the complete synthetic iOS note set"
+            )
+            return
+        }
+
+        let creationQueueDepth = await waitForIOSDrain(state: state, timeoutSeconds: 45)
+        guard creationQueueDepth == 0 else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                state: state,
+                detail: "iOS seed creation traffic did not drain before initialization"
+            )
+            return
+        }
+        recorder.record(.phase, phase: "seedCreationDrain", queueDepth: 0, outcome: "completed")
+
+        for (offset, noteID) in noteIDs.enumerated() {
+            guard let note = state.vm.refreshedNote(withID: noteID) else {
+                failed += 1
+                continue
+            }
             attempted += 1
+            let index = offset + 1
             let title = MyRAMSyncBenchmarkEnduranceWorkload.noteTitle(
                 runID: launch.runID,
                 platform: .iOS,
@@ -288,14 +327,13 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
             )
             if await state.vm.commitNoteEditForProduction(note, title: title, content: body) {
                 committed += 1
-                noteIDs.append(note.id)
             } else {
                 failed += 1
             }
         }
         recorder.record(.phase, phase: "seed", operationCount: attempted, outcome: "completed")
 
-        guard noteIDs.count == MyRAMSyncBenchmarkEnduranceWorkload.notesPerPlatform else {
+        guard committed == MyRAMSyncBenchmarkEnduranceWorkload.notesPerPlatform else {
             finishFailure(
                 recorder: recorder,
                 launch: launch,
