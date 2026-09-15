@@ -394,6 +394,16 @@ final class MyRAMSyncBenchmarkRecorderTests: XCTestCase {
         }
     }
 
+    func testEnduranceConfigurationShortensCompositionRootBatchQuietWindow() {
+        XCTAssertEqual(MyRAMSyncBenchmarkConfiguration.batchQuietWindow(environment: [:]), 3)
+        XCTAssertEqual(
+            MyRAMSyncBenchmarkConfiguration.batchQuietWindow(environment: [
+                MyRAMSyncBenchmarkConfiguration.enduranceEnvironmentKey: "1"
+            ]),
+            0.25
+        )
+    }
+
     func testDisabledRecorderDoesNotCreateArtifact() {
         let directory = temporaryDirectory()
         let recorder = MyRAMSyncBenchmarkRecorder(

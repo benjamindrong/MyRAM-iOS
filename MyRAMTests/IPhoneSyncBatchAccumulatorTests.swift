@@ -2,6 +2,29 @@ import XCTest
 @testable import MyRAM
 
 final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
+    func testEnduranceRoutingGateRequiresOrdinaryReadinessAndV2OnSamePeer() {
+        let peers = ["ordinary-only", "v2-only"]
+
+        XCTAssertFalse(MyRAMSyncBenchmarkEnduranceRoutingGate.isReady(
+            expectedPeerDeviceID: "ordinary-only",
+            connectedPeerDeviceIDs: peers,
+            ordinarySyncReady: { $0 == "ordinary-only" },
+            hasExplicitV2Support: { $0 == "v2-only" }
+        ))
+        XCTAssertTrue(MyRAMSyncBenchmarkEnduranceRoutingGate.isReady(
+            expectedPeerDeviceID: "ordinary-only",
+            connectedPeerDeviceIDs: peers,
+            ordinarySyncReady: { $0 == "ordinary-only" },
+            hasExplicitV2Support: { $0 == "ordinary-only" }
+        ))
+        XCTAssertFalse(MyRAMSyncBenchmarkEnduranceRoutingGate.isReady(
+            expectedPeerDeviceID: "benchmark-peer",
+            connectedPeerDeviceIDs: peers,
+            ordinarySyncReady: { _ in true },
+            hasExplicitV2Support: { _ in true }
+        ))
+    }
+
     func testChangesAppendToPendingBatchAndPreserveOrdering() async {
         let accumulator = makeAccumulator()
         let firstChange = titleChange("First")
