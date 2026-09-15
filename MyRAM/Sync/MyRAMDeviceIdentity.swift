@@ -66,7 +66,7 @@ enum MyRAMSyncBenchmarkEnduranceIOSIsolation {
 
 enum MyRAMDeviceIdentity {
     private static let deviceIDKey = "myram.sync.deviceID"
-    private static let enduranceDeviceID = "B3600000-0000-0000-0000-000000000001"
+    private static let enduranceDeviceID = MyRAMSyncBenchmarkConfiguration.enduranceIOSDeviceID
     static let maximumPeerDisplayNameUTF8ByteCount = 63
 
     static func currentDeviceID() -> String {

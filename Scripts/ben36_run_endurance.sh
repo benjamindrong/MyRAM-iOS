@@ -55,6 +55,12 @@ record_stage() {
   printf '[BEN-36] %s\n' "$1"
 }
 
+write_evidence_hashes() {
+  find "$IOS_EVIDENCE" "$MAC_EVIDENCE" "$VALIDATION_DIR" "$PROVENANCE_DIR" "$LOG_DIR" -type f -print0 \
+    | sort -z \
+    | xargs -0 shasum -a 256 > "$EVIDENCE_ROOT/SHA256SUMS.txt"
+}
+
 cleanup() {
   local exit_status=$?
   set +e
@@ -70,6 +76,7 @@ cleanup() {
     xcrun devicectl device process terminate --device "$DEVICE_ID" --pid "$IOS_PID" >/dev/null 2>&1 || true
   fi
   if (( SCENARIO_STARTED == 1 )); then
+    write_evidence_hashes >/dev/null 2>&1 || true
     python3 Scripts/ben36_evidence.py update \
       --index "$RUN_INDEX" --run-id "$RUN_ID" \
       --disposition "$RUN_DISPOSITION" --detail "$RUN_DETAIL" >/dev/null 2>&1 || true
@@ -96,6 +103,8 @@ CURRENT_HEAD="$(git rev-parse HEAD)"
 [[ "$CURRENT_BRANCH" == "$EXPECTED_BRANCH" ]] || fail "expected branch $EXPECTED_BRANCH, found $CURRENT_BRANCH"
 [[ "$CURRENT_HEAD" == "$EXPECTED_HEAD" ]] || fail "expected head $EXPECTED_HEAD, found $CURRENT_HEAD"
 [[ -z "$(git status --porcelain)" ]] || fail "working tree must be clean"
+[[ -z "$(/usr/bin/pgrep -x MyRAMMac || true)" ]] \
+  || fail "close the existing MyRAMMac app before starting isolated endurance execution"
 git merge-base --is-ancestor "$BASE_SHA" "$CURRENT_HEAD" || fail "current head does not descend from approved base $BASE_SHA"
 PYTHONPYCACHEPREFIX="$EVIDENCE_ROOT/python-cache" \
   python3 -m py_compile Scripts/ben36_select_device.py Scripts/ben36_validate_endurance.py Scripts/ben36_evidence.py
@@ -351,9 +360,7 @@ metadata = {
 open(out, 'w', encoding='utf-8').write(json.dumps(metadata, indent=2, sort_keys=True) + '\n')
 PY
 
-find "$IOS_EVIDENCE" "$MAC_EVIDENCE" "$VALIDATION_DIR" "$PROVENANCE_DIR" "$LOG_DIR" -type f -print0 \
-  | sort -z \
-  | xargs -0 shasum -a 256 > "$EVIDENCE_ROOT/SHA256SUMS.txt"
+write_evidence_hashes
 
 record_stage complete
 RUN_DISPOSITION="successful"

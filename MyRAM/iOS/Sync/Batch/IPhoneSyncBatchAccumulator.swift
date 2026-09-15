@@ -488,7 +488,9 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
             }
             if state.bootstrapState == .ready,
                !state.syncController.hasConnectedPeers,
-               let peer = state.syncController.availablePeers.first {
+               let peer = state.syncController.availablePeers.first(where: {
+                   $0.deviceID == MyRAMSyncBenchmarkConfiguration.enduranceMacDeviceID
+               }) {
                 state.syncController.invite(peer)
             }
             try? await Task.sleep(nanoseconds: 500_000_000)
@@ -519,7 +521,9 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
         var lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
         while Date() < deadline, !Task.isCancelled {
             if !state.syncController.hasConnectedPeers,
-               let peer = state.syncController.availablePeers.first {
+               let peer = state.syncController.availablePeers.first(where: {
+                   $0.deviceID == MyRAMSyncBenchmarkConfiguration.enduranceMacDeviceID
+               }) {
                 state.syncController.invite(peer)
             }
             lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
@@ -537,9 +541,9 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
     }
 
     private func ordinaryRoutingReady(state: NotesListState) -> Bool {
-        let connectedPeerDeviceIDs = state.syncController.connectedPeerDeviceIDsForBenchmark()
         return MyRAMSyncBenchmarkEnduranceRoutingGate.isReady(
-            connectedPeerDeviceIDs: connectedPeerDeviceIDs,
+            expectedPeerDeviceID: MyRAMSyncBenchmarkConfiguration.enduranceMacDeviceID,
+            connectedPeerDeviceIDs: state.syncController.connectedPeerDeviceIDsForBenchmark(),
             ordinarySyncReady: { peerDeviceID in
                 state.syncController.isOrdinarySyncReadyForTesting(peerDeviceID: peerDeviceID)
             },

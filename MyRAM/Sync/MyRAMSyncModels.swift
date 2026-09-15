@@ -495,6 +495,8 @@ enum MyRAMSyncBenchmarkEnduranceLaunchValidation: Equatable, Sendable {
 }
 
 extension MyRAMSyncBenchmarkConfiguration {
+    static let enduranceIOSDeviceID = "B3600000-0000-0000-0000-000000000001"
+    static let enduranceMacDeviceID = "B3600000-0000-0000-0000-000000000002"
     static var enduranceEnvironmentKey: String { "MYRAM_SYNC_BENCHMARK_ENDURANCE" }
     static var enduranceDurationEnvironmentKey: String { "MYRAM_SYNC_BENCHMARK_ENDURANCE_SECONDS" }
     static var enduranceDefaultDurationSeconds: Int { 720 }
@@ -871,12 +873,15 @@ private enum MyRAMSyncBenchmarkEnduranceDriverSupport {
 #if DEBUG
 enum MyRAMSyncBenchmarkEnduranceRoutingGate {
     static func isReady(
+        expectedPeerDeviceID: String,
         connectedPeerDeviceIDs: [String],
         ordinarySyncReady: (String) -> Bool,
         hasExplicitV2Support: (String) -> Bool
     ) -> Bool {
         connectedPeerDeviceIDs.contains {
-            ordinarySyncReady($0) && hasExplicitV2Support($0)
+            $0 == expectedPeerDeviceID
+                && ordinarySyncReady($0)
+                && hasExplicitV2Support($0)
         }
     }
 }
@@ -1500,9 +1505,9 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
     }
 
     private func ordinaryRoutingReady(controller: MacSyncBatchController) -> Bool {
-        let connectedPeerDeviceIDs = controller.connectedPeerDeviceIDsForBenchmark()
         return MyRAMSyncBenchmarkEnduranceRoutingGate.isReady(
-            connectedPeerDeviceIDs: connectedPeerDeviceIDs,
+            expectedPeerDeviceID: MyRAMSyncBenchmarkConfiguration.enduranceIOSDeviceID,
+            connectedPeerDeviceIDs: controller.connectedPeerDeviceIDsForBenchmark(),
             ordinarySyncReady: { peerDeviceID in
                 controller.bootstrapStateForTesting(peerDeviceID: peerDeviceID)?.ordinarySyncReady == true
             },

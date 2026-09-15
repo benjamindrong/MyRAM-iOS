@@ -65,7 +65,9 @@ enum MyRAMSyncBenchmarkEnduranceMacIsolation {
 
 struct MacSyncDeviceIdentity: Equatable {
     static let deviceIDKey = "myram.sync.deviceID"
-    static let enduranceDeviceID = UUID(uuidString: "B3600000-0000-0000-0000-000000000002")!
+    static let enduranceDeviceID = UUID(
+        uuidString: MyRAMSyncBenchmarkConfiguration.enduranceMacDeviceID
+    )!
     static let maximumPeerDisplayNameUTF8ByteCount = 63
 
     let id: MacSyncDeviceID
