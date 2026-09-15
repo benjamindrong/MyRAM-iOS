@@ -8,7 +8,7 @@ struct MacSyncConvergencePresentationSurface {
     let refreshNotesList: () -> Void
     let closeRemovedSelectedEditor: (UUID) -> Void
     let applyIncremental: ([MacSelectedEditorAction], UUID, String) -> EditorRemoteBatchApplyResult
-    let reloadSelectedEditor: (UUID, String) -> Bool
+    let reloadSelectedEditor: (UUID) -> Bool
     let currentEditorBody: () -> String?
 }
 
@@ -22,6 +22,9 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
 
     func refreshAfterBootstrap() {
         surface.refreshNotesList()
+        guard let selectedNoteID = surface.selectedNoteID(),
+              !surface.hasUnsavedChanges() else { return }
+        _ = surface.reloadSelectedEditor(selectedNoteID)
     }
 
     func refreshPresentation(for request: SyncConvergencePresentationRequest) async -> SyncConvergencePostCommitAdapterResult {
@@ -37,7 +40,7 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
 
         switch request.routing {
         case .none:
-            return .verifiedComplete
+            return refreshMetadataOnlyPresentation(for: request)
         case .noteRemoved:
             surface.closeRemovedSelectedEditor(request.noteID)
             return .verifiedComplete
@@ -48,6 +51,18 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
         case .structuralRefresh:
             return refreshStructuralPresentation(for: request)
         }
+    }
+
+    private func refreshMetadataOnlyPresentation(
+        for request: SyncConvergencePresentationRequest
+    ) -> SyncConvergencePostCommitAdapterResult {
+        if surface.currentEditorBody() == request.committedNote.body {
+            return .verifiedComplete
+        }
+        guard !surface.hasUnsavedChanges() else { return .stillPending }
+        guard surface.reloadSelectedEditor(request.noteID) else { return .stillPending }
+        guard surface.currentEditorBody() == request.committedNote.body else { return .failed }
+        return .verifiedComplete
     }
 
     private func refreshIncrementalPresentation(
@@ -67,7 +82,7 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
             // wired up yet). Retrying the same incremental apply would hit the same
             // wall forever, so fall back to a full reload from the already-committed
             // note instead of waiting on a condition that may never change.
-            guard surface.reloadSelectedEditor(request.noteID, request.committedNote.body) else { return .stillPending }
+            guard surface.reloadSelectedEditor(request.noteID) else { return .stillPending }
             guard surface.currentEditorBody() == request.committedNote.body else { return .failed }
             return .verifiedComplete
         }
@@ -77,7 +92,7 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
         for request: SyncConvergencePresentationRequest
     ) -> SyncConvergencePostCommitAdapterResult {
         guard !surface.hasUnsavedChanges() else { return .stillPending }
-        guard surface.reloadSelectedEditor(request.noteID, request.committedNote.body) else { return .stillPending }
+        guard surface.reloadSelectedEditor(request.noteID) else { return .stillPending }
         guard surface.currentEditorBody() == request.committedNote.body else { return .failed }
         return .verifiedComplete
     }
@@ -92,7 +107,7 @@ final class MacSyncConvergencePresentationAdapter: SyncConvergencePresentationAd
             return .failed
         }
         guard !surface.hasUnsavedChanges() else { return .stillPending }
-        guard surface.reloadSelectedEditor(request.noteID, request.committedNote.body) else { return .stillPending }
+        guard surface.reloadSelectedEditor(request.noteID) else { return .stillPending }
         guard surface.currentEditorBody() == request.committedNote.body else { return .failed }
         return .verifiedComplete
     }

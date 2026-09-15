@@ -430,7 +430,7 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
             applyIncremental: { _, _, _ in
                 EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .noApplicableMutations)
             },
-            reloadSelectedEditor: { _, _ in true },
+            reloadSelectedEditor: { _ in true },
             currentEditorBody: { nil }
         )
     }

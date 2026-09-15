@@ -458,6 +458,398 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         }
     }
 
+    func testMYR221CurrentTitleWinnerProtectsWholeIncorporationRoot() throws {
+        let stored = try makeCompletedTitleIncorporation()
+        let beforeBytes = try fullIncorporationEvidenceBytes(in: stored.context)
+
+        let compacted = try SwiftDataSyncConvergencePersistenceTransaction(context: stored.context)
+            .compactCompletedIncorporationHistory(
+                affecting: [stored.fixture.noteID],
+                protectedBatchIDs: []
+            )
+
+        XCTAssertTrue(compacted.isEmpty)
+        XCTAssertGreaterThan(beforeBytes, 0)
+        XCTAssertEqual(try fullIncorporationEvidenceBytes(in: stored.context), beforeBytes)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 1)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>()).count, 1)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>()).count, 1)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>()).count, 1)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchTombstone>()).count, 0)
+    }
+
+    func testMYR221SupersededTitleWinnerAllowsWholeRootCompactionAndDuplicateRemainsIdempotent() throws {
+        let stored = try makeCompletedTitleIncorporation()
+        let olderBatchID = stored.fixture.validatedInput.sourceBatchID
+        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: stored.context)
+        let note = try XCTUnwrap(try stored.context.fetch(FetchDescriptor<Note>()).first)
+        let laterBatch = titleBatch(
+            id: uuid("00000000-0000-0000-0000-000000221104"),
+            noteID: stored.fixture.noteID,
+            title: "Later",
+            modifiedAt: date(40)
+        )
+        let laterPlanning = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: laterBatch,
+            currentNotes: [.init(
+                noteID: note.id,
+                folderID: note.folder?.id,
+                title: note.title,
+                body: note.content,
+                createdAt: note.createdAt,
+                modifiedAt: note.modifiedAt
+            )],
+            persistedTitleWinners: (try transaction.loadTitleWinner(noteID: note.id)).map { [$0] } ?? []
+        ))
+        guard case .planned(let laterInput) = laterPlanning else {
+            return XCTFail("Expected later title batch to plan, got \(laterPlanning)")
+        }
+        guard case .incorporated = SyncConvergenceIncorporationExecutor().incorporate(
+            input: laterInput,
+            transaction: transaction,
+            committedAt: date(41)
+        ) else {
+            return XCTFail("Expected later title batch to incorporate")
+        }
+        for root in try stored.context.fetch(FetchDescriptor<IncorporatedSyncBatch>()) {
+            root.postCommitStatePayloadData = try SyncConvergencePostCommitState.none.encodedPayloadData()
+            root.hasPendingPostCommitWork = false
+        }
+        try stored.context.save()
+
+        let compacted = try transaction.compactCompletedIncorporationHistory(
+            affecting: [stored.fixture.noteID],
+            protectedBatchIDs: []
+        )
+
+        XCTAssertEqual(compacted, [olderBatchID])
+        let remainingRoot = try XCTUnwrap(try stored.context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).first)
+        XCTAssertEqual(remainingRoot.batchID, laterBatch.id)
+        let winner = try XCTUnwrap(try transaction.loadTitleWinner(noteID: stored.fixture.noteID))
+        XCTAssertEqual(winner.title, "Later")
+        XCTAssertEqual(winner.operationIdentity.batchIDLowercase, laterBatch.id.uuidString.lowercased())
+        XCTAssertEqual(note.title, "Later")
+
+        let duplicate = SyncConvergenceIncorporationExecutor().incorporate(
+            input: stored.fixture.validatedInput,
+            transaction: transaction,
+            committedAt: date(99)
+        )
+
+        guard case .alreadyIncorporated = duplicate else {
+            return XCTFail("Expected tombstone-backed duplicate, got \(duplicate)")
+        }
+        XCTAssertEqual(note.title, "Later")
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 1)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchTombstone>()).count, 1)
+    }
+
+    func testMYR221CompletedEpisodeEvidenceProtectsWholeIncorporationRoot() throws {
+        let stored = try makeCompletedTitleIncorporation()
+        let beforeBytes = try fullIncorporationEvidenceBytes(in: stored.context)
+        stored.context.insert(ReconciliationEpisode(
+            noteID: stored.fixture.noteID,
+            generation: 1,
+            stateRaw: "completed",
+            logicalGroupingPayloadData: Data(stored.fixture.validatedInput.sourceBatchID.uuidString.utf8),
+            completedAt: date(20)
+        ))
+        try stored.context.save()
+
+        let compacted = try SwiftDataSyncConvergencePersistenceTransaction(context: stored.context)
+            .compactCompletedIncorporationHistory(
+                affecting: [stored.fixture.noteID],
+                protectedBatchIDs: []
+            )
+
+        XCTAssertTrue(compacted.isEmpty)
+        XCTAssertEqual(try fullIncorporationEvidenceBytes(in: stored.context), beforeBytes)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 1)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchTombstone>()).count, 0)
+    }
+
+    func testMYR221OrphanReconciliationCandidateEvidenceProtectsWholeIncorporationRoot() throws {
+        let stored = try makeCompletedTitleIncorporation()
+        stored.context.insert(ReconciliationCandidateRecord(
+            noteID: stored.fixture.noteID,
+            generation: 1,
+            candidateRoleRaw: "peer",
+            candidateIdentity: stored.fixture.validatedInput.sourceBatchID.uuidString,
+            candidateEvidencePayloadData: Data(stored.fixture.validatedInput.sourceBatchID.uuidString.utf8)
+        ))
+        try stored.context.save()
+
+        let compacted = try SwiftDataSyncConvergencePersistenceTransaction(context: stored.context)
+            .compactCompletedIncorporationHistory(affecting: [stored.fixture.noteID], protectedBatchIDs: [])
+
+        XCTAssertTrue(compacted.isEmpty)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 1)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchTombstone>()).count, 0)
+    }
+
+    func testMYR221OrphanReconciliationCompletionEvidenceProtectsWholeIncorporationRoot() throws {
+        let stored = try makeCompletedTitleIncorporation()
+        stored.context.insert(ReconciliationCompletionEvidenceRecord(
+            noteID: stored.fixture.noteID,
+            generation: 1,
+            kindRaw: "receivingCompletion",
+            evidencePayloadData: Data(stored.fixture.validatedInput.sourceBatchID.uuidString.utf8)
+        ))
+        try stored.context.save()
+
+        let compacted = try SwiftDataSyncConvergencePersistenceTransaction(context: stored.context)
+            .compactCompletedIncorporationHistory(affecting: [stored.fixture.noteID], protectedBatchIDs: [])
+
+        XCTAssertTrue(compacted.isEmpty)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 1)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchTombstone>()).count, 0)
+    }
+
+    func testMYR221QueuedBatchProtectionPreventsHistoryCompaction() throws {
+        let stored = try makeCompletedTitleIncorporation()
+        let batchID = stored.fixture.validatedInput.sourceBatchID
+
+        let compacted = try SwiftDataSyncConvergencePersistenceTransaction(context: stored.context)
+            .compactCompletedIncorporationHistory(
+                affecting: [stored.fixture.noteID],
+                protectedBatchIDs: [batchID]
+            )
+
+        XCTAssertTrue(compacted.isEmpty)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 1)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchTombstone>()).count, 0)
+    }
+
+    func testMYR221RetainedOperationProtectionPreventsHistoryCompaction() throws {
+        let fixture = try makeFixture()
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        seed(note: fixture.initialNote, in: context)
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
+            committedAt: fixture.committedAt
+        )
+        guard case .incorporated = outcome else {
+            return XCTFail("Expected protected fixture incorporation, got \(outcome)")
+        }
+        let root = try XCTUnwrap(try context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).first)
+        root.postCommitStatePayloadData = try SyncConvergencePostCommitState.none.encodedPayloadData()
+        root.hasPendingPostCommitWork = false
+        try context.save()
+        XCTAssertEqual(try context.fetch(FetchDescriptor<RetainedBodyOperation>()).count, 1)
+
+        let compacted = try SwiftDataSyncConvergencePersistenceTransaction(context: context)
+            .compactCompletedIncorporationHistory(affecting: [fixture.noteID], protectedBatchIDs: [])
+
+        XCTAssertTrue(compacted.isEmpty)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 1)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedBatchTombstone>()).count, 0)
+    }
+
+    func testMYR221CompactionSaveFailureRollsBackTombstoneAndFullHistoryDeletion() throws {
+        let stored = try makeCompletedTitleIncorporation()
+        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: stored.context)
+        let note = try XCTUnwrap(try stored.context.fetch(FetchDescriptor<Note>()).first)
+        let laterBatch = titleBatch(
+            id: uuid("00000000-0000-0000-0000-000000221105"),
+            noteID: stored.fixture.noteID,
+            title: "Later",
+            modifiedAt: date(40)
+        )
+        let planning = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: laterBatch,
+            currentNotes: [.init(
+                noteID: note.id,
+                folderID: note.folder?.id,
+                title: note.title,
+                body: note.content,
+                createdAt: note.createdAt,
+                modifiedAt: note.modifiedAt
+            )],
+            persistedTitleWinners: (try transaction.loadTitleWinner(noteID: note.id)).map { [$0] } ?? []
+        ))
+        guard case .planned(let input) = planning,
+              case .incorporated = SyncConvergenceIncorporationExecutor().incorporate(
+                input: input,
+                transaction: transaction,
+                committedAt: date(41)
+              ) else {
+            return XCTFail("Expected superseding title incorporation")
+        }
+        for root in try stored.context.fetch(FetchDescriptor<IncorporatedSyncBatch>()) {
+            root.postCommitStatePayloadData = try SyncConvergencePostCommitState.none.encodedPayloadData()
+            root.hasPendingPostCommitWork = false
+        }
+        try stored.context.save()
+        let beforeBytes = try fullIncorporationEvidenceBytes(in: stored.context)
+        let rootsBefore = try stored.context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count
+        let identitiesBefore = try stored.context.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>()).count
+        let effectsBefore = try stored.context.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>()).count
+        let resultsBefore = try stored.context.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>()).count
+        enum InjectedFailure: Error { case save }
+        let failingTransaction = SwiftDataSyncConvergencePersistenceTransaction(
+            context: stored.context,
+            saveContext: { _ in throw InjectedFailure.save }
+        )
+
+        XCTAssertThrowsError(try failingTransaction.compactCompletedIncorporationHistory(
+            affecting: [stored.fixture.noteID],
+            protectedBatchIDs: []
+        )) { error in
+            XCTAssertTrue(error is InjectedFailure)
+        }
+
+        XCTAssertEqual(try fullIncorporationEvidenceBytes(in: stored.context), beforeBytes)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, rootsBefore)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>()).count, identitiesBefore)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>()).count, effectsBefore)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>()).count, resultsBefore)
+        XCTAssertEqual(try stored.context.fetch(FetchDescriptor<IncorporatedBatchTombstone>()).count, 0)
+        XCTAssertFalse(stored.context.hasChanges)
+    }
+
+    @MainActor
+    func testMYR221FreshAnchoredEditPassesAfterPressureCompactsCompletedHistory() async throws {
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = container.mainContext
+        let noteID = uuid("00000000-0000-0000-0000-000000221101")
+        let originID = uuid("00000000-0000-0000-0000-000000221102")
+        let note = Note(title: "Title 0", content: "AB")
+        note.id = noteID
+        note.createdAt = date(1)
+        note.modifiedAt = date(2)
+        context.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+
+        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: FileManager.default.temporaryDirectory
+                .appendingPathComponent("MYR221-recovery-\(UUID().uuidString).json")
+        )
+        let runtime = SyncConvergenceRuntime(
+            context: context,
+            convergenceQueue: FileBackedSyncBatchQueue(fileURL: nil),
+            localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil),
+            localBatchTransportAdapter: nil,
+            presentationAdapter: MYR221CompletingPresentationAdapter(),
+            anchoredRecoveryStore: recoveryStore
+        )
+        var before = try XCTUnwrap(runtime.loadHistoryStatesForTesting(noteIDs: [noteID]).first)
+        var sequence = 0
+        while before.fullIncorporationEvidenceBytes <= 270_000 {
+            sequence += 1
+            let batchID = uuid(String(format: "00000000-0000-0000-0003-%012d", sequence))
+            let modifiedAt = date(TimeInterval(10 + sequence))
+            let batch = SyncBatch(
+                id: batchID,
+                originDeviceID: originID,
+                createdAt: modifiedAt,
+                batchSequence: UInt64(sequence),
+                changes: [.noteTitleChanged(.init(
+                    noteID: noteID,
+                    title: "Title \(sequence)",
+                    modifiedAt: modifiedAt
+                ))]
+            )
+            let winner = try transaction.loadTitleWinner(noteID: noteID)
+            let planning = SyncConvergencePlanner().plan(input: .init(
+                incomingBatch: batch,
+                currentNotes: [.init(
+                    noteID: note.id,
+                    folderID: note.folder?.id,
+                    title: note.title,
+                    body: note.content,
+                    createdAt: note.createdAt,
+                    modifiedAt: note.modifiedAt
+                )],
+                persistedTitleWinners: winner.map { [$0] } ?? []
+            ))
+            guard case .planned(let input) = planning else {
+                return XCTFail("Expected history setup batch \(sequence) to plan, got \(planning)")
+            }
+            let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+                input: input,
+                transaction: transaction,
+                committedAt: modifiedAt.addingTimeInterval(1)
+            )
+            guard case .incorporated = outcome else {
+                return XCTFail("Expected history setup batch \(sequence) to incorporate, got \(outcome)")
+            }
+            let root = try XCTUnwrap(try context.fetch(FetchDescriptor<IncorporatedSyncBatch>())
+                .first { $0.batchID == batchID })
+            root.postCommitStatePayloadData = try SyncConvergencePostCommitState.none.encodedPayloadData()
+            root.hasPendingPostCommitWork = false
+            try context.save()
+            before = try XCTUnwrap(runtime.loadHistoryStatesForTesting(noteIDs: [noteID]).first)
+            XCTAssertLessThan(sequence, 400, "History fixture must reach pressure with bounded work")
+        }
+        XCTAssertGreaterThan(before.fullIncorporationEvidenceBytes, 262_144)
+        XCTAssertLessThan(before.fullIncorporationEvidenceBytes, 524_288)
+
+        let loadedState = try await SwiftDataNoteSequenceStateStore(container: container).loadOrBootstrap(noteID: noteID)
+        let initialState = loadedState.state
+        let anchoredChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 1,
+            text: "X",
+            modifiedAt: date(10_000),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: note.content),
+            operationID: SyncOperationID(deviceID: originID, localCounter: 10_000),
+            state: initialState
+        )
+        let freshBatch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000221103"),
+            originDeviceID: originID,
+            createdAt: date(10_000),
+            batchSequence: 10_000,
+            changes: [anchoredChange]
+        )
+        let preCompaction: SyncConvergencePlanningOutcome = SyncConvergencePlanner().planCore(
+            input: .init(
+                incomingBatch: freshBatch,
+                currentNotes: [.init(
+                    noteID: note.id,
+                    folderID: note.folder?.id,
+                    title: note.title,
+                    body: note.content,
+                    createdAt: note.createdAt,
+                    modifiedAt: note.modifiedAt
+                )],
+                persistedTitleWinners: (try transaction.loadTitleWinner(noteID: noteID)).map { [$0] } ?? [],
+                historyStates: [before],
+                anchoredSequenceSnapshots: [.init(
+                    noteID: noteID,
+                    body: note.content,
+                    revision: loadedState.revision,
+                    state: initialState
+                )],
+                anchoredRecoverySnapshot: recoveryStore.snapshot()
+            ),
+            activationEnabled: true
+        )
+        XCTAssertEqual(preCompaction, .deferred(.historyPressure(noteID: noteID, blockingBatchID: nil)))
+
+        let outcome = await runtime.submitRemoteBatchForTesting(freshBatch, activationEnabled: true)
+        guard case .drained(let applied) = outcome else {
+            return XCTFail("Expected fresh anchored edit to drain after compaction, got \(outcome)")
+        }
+        XCTAssertEqual(applied, [freshBatch.id])
+        XCTAssertEqual(note.content, "AXB")
+        let after = try XCTUnwrap(runtime.loadHistoryStatesForTesting(noteIDs: [noteID]).first)
+        XCTAssertLessThan(after.fullIncorporationEvidenceBytes, before.fullIncorporationEvidenceBytes)
+        XCTAssertLessThan(after.fullIncorporationEvidenceBytes, 262_144)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).count, 2)
+        XCTAssertEqual(try context.fetch(FetchDescriptor<IncorporatedBatchTombstone>()).count, sequence - 1)
+    }
+
     func testMYR158SwiftDataTransactionRejectsMalformedPostCommitStateAsInvalidMergePlan() throws {
         let container = try ModelContainer(
             for: Schema(MyRAMModelRegistry.models),
@@ -2739,6 +3131,145 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertFalse(transaction.saveCalled)
     }
 
+
+    func testIncorporatedBatchTombstoneSurvivesPostCommitCleanupOnDiskRestartAndPreventsDuplicateReapplication() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-185-Incorporation-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("MyRAM.store")
+        let queueURL = directory.appendingPathComponent("convergence-queue.json")
+        let fixture = try makeFixture()
+        let tombstone = try tombstoneProjection(matching: fixture)
+        let identity = SyncConvergencePersistedIncorporationIdentity(
+            batchID: tombstone.batchID,
+            canonicalPayloadDigest: tombstone.canonicalPayloadDigest,
+            canonicalPayloadDigestFormatVersion: tombstone.canonicalPayloadDigestFormatVersion,
+            committedResultDigest: tombstone.committedResultDigest,
+            committedResultDigestFormatVersion: tombstone.committedResultDigestFormatVersion
+        )
+
+        do {
+            let container = try makeMYR185IncorporationDiskContainer(storeURL: storeURL)
+            let context = ModelContext(container)
+            let note = Note(title: fixture.initialNote.title, content: fixture.initialNote.body)
+            note.id = fixture.initialNote.noteID
+            note.createdAt = fixture.initialNote.createdAt
+            note.modifiedAt = fixture.initialNote.modifiedAt
+            note.deletedAt = fixture.initialNote.deletedAt
+            context.insert(note)
+            context.insert(try IncorporatedBatchTombstone.makeValidated(
+                batchID: tombstone.batchID,
+                originDeviceID: tombstone.originDeviceID,
+                canonicalPayloadDigest: tombstone.canonicalPayloadDigest,
+                canonicalPayloadDigestFormatVersion: tombstone.canonicalPayloadDigestFormatVersion,
+                schemaVersion: tombstone.schemaVersion,
+                committedResultDigest: tombstone.committedResultDigest,
+                committedResultDigestFormatVersion: tombstone.committedResultDigestFormatVersion,
+                committedAtOrderingPayloadData: tombstone.committedAtOrderingPayloadData,
+                tombstoneFormatVersion: tombstone.tombstoneFormatVersion
+            ))
+            try context.save()
+
+            let queue = FileBackedSyncBatchQueue(fileURL: queueURL, limit: 10)
+            try queue.enqueueDurably(fixture.batch)
+            XCTAssertTrue(queue.contains(fixture.batch.id))
+
+            let postCommitStore = SwiftDataSyncConvergencePostCommitStore(
+                context: ModelContext(container)
+            )
+            let request = SyncConvergencePostCommitRequest(
+                sourceBatchID: identity.batchID,
+                affectedNoteIDs: [],
+                cleanupPlan: SyncConvergenceCleanupPlan(
+                    batchIDs: [identity.batchID],
+                    retryQueueCleanup: true,
+                    retryLegacyCleanup: false,
+                    retryPresentationRefresh: false
+                ),
+                presentationPlan: SyncConvergencePresentationPlan(noteRoutings: [:]),
+                persistedIncorporationIdentity: identity
+            )
+            let executor = SyncConvergencePostCommitExecutor(
+                store: postCommitStore,
+                queueCleanupAdapter: queue,
+                presentationAdapter: FakePresentationAdapter(result: .verifiedComplete)
+            )
+
+            let postCommitOutcome = await executor.execute(request)
+            XCTAssertEqual(postCommitOutcome, .complete)
+            XCTAssertFalse(queue.contains(fixture.batch.id))
+
+            let verificationContext = ModelContext(container)
+            let noteID = fixture.noteID
+            let persistedNote = try XCTUnwrap(
+                verificationContext.fetch(FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == noteID }
+                )).first
+            )
+            XCTAssertEqual(persistedNote.id, fixture.initialNote.noteID)
+            XCTAssertEqual(persistedNote.folder?.id, fixture.initialNote.folderID)
+            XCTAssertEqual(persistedNote.title, fixture.initialNote.title)
+            XCTAssertEqual(persistedNote.content, fixture.initialNote.body)
+            XCTAssertEqual(persistedNote.createdAt, fixture.initialNote.createdAt)
+            XCTAssertEqual(persistedNote.modifiedAt, fixture.initialNote.modifiedAt)
+            XCTAssertEqual(persistedNote.deletedAt, fixture.initialNote.deletedAt)
+            XCTAssertTrue(try verificationContext.fetch(FetchDescriptor<IncorporatedSyncBatch>()).isEmpty)
+            let tombstones = try verificationContext.fetch(FetchDescriptor<IncorporatedBatchTombstone>())
+            XCTAssertEqual(tombstones.count, 1)
+            XCTAssertNoThrow(try tombstones[0].validateForPersistence())
+        }
+
+        do {
+            let reopenedContainer = try makeMYR185IncorporationDiskContainer(storeURL: storeURL)
+            let reopenedStore = SwiftDataSyncConvergencePostCommitStore(
+                context: ModelContext(reopenedContainer)
+            )
+            guard case .tombstone(let reopenedTombstone) = try reopenedStore.loadState(matching: identity) else {
+                return XCTFail("Expected matching incorporated-batch tombstone after restart")
+            }
+            XCTAssertEqual(reopenedTombstone, tombstone)
+
+            let replayContext = ModelContext(reopenedContainer)
+            let replay = SyncConvergenceIncorporationExecutor().incorporate(
+                input: fixture.validatedInput,
+                transaction: SwiftDataSyncConvergencePersistenceTransaction(context: replayContext),
+                committedAt: fixture.committedAt
+            )
+            guard case .alreadyIncorporated(let result) = replay else {
+                return XCTFail("Expected durable tombstone to prevent duplicate reapplication, got \(replay)")
+            }
+            XCTAssertEqual(result.batchID, fixture.batch.id)
+
+            let noteID = fixture.noteID
+            let replayedNote = try XCTUnwrap(
+                replayContext.fetch(FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == noteID }
+                )).first
+            )
+            XCTAssertEqual(replayedNote.id, fixture.initialNote.noteID)
+            XCTAssertEqual(replayedNote.folder?.id, fixture.initialNote.folderID)
+            XCTAssertEqual(replayedNote.title, fixture.initialNote.title)
+            XCTAssertEqual(replayedNote.content, fixture.initialNote.body)
+            XCTAssertEqual(replayedNote.createdAt, fixture.initialNote.createdAt)
+            XCTAssertEqual(replayedNote.modifiedAt, fixture.initialNote.modifiedAt)
+            XCTAssertEqual(replayedNote.deletedAt, fixture.initialNote.deletedAt)
+            XCTAssertTrue(try replayContext.fetch(FetchDescriptor<IncorporatedSyncBatch>()).isEmpty)
+
+            let durableTombstones = try replayContext.fetch(FetchDescriptor<IncorporatedBatchTombstone>())
+            XCTAssertEqual(durableTombstones.count, 1)
+            XCTAssertNoThrow(try durableTombstones[0].validateForPersistence())
+            let durableProjection = try XCTUnwrap(
+                try SwiftDataSyncConvergencePersistenceTransaction(context: replayContext)
+                    .loadTombstone(batchID: fixture.batch.id)
+            )
+            XCTAssertEqual(durableProjection, tombstone)
+        }
+    }
+
     func testMatchingRootAndTombstoneDuplicateComparesCommittedOrdering() throws {
         let fixture = try makeFixture()
         let transaction = InMemoryConvergenceTransaction(notes: [fixture.initialNote.noteID: fixture.initialNote])
@@ -3461,6 +3992,61 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         let orphanedWinner: SyncConvergenceTitleWinnerProjection
     }
 
+    private func makeCompletedTitleIncorporation() throws -> (
+        context: ModelContext,
+        fixture: TitleFixture
+    ) {
+        let fixture = try makeTitleApplyFixture()
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        seed(note: SyncConvergenceMutableNoteRecord(
+            noteID: fixture.noteID,
+            folderID: nil,
+            title: "Prior",
+            body: "Body",
+            createdAt: date(1),
+            modifiedAt: date(2)
+        ), in: context)
+        try seedTitleWinner(fixture.priorWinner, updatedAt: date(3), in: context)
+        let outcome = SyncConvergenceIncorporationExecutor().incorporate(
+            input: fixture.validatedInput,
+            transaction: SwiftDataSyncConvergencePersistenceTransaction(context: context),
+            committedAt: fixture.committedAt
+        )
+        guard case .incorporated = outcome else {
+            throw TestFixtureError.unexpectedPlanningOutcome
+        }
+        let root = try XCTUnwrap(try context.fetch(FetchDescriptor<IncorporatedSyncBatch>()).first)
+        root.postCommitStatePayloadData = try SyncConvergencePostCommitState.none.encodedPayloadData()
+        root.hasPendingPostCommitWork = false
+        try context.save()
+        return (context, fixture)
+    }
+
+    private func fullIncorporationEvidenceBytes(in context: ModelContext) throws -> Int {
+        let roots = try context.fetch(FetchDescriptor<IncorporatedSyncBatch>())
+        let noteEffects = try context.fetch(FetchDescriptor<IncorporatedBatchNoteEffect>())
+        let operationIdentities = try context.fetch(FetchDescriptor<IncorporatedBatchOperationIdentity>())
+        let resultEvidence = try context.fetch(FetchDescriptor<IncorporatedBatchResultEvidence>())
+        return roots.reduce(0) {
+            $0
+                + $1.affectedNotesPayloadData.count
+                + $1.authoritativeChildBytes
+                + ($1.postCommitWorkPayloadData?.count ?? 0)
+                + $1.postCommitStatePayloadData.count
+        }
+        + noteEffects.reduce(0) {
+            $0
+                + ($1.preTitleKeyPayloadData?.count ?? 0)
+                + ($1.postTitleKeyPayloadData?.count ?? 0)
+        }
+        + operationIdentities.reduce(0) { $0 + $1.payloadUTF8ByteCount }
+        + resultEvidence.reduce(0) { $0 + $1.payloadUTF8ByteCount }
+    }
+
     private func myr158IncorporatedRecord(
         batchID: UUID,
         index: Int,
@@ -4044,6 +4630,18 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
             committedAt: committedAt,
             priorWinner: nil
         )
+    }
+
+
+    private func makeMYR185IncorporationDiskContainer(storeURL: URL) throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR-185-Incorporation",
+            schema: schema,
+            url: storeURL,
+            cloudKitDatabase: .none
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
     }
 
     private func tombstoneProjection(
@@ -4845,6 +5443,14 @@ private func uuid(_ value: String) -> UUID {
 
 private func date(_ value: TimeInterval) -> Date {
     Date(timeIntervalSinceReferenceDate: value)
+}
+
+private struct MYR221CompletingPresentationAdapter: SyncConvergencePresentationAdapter {
+    func refreshPresentation(
+        for request: SyncConvergencePresentationRequest
+    ) async -> SyncConvergencePostCommitAdapterResult {
+        .verifiedComplete
+    }
 }
 
 private func titleBatch(id: UUID, noteID: UUID, title: String, modifiedAt: Date) -> SyncBatch {

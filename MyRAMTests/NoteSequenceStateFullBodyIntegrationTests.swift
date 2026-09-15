@@ -537,6 +537,718 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
         XCTAssertEqual(try fetchNotes(in: destination).only?.content, "Newer local state")
     }
 
+    func testBootstrapMergesSharedDivergentLineageAndCoversSequenceBaseline() throws {
+        let source = try makeSeededFixture(body: "AB")
+        let destination = try makeContainer()
+        let destinationContext = ModelContext(destination)
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+            to: destinationContext
+        )
+
+        let sourceSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: source.note,
+            in: source.context
+        )
+        let destinationNote = try fetchNote(source.note.id, in: destinationContext)
+        let destinationSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: destinationNote,
+            in: destinationContext
+        )
+        let rootID = try XCTUnwrap(sourceSnapshot.state.runs.first?.operationID)
+        let left = try SyncTextElementID(operationID: rootID, elementOffset: 0)
+        let right = try SyncTextElementID(operationID: rootID, elementOffset: 1)
+        let anchor = try SyncOperationAnchor.between(left: left, right: right)
+        let sourceState = try sourceSnapshot.state.incorporating(
+            insert: SyncTextInsertOperationPayload(
+                operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+                anchor: anchor
+            ),
+            insertedText: "S"
+        )
+        let destinationState = try destinationSnapshot.state.incorporating(
+            insert: SyncTextInsertOperationPayload(
+                operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+                anchor: anchor
+            ),
+            insertedText: "D"
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: source.note,
+            expected: sourceSnapshot,
+            newBody: sourceState.visibleText,
+            finalState: sourceState,
+            in: source.context
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: destinationNote,
+            expected: destinationSnapshot,
+            newBody: destinationState.visibleText,
+            finalState: destinationState,
+            in: destinationContext
+        )
+        try source.context.save()
+        try destinationContext.save()
+        destinationNote.richTextContentData = Data("stale-rich-text".utf8)
+        try destinationContext.save()
+        let batchID = UUID()
+        let snapshot = withHistoryCoverage(
+            try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+            batchID: batchID,
+            noteIDs: [source.note.id]
+        )
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: destinationContext)
+        let mergedRecord = try XCTUnwrap(fetchRecords(in: destinationContext).only)
+        let mergedState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: mergedRecord,
+            noteID: source.note.id
+        )
+
+        XCTAssertEqual(disposition.coveredNoteIDs, [source.note.id])
+        XCTAssertTrue(disposition.coveredBatchIDs.isEmpty)
+        XCTAssertTrue(disposition.presentationRefreshRequired)
+        XCTAssertTrue(mergedState.visibleText.contains("S"))
+        XCTAssertTrue(mergedState.visibleText.contains("D"))
+        XCTAssertEqual(destinationNote.content, mergedState.visibleText)
+        XCTAssertNil(destinationNote.richTextContentData)
+        XCTAssertEqual(mergedState.runs.count, 3)
+    }
+
+    func testBootstrapPersistsQueuedInsertionOwnershipAfterUnionCommitAndPlannerCleansIt() throws {
+        let source = try makeSeededFixture(body: "AB")
+        let destination = try makeContainer()
+        let destinationContext = ModelContext(destination)
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+            to: destinationContext
+        )
+        let sourceSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: source.note,
+            in: source.context
+        )
+        let destinationNote = try fetchNote(source.note.id, in: destinationContext)
+        let destinationSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: destinationNote,
+            in: destinationContext
+        )
+        let rootID = try XCTUnwrap(sourceSnapshot.state.runs.first?.operationID)
+        let anchor = try SyncOperationAnchor.between(
+            left: SyncTextElementID(operationID: rootID, elementOffset: 0),
+            right: SyncTextElementID(operationID: rootID, elementOffset: 1)
+        )
+        let ownedID = SyncOperationID(deviceID: UUID(), localCounter: 1)
+        let queuedChange = try XCTUnwrap({ () -> SyncBatchNoteBodyTextInsertedAnchoredChange? in
+            guard case .noteBodyTextInsertedAnchored(let change) = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+                noteID: source.note.id,
+                utf16Offset: 1,
+                text: "S",
+                modifiedAt: Date(timeIntervalSince1970: 221),
+                baseContentHash: nil,
+                operationID: ownedID,
+                state: sourceSnapshot.state
+            ) else { return nil }
+            return change
+        }())
+        let insertedSourceState = try sourceSnapshot.state.incorporating(
+            insert: queuedChange.payload,
+            insertedText: queuedChange.text
+        )
+        guard case .noteBodyTextDeletedAnchored(let queuedDeletion) = try SyncBatchAnchoredPayloadAdapter.makeDeletedChange(
+            noteID: source.note.id,
+            utf16Offset: 0,
+            utf16Length: 1,
+            expectedText: "A",
+            modifiedAt: Date(timeIntervalSince1970: 222),
+            baseContentHash: nil,
+            operationID: SyncOperationID(deviceID: UUID(), localCounter: 2),
+            state: insertedSourceState
+        ) else {
+            return XCTFail("Expected anchored deletion")
+        }
+        let sourceState = try insertedSourceState.incorporating(delete: queuedDeletion.payload)
+        let destinationState = try destinationSnapshot.state.incorporating(
+            insert: SyncTextInsertOperationPayload(
+                operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+                anchor: anchor
+            ),
+            insertedText: "D"
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: source.note,
+            expected: sourceSnapshot,
+            newBody: sourceState.visibleText,
+            finalState: sourceState,
+            in: source.context
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: destinationNote,
+            expected: destinationSnapshot,
+            newBody: destinationState.visibleText,
+            finalState: destinationState,
+            in: destinationContext
+        )
+        try source.context.save()
+        try destinationContext.save()
+
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-221-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let queueURL = temporaryDirectory.appendingPathComponent("pending-incoming.json")
+        let recoveryURL = temporaryDirectory.appendingPathComponent("anchored-recovery.json")
+        let queue = FileBackedSyncBatchQueue(fileURL: queueURL)
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: recoveryURL)
+        let batch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 221),
+            changes: [
+                .noteBodyTextInsertedAnchored(queuedChange),
+                .noteBodyTextDeletedAnchored(queuedDeletion)
+            ]
+        )
+        try queue.enqueueIncomingCore(batch, activationEnabled: true)
+
+        let abortedStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("aborted-recovery.json")
+        )
+        XCTAssertThrowsError(
+            try SyncPeerBootstrapSnapshotPersistence.apply(
+                try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+                to: destinationContext,
+                pendingIncomingBatches: queue,
+                anchoredRecoveryStore: abortedStore,
+                saveContext: {
+                    throw NSError(domain: "MYR221InjectedSequenceSaveFailure", code: 1)
+                }
+            )
+        )
+        let abortedKey = SyncBatchAnchoredRecoveryRecordKey(
+            noteID: source.note.id,
+            operationID: queuedChange.payload.operationID
+        )
+        XCTAssertNil(abortedStore.snapshot().record(for: abortedKey))
+        let rolledBackRecord = try XCTUnwrap(fetchRecords(in: destinationContext).only)
+        let rolledBackState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: rolledBackRecord,
+            noteID: source.note.id
+        )
+        XCTAssertFalse(rolledBackState.runs.contains { $0.operationID == ownedID })
+        let replayPlan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+            change: .insertion(queuedChange),
+            sequenceState: rolledBackState,
+            recoverySnapshot: abortedStore.snapshot()
+        )
+        XCTAssertTrue(replayPlan.didChangeApplicationState)
+        XCTAssertTrue(replayPlan.appliedRecords.isEmpty)
+        XCTAssertTrue(replayPlan.recoveryStoreTransitions.isEmpty)
+
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+            to: destinationContext,
+            pendingIncomingBatches: queue,
+            anchoredRecoveryStore: recoveryStore
+        )
+
+        let key = SyncBatchAnchoredRecoveryRecordKey(
+            noteID: source.note.id,
+            operationID: queuedChange.payload.operationID
+        )
+        let persisted = try XCTUnwrap(recoveryStore.snapshot().record(for: key))
+        XCTAssertEqual(persisted.lifecycle, .bootstrapOwned)
+        let deletionKey = SyncBatchAnchoredRecoveryRecordKey(
+            noteID: source.note.id,
+            operationID: queuedDeletion.payload.operationID
+        )
+        let persistedDeletion = try XCTUnwrap(recoveryStore.snapshot().record(for: deletionKey))
+        XCTAssertEqual(persistedDeletion.lifecycle, .bootstrapOwned)
+        let finalRecord = try XCTUnwrap(fetchRecords(in: destinationContext).only)
+        let finalState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: finalRecord,
+            noteID: source.note.id
+        )
+        let failingStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("failing-recovery.json"),
+            atomicWriter: { _, _ in
+                throw NSError(domain: "MYR221InjectedRecoveryWriteFailure", code: 1)
+            }
+        )
+        XCTAssertThrowsError(
+            try SyncPeerBootstrapSnapshotPersistence.apply(
+                try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+                to: destinationContext,
+                pendingIncomingBatches: queue,
+                anchoredRecoveryStore: failingStore
+            )
+        )
+        let stateAfterFailedOwnership = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: try XCTUnwrap(fetchRecords(in: destinationContext).only),
+            noteID: source.note.id
+        )
+        XCTAssertEqual(stateAfterFailedOwnership, finalState)
+        XCTAssertNil(failingStore.snapshot().record(for: key))
+        XCTAssertFalse(destinationContext.hasChanges)
+
+        let plan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+            change: .insertion(queuedChange),
+            sequenceState: finalState,
+            recoverySnapshot: recoveryStore.snapshot()
+        )
+        XCTAssertEqual(plan.appliedRecords, [persisted])
+        XCTAssertEqual(plan.recoveryStoreTransitions, [.removeCommitted(expected: persisted)])
+        let deletionPlan = try SyncBatchAnchoredRecoveryPlanner.planInitialDelivery(
+            change: .deletion(queuedDeletion),
+            sequenceState: finalState,
+            recoverySnapshot: recoveryStore.snapshot()
+        )
+        XCTAssertEqual(deletionPlan.appliedRecords, [persistedDeletion])
+        XCTAssertEqual(
+            deletionPlan.recoveryStoreTransitions,
+            [.removeCommitted(expected: persistedDeletion)]
+        )
+
+        let duplicateRunStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("duplicate-run-recovery.json")
+        )
+        let duplicateRunRecord = try SyncBatchAnchoredRecoveryRecord(
+            change: .insertion(queuedChange),
+            lifecycle: .terminalStructuralFailure(
+                try SyncBatchAnchoredStructuralFailure(
+                    code: .duplicateRun,
+                    evidence: .init(operationID: queuedChange.payload.operationID)
+                )
+            )
+        )
+        try duplicateRunStore.apply([.insertExpectedAbsent(duplicateRunRecord)])
+
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+            to: destinationContext,
+            pendingIncomingBatches: queue,
+            anchoredRecoveryStore: duplicateRunStore
+        )
+
+        let upgradedOwnership = try XCTUnwrap(
+            duplicateRunStore.snapshot().record(for: duplicateRunRecord.key)
+        )
+        XCTAssertEqual(upgradedOwnership.change, duplicateRunRecord.change)
+        XCTAssertEqual(upgradedOwnership.lifecycle, .bootstrapOwned)
+    }
+
+    func testBootstrapPersistsManifestedInsertionOwnershipWithoutPendingIncomingBatch() throws {
+        let source = try makeSeededFixture(body: "AB")
+        let destination = try makeContainer()
+        let destinationContext = ModelContext(destination)
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+            to: destinationContext
+        )
+        let sourceSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: source.note,
+            in: source.context
+        )
+        let destinationNote = try fetchNote(source.note.id, in: destinationContext)
+        let destinationSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: destinationNote,
+            in: destinationContext
+        )
+        guard case .noteBodyTextInsertedAnchored(let manifestedInsertion) = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: source.note.id,
+            utf16Offset: 1,
+            text: "S",
+            modifiedAt: Date(timeIntervalSince1970: 221),
+            baseContentHash: nil,
+            operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+            state: sourceSnapshot.state
+        ) else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let sourceState = try sourceSnapshot.state.incorporating(
+            insert: manifestedInsertion.payload,
+            insertedText: manifestedInsertion.text
+        )
+        guard case .noteBodyTextInsertedAnchored(let destinationInsertion) = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: destinationNote.id,
+            utf16Offset: 1,
+            text: "D",
+            modifiedAt: Date(timeIntervalSince1970: 222),
+            baseContentHash: nil,
+            operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+            state: destinationSnapshot.state
+        ) else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let destinationState = try destinationSnapshot.state.incorporating(
+            insert: destinationInsertion.payload,
+            insertedText: destinationInsertion.text
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: source.note,
+            expected: sourceSnapshot,
+            newBody: sourceState.visibleText,
+            finalState: sourceState,
+            in: source.context
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: destinationNote,
+            expected: destinationSnapshot,
+            newBody: destinationState.visibleText,
+            finalState: destinationState,
+            in: destinationContext
+        )
+        try source.context.save()
+        try destinationContext.save()
+
+        let batch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 223),
+            changes: [
+                .noteBodyTextInsertedAnchored(manifestedInsertion),
+                .noteTitleChanged(
+                    SyncBatchNoteTitleChangedChange(
+                        noteID: source.note.id,
+                        title: "Non-anchored metadata",
+                        modifiedAt: Date(timeIntervalSince1970: 224)
+                    )
+                )
+            ]
+        )
+        let snapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: source.context)
+            .attachingHistoryCoverage(for: [batch])
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-221-manifested-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let emptyQueue = FileBackedSyncBatchQueue(
+            fileURL: temporaryDirectory.appendingPathComponent("pending-incoming.json")
+        )
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("anchored-recovery.json")
+        )
+
+        let terminalStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("terminal-recovery.json")
+        )
+        let terminalRecord = try SyncBatchAnchoredRecoveryRecord(
+            change: .insertion(manifestedInsertion),
+            lifecycle: .terminalStructuralFailure(
+                .identityCollision(operationID: manifestedInsertion.payload.operationID)
+            )
+        )
+        try terminalStore.apply([.insertExpectedAbsent(terminalRecord)])
+        XCTAssertThrowsError(
+            try SyncPeerBootstrapSnapshotPersistence.apply(
+                snapshot,
+                to: destinationContext,
+                pendingIncomingBatches: emptyQueue,
+                anchoredRecoveryStore: terminalStore
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? SyncPeerBootstrapError,
+                .anchoredRecoveryConflict(terminalRecord.key)
+            )
+        }
+        XCTAssertEqual(terminalStore.snapshot().record(for: terminalRecord.key), terminalRecord)
+
+        guard case .noteBodyTextInsertedAnchored(let conflictingInsertion) = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: source.note.id,
+            utf16Offset: 1,
+            text: "conflict",
+            modifiedAt: manifestedInsertion.modifiedAt,
+            baseContentHash: nil,
+            operationID: manifestedInsertion.payload.operationID,
+            state: sourceSnapshot.state
+        ) else {
+            return XCTFail("Expected conflicting anchored insertion")
+        }
+        let conflictingStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("conflicting-recovery.json")
+        )
+        let conflictingRecord = try SyncBatchAnchoredRecoveryRecord(
+            change: .insertion(conflictingInsertion),
+            lifecycle: .bootstrapOwned
+        )
+        try conflictingStore.apply([.insertExpectedAbsent(conflictingRecord)])
+        XCTAssertThrowsError(
+            try SyncPeerBootstrapSnapshotPersistence.apply(
+                snapshot,
+                to: destinationContext,
+                pendingIncomingBatches: emptyQueue,
+                anchoredRecoveryStore: conflictingStore
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? SyncPeerBootstrapError,
+                .anchoredRecoveryConflict(conflictingRecord.key)
+            )
+        }
+        XCTAssertEqual(conflictingStore.snapshot().record(for: conflictingRecord.key), conflictingRecord)
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: destinationContext,
+            pendingIncomingBatches: emptyQueue,
+            anchoredRecoveryStore: recoveryStore
+        )
+        let committedState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: try XCTUnwrap(fetchRecords(in: destinationContext).only),
+            noteID: source.note.id
+        )
+        let key = SyncBatchAnchoredRecoveryRecordKey(
+            noteID: source.note.id,
+            operationID: manifestedInsertion.payload.operationID
+        )
+
+        XCTAssertFalse(disposition.coveredBatchIDs.contains(batch.id))
+        XCTAssertEqual(snapshot.historyCoverage.only?.anchoredRecoveryChanges, [.insertion(manifestedInsertion)])
+        XCTAssertTrue(committedState.runs.contains { $0.operationID == manifestedInsertion.payload.operationID })
+        XCTAssertEqual(recoveryStore.snapshot().record(for: key)?.lifecycle, .bootstrapOwned)
+
+        let route = try SyncBatchAnchoredActivationPlanner.planInitialDelivery(
+            change: .noteBodyTextInsertedAnchored(manifestedInsertion),
+            sequenceState: committedState,
+            recoverySnapshot: recoveryStore.snapshot()
+        )
+        guard case .completedWithoutApplicationChange(let plan, let reason) = route else {
+            return XCTFail("Expected applied-equivalent recovery, got \(route)")
+        }
+        XCTAssertEqual(reason, .appliedEquivalentRecovery)
+        XCTAssertTrue(try recoveryStore.apply(plan.recoveryStoreTransitions))
+        XCTAssertNil(recoveryStore.snapshot().record(for: key))
+    }
+
+    func testBootstrapFullyCoveredManifestedBatchDoesNotCreateOrphanOwnership() throws {
+        let source = try makeSeededFixture(body: "AB")
+        let sourceSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: source.note,
+            in: source.context
+        )
+        guard case .noteBodyTextInsertedAnchored(let insertion) = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: source.note.id,
+            utf16Offset: 1,
+            text: "S",
+            modifiedAt: Date(timeIntervalSince1970: 221),
+            baseContentHash: nil,
+            operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+            state: sourceSnapshot.state
+        ) else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let insertedState = try sourceSnapshot.state.incorporating(
+            insert: insertion.payload,
+            insertedText: insertion.text
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: source.note,
+            expected: sourceSnapshot,
+            newBody: insertedState.visibleText,
+            finalState: insertedState,
+            in: source.context
+        )
+        try source.context.save()
+        let batch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 222),
+            changes: [.noteBodyTextInsertedAnchored(insertion)]
+        )
+        let snapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: source.context)
+            .attachingHistoryCoverage(for: [batch])
+        let destination = try makeContainer()
+        let context = ModelContext(destination)
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-221-covered-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("anchored-recovery.json")
+        )
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: context,
+            anchoredRecoveryStore: recoveryStore
+        )
+
+        XCTAssertEqual(disposition.coveredBatchIDs, [batch.id])
+        XCTAssertTrue(recoveryStore.snapshot().records.isEmpty)
+    }
+
+    func testBootstrapLegacyHistoryCoverageDecodesWithoutEvidenceAndCreatesNoOwnership() throws {
+        let source = try makeSeededFixture(body: "AB")
+        let batchID = UUID()
+        let noteID = source.note.id
+        let encoded = try JSONSerialization.data(withJSONObject: [
+            "batchID": batchID.uuidString,
+            "noteIDs": [noteID.uuidString]
+        ])
+        let decoded = try JSONDecoder().decode(
+            SyncPeerBootstrapHistoryBatchCoverage.self,
+            from: encoded
+        )
+
+        XCTAssertEqual(decoded.batchID, batchID)
+        XCTAssertEqual(decoded.noteIDs, [noteID])
+        XCTAssertNil(decoded.anchoredRecoveryChanges)
+
+        let original = try SyncPeerBootstrapSnapshotPersistence.build(from: source.context)
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: original.id,
+            folders: original.folders,
+            notes: original.notes,
+            historyCoverage: [decoded]
+        )
+        let temporaryDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-221-legacy-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: temporaryDirectory) }
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: temporaryDirectory.appendingPathComponent("anchored-recovery.json")
+        )
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: ModelContext(try makeContainer()),
+            anchoredRecoveryStore: recoveryStore
+        )
+        XCTAssertTrue(recoveryStore.snapshot().records.isEmpty)
+    }
+
+    func testBootstrapManifestRejectsBootstrapAndUndeclaredNoteRecoveryEvidence() throws {
+        let source = try makeSeededFixture(body: "AB")
+        let original = try SyncPeerBootstrapSnapshotPersistence.build(from: source.context)
+        let bootstrapBatchID = UUID()
+        let bootstrap = SyncBatchAnchoredRecoveryChange.bootstrap(
+            try SyncBatchAnchoredBootstrapChange(noteID: source.note.id, body: source.note.content)
+        )
+        let bootstrapSnapshot = SyncPeerBootstrapSnapshot(
+            id: original.id,
+            folders: original.folders,
+            notes: original.notes,
+            historyCoverage: [
+                .init(
+                    batchID: bootstrapBatchID,
+                    noteIDs: [source.note.id],
+                    anchoredRecoveryChanges: [bootstrap]
+                )
+            ]
+        )
+        let destination = try makeContainer()
+
+        XCTAssertThrowsError(
+            try SyncPeerBootstrapSnapshotPersistence.apply(
+                bootstrapSnapshot,
+                to: ModelContext(destination)
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? SyncPeerBootstrapError,
+                .historyContainsBootstrapRecoveryChange(bootstrapBatchID)
+            )
+        }
+
+        let sourceState = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: source.note,
+            in: source.context
+        ).state
+        guard case .noteBodyTextInsertedAnchored(let insertion) = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: source.note.id,
+            utf16Offset: 1,
+            text: "S",
+            modifiedAt: Date(timeIntervalSince1970: 221),
+            baseContentHash: nil,
+            operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+            state: sourceState
+        ) else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let undeclaredSnapshot = SyncPeerBootstrapSnapshot(
+            id: original.id,
+            folders: original.folders,
+            notes: original.notes,
+            historyCoverage: [
+                .init(
+                    batchID: UUID(),
+                    noteIDs: [],
+                    anchoredRecoveryChanges: [.insertion(insertion)]
+                )
+            ]
+        )
+
+        XCTAssertThrowsError(
+            try SyncPeerBootstrapSnapshotPersistence.apply(
+                undeclaredSnapshot,
+                to: ModelContext(destination)
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? SyncPeerBootstrapError,
+                .historyEvidenceReferencesUndeclaredNote(source.note.id)
+            )
+        }
+    }
+
+    func testBootstrapStructuralOnlyUnionPreservesRichText() throws {
+        let source = try makeSeededFixture(body: "AB")
+        let destination = try makeContainer()
+        let destinationContext = ModelContext(destination)
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+            to: destinationContext
+        )
+        let sourceSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: source.note,
+            in: source.context
+        )
+        guard case .noteBodyTextInsertedAnchored(let insertion) = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: source.note.id,
+            utf16Offset: 1,
+            text: "X",
+            modifiedAt: Date(timeIntervalSince1970: 221),
+            baseContentHash: nil,
+            operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+            state: sourceSnapshot.state
+        ) else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let insertedState = try sourceSnapshot.state.incorporating(
+            insert: insertion.payload,
+            insertedText: insertion.text
+        )
+        guard case .noteBodyTextDeletedAnchored(let deletion) = try SyncBatchAnchoredPayloadAdapter.makeDeletedChange(
+            noteID: source.note.id,
+            utf16Offset: 1,
+            utf16Length: 1,
+            expectedText: "X",
+            modifiedAt: Date(timeIntervalSince1970: 222),
+            baseContentHash: nil,
+            operationID: SyncOperationID(deviceID: UUID(), localCounter: 2),
+            state: insertedState
+        ) else {
+            return XCTFail("Expected anchored deletion")
+        }
+        let tombstonedState = try insertedState.incorporating(delete: deletion.payload)
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: source.note,
+            expected: sourceSnapshot,
+            newBody: tombstonedState.visibleText,
+            finalState: tombstonedState,
+            in: source.context
+        )
+        try source.context.save()
+        let destinationNote = try fetchNote(source.note.id, in: destinationContext)
+        let richText = Data("preserve-rich-text".utf8)
+        destinationNote.richTextContentData = richText
+        try destinationContext.save()
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            try SyncPeerBootstrapSnapshotPersistence.build(from: source.context),
+            to: destinationContext
+        )
+
+        XCTAssertTrue(disposition.presentationRefreshRequired)
+        XCTAssertEqual(destinationNote.content, "AB")
+        XCTAssertEqual(destinationNote.richTextContentData, richText)
+    }
+
     func testBootstrapCoversOnlyExactNoteBatchAndRejectsMixedDivergentBatch() throws {
         let source = try makeSeededFixture(body: "Exact authoritative")
         let divergentSourceNote = Note(content: "Divergent authoritative")

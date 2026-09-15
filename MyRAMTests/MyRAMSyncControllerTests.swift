@@ -6,6 +6,136 @@ import XCTest
 
 @MainActor
 final class MyRAMSyncControllerTests: XCTestCase {
+    func testBootstrapPresentationRefreshPublishesSelectedMountedEditorReload() throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let container = try makeContainer()
+        let context = container.mainContext
+        let note = Note(title: "Selected", content: "before bootstrap")
+        context.insert(note)
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: controller,
+            pendingIncomingBatchQueueFileURL: temporaryQueueFileURL(),
+            pendingLocalConvergenceBatchQueueFileURL: temporaryQueueFileURL(),
+            resumesPendingConvergenceOnInit: false
+        )
+        viewModel.selectNote(note)
+        viewModel.registerActiveEditor(noteID: note.id)
+        defer { viewModel.unregisterActiveEditor(noteID: note.id) }
+
+        note.content = "after bootstrap"
+        try context.save()
+        controller.onBootstrapPresentationRefresh?()
+
+        XCTAssertEqual(viewModel.currentNote?.id, note.id)
+        XCTAssertEqual(viewModel.currentNote?.content, "after bootstrap")
+        XCTAssertEqual(viewModel.activeEditorSyncUpdate?.noteID, note.id)
+        XCTAssertEqual(
+            viewModel.activeEditorSyncUpdate?.disposition,
+            .reload(.unsupportedIntegratedChange)
+        )
+    }
+
+    func testBootstrapPresentationRefreshWithoutMountedEditorRemainsListOnly() throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let container = try makeContainer()
+        let context = container.mainContext
+        let note = Note(title: "Selected", content: "before bootstrap")
+        context.insert(note)
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: controller,
+            pendingIncomingBatchQueueFileURL: temporaryQueueFileURL(),
+            pendingLocalConvergenceBatchQueueFileURL: temporaryQueueFileURL(),
+            resumesPendingConvergenceOnInit: false
+        )
+        viewModel.selectNote(note)
+
+        note.content = "after bootstrap"
+        try context.save()
+        controller.onBootstrapPresentationRefresh?()
+
+        XCTAssertEqual(viewModel.currentNote?.content, "after bootstrap")
+        XCTAssertNil(viewModel.activeEditorSyncUpdate)
+    }
+
+    func testFailedConnectionRetryInvitesStillDiscoveredTrustedPeer() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let peer = MyRAMDiscoveredPeer(
+            peerID: Self.remotePeerID,
+            deviceID: "remote-device",
+            displayName: "Remote",
+            isTrusted: true
+        )
+
+        controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 0)
+
+        await waitUntil { transport.invitedPeerIDs == [Self.remotePeerID] }
+        XCTAssertEqual(controller.lastConnectionEvent, "Inviting Remote")
+    }
+
+    func testFailedConnectionRetryDoesNotInvitePeerThatReconnectedDuringBackoff() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let peer = MyRAMDiscoveredPeer(
+            peerID: Self.remotePeerID,
+            deviceID: "remote-device",
+            displayName: "Remote",
+            isTrusted: true
+        )
+
+        controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 20_000_000)
+        transport.connectedPeers = [Self.remotePeerID]
+        try await Task.sleep(for: .milliseconds(40))
+
+        XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
+        XCTAssertEqual(controller.lastConnectionEvent, "Connected: Remote")
+    }
+
+    func testNotConnectedCallbackSchedulesAnotherAttemptForVisibleTrustedPeer() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
+        let controller = try makeController(transport: transport)
+        let peer = MyRAMDiscoveredPeer(
+            peerID: Self.remotePeerID,
+            deviceID: "remote-device",
+            displayName: "Remote",
+            isTrusted: true
+        )
+        let session = MCSession(
+            peer: MCPeerID(displayName: "local|retry-callback"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+
+        controller.scheduleReconnectForTesting(to: peer, delayNanoseconds: 0)
+        await waitUntil { transport.invitedPeerIDs.count == 1 }
+        controller.session(session, peer: Self.remotePeerID, didChange: .notConnected)
+        await waitUntil { transport.invitedPeerIDs.count == 2 }
+
+        XCTAssertEqual(transport.invitedPeerIDs, [Self.remotePeerID, Self.remotePeerID])
+    }
+
+    func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(transport: transport)
+        let peer = MyRAMDiscoveredPeer(
+            peerID: Self.remotePeerID,
+            deviceID: "remote-device",
+            displayName: "Remote",
+            isTrusted: true
+        )
+
+        controller.invite(peer)
+
+        XCTAssertTrue(transport.invitedPeerIDs.isEmpty)
+        XCTAssertEqual(controller.lastConnectionEvent, "Connected: Remote")
+    }
+
     func testRecordedChangeIsSentAsLegacyEnvelopeOnManualFlush() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let controller = try makeController(transport: transport)
@@ -942,6 +1072,7 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     private(set) var sentLegacyEnvelopes: [SyncEnvelope] = []
     private(set) var sentBatchEnvelopes: [SyncBatchEnvelope] = []
     private(set) var sentBatchAcknowledgements: [SyncBatchAcknowledgement] = []
+    private(set) var invitedPeerIDs: [MCPeerID] = []
     private(set) var activeLegacySendCount = 0
     private(set) var maximumConcurrentLegacySends = 0
     private(set) var activeBatchSendCount = 0
@@ -965,7 +1096,13 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
         _ peerID: MCPeerID,
         context: Data,
         timeout: TimeInterval
-    ) {}
+    ) {
+        invitedPeerIDs.append(peerID)
+    }
+
+    func hasConnectedPeer(_ peerID: MCPeerID) -> Bool {
+        connectedPeers.contains(peerID)
+    }
 
     func connectedPeers() async -> [MCPeerID] {
         connectedPeers

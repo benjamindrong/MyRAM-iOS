@@ -323,7 +323,24 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertTrue(transport.batchRecipientLists.isEmpty)
 
         await controller.handleBootstrapAcknowledgementForTesting(
-            SyncPeerBootstrapAcknowledgement(snapshotID: snapshotID, coveredBatchIDs: []),
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshotID,
+                coveredBatchIDs: [],
+                coveredNoteIDs: []
+            ),
+            from: peer
+        )
+
+        XCTAssertFalse(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "behind-peer"))
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [historical])
+        XCTAssertTrue(transport.batchRecipientLists.isEmpty)
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshotID,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [noteID]
+            ),
             from: peer
         )
 
@@ -1141,6 +1158,10 @@ private final class CapabilityRecordingTransport: MyRAMSyncTransporting {
 
     func connectedPeers() async -> [MCPeerID] {
         connectedPeerValues
+    }
+
+    func hasConnectedPeer(_ peerID: MCPeerID) -> Bool {
+        connectedPeerValues.contains(peerID)
     }
 
     func send(

@@ -35,6 +35,10 @@ jobs:
           git fetch --no-tags origin main
           git diff --check origin/main...HEAD
 
+      - name: Verify isolated MyRAM Verification configuration
+        working-directory: MyRAM-iOS
+        run: bash Scripts/verify-myram-verification-isolation.sh
+
       - name: Detect documentation-only changes
         id: changes
         working-directory: MyRAM-iOS

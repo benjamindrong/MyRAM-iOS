@@ -7,6 +7,8 @@ final class MacSyncConvergenceCoordinator {
     private let syncController: MacSyncBatchController
     private let pendingIncomingQueue: FileBackedSyncBatchQueue
     private let localObligationQueue: FileBackedSyncConvergenceLocalObligationQueue
+    private let anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore
+    private let conflictStore: SyncConflictStore
     private let presentationAdapter: MacSyncConvergencePresentationAdapter
     private let incomingBoundaryAdapter: MacSyncIncomingLocalBoundaryAdapter
     private let runtime: SyncConvergenceRuntime
@@ -18,11 +20,15 @@ final class MacSyncConvergenceCoordinator {
         presentationSurface: MacSyncConvergencePresentationSurface,
         incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface,
         pendingIncomingQueueFileURL: URL? = SyncBatchQueueFileLocation.pendingIncoming(for: .nativeMac),
-        localObligationQueueFileURL: URL? = SyncBatchQueueFileLocation.pendingLocalConvergence(for: .nativeMac)
+        localObligationQueueFileURL: URL? = SyncBatchQueueFileLocation.pendingLocalConvergence(for: .nativeMac),
+        anchoredRecoveryStore: FileBackedSyncBatchAnchoredRecoveryStore? = nil
     ) {
         self.syncController = syncController
+        self.conflictStore = conflictStore
         pendingIncomingQueue = FileBackedSyncBatchQueue(fileURL: pendingIncomingQueueFileURL)
         localObligationQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: localObligationQueueFileURL)
+        self.anchoredRecoveryStore = anchoredRecoveryStore
+            ?? Self.makeProductionAnchoredRecoveryStore()
         presentationAdapter = MacSyncConvergencePresentationAdapter(surface: presentationSurface)
         incomingBoundaryAdapter = MacSyncIncomingLocalBoundaryAdapter(surface: incomingBoundarySurface)
         runtime = SyncConvergenceRuntime(
@@ -33,13 +39,18 @@ final class MacSyncConvergenceCoordinator {
             presentationAdapter: presentationAdapter,
             incomingLocalBoundaryAdapter: incomingBoundaryAdapter,
             conflictStore: conflictStore,
-            anchoredRecoveryPlatform: .nativeMac
+            anchoredRecoveryPlatform: .nativeMac,
+            anchoredRecoveryStore: self.anchoredRecoveryStore
         )
         syncController.convergenceCoordinator = self
     }
 
     var pendingIncomingBatchCount: Int {
         pendingIncomingQueue.pendingCount
+    }
+
+    var pendingLocalObligationCount: Int {
+        localObligationQueue.pendingCount
     }
 
     /// Durably persists an incoming batch's raw bytes, independent of whatever
@@ -66,65 +77,16 @@ final class MacSyncConvergenceCoordinator {
         guard (try? SyncBatchAnchoredPayloadPolicy.validateConvergence(batch)) != nil else {
             return .acknowledgementPermitted
         }
-        let outcome = await runtime.submitRemoteBatch(batch)
-        MyRAMSyncBenchmarkTelemetry.shared.record(
-            .batchConvergenceCompleted,
-            batchID: String(describing: batch.id),
-            outcome: Self.benchmarkRuntimeOutcomeLabel(for: outcome, batchID: batch.id),
-            detail: Self.benchmarkRuntimeOutcomeDetail(for: outcome, batchID: batch.id)
-        )
+        let completion = await runtime.submitRemoteBatchAwaitingDrainOwnership(batch)
+        let outcome = completion.outcome
         await handle(outcome: outcome, sourceBatch: batch)
+        if completion.successfullyCompletedBatchIDs.contains(batch.id) {
+            return .acknowledgementPermitted
+        }
         return SyncConvergenceRemoteBatchDispositionPolicy.disposition(
             for: outcome,
             batchID: batch.id
         )
-    }
-
-    static func benchmarkRuntimeOutcomeLabel(
-        for outcome: SyncConvergenceRuntimeOutcome,
-        batchID: UUID
-    ) -> String {
-        switch outcome {
-        case .drained(let appliedBatchIDs):
-            return appliedBatchIDs.contains(batchID)
-                ? "runtimeDrainedApplied"
-                : "runtimeDrainedUnapplied"
-        case .pending:
-            return "runtimePending"
-        case .deferred:
-            return "runtimeDeferred"
-        case .quarantined:
-            return "runtimeQuarantined"
-        case .alreadyDraining:
-            return "runtimeAlreadyDraining"
-        case .blocked:
-            return "runtimeBlocked"
-        }
-    }
-
-    static func benchmarkRuntimeOutcomeDetail(
-        for outcome: SyncConvergenceRuntimeOutcome,
-        batchID: UUID
-    ) -> String? {
-        switch outcome {
-        case .blocked(let failure):
-            return "failureKind=\(String(describing: failure.kind))"
-        case .deferred(let work):
-            guard let item = work.incoming.first(where: { $0.batchID == batchID }) else {
-                return "incomingReason=none"
-            }
-            return "incomingReason=\(String(describing: item.reason))"
-        case .quarantined(let work):
-            guard let item = work.items.first(where: { $0.domain == .incoming && $0.batchID == batchID }) else {
-                return "incomingReason=none"
-            }
-            return "incomingReason=\(String(describing: item.reason))"
-        case .pending(let pending):
-            let values = pending.map { String(describing: $0) }.sorted().joined(separator: ",")
-            return "pending=\(values)"
-        case .drained, .alreadyDraining:
-            return nil
-        }
     }
 
     func submitLocalObligation(_ obligation: SyncConvergenceLocalObligation) async {
@@ -142,6 +104,19 @@ final class MacSyncConvergenceCoordinator {
         presentationAdapter.refreshAfterBootstrap()
     }
 
+    func applyBootstrapSnapshot(
+        _ snapshot: SyncPeerBootstrapSnapshot,
+        to context: ModelContext
+    ) throws -> SyncPeerBootstrapApplyDisposition {
+        try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: context,
+            pendingIncomingBatches: pendingIncomingQueue,
+            anchoredRecoveryStore: anchoredRecoveryStore,
+            structuralConflictStore: conflictStore
+        )
+    }
+
     private func handle(outcome: SyncConvergenceRuntimeOutcome, sourceBatch: SyncBatch?) async {
         switch outcome {
         case .drained:
@@ -152,6 +127,18 @@ final class MacSyncConvergenceCoordinator {
             syncController.markConvergenceBlocked(failure)
         case .quarantined(let work):
             syncController.markConvergenceQuarantined(work)
+        }
+    }
+
+    nonisolated private static func makeProductionAnchoredRecoveryStore()
+        -> FileBackedSyncBatchAnchoredRecoveryStore
+    {
+        do {
+            return FileBackedSyncBatchAnchoredRecoveryStore(
+                fileURL: try SyncBatchAnchoredRecoveryStoreFileLocation.fileURL(for: .nativeMac)
+            )
+        } catch {
+            preconditionFailure("The Mac anchored recovery store requires Application Support.")
         }
     }
 }

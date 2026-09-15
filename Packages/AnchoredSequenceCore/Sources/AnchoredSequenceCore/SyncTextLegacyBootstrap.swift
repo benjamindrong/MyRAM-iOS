@@ -68,6 +68,57 @@ public enum SyncTextLegacyBootstrap {
         ).state
     }
 
+    /// Replaces visible legacy/full-body text without replacing the established
+    /// structural lineage. Existing visible elements become tombstones so anchors
+    /// already captured against them remain durable; the replacement body is then
+    /// appended as one deterministic structural insertion.
+    public static func makeLineagePreservingState(
+        noteID: UUID,
+        currentState: SyncTextSequenceState,
+        body: String,
+        formatVersion: SyncTextLegacyBootstrapFormatVersion = .v1
+    ) throws -> SyncTextSequenceState {
+        guard !exactUTF16Matches(currentState.visibleText, body) else {
+            return currentState
+        }
+
+        var candidate = currentState
+        if candidate.visibleUTF16Count > 0 {
+            let operationID = transitionOperationID(
+                noteID: noteID,
+                currentState: currentState,
+                targetBody: body,
+                role: .delete,
+                formatVersion: formatVersion
+            )
+            let payload = try candidate.deleteOperationPayload(
+                operationID: operationID,
+                inVisibleUTF16Range: 0..<candidate.visibleUTF16Count
+            )
+            candidate = try candidate.incorporating(delete: payload)
+        }
+
+        if !body.isEmpty {
+            let operationID = transitionOperationID(
+                noteID: noteID,
+                currentState: currentState,
+                targetBody: body,
+                role: .insert,
+                formatVersion: formatVersion
+            )
+            let payload = try candidate.insertOperationPayload(
+                operationID: operationID,
+                atVisibleUTF16Offset: 0
+            )
+            candidate = try candidate.incorporating(
+                insert: payload,
+                insertedText: body
+            )
+        }
+
+        return candidate
+    }
+
     private static func legacyOperationID(
         noteID: UUID,
         body: String,
@@ -85,6 +136,74 @@ public enum SyncTextLegacyBootstrap {
             )
             return operationID(from: legacyRunDigest)
         }
+    }
+
+    private enum TransitionOperationRole: UInt8 {
+        case delete = 1
+        case insert = 2
+    }
+
+    private static func transitionOperationID(
+        noteID: UUID,
+        currentState: SyncTextSequenceState,
+        targetBody: String,
+        role: TransitionOperationRole,
+        formatVersion: SyncTextLegacyBootstrapFormatVersion
+    ) -> SyncOperationID {
+        switch formatVersion {
+        case .v1:
+            let stateDigest = SHA256.hash(data: stateHashInputV1(currentState))
+            let targetBodyDigest = SHA256.hash(data: bodyHashInputV1(targetBody))
+            var input = Data("AnchoredSequenceCore.LegacyLineageTransitionID".utf8)
+            input.append(0)
+            appendUInt32BigEndian(formatVersion.rawValue, to: &input)
+            input.append(contentsOf: rawUUIDBytes(noteID))
+            input.append(contentsOf: stateDigest)
+            input.append(contentsOf: targetBodyDigest)
+            input.append(role.rawValue)
+            return operationID(from: SHA256.hash(data: input))
+        }
+    }
+
+    private static func stateHashInputV1(_ state: SyncTextSequenceState) -> Data {
+        var input = Data("AnchoredSequenceCore.LegacyLineageState".utf8)
+        input.append(0)
+        appendUInt64BigEndian(UInt64(state.runs.count), to: &input)
+        for run in state.runs {
+            appendOperationID(run.operationID, to: &input)
+            appendElementID(run.origin.leftElementID, to: &input)
+            appendElementID(run.origin.rightElementID, to: &input)
+            input.append(contentsOf: SHA256.hash(data: bodyHashInputV1(run.text)))
+        }
+        appendUInt64BigEndian(UInt64(state.fragments.count), to: &input)
+        for fragment in state.fragments {
+            appendOperationID(fragment.operationID, to: &input)
+            appendUInt64BigEndian(UInt64(fragment.startOffset), to: &input)
+            appendUInt64BigEndian(UInt64(fragment.utf16Length), to: &input)
+            input.append(fragment.visibility == .visible ? 1 : 2)
+        }
+        return input
+    }
+
+    private static func appendOperationID(
+        _ operationID: SyncOperationID,
+        to data: inout Data
+    ) {
+        data.append(contentsOf: rawUUIDBytes(operationID.deviceID))
+        appendUInt64BigEndian(operationID.localCounter, to: &data)
+    }
+
+    private static func appendElementID(
+        _ elementID: SyncTextElementID?,
+        to data: inout Data
+    ) {
+        guard let elementID else {
+            data.append(0)
+            return
+        }
+        data.append(1)
+        appendOperationID(elementID.operationID, to: &data)
+        appendUInt64BigEndian(UInt64(elementID.elementOffset), to: &data)
     }
 
     private static func bodyHashInputV1(_ body: String) -> Data {
@@ -159,5 +278,9 @@ public enum SyncTextLegacyBootstrap {
             bytes[8], bytes[9], bytes[10], bytes[11],
             bytes[12], bytes[13], bytes[14], bytes[15]
         )
+    }
+
+    private static func exactUTF16Matches(_ lhs: String, _ rhs: String) -> Bool {
+        lhs.utf16.elementsEqual(rhs.utf16)
     }
 }

@@ -406,6 +406,102 @@ final class SwiftDataNoteSequenceStateStoreTests: XCTestCase {
         XCTAssertEqual(try fetchRecords(in: container).count, 1)
     }
 
+
+    func testTombstonedSequenceStateSurvivesDurableOnDiskContainerRestart() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-185-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: directory,
+            withIntermediateDirectories: true
+        )
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let storeURL = directory.appendingPathComponent("MyRAM.store")
+        let noteID = UUID(uuidString: "00000000-0000-0000-0000-000000185001")!
+        let operationID = operation(185)
+        let run = try SyncTextSequenceRun(
+            operationID: operationID,
+            origin: SyncTextInsertionOrigin(leftElementID: nil, rightElementID: nil),
+            text: "ab"
+        )
+        let fragments = [
+            try SyncTextSequenceFragment(
+                operationID: operationID,
+                startOffset: 0,
+                utf16Length: 1,
+                visibility: .visible
+            ),
+            try SyncTextSequenceFragment(
+                operationID: operationID,
+                startOffset: 1,
+                utf16Length: 1,
+                visibility: .tombstone
+            )
+        ]
+        let state = try SyncTextSequenceState(runs: [run], fragments: fragments)
+
+        XCTAssertEqual(state.visibleText, "a")
+        XCTAssertEqual(state.runs, [run])
+        XCTAssertEqual(state.fragments, fragments)
+        XCTAssertEqual(state.runs.map(\.operationID), [operationID])
+        XCTAssertEqual(state.fragments.map(\.operationID), [operationID, operationID])
+        XCTAssertEqual(state.visibleUTF16Count, 1)
+        XCTAssertEqual(state.tombstonedUTF16Count, 1)
+
+        do {
+            let container = try makeDiskContainer(
+                models: MyRAMModelRegistry.models,
+                url: storeURL
+            )
+            try insertNote(noteID: noteID, body: state.visibleText, in: container)
+            let store = await SwiftDataNoteSequenceStateStore(container: container)
+            let persisted = try await store.compareAndSet(
+                noteID: noteID,
+                expected: .missing(expectedBody: state.visibleText),
+                newBody: state.visibleText,
+                newState: state
+            )
+            XCTAssertEqual(persisted.note.body, state.visibleText)
+            XCTAssertEqual(persisted.revision, 0)
+            XCTAssertEqual(persisted.state, state)
+
+            let records = try fetchRecords(in: container)
+            XCTAssertEqual(records.count, 1)
+            let record = try XCTUnwrap(records.first)
+            XCTAssertEqual(record.noteID, noteID)
+            XCTAssertEqual(record.formatVersion, NoteSequenceStatePersistenceCodec.formatVersion)
+            XCTAssertEqual(record.revision, 0)
+            XCTAssertEqual(record.visibleUTF16Count, state.visibleUTF16Count)
+            XCTAssertEqual(record.tombstonedUTF16Count, state.tombstonedUTF16Count)
+            XCTAssertEqual(record.payloadByteCount, record.statePayloadData.count)
+            let decoded = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+                record: record,
+                noteID: noteID
+            )
+            XCTAssertEqual(decoded, state)
+        }
+
+        do {
+            let reopenedContainer = try makeDiskContainer(
+                models: MyRAMModelRegistry.models,
+                url: storeURL
+            )
+            let restartedStore = await SwiftDataNoteSequenceStateStore(container: reopenedContainer)
+            let loaded = try await restartedStore.load(noteID: noteID)
+            guard case .present(let present) = loaded else {
+                return XCTFail("Expected tombstoned state after durable container restart")
+            }
+            XCTAssertEqual(present.note.body, state.visibleText)
+            XCTAssertEqual(present.state, state)
+            XCTAssertEqual(present.state.runs, state.runs)
+            XCTAssertEqual(present.state.fragments, state.fragments)
+            XCTAssertEqual(present.state.runs.map(\.operationID), [operationID])
+            XCTAssertEqual(present.state.fragments.map(\.operationID), [operationID, operationID])
+            XCTAssertEqual(present.state.visibleText, state.visibleText)
+            XCTAssertEqual(present.state.tombstonedUTF16Count, state.tombstonedUTF16Count)
+            XCTAssertGreaterThan(present.state.tombstonedUTF16Count, 0)
+        }
+    }
+
     func testEnsureBootstrapStateForCurrentBodyReturnsExactExistingStateWithoutSave() async throws {
         let container = try makeContainer()
         let noteID = try insertNote(body: "Exact", in: container)

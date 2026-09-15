@@ -615,6 +615,91 @@ final class SyncTextSequenceStateTests: XCTestCase {
         XCTAssertLessThanOrEqual(state.validationMetrics.comparedSpans, runCount * 2)
     }
 
+    func testRetainedLineageMergeConvergesConcurrentInsertionsAndIsIdempotent() throws {
+        let rootID = operation(0)
+        let left = try element(rootID, 0)
+        let right = try element(rootID, 1)
+        let base = try SyncTextSequenceState(
+            runs: [try run(rootID, text: "AB")],
+            fragments: [try fragment(rootID, length: 2)]
+        )
+        let lhsID = operation(1, deviceID: "00000000-0000-0000-0000-000000000010")
+        let rhsID = operation(1, deviceID: "00000000-0000-0000-0000-000000000020")
+        let anchor = try SyncOperationAnchor.between(left: left, right: right)
+        let lhs = try base.incorporating(
+            insert: SyncTextInsertOperationPayload(operationID: lhsID, anchor: anchor),
+            insertedText: "L"
+        )
+        let rhs = try base.incorporating(
+            insert: SyncTextInsertOperationPayload(operationID: rhsID, anchor: anchor),
+            insertedText: "R"
+        )
+
+        let lhsMerged = try lhs.mergingRetainedLineage(with: rhs)
+        let rhsMerged = try rhs.mergingRetainedLineage(with: lhs)
+
+        XCTAssertEqual(lhsMerged, rhsMerged)
+        XCTAssertEqual(try lhsMerged.mergingRetainedLineage(with: rhs), lhsMerged)
+        XCTAssertEqual(Set(lhsMerged.runs.map(\.operationID)), Set([rootID, lhsID, rhsID]))
+        XCTAssertTrue(lhsMerged.visibleText.contains("L"))
+        XCTAssertTrue(lhsMerged.visibleText.contains("R"))
+    }
+
+    func testRetainedLineageMergeMakesDeletionMonotonic() throws {
+        let rootID = operation(0)
+        let base = try SyncTextSequenceState(
+            runs: [try run(rootID, text: "ABC")],
+            fragments: [try fragment(rootID, length: 3)]
+        )
+        let deleted = try base.incorporating(
+            delete: SyncTextDeleteOperationPayload(
+                operationID: operation(1),
+                deletedElementIDSpans: [try span(rootID, start: 1)]
+            )
+        )
+
+        let merged = try base.mergingRetainedLineage(with: deleted)
+
+        XCTAssertEqual(merged.visibleText, "AC")
+        XCTAssertEqual(merged.visibility(of: try element(rootID, 1)), .tombstone)
+        XCTAssertEqual(try deleted.mergingRetainedLineage(with: base), merged)
+    }
+
+    func testRetainedLineageMergeRejectsAliasedOperationIdentity() throws {
+        let operationID = operation(0)
+        let lhs = try SyncTextSequenceState(
+            runs: [try run(operationID, text: "A")],
+            fragments: [try fragment(operationID)]
+        )
+        let rhs = try SyncTextSequenceState(
+            runs: [try run(operationID, text: "B")],
+            fragments: [try fragment(operationID)]
+        )
+
+        XCTAssertThrowsError(try lhs.mergingRetainedLineage(with: rhs)) {
+            XCTAssertEqual(
+                $0 as? SyncTextSequenceMergeError,
+                .conflictingRunDefinition(operationID)
+            )
+        }
+    }
+
+    func testRetainedLineageMergeRejectsIndependentRoots() throws {
+        let lhs = try SyncTextSequenceState(
+            runs: [try run(operation(0), text: "A")],
+            fragments: [try fragment(operation(0))]
+        )
+        let rhsID = operation(0, deviceID: "00000000-0000-0000-0000-000000000002")
+        let rhs = try SyncTextSequenceState(
+            runs: [try run(rhsID, text: "B")],
+            fragments: [try fragment(rhsID)]
+        )
+
+        XCTAssertThrowsError(try lhs.mergingRetainedLineage(with: rhs)) {
+            XCTAssertEqual($0 as? SyncTextSequenceMergeError, .noSharedRetainedLineage)
+        }
+    }
+
     private func permutations<Element>(_ values: [Element]) -> [[Element]] {
         guard let first = values.first else { return [[]] }
         return permutations(Array(values.dropFirst())).flatMap { permutation in
