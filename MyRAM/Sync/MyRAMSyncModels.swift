@@ -804,9 +804,16 @@ enum MyRAMSyncBenchmarkEnduranceWorkload {
 
     static func expectedTitles(runID: String) -> [String] {
         [MyRAMSyncBenchmarkPlatform.iOS, .macOS].flatMap { platform in
-            (1...notesPerPlatform).map { index in
-                noteTitle(runID: runID, platform: platform, index: index)
-            }
+            expectedTitles(runID: runID, platform: platform)
+        }
+    }
+
+    static func expectedTitles(
+        runID: String,
+        platform: MyRAMSyncBenchmarkPlatform
+    ) -> [String] {
+        (1...notesPerPlatform).map { index in
+            noteTitle(runID: runID, platform: platform, index: index)
         }
     }
 
@@ -1288,6 +1295,22 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         }
         recorder.record(.phase, phase: "seedDrain", queueDepth: 0, outcome: "completed")
 
+        guard await waitForAllSeedNotes(adapter: adapter, runID: launch.runID, timeoutSeconds: 60) else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                controller: controller,
+                adapter: adapter,
+                detail: "peer seed traffic did not converge before workload"
+            )
+            return
+        }
+        recorder.record(.phase, phase: "peerSeed", outcome: "completed")
+
         let workloadSeconds = max(1, launch.durationSeconds - MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds)
         let workloadEnd = startedAt.addingTimeInterval(TimeInterval(workloadSeconds))
         let outageWindows = MyRAMSyncBenchmarkEnduranceWorkload.outageWindows(totalDurationSeconds: launch.durationSeconds)
@@ -1505,6 +1528,23 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
         return lastDepth
+    }
+
+    private func waitForAllSeedNotes(
+        adapter: MacNotePersistenceAdapter,
+        runID: String,
+        timeoutSeconds: Int
+    ) async -> Bool {
+        let expected = Set(MyRAMSyncBenchmarkEnduranceWorkload.expectedTitles(runID: runID))
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        while Date() < deadline, !Task.isCancelled {
+            if let notes = try? adapter.loadNotes(),
+               expected.isSubset(of: Set(notes.map(\.title))) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return false
     }
 
     private func ordinaryRoutingReady(controller: MacSyncBatchController) -> Bool {

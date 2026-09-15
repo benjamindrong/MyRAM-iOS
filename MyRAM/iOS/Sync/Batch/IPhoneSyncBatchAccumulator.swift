@@ -249,6 +249,21 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
         }
         recorder.record(.phase, phase: "initialRoutingReady", outcome: "completed")
 
+        guard await waitForMacSeedNotes(state: state, runID: launch.runID, timeoutSeconds: 60) else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: 0,
+                committed: 0,
+                failed: 0,
+                state: state,
+                detail: "macOS seed traffic did not converge before local seed"
+            )
+            return
+        }
+        recorder.record(.phase, phase: "peerSeed", outcome: "completed")
+
         recorder.record(.phase, phase: "seed", outcome: "started")
         var noteIDs: [UUID] = []
         var attempted = 0
@@ -525,6 +540,26 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
             try? await Task.sleep(nanoseconds: 1_000_000_000)
         }
         return lastDepth
+    }
+
+    private func waitForMacSeedNotes(
+        state: NotesListState,
+        runID: String,
+        timeoutSeconds: Int
+    ) async -> Bool {
+        let expected = Set(MyRAMSyncBenchmarkEnduranceWorkload.expectedTitles(
+            runID: runID,
+            platform: .macOS
+        ))
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        while Date() < deadline, !Task.isCancelled {
+            let notes = state.vm.notes
+            if expected.isSubset(of: Set(notes.map(\.title))) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return false
     }
 
     private func ordinaryRoutingReady(state: NotesListState) -> Bool {
