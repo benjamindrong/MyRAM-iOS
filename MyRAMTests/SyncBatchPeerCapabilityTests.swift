@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import MultipeerConnectivity
 import XCTest
 @testable import MyRAM
@@ -281,6 +282,120 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertTrue(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "behind-peer"))
         XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [historical])
         XCTAssertEqual(transport.batchRecipientLists, [[peer]])
+    }
+
+    func testMYR229ReconnectRetriesProviderBeforeSendingLaterAnchoredDependent() async throws {
+        let peer = MCPeerID(displayName: "Remote|myr-229-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let snapshotID = UUID(uuidString: "00000000-0000-0000-0000-000000229000")!
+        let noteID = UUID(uuidString: "300BB942-B5DA-49D4-BDEA-D251D56D58CF")!
+        let actorID = UUID(uuidString: "280CD3D7-6663-4881-B097-CD79AF5C88AF")!
+        let providerID = SyncOperationID(deviceID: actorID, localCounter: 265)
+        let dependentID = SyncOperationID(deviceID: actorID, localCounter: 269)
+        let baseline = SyncTextSequenceState.empty
+        let providerChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 0,
+            text: "iOS-op-261\n",
+            modifiedAt: Date(timeIntervalSince1970: 2_290),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            operationID: providerID,
+            state: baseline
+        )
+        guard case .noteBodyTextInsertedAnchored(let providerInsertion) = providerChange else {
+            return XCTFail("Expected anchored provider")
+        }
+        let stateWithProvider = try SyncBatchAnchoredInsertReplay.applying(
+            providerInsertion,
+            to: baseline
+        ).sequenceState
+        let dependentChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 11,
+            text: "!",
+            modifiedAt: Date(timeIntervalSince1970: 2_291),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: stateWithProvider.visibleText),
+            operationID: dependentID,
+            state: stateWithProvider
+        )
+        guard case .noteBodyTextInsertedAnchored(let dependentInsertion) = dependentChange else {
+            return XCTFail("Expected anchored dependent")
+        }
+        XCTAssertEqual(
+            dependentInsertion.payload.anchor,
+            .after(try SyncTextElementID(operationID: providerID, elementOffset: 10))
+        )
+
+        let provider = SyncBatch(
+            id: UUID(uuidString: "7BDBBD6A-7843-4022-AE43-B8C80C033CD3")!,
+            originDeviceID: actorID,
+            createdAt: Date(timeIntervalSince1970: 2_290),
+            batchSequence: 264,
+            changes: [providerChange]
+        )
+        let dependent = SyncBatch(
+            id: UUID(uuidString: "E3C5B753-1B2F-46B9-B2B2-D003D68E42F5")!,
+            originDeviceID: actorID,
+            createdAt: Date(timeIntervalSince1970: 2_291),
+            batchSequence: 268,
+            changes: [dependentChange]
+        )
+        let receiverOutcome = try SyncConvergenceAnchoredBatchPlanner().plan(
+            indexedChanges: [(0, dependentChange)],
+            batch: dependent,
+            expectedSnapshot: NoteSequenceStateMutationSnapshot(
+                noteID: noteID,
+                body: "",
+                revision: 0,
+                state: baseline
+            ),
+            recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot(records: [], health: .healthy)
+        )
+        guard case .deferred(let deferred) = receiverOutcome else {
+            return XCTFail("A receiver missing operation 265 must defer operation 269")
+        }
+        XCTAssertEqual(
+            deferred.dependency,
+            .insertionAnchor(try SyncTextElementID(operationID: providerID, elementOffset: 10))
+        )
+        controller.buildBootstrapSnapshot = {
+            try self.makeBootstrapSnapshot(id: snapshotID, noteID: noteID)
+        }
+        let browser = MCNearbyServiceBrowser(
+            peer: MCPeerID(displayName: "Local|myr-229-local"),
+            serviceType: "myram-sync"
+        )
+        controller.browser(
+            browser,
+            foundPeer: peer,
+            withDiscoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
+        )
+        await Task.yield()
+
+        try await controller.acceptLocalBatch(provider)
+        await controller.beginBootstrapForTesting(to: peer)
+        transport.failNextBatchID = provider.id
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshotID,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [noteID]
+            ),
+            from: peer
+        )
+        try await controller.acceptLocalBatch(dependent)
+
+        XCTAssertEqual(
+            transport.attemptedBatchIDs,
+            [provider.id, provider.id, dependent.id],
+            "The unresolved provider must be retried ahead of its dependent"
+        )
+        XCTAssertEqual(transport.sentBatchIDs, [provider.id, dependent.id])
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshot().pendingBatches.map(\.id),
+            [provider.id, dependent.id]
+        )
     }
 
     func testCapturedButUnmanifestedCoverageAcknowledgementFailsClosed() async throws {
@@ -1057,7 +1172,10 @@ private final class CapabilityRecordingTransport: MyRAMSyncTransporting {
     private(set) var sentBootstrapSnapshots: [SyncPeerBootstrapSnapshot] = []
     private(set) var sentBootstrapAcknowledgements: [SyncPeerBootstrapAcknowledgement] = []
     private(set) var sentMessageKinds: [MultipeerSyncMessageKind] = []
+    private(set) var attemptedBatchIDs: [SyncBatchID] = []
+    private(set) var sentBatchIDs: [SyncBatchID] = []
     var onSendKind: ((MultipeerSyncMessageKind) -> Void)?
+    var failNextBatchID: SyncBatchID?
     var failNextBootstrapSnapshotSend = false
     var failNextBootstrapAcknowledgementSend = false
 
@@ -1088,6 +1206,15 @@ private final class CapabilityRecordingTransport: MyRAMSyncTransporting {
         mode: MCSessionSendDataMode
     ) async throws {
         let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+        if message.kind == .batchSync {
+            let batch = try SyncBatchEnvelopeCodec.decode(message.payload).batch
+            attemptedBatchIDs.append(batch.id)
+            if failNextBatchID == batch.id {
+                failNextBatchID = nil
+                throw CapabilityRecordingTransportError.injected
+            }
+            sentBatchIDs.append(batch.id)
+        }
         if message.kind == .bootstrapSnapshot {
             attemptedBootstrapSnapshots.append(
                 try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)

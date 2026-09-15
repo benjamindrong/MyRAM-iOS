@@ -779,8 +779,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             return
         }
 
-        let connectedPeers = await transport.connectedPeers()
-        _ = await sendQueuedBatch(batch, connectedPeers: connectedPeers)
+        await flushUnsentBatches()
     }
 
     private func sendQueuedBatch(
@@ -956,7 +955,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         let connectedPeers = await transport.connectedPeers()
 
         for batch in unsentBatches.pendingBatches {
-            _ = await sendQueuedBatch(batch, connectedPeers: connectedPeers)
+            // A later anchored batch may depend on structure in this batch. Preserve
+            // durable queue order across reconnect failures instead of bypassing it.
+            guard await sendQueuedBatch(batch, connectedPeers: connectedPeers) else {
+                break
+            }
         }
     }
 
