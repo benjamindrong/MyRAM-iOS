@@ -75,4 +75,46 @@ final class MYR220PinnedTextPresentationTests: XCTestCase {
         XCTAssertTrue(plan.countOccupiesAuxiliarySlot)
         XCTAssertFalse(plan.bodyIsEligible)
     }
+
+    func testWidgetRenderDispositionKeepsMeasurementVariantsOutOfRendering() {
+        let renderedRow = MyRAMWidgetPinnedContentAllocatedRow(
+            pinIndex: 0,
+            representation: .truncatedTwoLines,
+            height: 36
+        )
+        let allocation = MyRAMWidgetPinnedContentAllocationPlan(
+            rows: [renderedRow],
+            allPinsRepresented: false,
+            bodyIsEligible: false,
+            bodyMaximumHeight: 0
+        )
+        let policy = MyRAMWidgetPinnedContentSubviewDispositionPolicy()
+
+        XCTAssertEqual(policy.disposition(for: .pinFullProbe(0), allocation: allocation), .measurementOnly)
+        XCTAssertEqual(policy.disposition(for: .pinOneLineProbe(0), allocation: allocation), .measurementOnly)
+        XCTAssertEqual(policy.disposition(for: .pinTwoLinesProbe(0), allocation: allocation), .measurementOnly)
+        XCTAssertEqual(policy.disposition(for: .bodyOneLineProbe, allocation: allocation), .measurementOnly)
+        XCTAssertEqual(policy.disposition(for: .pinRender(0), allocation: allocation), .renderPin(renderedRow))
+        XCTAssertEqual(policy.disposition(for: .pinRender(1), allocation: allocation), .suppressed)
+        XCTAssertEqual(policy.disposition(for: .body, allocation: allocation), .suppressed)
+    }
+
+    func testWidgetRenderDispositionAllowsBodyOnlyWhenAllocationMakesItEligible() {
+        let renderedRow = MyRAMWidgetPinnedContentAllocatedRow(
+            pinIndex: 0,
+            representation: .complete,
+            height: 18
+        )
+        let allocation = MyRAMWidgetPinnedContentAllocationPlan(
+            rows: [renderedRow],
+            allPinsRepresented: true,
+            bodyIsEligible: true,
+            bodyMaximumHeight: 22
+        )
+        let policy = MyRAMWidgetPinnedContentSubviewDispositionPolicy()
+
+        XCTAssertEqual(policy.disposition(for: .pinRender(0), allocation: allocation), .renderPin(renderedRow))
+        XCTAssertEqual(policy.disposition(for: .body, allocation: allocation), .renderBody)
+        XCTAssertEqual(policy.disposition(for: .bodyOneLineProbe, allocation: allocation), .measurementOnly)
+    }
 }

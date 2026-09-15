@@ -214,6 +214,41 @@ enum MyRAMWidgetPinnedContentRowVariant: Sendable {
     }
 }
 
+enum MyRAMWidgetPinnedContentSubviewRole: Equatable, Sendable {
+    case pinFullProbe(Int)
+    case pinOneLineProbe(Int)
+    case pinTwoLinesProbe(Int)
+    case pinRender(Int)
+    case bodyOneLineProbe
+    case body
+}
+
+enum MyRAMWidgetPinnedContentSubviewDisposition: Equatable, Sendable {
+    case measurementOnly
+    case renderPin(MyRAMWidgetPinnedContentAllocatedRow)
+    case renderBody
+    case suppressed
+}
+
+struct MyRAMWidgetPinnedContentSubviewDispositionPolicy: Sendable {
+    func disposition(
+        for role: MyRAMWidgetPinnedContentSubviewRole,
+        allocation: MyRAMWidgetPinnedContentAllocationPlan
+    ) -> MyRAMWidgetPinnedContentSubviewDisposition {
+        switch role {
+        case .pinFullProbe, .pinOneLineProbe, .pinTwoLinesProbe, .bodyOneLineProbe:
+            return .measurementOnly
+        case let .pinRender(index):
+            guard let row = allocation.rows.first(where: { $0.pinIndex == index }) else {
+                return .suppressed
+            }
+            return .renderPin(row)
+        case .body:
+            return allocation.bodyIsEligible ? .renderBody : .suppressed
+        }
+    }
+}
+
 struct MyRAMWidgetPinnedContentLayout<PinRow: View, BodyRow: View>: View {
     private let pinnedTexts: [String]
     private let bodyText: String?
@@ -243,29 +278,48 @@ struct MyRAMWidgetPinnedContentLayout<PinRow: View, BodyRow: View>: View {
             ForEach(Array(pinnedTexts.enumerated()), id: \.offset) { index, text in
                 pinRow(text, .full)
                     .fixedSize(horizontal: false, vertical: true)
+                    .hidden()
+                    .accessibilityHidden(true)
                     .layoutValue(
                         key: MyRAMWidgetPinnedContentSubviewRoleKey.self,
-                        value: .pinFull(index)
+                        value: .pinFullProbe(index)
                     )
 
                 pinRow(text, .oneLine)
                     .fixedSize(horizontal: false, vertical: true)
+                    .hidden()
+                    .accessibilityHidden(true)
                     .layoutValue(
                         key: MyRAMWidgetPinnedContentSubviewRoleKey.self,
-                        value: .pinOneLine(index)
+                        value: .pinOneLineProbe(index)
                     )
 
                 pinRow(text, .twoLines)
                     .fixedSize(horizontal: false, vertical: true)
+                    .hidden()
+                    .accessibilityHidden(true)
                     .layoutValue(
                         key: MyRAMWidgetPinnedContentSubviewRoleKey.self,
-                        value: .pinTwoLines(index)
+                        value: .pinTwoLinesProbe(index)
                     )
+
+                ViewThatFits(in: .vertical) {
+                    pinRow(text, .full)
+                        .fixedSize(horizontal: false, vertical: true)
+                    pinRow(text, .twoLines)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .layoutValue(
+                    key: MyRAMWidgetPinnedContentSubviewRoleKey.self,
+                    value: .pinRender(index)
+                )
             }
 
             if let bodyText {
                 bodyRow(bodyText, true)
                     .fixedSize(horizontal: false, vertical: true)
+                    .hidden()
+                    .accessibilityHidden(true)
                     .layoutValue(
                         key: MyRAMWidgetPinnedContentSubviewRoleKey.self,
                         value: .bodyOneLineProbe
@@ -278,15 +332,8 @@ struct MyRAMWidgetPinnedContentLayout<PinRow: View, BodyRow: View>: View {
                     )
             }
         }
+        .clipped()
     }
-}
-
-private enum MyRAMWidgetPinnedContentSubviewRole: Equatable {
-    case pinFull(Int)
-    case pinOneLine(Int)
-    case pinTwoLines(Int)
-    case bodyOneLineProbe
-    case body
 }
 
 private struct MyRAMWidgetPinnedContentSubviewRoleKey: LayoutValueKey {
@@ -322,37 +369,45 @@ private struct MyRAMWidgetPinnedContentSwiftUILayout: Layout {
             availableHeight: bounds.height,
             verticalSpacing: verticalSpacing
         )
+        let dispositionPolicy = MyRAMWidgetPinnedContentSubviewDispositionPolicy()
+        let rowOrigins = rowOrigins(for: allocation, startingAt: bounds.minY)
+        let bodyOrigin = bodyOrigin(for: allocation, startingAt: bounds.minY)
 
-        var y = bounds.minY
-        for (position, row) in allocation.rows.enumerated() {
-            if position > 0 {
-                y += verticalSpacing
+        for subview in subviews {
+            guard let role = subview[MyRAMWidgetPinnedContentSubviewRoleKey.self] else {
+                park(subview, outside: bounds)
+                continue
             }
 
-            guard let subview = subviewForAllocatedRow(row, in: subviews) else { continue }
-            subview.place(
-                at: CGPoint(x: bounds.minX, y: y),
-                anchor: .topLeading,
-                proposal: ProposedViewSize(width: bounds.width, height: row.height)
-            )
-            y += row.height
+            switch dispositionPolicy.disposition(for: role, allocation: allocation) {
+            case .measurementOnly, .suppressed:
+                park(subview, outside: bounds)
+            case let .renderPin(row):
+                guard let y = rowOrigins[row.pinIndex] else {
+                    park(subview, outside: bounds)
+                    continue
+                }
+                subview.place(
+                    at: CGPoint(x: bounds.minX, y: y),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(width: bounds.width, height: row.height)
+                )
+            case .renderBody:
+                let remainingHeight = max(
+                    0,
+                    min(allocation.bodyMaximumHeight, bounds.maxY - bodyOrigin)
+                )
+                guard remainingHeight > 0 else {
+                    park(subview, outside: bounds)
+                    continue
+                }
+                subview.place(
+                    at: CGPoint(x: bounds.minX, y: bodyOrigin),
+                    anchor: .topLeading,
+                    proposal: ProposedViewSize(width: bounds.width, height: remainingHeight)
+                )
+            }
         }
-
-        guard allocation.bodyIsEligible,
-              let bodySubview = subview(with: .body, in: subviews) else {
-            return
-        }
-
-        if !allocation.rows.isEmpty {
-            y += verticalSpacing
-        }
-        let remainingHeight = max(0, min(allocation.bodyMaximumHeight, bounds.maxY - y))
-        guard remainingHeight > 0 else { return }
-        bodySubview.place(
-            at: CGPoint(x: bounds.minX, y: y),
-            anchor: .topLeading,
-            proposal: ProposedViewSize(width: bounds.width, height: remainingHeight)
-        )
     }
 
     private func resolvedWidth(for proposal: ProposedViewSize, subviews: Subviews) -> CGFloat {
@@ -381,9 +436,9 @@ private struct MyRAMWidgetPinnedContentSwiftUILayout: Layout {
         subviews: Subviews
     ) -> [MyRAMWidgetPinnedContentMeasurement] {
         (0..<pinCount).compactMap { index in
-            guard let full = subview(with: .pinFull(index), in: subviews),
-                  let oneLine = subview(with: .pinOneLine(index), in: subviews),
-                  let twoLines = subview(with: .pinTwoLines(index), in: subviews) else {
+            guard let full = subview(with: .pinFullProbe(index), in: subviews),
+                  let oneLine = subview(with: .pinOneLineProbe(index), in: subviews),
+                  let twoLines = subview(with: .pinTwoLinesProbe(index), in: subviews) else {
                 return nil
             }
             let proposal = ProposedViewSize(width: width, height: nil)
@@ -400,16 +455,47 @@ private struct MyRAMWidgetPinnedContentSwiftUILayout: Layout {
             .sizeThatFits(ProposedViewSize(width: width, height: nil)).height
     }
 
-    private func subviewForAllocatedRow(
-        _ row: MyRAMWidgetPinnedContentAllocatedRow,
-        in subviews: Subviews
-    ) -> LayoutSubview? {
-        switch row.representation {
-        case .complete:
-            return subview(with: .pinFull(row.pinIndex), in: subviews)
-        case .truncatedTwoLines:
-            return subview(with: .pinTwoLines(row.pinIndex), in: subviews)
+    private func rowOrigins(
+        for allocation: MyRAMWidgetPinnedContentAllocationPlan,
+        startingAt startY: CGFloat
+    ) -> [Int: CGFloat] {
+        var origins: [Int: CGFloat] = [:]
+        var y = startY
+
+        for (position, row) in allocation.rows.enumerated() {
+            if position > 0 {
+                y += verticalSpacing
+            }
+            origins[row.pinIndex] = y
+            y += row.height
         }
+
+        return origins
+    }
+
+    private func bodyOrigin(
+        for allocation: MyRAMWidgetPinnedContentAllocationPlan,
+        startingAt startY: CGFloat
+    ) -> CGFloat {
+        var y = startY
+        for (position, row) in allocation.rows.enumerated() {
+            if position > 0 {
+                y += verticalSpacing
+            }
+            y += row.height
+        }
+        if !allocation.rows.isEmpty {
+            y += verticalSpacing
+        }
+        return y
+    }
+
+    private func park(_ subview: LayoutSubview, outside bounds: CGRect) {
+        subview.place(
+            at: CGPoint(x: bounds.minX, y: bounds.maxY + 1),
+            anchor: .topLeading,
+            proposal: ProposedViewSize(width: 0, height: 0)
+        )
     }
 
     private func subview(
