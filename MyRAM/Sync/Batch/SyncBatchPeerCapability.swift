@@ -177,13 +177,10 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
 
     private var evidenceByPeerDeviceID:
         [String: [EvidenceSource: NormalizedEvidence]] = [:]
-    private var sessionCapabilityByPeerDeviceID:
-        [String: SyncBatchPeerCapability] = [:]
     private var bootstrapDiscoveryEvidenceByPeerDeviceID:
         [String: BootstrapCapabilityEvidence] = [:]
     private var bootstrapSessionEvidenceByPeerDeviceID:
         [String: BootstrapSessionEvidence] = [:]
-    private var peersAwaitingSessionRebind: Set<String> = []
 
     mutating func recordBootstrapDiscoveryValue(
         _ value: String?,
@@ -247,22 +244,8 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
 
     mutating func clearEvidence(forPeerDeviceID peerDeviceID: String) {
         evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
-        sessionCapabilityByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
-        peersAwaitingSessionRebind.remove(peerDeviceID)
-    }
-
-    mutating func clearSessionEvidencePreservingDiscovery(
-        forPeerDeviceID peerDeviceID: String
-    ) {
-        sessionCapabilityByPeerDeviceID.removeValue(forKey: peerDeviceID)
-        evidenceByPeerDeviceID[peerDeviceID]?.removeValue(forKey: .invitationContext)
-        if evidenceByPeerDeviceID[peerDeviceID]?.isEmpty == true {
-            evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
-        }
-        bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
-        peersAwaitingSessionRebind.insert(peerDeviceID)
     }
 
     mutating func clearDiscoveryEvidence(forPeerDeviceID peerDeviceID: String) {
@@ -279,43 +262,13 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
     func effectiveCapability(
         forPeerDeviceID peerDeviceID: String
     ) -> SyncBatchPeerCapability {
-        if let sessionCapability = sessionCapabilityByPeerDeviceID[peerDeviceID] {
-            return sessionCapability
-        }
-        guard !peersAwaitingSessionRebind.contains(peerDeviceID) else {
-            return .v1Only
-        }
-        return negotiatedCapability(forPeerDeviceID: peerDeviceID)
-    }
-
-    mutating func bindCurrentCapabilityToSession(forPeerDeviceID peerDeviceID: String) {
-        if evidenceByPeerDeviceID[peerDeviceID] != nil {
-            let negotiated = negotiatedCapability(forPeerDeviceID: peerDeviceID)
-            let bound = sessionCapabilityByPeerDeviceID[peerDeviceID]
-            // Discovery callbacks are independent of the live MCSession and can
-            // later omit discoveryInfo. Once V2 was positively bound to this
-            // session, that browser fallback must not revoke it. A later positive
-            // observation may still upgrade an initially conservative binding.
-            if bound?.supportsV2 != true || negotiated.supportsV2 {
-                sessionCapabilityByPeerDeviceID[peerDeviceID] = negotiated
-            }
-        }
-        peersAwaitingSessionRebind.remove(peerDeviceID)
-        if bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] == .v1Supported {
-            bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] = .v1Supported
-        }
-    }
-
-    private func negotiatedCapability(
-        forPeerDeviceID peerDeviceID: String
-    ) -> SyncBatchPeerCapability {
-        let capabilities = evidenceByPeerDeviceID[peerDeviceID]?.values.map(\.capability) ?? []
-        guard let first = capabilities.first else {
+        guard let evidence = evidenceByPeerDeviceID[peerDeviceID],
+              let first = evidence.values.first else {
             return .v1Only
         }
 
-        return capabilities.dropFirst().reduce(first) {
-            $0.intersecting($1)
+        return evidence.values.dropFirst().reduce(first.capability) {
+            $0.intersecting($1.capability)
         }
     }
 
@@ -343,10 +296,7 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
     }
 
     func isBootstrapCapabilityResolved(forPeerDeviceID peerDeviceID: String) -> Bool {
-        guard !peersAwaitingSessionRebind.contains(peerDeviceID) else {
-            return false
-        }
-        return bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] != nil
+        bootstrapSessionEvidenceByPeerDeviceID[peerDeviceID] != nil
             || bootstrapDiscoveryEvidenceByPeerDeviceID[peerDeviceID] != nil
     }
 

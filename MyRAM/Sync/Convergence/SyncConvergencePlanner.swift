@@ -3078,12 +3078,7 @@ struct SyncConvergenceIncorporationExecutor {
                 current: current,
                 creationEffect: notePlan.creationEffect
             )
-            try verifyTitlePrecondition(
-                notePlan.titleEffect,
-                current: current,
-                creationEffect: notePlan.creationEffect,
-                transaction: transaction
-            )
+            try verifyTitlePrecondition(notePlan.titleEffect, current: current, transaction: transaction)
         }
     }
 
@@ -3380,7 +3375,6 @@ struct SyncConvergenceIncorporationExecutor {
     private func verifyTitlePrecondition(
         _ effect: SyncConvergenceTitleEffect?,
         current: SyncConvergenceMutableNoteRecord?,
-        creationEffect: SyncConvergenceCreationEffect?,
         transaction: SyncConvergencePersistenceTransaction
     ) throws {
         guard let effect else { return }
@@ -3392,15 +3386,6 @@ struct SyncConvergenceIncorporationExecutor {
             guard winner == nil else {
                 throw ExecutorFailure(.inconsistentIncorporationState(noteID: effect.resultEvidence.noteID))
             }
-            return
-        }
-        if current == nil,
-           let creationEffect,
-           creationEffect.verdict == .create,
-           effect.verdict == .apply,
-           effect.priorTitle == creationEffect.title,
-           effect.priorWinningKey == nil,
-           winner == nil {
             return
         }
         guard let current else {

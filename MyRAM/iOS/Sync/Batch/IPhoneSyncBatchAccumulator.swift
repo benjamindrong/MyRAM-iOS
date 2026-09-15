@@ -192,18 +192,6 @@ private struct PendingBatch {
 }
 
 #if DEBUG && os(iOS)
-enum MyRAMSyncBenchmarkEnduranceIOSRoutingGate {
-    static func isReady(
-        connectedPeerDeviceIDs: [String],
-        ordinarySyncReady: (String) -> Bool,
-        hasExplicitV2Support: (String) -> Bool
-    ) -> Bool {
-        connectedPeerDeviceIDs.contains {
-            ordinarySyncReady($0) && hasExplicitV2Support($0)
-        }
-    }
-}
-
 @MainActor
 final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
     static let shared = MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver()
@@ -509,11 +497,7 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
     }
 
     private func initialRoutingProbe(state: NotesListState) -> String {
-        let children = Mirror(reflecting: state.syncController).children
-        let connectedPeerDeviceIDs = (children.first { $0.label == "session" }?.value as? MCSession)?
-            .connectedPeers
-            .map { MyRAMPeerIdentity(peerID: $0).deviceID }
-            ?? []
+        let connectedPeerDeviceIDs = state.syncController.connectedPeerDeviceIDsForBenchmark()
         let peerStates = connectedPeerDeviceIDs.sorted().map { peerDeviceID in
             let ordinary = state.syncController.isOrdinarySyncReadyForTesting(
                 peerDeviceID: peerDeviceID
@@ -553,14 +537,8 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
     }
 
     private func ordinaryRoutingReady(state: NotesListState) -> Bool {
-        let children = Mirror(reflecting: state.syncController).children
-        guard let session = children.first(where: { $0.label == "session" })?.value as? MCSession else {
-            return false
-        }
-        let connectedPeerDeviceIDs = session.connectedPeers.map {
-            MyRAMPeerIdentity(peerID: $0).deviceID
-        }
-        return MyRAMSyncBenchmarkEnduranceIOSRoutingGate.isReady(
+        let connectedPeerDeviceIDs = state.syncController.connectedPeerDeviceIDsForBenchmark()
+        return MyRAMSyncBenchmarkEnduranceRoutingGate.isReady(
             connectedPeerDeviceIDs: connectedPeerDeviceIDs,
             ordinarySyncReady: { peerDeviceID in
                 state.syncController.isOrdinarySyncReadyForTesting(peerDeviceID: peerDeviceID)

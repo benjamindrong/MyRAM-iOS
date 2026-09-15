@@ -151,6 +151,7 @@ def validate_telemetry(
 ) -> Counter[str]:
     event_types: Counter[str] = Counter()
     connection_outcomes: Counter[str] = Counter()
+    final_convergence_outcome_by_batch: dict[str, str] = {}
     for index, event in enumerate(events, start=1):
         require(event.get("schemaVersion") == TELEMETRY_SCHEMA, f"{platform}: telemetry event {index} schema mismatch", failures)
         require(event.get("runID") == run_id, f"{platform}: telemetry event {index} runID mismatch", failures)
@@ -160,12 +161,30 @@ def validate_telemetry(
             event_types[event_type] += 1
             if event_type == "peerConnectionState" and isinstance(event.get("outcome"), str):
                 connection_outcomes[event["outcome"]] += 1
+            if event_type == "batchConvergenceCompleted":
+                batch_id = event.get("batchID")
+                outcome = event.get("outcome")
+                if isinstance(batch_id, str) and isinstance(outcome, str):
+                    final_convergence_outcome_by_batch[batch_id] = outcome
 
     require(event_types["sessionStarted"] >= 1, f"{platform}: missing telemetry sessionStarted", failures)
     require(event_types["batchQueued"] >= 20, f"{platform}: fewer than 20 queued batches; endurance traffic was too thin", failures)
     require(event_types["batchSendStarted"] >= 20, f"{platform}: fewer than 20 batch send attempts", failures)
     require(event_types["batchReceived"] >= 20, f"{platform}: fewer than 20 received batches", failures)
     require(event_types["batchAcknowledgementReceived"] >= 20, f"{platform}: fewer than 20 received acknowledgements", failures)
+    for failure_event in (
+        "queueWriteFailed",
+        "batchSendFailed",
+        "batchAcknowledgementSendFailed",
+        "bootstrapSnapshotApplyFailed",
+    ):
+        require(event_types[failure_event] == 0, f"{platform}: telemetry contains {failure_event}", failures)
+    unresolved = sorted(
+        batch_id
+        for batch_id, outcome in final_convergence_outcome_by_batch.items()
+        if outcome not in {"acknowledgementPermitted", "runtimeDrainedApplied"}
+    )
+    require(not unresolved, f"{platform}: batches ended in unresolved convergence state: {unresolved}", failures)
     require(connection_outcomes["notConnected"] >= 4, f"{platform}: fewer than four observed disconnects", failures)
     require(connection_outcomes["connected"] >= 5, f"{platform}: fewer than five observed connections/reconnections", failures)
     return event_types

@@ -868,6 +868,20 @@ private enum MyRAMSyncBenchmarkEnduranceDriverSupport {
     }
 }
 
+#if DEBUG
+enum MyRAMSyncBenchmarkEnduranceRoutingGate {
+    static func isReady(
+        connectedPeerDeviceIDs: [String],
+        ordinarySyncReady: (String) -> Bool,
+        hasExplicitV2Support: (String) -> Bool
+    ) -> Bool {
+        connectedPeerDeviceIDs.contains {
+            ordinarySyncReady($0) && hasExplicitV2Support($0)
+        }
+    }
+}
+#endif
+
 #if DEBUG && os(iOS)
 @MainActor
 final class MyRAMSyncBenchmarkEnduranceIOSDriver {
@@ -1141,10 +1155,10 @@ final class MyRAMSyncBenchmarkEnduranceIOSDriver {
 @MainActor
 final class MyRAMSyncBenchmarkEnduranceMacDriver {
     static let shared = MyRAMSyncBenchmarkEnduranceMacDriver()
-    private static let invitationRetryInterval: TimeInterval = 12
+    private static let syntheticQueueHighWatermark = 80
+    private static let initialSeedDrainSeconds = 45
     private var task: Task<Void, Never>?
     private var convergenceCoordinator: MacSyncConvergenceCoordinator?
-    private var lastInvitationAt: Date?
 
     private init() {}
 
@@ -1175,9 +1189,9 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         let recorder = MyRAMSyncBenchmarkEnduranceRecorder(runID: launch.runID, platform: .macOS)
         let adapter = MacNotePersistenceAdapter()
         let startedAt = Date()
-        recorder.record(.launch, outcome: "accepted", detail: "durationSeconds=\(launch.durationSeconds)")
+        recorder.record(.launch, outcome: "accepted", detail: "durationSeconds=\(launch.durationSeconds);routingGate=currentProduction")
 
-        guard await waitForMacConnection(controller: controller, timeoutSeconds: 60) else {
+        guard await waitForMacRoutingReady(controller: controller, timeoutSeconds: 60) else {
             finishFailure(
                 recorder: recorder,
                 launch: launch,
@@ -1187,7 +1201,7 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
                 failed: 0,
                 controller: controller,
                 adapter: adapter,
-                detail: "initial peer connection was not established"
+                detail: "initial peer bootstrap/routing did not become ready"
             )
             return
         }
@@ -1249,10 +1263,32 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
             return
         }
 
+        let seedQueueDepth = await waitForMacDrain(
+            controller: controller,
+            timeoutSeconds: Self.initialSeedDrainSeconds
+        )
+        guard seedQueueDepth == 0, ordinaryRoutingReady(controller: controller) else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                controller: controller,
+                adapter: adapter,
+                detail: "seed traffic did not drain through an ordinary-sync-ready route"
+            )
+            return
+        }
+        recorder.record(.phase, phase: "seedDrain", queueDepth: 0, outcome: "completed")
+
         let workloadSeconds = max(1, launch.durationSeconds - MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds)
         let workloadEnd = startedAt.addingTimeInterval(TimeInterval(workloadSeconds))
         let outageWindows = MyRAMSyncBenchmarkEnduranceWorkload.outageWindows(totalDurationSeconds: launch.durationSeconds)
         var networkEnabled = true
+        var waitingForReconnectRouting = false
+        var highWatermarkRecorded = false
         var operation = 0
         recorder.record(.phase, phase: "workload", outcome: "started")
 
@@ -1261,6 +1297,7 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
             let shouldNetworkBeEnabled = !outageWindows.contains { $0.contains(elapsedSeconds) }
             if shouldNetworkBeEnabled != networkEnabled {
                 networkEnabled = shouldNetworkBeEnabled
+                waitingForReconnectRouting = networkEnabled
                 controller.setBenchmarkEnduranceNetworkingEnabled(networkEnabled)
                 recorder.record(
                     .network,
@@ -1272,9 +1309,38 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
                 )
             }
 
-            if networkEnabled, !controller.hasConnectedPeers {
-                inviteMacPeerIfDue(controller: controller)
+            let queueDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
+            if networkEnabled, waitingForReconnectRouting || !ordinaryRoutingReady(controller: controller) {
+                guard ordinaryRoutingReady(controller: controller) else {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    continue
+                }
+                waitingForReconnectRouting = false
+                highWatermarkRecorded = false
+                recorder.record(
+                    .phase,
+                    phase: "reconnectRoutingWait",
+                    operationCount: operation,
+                    queueDepth: queueDepth,
+                    outcome: "routingReady"
+                )
             }
+
+            if queueDepth >= Self.syntheticQueueHighWatermark {
+                if !highWatermarkRecorded {
+                    highWatermarkRecorded = true
+                    recorder.record(
+                        .checkpoint,
+                        phase: "queueBackpressure",
+                        operationCount: operation,
+                        queueDepth: queueDepth,
+                        outcome: "paused"
+                    )
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                continue
+            }
+            highWatermarkRecorded = false
 
             let noteID = noteIDs[operation % noteIDs.count]
             attempted += 1
@@ -1332,6 +1398,7 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         let locallyComplete = failed == 0
             && finalQueueDepth == 0
             && controller.hasConnectedPeers
+            && ordinaryRoutingReady(controller: controller)
             && hasExpectedNotes
 
         let result = MyRAMSyncBenchmarkEnduranceResult(
@@ -1356,7 +1423,7 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
             operationCount: operation,
             queueDepth: finalQueueDepth,
             outcome: result.outcome,
-            detail: "observedBenchmarkNotes=\(digests.count)"
+            detail: "observedBenchmarkNotes=\(digests.count);routingReady=\(ordinaryRoutingReady(controller: controller))"
         )
         recorder.writeResult(result)
         recorder.record(.completed, outcome: result.outcome)
@@ -1376,7 +1443,7 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
                     disposition: .noApplicableMutations
                 )
             },
-            reloadSelectedEditor: { _, _ in true },
+            reloadSelectedEditor: { _ in true },
             currentEditorBody: { nil }
         )
         let boundarySurface = MacSyncIncomingLocalBoundarySurface(
@@ -1400,14 +1467,13 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         )
     }
 
-    private func waitForMacConnection(
+    private func waitForMacRoutingReady(
         controller: MacSyncBatchController,
         timeoutSeconds: Int
     ) async -> Bool {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
         while Date() < deadline, !Task.isCancelled {
-            if controller.hasConnectedPeers { return true }
-            inviteMacPeerIfDue(controller: controller)
+            if ordinaryRoutingReady(controller: controller) { return true }
             try? await Task.sleep(nanoseconds: 500_000_000)
         }
         return false
@@ -1421,11 +1487,8 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         var stableZeroSamples = 0
         var lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
         while Date() < deadline, !Task.isCancelled {
-            if !controller.hasConnectedPeers {
-                inviteMacPeerIfDue(controller: controller)
-            }
             lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
-            if lastDepth == 0 && controller.hasConnectedPeers {
+            if lastDepth == 0 && ordinaryRoutingReady(controller: controller) {
                 stableZeroSamples += 1
                 if stableZeroSamples >= 5 { return 0 }
             } else {
@@ -1436,15 +1499,17 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
         return lastDepth
     }
 
-    private func inviteMacPeerIfDue(controller: MacSyncBatchController) {
-        let now = Date()
-        if let lastInvitationAt,
-           now.timeIntervalSince(lastInvitationAt) < Self.invitationRetryInterval {
-            return
-        }
-        guard let peer = controller.availablePeers.first else { return }
-        lastInvitationAt = now
-        controller.invite(peer)
+    private func ordinaryRoutingReady(controller: MacSyncBatchController) -> Bool {
+        let connectedPeerDeviceIDs = controller.connectedPeerDeviceIDsForBenchmark()
+        return MyRAMSyncBenchmarkEnduranceRoutingGate.isReady(
+            connectedPeerDeviceIDs: connectedPeerDeviceIDs,
+            ordinarySyncReady: { peerDeviceID in
+                controller.bootstrapStateForTesting(peerDeviceID: peerDeviceID)?.ordinarySyncReady == true
+            },
+            hasExplicitV2Support: { peerDeviceID in
+                controller.hasExplicitPeerV2Support(forPeerDeviceID: peerDeviceID)
+            }
+        )
     }
 
     private func finishFailure(

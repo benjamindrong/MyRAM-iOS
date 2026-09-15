@@ -8,33 +8,6 @@ import XCTest
 final class SyncBatchPeerCapabilityTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
-    func testDiscoveryLossPreservesV2CapabilityBoundToLiveSession() {
-        var registry = SyncBatchPeerCapabilityRegistry()
-        registry.recordDiscoveryValue(nil, forPeerDeviceID: "peer")
-        registry.bindCurrentCapabilityToSession(forPeerDeviceID: "peer")
-        XCTAssertFalse(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
-
-        registry.recordDiscoveryValue("1,2", forPeerDeviceID: "peer")
-        registry.bindCurrentCapabilityToSession(forPeerDeviceID: "peer")
-
-        registry.clearDiscoveryEvidence(forPeerDeviceID: "peer")
-
-        XCTAssertTrue(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
-        registry.clearEvidence(forPeerDeviceID: "peer")
-        XCTAssertFalse(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
-    }
-
-    func testDiscoveryFallbackDoesNotDowngradeV2BoundToLiveSession() {
-        var registry = SyncBatchPeerCapabilityRegistry()
-        registry.recordDiscoveryValue("1,2", forPeerDeviceID: "peer")
-        registry.bindCurrentCapabilityToSession(forPeerDeviceID: "peer")
-
-        registry.recordDiscoveryValue(nil, forPeerDeviceID: "peer")
-        registry.bindCurrentCapabilityToSession(forPeerDeviceID: "peer")
-
-        XCTAssertTrue(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
-    }
-
     func testCanonicalEncoding() throws {
         XCTAssertEqual(SyncBatchPeerCapabilityCodec.encode(.v1Only), "1")
         XCTAssertEqual(SyncBatchPeerCapabilityCodec.encode(.v2Only), "2")
@@ -482,30 +455,6 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(invitationContexts, [Data("1,2".utf8)])
     }
 
-    func testMacInvitationBindsDiscoveredV2BeforeDiscoveryLoss() async throws {
-        let controller = try makeController()
-        let localPeerID = MCPeerID(displayName: "Local|local-device")
-        let remotePeerID = MCPeerID(displayName: "Remote|invited-v2")
-        let browser = MCNearbyServiceBrowser(peer: localPeerID, serviceType: "myram-sync")
-
-        controller.browser(
-            browser,
-            foundPeer: remotePeerID,
-            withDiscoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
-        )
-        await Task.yield()
-        controller.invite(MacSyncDiscoveredPeer(
-            peerID: remotePeerID,
-            deviceID: "invited-v2",
-            displayName: "Remote"
-        ))
-        controller.browser(browser, lostPeer: remotePeerID)
-        await Task.yield()
-
-        XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "invited-v2"))
-        XCTAssertTrue(controller.isBootstrapCapabilityResolvedForTesting(peerDeviceID: "invited-v2"))
-    }
-
     func testControllerIntersectsDiscoveryAndInvitationEvidenceAndClearsIt() async throws {
         let controller = try makeController()
         let localPeerID = MCPeerID(displayName: "Local|local-device")
@@ -582,14 +531,6 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             ]
         )
         await Task.yield()
-        XCTAssertFalse(
-            controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "capability-peer"
-            )
-        )
-
-        controller.session(session, peer: remotePeerID, didChange: .connected)
-        await Task.yield()
         XCTAssertTrue(
             controller.hasExplicitPeerV2Support(
                 forPeerDeviceID: "capability-peer"
@@ -598,7 +539,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
 
         controller.browser(browser, lostPeer: remotePeerID)
         await Task.yield()
-        XCTAssertTrue(
+        XCTAssertFalse(
             controller.hasExplicitPeerV2Support(
                 forPeerDeviceID: "capability-peer"
             )
@@ -699,52 +640,6 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertNil(controller.lastSyncAt)
         XCTAssertNotEqual(controller.lastConnectionEvent, lastConnectionEvent)
         XCTAssertEqual(controller.lastConnectionEvent, "Received sync from Remote")
-    }
-
-    func testEnduranceOutageRejectsInvitationsWithoutMutatingPeerCapability() async throws {
-        let remotePeerID = MCPeerID(displayName: "Remote|endurance-gated-peer")
-        let controller = try makeController()
-        let localPeerID = MCPeerID(displayName: "Local|local-device")
-        let advertiser = MCNearbyServiceAdvertiser(
-            peer: localPeerID,
-            discoveryInfo: nil,
-            serviceType: "myram-sync"
-        )
-        var acceptance: (Bool, MCSession?)?
-
-        controller.setBenchmarkEnduranceInvitationAcceptanceEnabled(false)
-        controller.advertiser(
-            advertiser,
-            didReceiveInvitationFromPeer: remotePeerID,
-            withContext: Data("1,2".utf8),
-            invitationHandler: { acceptance = ($0, $1) }
-        )
-        await Task.yield()
-
-        XCTAssertEqual(acceptance?.0, false)
-        XCTAssertNil(acceptance?.1)
-        XCTAssertFalse(
-            controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "endurance-gated-peer"
-            )
-        )
-
-        controller.setBenchmarkEnduranceInvitationAcceptanceEnabled(true)
-        controller.advertiser(
-            advertiser,
-            didReceiveInvitationFromPeer: remotePeerID,
-            withContext: Data("1,2".utf8),
-            invitationHandler: { acceptance = ($0, $1) }
-        )
-        await Task.yield()
-
-        XCTAssertEqual(acceptance?.0, true)
-        XCTAssertNotNil(acceptance?.1)
-        XCTAssertTrue(
-            controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "endurance-gated-peer"
-            )
-        )
     }
 
     private func makeController(

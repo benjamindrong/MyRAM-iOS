@@ -5,12 +5,12 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
     func testEnduranceRoutingGateRequiresOrdinaryReadinessAndV2OnSamePeer() {
         let peers = ["ordinary-only", "v2-only"]
 
-        XCTAssertFalse(MyRAMSyncBenchmarkEnduranceIOSRoutingGate.isReady(
+        XCTAssertFalse(MyRAMSyncBenchmarkEnduranceRoutingGate.isReady(
             connectedPeerDeviceIDs: peers,
             ordinarySyncReady: { $0 == "ordinary-only" },
             hasExplicitV2Support: { $0 == "v2-only" }
         ))
-        XCTAssertTrue(MyRAMSyncBenchmarkEnduranceIOSRoutingGate.isReady(
+        XCTAssertTrue(MyRAMSyncBenchmarkEnduranceRoutingGate.isReady(
             connectedPeerDeviceIDs: peers,
             ordinarySyncReady: { $0 == "ordinary-only" },
             hasExplicitV2Support: { $0 == "ordinary-only" }

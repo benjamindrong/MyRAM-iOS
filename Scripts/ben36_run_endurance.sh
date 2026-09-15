@@ -3,6 +3,7 @@ set -euo pipefail
 
 EXPECTED_BRANCH="BEN-36-MyRAM-sync-endurance-harness"
 BASE_SHA="6f61235ec67876c26d3af045e1eeabd81aefc12f"
+EXPECTED_NEARBY_SYNC_CORE_HEAD="4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2"
 DURATION_SECONDS="${MYRAM_DURATION_SECONDS:-720}"
 RUN_ID="${MYRAM_RUN_ID:-BEN36-$(date -u +%Y%m%dT%H%M%SZ)}"
 EXPECTED_HEAD="${MYRAM_EXPECTED_HEAD:-}"
@@ -13,11 +14,13 @@ ROOT="$(git rev-parse --show-toplevel 2>/dev/null || true)"
 cd "$ROOT"
 
 EVIDENCE_ROOT="$ROOT/.local-completion/BEN-36-sync-endurance/$RUN_ID"
+RUN_INDEX="$ROOT/.local-completion/BEN-36-sync-endurance/run-index.json"
 DERIVED_DATA="$EVIDENCE_ROOT/DerivedData"
 LOG_DIR="$EVIDENCE_ROOT/logs"
 IOS_EVIDENCE="$EVIDENCE_ROOT/iOS"
 MAC_EVIDENCE="$EVIDENCE_ROOT/macOS"
 VALIDATION_DIR="$EVIDENCE_ROOT/validation"
+PROVENANCE_DIR="$EVIDENCE_ROOT/raw/provenance"
 DEVICE_JSON="$EVIDENCE_ROOT/devices.json"
 IOS_LAUNCH_JSON="$EVIDENCE_ROOT/ios-launch.json"
 IOS_POLL_RESULT="$EVIDENCE_ROOT/ios-result-poll.json"
@@ -28,11 +31,23 @@ IOS_PID=""
 IOS_BUNDLE_ID=""
 DEVICE_ID=""
 XCODE_DEVICE_ID=""
+SCENARIO_STARTED=0
+RUN_DISPOSITION="incomplete"
+RUN_DETAIL="scenario exited without a terminal disposition"
 
 fail() {
-  echo "ERROR: $*" >&2
+  local message="$1"
+  RUN_DISPOSITION="${2:-failed}"
+  RUN_DETAIL="$message"
+  echo "ERROR: $message" >&2
   printf 'failed\n' > "$STATE_FILE" 2>/dev/null || true
   exit 1
+}
+
+abort() {
+  RUN_DISPOSITION="aborted"
+  RUN_DETAIL="scenario interrupted by signal"
+  exit 130
 }
 
 record_stage() {
@@ -41,6 +56,7 @@ record_stage() {
 }
 
 cleanup() {
+  local exit_status=$?
   set +e
   if [[ -n "$MAC_PID" ]] && kill -0 "$MAC_PID" 2>/dev/null; then
     kill "$MAC_PID" 2>/dev/null || true
@@ -53,10 +69,17 @@ cleanup() {
   if [[ -n "$DEVICE_ID" && -n "$IOS_PID" ]]; then
     xcrun devicectl device process terminate --device "$DEVICE_ID" --pid "$IOS_PID" >/dev/null 2>&1 || true
   fi
+  if (( SCENARIO_STARTED == 1 )); then
+    python3 Scripts/ben36_evidence.py update \
+      --index "$RUN_INDEX" --run-id "$RUN_ID" \
+      --disposition "$RUN_DISPOSITION" --detail "$RUN_DETAIL" >/dev/null 2>&1 || true
+  fi
+  return "$exit_status"
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap abort INT TERM
 
-mkdir -p "$EVIDENCE_ROOT" "$DERIVED_DATA" "$LOG_DIR" "$IOS_EVIDENCE" "$MAC_EVIDENCE" "$VALIDATION_DIR"
+mkdir -p "$EVIDENCE_ROOT" "$DERIVED_DATA" "$LOG_DIR" "$IOS_EVIDENCE" "$MAC_EVIDENCE" "$VALIDATION_DIR" "$PROVENANCE_DIR"
 
 record_stage preflight
 [[ -n "$EXPECTED_HEAD" ]] || fail "set MYRAM_EXPECTED_HEAD to the exact reviewed PR head before running"
@@ -74,12 +97,38 @@ CURRENT_HEAD="$(git rev-parse HEAD)"
 [[ "$CURRENT_HEAD" == "$EXPECTED_HEAD" ]] || fail "expected head $EXPECTED_HEAD, found $CURRENT_HEAD"
 [[ -z "$(git status --porcelain)" ]] || fail "working tree must be clean"
 git merge-base --is-ancestor "$BASE_SHA" "$CURRENT_HEAD" || fail "current head does not descend from approved base $BASE_SHA"
-python3 -m py_compile Scripts/ben36_select_device.py Scripts/ben36_validate_endurance.py
+PYTHONPYCACHEPREFIX="$EVIDENCE_ROOT/python-cache" \
+  python3 -m py_compile Scripts/ben36_select_device.py Scripts/ben36_validate_endurance.py Scripts/ben36_evidence.py
 python3 Scripts/test_ben36_select_device.py
+python3 Scripts/test_ben36_evidence.py
 
 git diff --check "$BASE_SHA" "$CURRENT_HEAD" > "$LOG_DIR/git-diff-check.txt" 2>&1 || fail "git diff --check failed"
 xcodebuild -version > "$LOG_DIR/xcode-version.txt"
 xcrun devicectl --version > "$LOG_DIR/devicectl-version.txt" 2>&1 || true
+
+git rev-parse HEAD > "$PROVENANCE_DIR/myram-source-revision.txt"
+git status --porcelain=v1 > "$PROVENANCE_DIR/myram-worktree-status.txt"
+git diff --no-ext-diff --binary > "$PROVENANCE_DIR/myram-worktree-diff.patch"
+git submodule status --recursive > "$PROVENANCE_DIR/git-submodule-status.txt" 2>&1 || true
+git -C ../NearbySyncCore rev-parse HEAD > "$PROVENANCE_DIR/nearby-sync-core-source-revision.txt" 2>&1 \
+  || printf 'missing\n' > "$PROVENANCE_DIR/nearby-sync-core-source-revision.txt"
+git -C ../NearbySyncCore status --porcelain=v1 > "$PROVENANCE_DIR/nearby-sync-core-worktree-status.txt" 2>&1 \
+  || printf 'missing\n' > "$PROVENANCE_DIR/nearby-sync-core-worktree-status.txt"
+[[ "$(tr -d '\n' < "$PROVENANCE_DIR/nearby-sync-core-source-revision.txt")" == "$EXPECTED_NEARBY_SYNC_CORE_HEAD" ]] \
+  || fail "NearbySyncCore is missing or not at accepted production identity $EXPECTED_NEARBY_SYNC_CORE_HEAD" "provenance-incomplete"
+xcodebuild -version > "$PROVENANCE_DIR/xcodebuild-version.txt" 2>&1
+sw_vers > "$PROVENANCE_DIR/host-sw-vers.txt" 2>&1
+uname -a > "$PROVENANCE_DIR/host-uname.txt" 2>&1
+printf '%s\n' \
+  'myram-source-revision.txt: git rev-parse HEAD' \
+  'myram-worktree-status.txt: git status --porcelain=v1' \
+  'myram-worktree-diff.patch: git diff --no-ext-diff --binary' \
+  'git-submodule-status.txt: git submodule status --recursive' \
+  'nearby-sync-core-source-revision.txt: git -C ../NearbySyncCore rev-parse HEAD' \
+  'nearby-sync-core-worktree-status.txt: git -C ../NearbySyncCore status --porcelain=v1' \
+  'xcodebuild-version.txt: xcodebuild -version' \
+  'host-sw-vers.txt: sw_vers' \
+  'host-uname.txt: uname -a' > "$PROVENANCE_DIR/commands.txt"
 
 record_stage resolve-device
 xcrun devicectl list devices --json-output "$DEVICE_JSON" > "$LOG_DIR/devicectl-list.txt" 2>&1 || fail "devicectl could not list devices"
@@ -90,6 +139,10 @@ IFS=$'\t' read -r DEVICE_ID XCODE_DEVICE_ID DEVICE_NAME <<< "$DEVICE_RECORD"
 printf '%s\n' "$DEVICE_ID" > "$EVIDENCE_ROOT/device-id.txt"
 printf '%s\n' "$XCODE_DEVICE_ID" > "$EVIDENCE_ROOT/xcode-device-id.txt"
 printf '%s\n' "$DEVICE_NAME" > "$EVIDENCE_ROOT/device-name.txt"
+cp "$DEVICE_JSON" "$PROVENANCE_DIR/devicectl-devices.json"
+printf '%s\n' "$DEVICE_ID" > "$PROVENANCE_DIR/ios-device-identifier.txt"
+printf '%s\n' "$XCODE_DEVICE_ID" > "$PROVENANCE_DIR/ios-xcode-destination-identifier.txt"
+printf '%s\n' "$DEVICE_NAME" > "$PROVENANCE_DIR/ios-device-name.txt"
 
 record_stage build
 xcodebuild \
@@ -115,6 +168,15 @@ MAC_APP="$(find "$DERIVED_DATA/Build/Products" -type d -path '*/Debug/MyRAMMac.a
 IOS_BUNDLE_ID="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$IOS_APP/Info.plist")"
 MAC_EXECUTABLE="$MAC_APP/Contents/MacOS/MyRAMMac"
 [[ -x "$MAC_EXECUTABLE" ]] || fail "built macOS executable not found"
+shasum -a 256 "$IOS_APP/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$IOS_APP/Info.plist")" > "$PROVENANCE_DIR/ios-application-binary-sha256.txt"
+shasum -a 256 "$MAC_EXECUTABLE" > "$PROVENANCE_DIR/macos-application-binary-sha256.txt"
+cp "$IOS_APP/Info.plist" "$PROVENANCE_DIR/ios-built-info.plist"
+cp "$MAC_APP/Contents/Info.plist" "$PROVENANCE_DIR/macos-built-info.plist"
+printf '%s\n' \
+  'ios-application-binary-sha256.txt: shasum -a 256 <built iOS CFBundleExecutable>' \
+  'macos-application-binary-sha256.txt: shasum -a 256 <built macOS executable>' \
+  'ios-built-info.plist: cp <built iOS Info.plist>' \
+  'macos-built-info.plist: cp <built macOS Info.plist>' >> "$PROVENANCE_DIR/commands.txt"
 
 record_stage install
 xcrun devicectl device install app --device "$DEVICE_ID" "$IOS_APP" > "$LOG_DIR/devicectl-install.txt" 2>&1 || fail "iOS app installation failed; unlock the device and verify Developer Mode"
@@ -136,6 +198,11 @@ IOS_BENCH_REL="Library/MyRAMSyncEndurance/$RUN_ID/Home/Library/Application Suppo
 IOS_RESULT_REL="$IOS_BENCH_REL/Endurance/$RUN_ID/endurance-result-iOS.json"
 
 record_stage launch
+python3 Scripts/ben36_evidence.py initiate \
+  --index "$RUN_INDEX" --run-id "$RUN_ID" \
+  --evidence-path "$RUN_ID" --duration "$DURATION_SECONDS" --head "$CURRENT_HEAD" \
+  || fail "could not create canonical run-index entry"
+SCENARIO_STARTED=1
 /usr/bin/open \
   --new \
   --wait-apps \
@@ -237,11 +304,12 @@ cp -R "$MAC_RUN_ROOT" "$MAC_EVIDENCE/SyncBenchmarks"
 find_one() {
   local root="$1"
   local pattern="$2"
+  local disposition="${3:-malformed}"
   local matches
   matches="$(find "$root" -type f -name "$pattern" -print)"
   local count
   count="$(printf '%s\n' "$matches" | sed '/^$/d' | wc -l | tr -d ' ')"
-  [[ "$count" == "1" ]] || fail "expected exactly one $pattern under $root; found $count"
+  [[ "$count" == "1" ]] || fail "expected exactly one $pattern under $root; found $count" "$disposition"
   printf '%s\n' "$matches"
 }
 
@@ -249,8 +317,8 @@ IOS_RESULT="$(find_one "$IOS_EVIDENCE" 'endurance-result-iOS.json')"
 MAC_RESULT="$(find_one "$MAC_EVIDENCE" 'endurance-result-macOS.json')"
 IOS_CONTROL="$(find_one "$IOS_EVIDENCE" 'endurance-control-iOS.jsonl')"
 MAC_CONTROL="$(find_one "$MAC_EVIDENCE" 'endurance-control-macOS.jsonl')"
-IOS_TELEMETRY="$(find_one "$IOS_EVIDENCE" 'sync-benchmark-iOS-*.jsonl')"
-MAC_TELEMETRY="$(find_one "$MAC_EVIDENCE" 'sync-benchmark-macOS-*.jsonl')"
+IOS_TELEMETRY="$(find_one "$IOS_EVIDENCE" 'sync-benchmark-iOS-*.jsonl' telemetry-missing)"
+MAC_TELEMETRY="$(find_one "$MAC_EVIDENCE" 'sync-benchmark-macOS-*.jsonl' telemetry-missing)"
 
 record_stage validate
 VALIDATION_JSON="$VALIDATION_DIR/endurance-validation.json"
@@ -283,10 +351,15 @@ metadata = {
 open(out, 'w', encoding='utf-8').write(json.dumps(metadata, indent=2, sort_keys=True) + '\n')
 PY
 
-find "$IOS_EVIDENCE" "$MAC_EVIDENCE" "$VALIDATION_DIR" -type f -print0 \
+find "$IOS_EVIDENCE" "$MAC_EVIDENCE" "$VALIDATION_DIR" "$PROVENANCE_DIR" "$LOG_DIR" -type f -print0 \
   | sort -z \
   | xargs -0 shasum -a 256 > "$EVIDENCE_ROOT/SHA256SUMS.txt"
 
 record_stage complete
+RUN_DISPOSITION="successful"
+RUN_DETAIL="deterministic validator passed"
+python3 Scripts/ben36_evidence.py update \
+  --index "$RUN_INDEX" --run-id "$RUN_ID" \
+  --disposition "$RUN_DISPOSITION" --detail "$RUN_DETAIL"
 trap - EXIT INT TERM
 printf '\nBEN-36 endurance run passed.\nRun ID: %s\nEvidence: %s\nValidation: %s\n' "$RUN_ID" "$EVIDENCE_ROOT" "$VALIDATION_JSON"

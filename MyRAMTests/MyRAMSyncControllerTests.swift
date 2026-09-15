@@ -448,37 +448,6 @@ final class MyRAMSyncControllerTests: XCTestCase {
         )
     }
 
-    func testUnsentBatchFlushRequestedDuringActiveSendDoesNotDuplicateQueueSnapshot() async throws {
-        let transport = FakeMyRAMSyncTransport(connectedPeers: [])
-        let controller = try makeController(
-            unsentBatchQueueFileURL: temporaryQueueFileURL(),
-            transport: transport
-        )
-        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "remote-device")
-        let batch = makeBatch(idSuffix: 198)
-        try await controller.acceptLocalBatch(batch)
-
-        transport.connectedPeers = [Self.remotePeerID]
-        transport.suspendBatchSends = true
-        controller.flushPendingChanges()
-        await waitUntil { transport.hasSuspendedBatchSend }
-
-        controller.flushPendingChanges()
-        try await Task.sleep(for: .milliseconds(50))
-        XCTAssertEqual(transport.maximumConcurrentBatchSends, 1)
-
-        transport.suspendBatchSends = false
-        transport.resumeNextBatchSend()
-        await waitUntil { transport.sentBatchEnvelopes.count == 1 }
-        try await Task.sleep(for: .milliseconds(50))
-
-        XCTAssertEqual(
-            transport.sentBatchEnvelopes.map(\.batch),
-            [batch],
-            "a flush request already covered by the active queue snapshot must not retransmit it"
-        )
-    }
-
     func testRecoverySuspendedBatchRequestFlushesOnceOnResume() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let controller = try makeController(
@@ -1067,7 +1036,6 @@ final class MyRAMSyncControllerTests: XCTestCase {
 private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     var connectedPeers: [MCPeerID]
     var suspendLegacySends = false
-    var suspendBatchSends = false
     private(set) var sentData: [Data] = []
     private(set) var sentLegacyEnvelopes: [SyncEnvelope] = []
     private(set) var sentBatchEnvelopes: [SyncBatchEnvelope] = []
@@ -1075,17 +1043,10 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     private(set) var invitedPeerIDs: [MCPeerID] = []
     private(set) var activeLegacySendCount = 0
     private(set) var maximumConcurrentLegacySends = 0
-    private(set) var activeBatchSendCount = 0
-    private(set) var maximumConcurrentBatchSends = 0
     private var suspendedLegacySendContinuations: [CheckedContinuation<Void, Never>] = []
-    private var suspendedBatchSendContinuations: [CheckedContinuation<Void, Never>] = []
 
     var hasSuspendedLegacySend: Bool {
         !suspendedLegacySendContinuations.isEmpty
-    }
-
-    var hasSuspendedBatchSend: Bool {
-        !suspendedBatchSendContinuations.isEmpty
     }
 
     init(connectedPeers: [MCPeerID]) {
@@ -1123,17 +1084,9 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
             }
             activeLegacySendCount -= 1
         case .batchSync:
-            activeBatchSendCount += 1
-            maximumConcurrentBatchSends = max(maximumConcurrentBatchSends, activeBatchSendCount)
             sentBatchEnvelopes.append(
                 try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload)
             )
-            if suspendBatchSends {
-                await withCheckedContinuation { continuation in
-                    suspendedBatchSendContinuations.append(continuation)
-                }
-            }
-            activeBatchSendCount -= 1
         case .batchAcknowledgement:
             sentBatchAcknowledgements.append(try JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload))
         case .bootstrapCapability, .bootstrapSnapshot, .bootstrapAcknowledgement:
@@ -1144,11 +1097,6 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
     func resumeNextLegacySend() {
         guard !suspendedLegacySendContinuations.isEmpty else { return }
         suspendedLegacySendContinuations.removeFirst().resume()
-    }
-
-    func resumeNextBatchSend() {
-        guard !suspendedBatchSendContinuations.isEmpty else { return }
-        suspendedBatchSendContinuations.removeFirst().resume()
     }
 
     func removeAllSentLegacyEnvelopes() {
