@@ -149,6 +149,7 @@ protocol MyRAMSyncConvergenceStatusConfiguring: AnyObject {
 @MainActor
 protocol MyRAMSyncBootstrapConfiguring: AnyObject {
     var onPrepareLocalOwnershipForBootstrap: (() async -> Void)? { get set }
+    var localOwnershipGenerationProvider: (() -> UInt64)? { get set }
     var buildBootstrapSnapshot: (() throws -> SyncPeerBootstrapSnapshot)? { get set }
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)? { get set }
     var onBootstrapPresentationRefresh: (() -> Void)? { get set }
@@ -225,6 +226,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var onFlushLocalConvergenceRequested: (() async -> Void)?
     var localConvergencePendingCountProvider: (() -> Int)?
     var onPrepareLocalOwnershipForBootstrap: (() async -> Void)?
+    var localOwnershipGenerationProvider: (() -> UInt64)?
     var buildBootstrapSnapshot: (() throws -> SyncPeerBootstrapSnapshot)?
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)?
     var onBootstrapPresentationRefresh: (() -> Void)?
@@ -232,6 +234,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 #if DEBUG
     var onOrdinaryTargetMutationReadyForTesting: (() async -> Void)?
     var onCheckedPublicationLeaseAcquiredForTesting: (() async -> Void)?
+    var onBootstrapOwnershipPreflightCompletedForTesting: (() async -> Void)?
 #endif
 
     private let serviceType = "myram-sync"
@@ -1104,17 +1107,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func beginBootstrap(to peerID: MCPeerID) async {
-        // Body/state may already include a durable local convergence obligation
-        // that has not crossed into the transport queue yet (for example after a
-        // restart). Move that work through its normal admission path before the
-        // bootstrap snapshot freezes history coverage, so any structural operation
-        // the peer can absorb is represented by existing bootstrap ownership.
-        if let onPrepareLocalOwnershipForBootstrap {
-            await onPrepareLocalOwnershipForBootstrap()
-        } else {
-            await onFlushLocalConvergenceRequested?()
-        }
-
         let identity = MyRAMPeerIdentity(peerID: peerID)
         guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
             forPeerDeviceID: identity.deviceID
@@ -1131,33 +1123,52 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             )
             return
         }
-        guard (localConvergencePendingCountProvider?() ?? 0) == 0 else {
-            lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
-            await updatePendingCount()
-            return
-        }
         guard let buildBootstrapSnapshot else {
             lastErrorMessage = "Unable to prepare nearby bootstrap state."
             return
         }
 
-        do {
-            let capturedBatches = unsentBatches.pendingBatches
-            let snapshot = try buildBootstrapSnapshot()
-                .attachingHistoryCoverage(for: capturedBatches)
-            bootstrapStateByPeerDeviceID[identity.deviceID] = SyncPeerBootstrapPendingState(
-                snapshot: snapshot,
-                coveredBatchIDs: Set(capturedBatches.map(\.id)),
-                withheldHistoricalBatchIDs: [],
-                ordinarySyncReady: false,
-                retryAttempt: 0
-            )
-            await attemptBootstrapSnapshotTransmission(
-                to: peerID,
-                expectedSnapshotID: snapshot.id
-            )
-        } catch {
-            lastErrorMessage = "Unable to prepare nearby bootstrap state."
+        while true {
+            let ownershipGeneration = localOwnershipGenerationProvider?()
+            if let onPrepareLocalOwnershipForBootstrap {
+                await onPrepareLocalOwnershipForBootstrap()
+            } else {
+                await onFlushLocalConvergenceRequested?()
+            }
+#if DEBUG
+            await onBootstrapOwnershipPreflightCompletedForTesting?()
+#endif
+            if let ownershipGeneration,
+               let localOwnershipGenerationProvider,
+               ownershipGeneration != localOwnershipGenerationProvider() {
+                continue
+            }
+            guard (localConvergencePendingCountProvider?() ?? 0) == 0 else {
+                lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
+                await updatePendingCount()
+                return
+            }
+
+            do {
+                let capturedBatches = unsentBatches.pendingBatches
+                let snapshot = try buildBootstrapSnapshot()
+                    .attachingHistoryCoverage(for: capturedBatches)
+                bootstrapStateByPeerDeviceID[identity.deviceID] = SyncPeerBootstrapPendingState(
+                    snapshot: snapshot,
+                    coveredBatchIDs: Set(capturedBatches.map(\.id)),
+                    withheldHistoricalBatchIDs: [],
+                    ordinarySyncReady: false,
+                    retryAttempt: 0
+                )
+                await attemptBootstrapSnapshotTransmission(
+                    to: peerID,
+                    expectedSnapshotID: snapshot.id
+                )
+                return
+            } catch {
+                lastErrorMessage = "Unable to prepare nearby bootstrap state."
+                return
+            }
         }
     }
 
