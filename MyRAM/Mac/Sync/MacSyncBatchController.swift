@@ -27,6 +27,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     @Published private(set) var quarantinedWork: SyncConvergenceQuarantinedWork?
 
     weak var convergenceCoordinator: MacSyncConvergenceCoordinator?
+#if DEBUG
+    var onBootstrapOwnershipPreflightCompletedForTesting: (() async -> Void)?
+#endif
 
     private let serviceType = "myram-sync"
     private let peerID: MCPeerID
@@ -56,6 +59,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         500_000_000,
         1_000_000_000
     ]
+    private var localCaptureGeneration: UInt64 = 0
     private var hasStartedNetworking = false
     private var pendingIncomingBatchWork: [IncomingBatchWork] = []
     private var isProcessingIncomingBatchWork = false
@@ -268,6 +272,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     func record(_ capturedChanges: [SyncConvergenceCapturedLocalChange], at date: Date = .now) async {
+        if !capturedChanges.isEmpty {
+            localCaptureGeneration &+= 1
+        }
         await accumulator.record(capturedChanges, at: date)
         await updateSequenceReservationIssue()
     }
@@ -281,6 +288,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         affecting noteID: UUID,
         at date: Date = .now
     ) async -> SyncConvergenceLocalObligation? {
+        if !capturedChanges.isEmpty {
+            localCaptureGeneration &+= 1
+        }
         let obligation = await accumulator.recordAndTakeBoundaryObligation(
             adding: capturedChanges,
             affecting: noteID,
@@ -310,11 +320,6 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     func acceptLocalBatch(_ batch: SyncBatch) async throws {
         try validateDurableAdmission(batch)
-        // Durability comes first: a peer accepting a `send()` call only means the
-        // data was handed to the transport, not that it survived to the other side.
-        // Removal from this queue happens only once the peer acknowledges receipt
-        // (see handleBatchAcknowledgement), so termination right after a send can
-        // never silently drop the batch.
         do {
             try unsentBatches.enqueueDurably(batch)
         } catch {
@@ -487,9 +492,6 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         let connectedPeers = connectedPeersProvider()
 
         for batch in unsentBatches.pendingBatches {
-            // A later anchored batch may depend on structure in this batch. Preserve
-            // durable queue order across real send/routing failures, while bootstrap-
-            // owned historical entries may remain queued without blocking newer work.
             if await sendQueuedBatch(batch, connectedPeers: connectedPeers) {
                 continue
             }
@@ -552,12 +554,23 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             return
         }
 
-        await convergenceCoordinator.resumePendingWork()
-        guard convergenceCoordinator.pendingLocalObligationCount == 0 else {
-            lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
+        while true {
+            let captureGeneration = localCaptureGeneration
+            await convergenceCoordinator.resumePendingWork()
+            while let obligation = await accumulator.takePendingObligationNow() {
+                await convergenceCoordinator.submitLocalObligation(obligation)
+            }
+#if DEBUG
+            await onBootstrapOwnershipPreflightCompletedForTesting?()
+#endif
+            guard captureGeneration == localCaptureGeneration else { continue }
+            guard convergenceCoordinator.pendingLocalObligationCount == 0 else {
+                lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
+                return
+            }
+            beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
             return
         }
-        beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
     }
 
     private func beginBootstrapAfterLocalOwnershipPreflight(to peerID: MCPeerID) {

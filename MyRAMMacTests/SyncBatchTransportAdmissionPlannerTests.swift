@@ -314,6 +314,78 @@ final class MYR229MacQueueDrainRegressionTests: XCTestCase {
         )
     }
 
+    func testReconnectCaptureDuringPreflightRestartsBeforeSnapshotFreeze() async throws {
+        let peer = MCPeerID(displayName: "Remote|myr-229-race-mac")
+        var bootstrapSnapshots: [SyncPeerBootstrapSnapshot] = []
+        let container = try makeContainer()
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "22900000-0000-0000-0000-000000000031")!
+        let note = Note(title: "Before", content: "")
+        note.id = noteID
+        context.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+
+        let controller = makeController(
+            context: context,
+            connectedPeers: [peer],
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                if message.kind == .bootstrapSnapshot {
+                    bootstrapSnapshots.append(
+                        try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
+                    )
+                }
+            }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: MacSyncConvergencePresentationSurface(
+                selectedNoteID: { nil },
+                hasUnsavedChanges: { false },
+                refreshNotesList: {},
+                closeRemovedSelectedEditor: { _ in },
+                applyIncremental: { _, _, _ in
+                    EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .noApplicableMutations)
+                },
+                reloadSelectedEditor: { _ in true },
+                currentEditorBody: { nil }
+            ),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: nil
+        )
+        _ = coordinator
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "myr-229-race-mac")
+        let captured = SyncConvergenceCapturedLocalChange(
+            change: .noteTitleChanged(
+                SyncBatchNoteTitleChangedChange(
+                    noteID: noteID,
+                    title: "After",
+                    modifiedAt: Date(timeIntervalSince1970: 2_296)
+                )
+            ),
+            evidence: nil
+        )
+        var injected = false
+        controller.onBootstrapOwnershipPreflightCompletedForTesting = {
+            guard !injected else { return }
+            injected = true
+            await controller.record(captured, at: Date(timeIntervalSince1970: 2_296))
+        }
+
+        await controller.beginReconnectBootstrapForTesting(to: peer)
+
+        XCTAssertTrue(injected)
+        XCTAssertEqual(bootstrapSnapshots.count, 1)
+        XCTAssertEqual(bootstrapSnapshots[0].historyCoverage.count, 1)
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count, 1)
+    }
+
     func testWithheldHistoricalHeadDoesNotBlockNewerOrdinaryBatch() async throws {
         let peer = MCPeerID(displayName: "Remote|myr-229-withheld-mac")
         var bootstrapSnapshotID: UUID?

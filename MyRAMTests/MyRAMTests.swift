@@ -2463,6 +2463,42 @@ final class MyRAMTests: XCTestCase {
         ])
     }
 
+    func testReconnectBootstrapWaitsForCommittedStructuralCaptureAndOwnsItDurably() async throws {
+        let container = try makeContainer(isStoredInMemoryOnly: true)
+        let context = container.mainContext
+        let note = Note(title: "Shared", content: "")
+        note.id = UUID(uuidString: "22900000-0000-0000-0000-000000000087")!
+        context.insert(note)
+        try context.save()
+        let syncController = RecordingSyncController()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncController: syncController,
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            syncBatchQuietWindow: 100,
+            resumesPendingConvergenceOnInit: false
+        )
+
+        viewModel.commitNoteEdit(note, title: "Shared", content: "operation 87")
+        XCTAssertEqual(note.content, "operation 87")
+
+        await viewModel.prepareLocalOwnershipForBootstrapForTesting()
+
+        XCTAssertEqual(syncController.recordedBatches.count, 1)
+        XCTAssertEqual(syncController.recordedBatches.first?.changes.count, 1)
+        switch syncController.recordedBatches.first?.changes.first {
+        case .noteBodyTextInsertedAnchored(let insertion):
+            XCTAssertEqual(insertion.text, "operation 87")
+        case .noteBodyTextInserted(let insertion):
+            XCTAssertEqual(insertion.text, "operation 87")
+        default:
+            return XCTFail("Bootstrap preflight must durably own the committed insertion")
+        }
+        let residualBatchID = await viewModel.capturePendingLocalBatchForRecovery()
+        XCTAssertNil(residualBatchID)
+    }
+
     func testCommitNoteEditLargeReplacementRecordsCapturedEvidenceChain() async throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
