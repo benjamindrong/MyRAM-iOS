@@ -465,16 +465,38 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
     }
 
+    private func isIntentionallyWithheldHistoricalBatch(
+        _ batch: SyncBatch,
+        connectedPeers: [MCPeerID]
+    ) -> Bool {
+        guard !connectedPeers.isEmpty else { return false }
+        return connectedPeers.allSatisfy { peerID in
+            let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+            guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
+                forPeerDeviceID: deviceID
+            ), let state = bootstrapStateByPeerDeviceID[deviceID],
+               state.ordinarySyncReady else {
+                return false
+            }
+            return state.withheldHistoricalBatchIDs.contains(batch.id)
+        }
+    }
+
     private func flushUnsentBatches() async {
         guard !unsentBatches.isEmpty else { return }
         let connectedPeers = connectedPeersProvider()
 
         for batch in unsentBatches.pendingBatches {
             // A later anchored batch may depend on structure in this batch. Preserve
-            // durable queue order across reconnect failures instead of bypassing it.
-            guard await sendQueuedBatch(batch, connectedPeers: connectedPeers) else {
-                break
+            // durable queue order across real send/routing failures, while bootstrap-
+            // owned historical entries may remain queued without blocking newer work.
+            if await sendQueuedBatch(batch, connectedPeers: connectedPeers) {
+                continue
             }
+            if isIntentionallyWithheldHistoricalBatch(batch, connectedPeers: connectedPeers) {
+                continue
+            }
+            break
         }
     }
 
