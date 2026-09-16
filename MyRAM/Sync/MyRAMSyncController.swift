@@ -149,7 +149,6 @@ protocol MyRAMSyncConvergenceStatusConfiguring: AnyObject {
 @MainActor
 protocol MyRAMSyncBootstrapConfiguring: AnyObject {
     var onPrepareLocalOwnershipForBootstrap: (() async -> Void)? { get set }
-    var localOwnershipGenerationProvider: (() -> UInt64)? { get set }
     var buildBootstrapSnapshot: (() throws -> SyncPeerBootstrapSnapshot)? { get set }
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)? { get set }
     var onBootstrapPresentationRefresh: (() -> Void)? { get set }
@@ -226,7 +225,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var onFlushLocalConvergenceRequested: (() async -> Void)?
     var localConvergencePendingCountProvider: (() -> Int)?
     var onPrepareLocalOwnershipForBootstrap: (() async -> Void)?
-    var localOwnershipGenerationProvider: (() -> UInt64)?
     var buildBootstrapSnapshot: (() throws -> SyncPeerBootstrapSnapshot)?
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)?
     var onBootstrapPresentationRefresh: (() -> Void)?
@@ -235,6 +233,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var onOrdinaryTargetMutationReadyForTesting: (() async -> Void)?
     var onCheckedPublicationLeaseAcquiredForTesting: (() async -> Void)?
     var onBootstrapOwnershipPreflightCompletedForTesting: (() async -> Void)?
+    var onBootstrapCandidateCapturedForTesting: (() async -> Void)?
 #endif
 
     private let serviceType = "myram-sync"
@@ -555,12 +554,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     func flushAllOutboundWork() {
         Task {
-            // debouncedSender.flushNow() cancels any scheduled debounce and fires
-            // its send closure (requestLegacyFlush()) via its own Task. Calling
-            // requestLegacyFlush() again here as well would race that fire-and-forget
-            // call: the loser would see isFlushingLegacy already true and schedule an
-            // immediate follow-up flush of the same not-yet-acknowledged page, instead
-            // of the acknowledgement-driven continuation in receiveLegacyEnvelope(_:from:).
             await debouncedSender.flushNow()
             await onFlushLocalConvergenceRequested?()
             await flushUnsentBatches()
@@ -761,11 +754,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func sendBatch(_ batch: SyncBatch) async throws {
-        // Durability comes first: a peer accepting a `send()` call only means the
-        // data was handed to the transport, not that it survived to the other side.
-        // Removal from this queue happens only once the peer acknowledges receipt
-        // (see handleBatchAcknowledgement), so termination right after a send can
-        // never silently drop the batch.
         do {
             try enqueueUnsentBatchDurably(batch)
             await updatePendingCount()
@@ -977,9 +965,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         let connectedPeers = await transport.connectedPeers()
 
         for batch in unsentBatches.pendingBatches {
-            // A later anchored batch may depend on structure in this batch. Preserve
-            // durable queue order across real send/routing failures, while bootstrap-
-            // owned historical entries may remain queued without blocking newer work.
             if await sendQueuedBatch(batch, connectedPeers: connectedPeers) {
                 continue
             }
@@ -1058,8 +1043,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 peerDeviceID: peerDeviceID,
                 outcome: "transportFailed"
             )
-            // Best effort: if the ack itself is lost, the sender simply retries
-            // redelivery on its next reconnect, which the receiver already dedupes.
         }
     }
 
@@ -1129,7 +1112,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
 
         while true {
-            let ownershipGeneration = localOwnershipGenerationProvider?()
             if let onPrepareLocalOwnershipForBootstrap {
                 await onPrepareLocalOwnershipForBootstrap()
             } else {
@@ -1138,11 +1120,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 #if DEBUG
             await onBootstrapOwnershipPreflightCompletedForTesting?()
 #endif
-            if let ownershipGeneration,
-               let localOwnershipGenerationProvider,
-               ownershipGeneration != localOwnershipGenerationProvider() {
-                continue
-            }
             guard (localConvergencePendingCountProvider?() ?? 0) == 0 else {
                 lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
                 await updatePendingCount()
@@ -1150,9 +1127,35 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             }
 
             do {
+                let candidateBatches = unsentBatches.pendingBatches
+                let candidateSnapshot = try buildBootstrapSnapshot()
+                    .attachingHistoryCoverage(for: candidateBatches)
+#if DEBUG
+                await onBootstrapCandidateCapturedForTesting?()
+#else
+                await Task.yield()
+#endif
+                if let onPrepareLocalOwnershipForBootstrap {
+                    await onPrepareLocalOwnershipForBootstrap()
+                } else {
+                    await onFlushLocalConvergenceRequested?()
+                }
+                guard (localConvergencePendingCountProvider?() ?? 0) == 0 else {
+                    lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
+                    await updatePendingCount()
+                    return
+                }
+
                 let capturedBatches = unsentBatches.pendingBatches
                 let snapshot = try buildBootstrapSnapshot()
                     .attachingHistoryCoverage(for: capturedBatches)
+                guard candidateBatches.map(\.id) == capturedBatches.map(\.id),
+                      candidateSnapshot.folders == snapshot.folders,
+                      candidateSnapshot.notes == snapshot.notes,
+                      candidateSnapshot.historyCoverage == snapshot.historyCoverage else {
+                    continue
+                }
+
                 bootstrapStateByPeerDeviceID[identity.deviceID] = SyncPeerBootstrapPendingState(
                     snapshot: snapshot,
                     coveredBatchIDs: Set(capturedBatches.map(\.id)),
