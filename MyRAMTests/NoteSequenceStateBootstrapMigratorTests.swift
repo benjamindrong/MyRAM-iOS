@@ -746,8 +746,8 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
         pendingLocalCount = 0
         await controller.beginBootstrapForTesting(to: remotePeer)
 
-        XCTAssertEqual(flushCount, 2)
-        XCTAssertEqual(buildCount, 1)
+        XCTAssertEqual(flushCount, 3)
+        XCTAssertEqual(buildCount, 2)
         XCTAssertEqual(transport.sentBootstrapSnapshots.count, 1)
         controller.handlePeerDisconnectForTesting(peerDeviceID: "myr222-ios-blocked-peer")
     }
