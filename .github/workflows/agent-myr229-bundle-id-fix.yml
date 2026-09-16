@@ -1,0 +1,72 @@
+name: Agent MYR-229 bundle ID fix
+
+on:
+  push:
+    branches:
+      - agent-MYR-229-bundle-id-fix
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout MYR-229 PR branch
+        uses: actions/checkout@v4
+        with:
+          ref: MYR-229-Restore-anchored-dependency-continuity-after-reconnect
+          fetch-depth: 0
+
+      - name: Verify starting head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "28a659d3d98317d94f3bb5857b4a555ea07402ed"
+
+      - name: Replace stale iOS test bundle identifiers
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("MyRAM.xcodeproj/project.pbxproj")
+          text = path.read_text()
+          replacements = {
+              "com.apexcoretechs.MyRAMTests": "com.northsignalstudio.myram.tests",
+              "com.apexcoretechs.MyRAMUITests": "com.northsignalstudio.myram.uitests",
+          }
+
+          for old, new in replacements.items():
+              count = text.count(old)
+              if count != 2:
+                  raise SystemExit(f"Expected exactly 2 occurrences of {old}, found {count}")
+              if text.count(new) != 0:
+                  raise SystemExit(f"Expected no pre-existing occurrences of {new}")
+              text = text.replace(old, new)
+
+          path.write_text(text)
+          PY
+
+      - name: Verify exact scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git diff --name-only)" = "MyRAM.xcodeproj/project.pbxproj"
+          test "$(grep -c 'PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.tests;' MyRAM.xcodeproj/project.pbxproj)" -eq 2
+          test "$(grep -c 'PRODUCT_BUNDLE_IDENTIFIER = com.northsignalstudio.myram.uitests;' MyRAM.xcodeproj/project.pbxproj)" -eq 2
+          ! grep -q 'com.apexcoretechs.MyRAMTests' MyRAM.xcodeproj/project.pbxproj
+          ! grep -q 'com.apexcoretechs.MyRAMUITests' MyRAM.xcodeproj/project.pbxproj
+          test "$(git diff --numstat -- MyRAM.xcodeproj/project.pbxproj)" = $'4\t4\tMyRAM.xcodeproj/project.pbxproj'
+          git diff --check
+
+      - name: Commit and push PR branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add MyRAM.xcodeproj/project.pbxproj
+          git commit -m "MYR-229 Align iOS test bundle identifiers"
+          git push origin HEAD:refs/heads/MYR-229-Restore-anchored-dependency-continuity-after-reconnect
