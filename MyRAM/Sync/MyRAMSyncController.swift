@@ -148,6 +148,7 @@ protocol MyRAMSyncConvergenceStatusConfiguring: AnyObject {
 
 @MainActor
 protocol MyRAMSyncBootstrapConfiguring: AnyObject {
+    var onPrepareLocalOwnershipForBootstrap: (() async -> Void)? { get set }
     var buildBootstrapSnapshot: (() throws -> SyncPeerBootstrapSnapshot)? { get set }
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)? { get set }
     var onBootstrapPresentationRefresh: (() -> Void)? { get set }
@@ -223,6 +224,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var onDurablyCaptureIncomingBatch: ((SyncBatch) async -> Bool)?
     var onFlushLocalConvergenceRequested: (() async -> Void)?
     var localConvergencePendingCountProvider: (() -> Int)?
+    var onPrepareLocalOwnershipForBootstrap: (() async -> Void)?
     var buildBootstrapSnapshot: (() throws -> SyncPeerBootstrapSnapshot)?
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)?
     var onBootstrapPresentationRefresh: (() -> Void)?
@@ -1107,7 +1109,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         // restart). Move that work through its normal admission path before the
         // bootstrap snapshot freezes history coverage, so any structural operation
         // the peer can absorb is represented by existing bootstrap ownership.
-        await onFlushLocalConvergenceRequested?()
+        if let onPrepareLocalOwnershipForBootstrap {
+            await onPrepareLocalOwnershipForBootstrap()
+        } else {
+            await onFlushLocalConvergenceRequested?()
+        }
 
         let identity = MyRAMPeerIdentity(peerID: peerID)
         guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(

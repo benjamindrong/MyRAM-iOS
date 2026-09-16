@@ -130,6 +130,10 @@ actor MacSyncBatchAccumulator {
         readyObligationIfAvailable(at: date)?.batch
     }
 
+    func takePendingObligationNow() -> SyncConvergenceLocalObligation? {
+        extractPendingBatch { _ in true }
+    }
+
     func takePendingObligationIfAffecting(noteID: UUID) -> SyncConvergenceLocalObligation? {
         extractPendingBatch { pendingBatch in
             pendingBatch.capturedChanges.contains {

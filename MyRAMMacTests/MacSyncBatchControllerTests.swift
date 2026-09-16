@@ -89,6 +89,76 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(try MultipeerSyncMessageCoding.decodeMessage(from: sends.last!).kind, .bootstrapSnapshot)
     }
 
+    func testReconnectBootstrapCapturesPendingAccumulatorWorkWithoutQuietWindow() async throws {
+        let peer = MCPeerID(displayName: "remote|myr229-accumulator-mac")
+        var sends: [Data] = []
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let controller = try makeController(
+            context: container.mainContext,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sends.append(data) }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: nil
+        )
+        _ = coordinator
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "myr229-accumulator-mac")
+        let operation87 = try makeAnchoredCapturedChange(localCounter: 87)
+        let note = Note(title: "Shared", content: "")
+        note.id = operation87.change.noteID
+        container.mainContext.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: container.mainContext
+        )
+        let initialSnapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: container.mainContext
+        )
+        guard case .noteBodyTextInsertedAnchored(let inserted) = operation87.change else {
+            return XCTFail("Expected operation 87 to be an anchored insertion")
+        }
+        let finalState = try SyncBatchAnchoredInsertReplay.applying(
+            inserted,
+            to: initialSnapshot.state
+        ).sequenceState
+        _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
+            of: note,
+            expected: initialSnapshot,
+            newBody: finalState.visibleText,
+            finalState: finalState,
+            in: container.mainContext
+        )
+        try container.mainContext.save()
+        await controller.record(
+            operation87,
+            at: Date(timeIntervalSince1970: 229)
+        )
+
+        await controller.beginReconnectBootstrapForTesting(to: peer)
+
+        let capturedBatch = try XCTUnwrap(
+            controller.unsentBatchQueueSnapshotForTesting().pendingBatches.first
+        )
+        _ = try XCTUnwrap(sends.first)
+        XCTAssertEqual(
+            controller.bootstrapStateForTesting(peerDeviceID: "myr229-accumulator-mac")?
+                .snapshot.historyCoverage.map(\.batchID),
+            [capturedBatch.id]
+        )
+    }
+
     func testBootstrapPruningFailureKeepsMacBarrierClosedAndHistoryQueued() async throws {
         let peer = MCPeerID(displayName: "remote|bootstrap-mac")
         var sends: [Data] = []
@@ -1350,7 +1420,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
-    private func makeAnchoredBatch() throws -> SyncBatch {
+    private func makeAnchoredBatch(localCounter: UInt64 = 1) throws -> SyncBatch {
         let deviceID = UUID(uuidString: "17100000-0000-0000-0000-0000000000BB")!
         let state = try SyncTextSequenceState(runs: [], fragments: [])
         let change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
@@ -1359,7 +1429,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             text: "A",
             modifiedAt: Date(timeIntervalSince1970: 1_710),
             baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
-            operationID: SyncOperationID(deviceID: deviceID, localCounter: 1),
+            operationID: SyncOperationID(deviceID: deviceID, localCounter: localCounter),
             state: state
         )
         return SyncBatch(
@@ -1368,6 +1438,25 @@ final class MacSyncBatchControllerTests: XCTestCase {
             createdAt: Date(timeIntervalSince1970: 1_710),
             batchSequence: 1,
             changes: [change]
+        )
+    }
+
+    private func makeAnchoredCapturedChange(
+        localCounter: UInt64
+    ) throws -> SyncConvergenceCapturedLocalChange {
+        let initialState = try SyncTextSequenceState(runs: [], fragments: [])
+        let change = try XCTUnwrap(makeAnchoredBatch(localCounter: localCounter).changes.first)
+        guard case .noteBodyTextInsertedAnchored(let inserted) = change else {
+            throw MacBootstrapSendTestError.injected
+        }
+        let finalState = try SyncBatchAnchoredInsertReplay.applying(
+            inserted,
+            to: initialState
+        ).sequenceState
+        return try SyncConvergenceLocalEvidenceCapture.capturedAnchoredChange(
+            for: change,
+            structuralPreState: initialState,
+            structuralPostState: finalState
         )
     }
 

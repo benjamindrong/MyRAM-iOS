@@ -668,7 +668,7 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
         var pendingLocalCount = 1
         var admissionError: Error?
         controller.localConvergencePendingCountProvider = { pendingLocalCount }
-        controller.onFlushLocalConvergenceRequested = { [weak controller] in
+        controller.onPrepareLocalOwnershipForBootstrap = { [weak controller] in
             guard let controller else { return }
             do {
                 try await controller.acceptLocalBatch(fixture.obligation.batch)

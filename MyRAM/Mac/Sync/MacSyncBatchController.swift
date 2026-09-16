@@ -553,6 +553,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
 
         await convergenceCoordinator.resumePendingWork()
+        while let obligation = await accumulator.takePendingObligationNow() {
+            await convergenceCoordinator.submitLocalObligation(obligation)
+        }
         guard convergenceCoordinator.pendingLocalObligationCount == 0 else {
             lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
             return
