@@ -1,5 +1,7 @@
 import AnchoredSequenceCore
 import Foundation
+@preconcurrency import MultipeerConnectivity
+import SwiftData
 import XCTest
 @testable import MyRAMMac
 
@@ -172,6 +174,247 @@ final class SyncBatchTransportAdmissionPlannerTests: XCTestCase {
             hasExplicitCurrentSessionV2Support: supportsV2
         )
     }
+}
+
+@MainActor
+final class MYR229MacQueueDrainRegressionTests: XCTestCase {
+    func testReconnectRetriesProvider265BeforeDependent269() async throws {
+        let peer = MCPeerID(displayName: "Remote|myr-229-mac")
+        let providerBatchID = UUID(uuidString: "7BDBBD6A-7843-4022-AE43-B8C80C033CD3")!
+        var bootstrapSnapshotID: UUID?
+        var attemptedBatchIDs: [SyncBatchID] = []
+        var sentBatchIDs: [SyncBatchID] = []
+        var failProviderOnce = false
+        let container = try makeContainer()
+        let controller = makeController(
+            context: container.mainContext,
+            connectedPeers: [peer],
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                switch message.kind {
+                case .bootstrapSnapshot:
+                    bootstrapSnapshotID = try JSONDecoder().decode(
+                        SyncPeerBootstrapSnapshot.self,
+                        from: message.payload
+                    ).id
+                case .batchSync:
+                    let batch = try SyncBatchEnvelopeCodec.decode(message.payload).batch
+                    attemptedBatchIDs.append(batch.id)
+                    if failProviderOnce, batch.id == providerBatchID {
+                        failProviderOnce = false
+                        throw MYR229MacQueueDrainError.injected
+                    }
+                    sentBatchIDs.append(batch.id)
+                default:
+                    break
+                }
+            }
+        )
+
+        let browser = MCNearbyServiceBrowser(
+            peer: MCPeerID(displayName: "Local|myr-229-mac-local"),
+            serviceType: "myram-sync"
+        )
+        controller.browser(
+            browser,
+            foundPeer: peer,
+            withDiscoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
+        )
+        await Task.yield()
+        controller.beginBootstrapForTesting(to: peer)
+        let snapshotID = try XCTUnwrap(bootstrapSnapshotID)
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(snapshotID: snapshotID, coveredBatchIDs: []),
+            from: peer
+        )
+
+        let noteID = UUID(uuidString: "300BB942-B5DA-49D4-BDEA-D251D56D58CF")!
+        let actorID = UUID(uuidString: "280CD3D7-6663-4881-B097-CD79AF5C88AF")!
+        let providerID = SyncOperationID(deviceID: actorID, localCounter: 265)
+        let dependentID = SyncOperationID(deviceID: actorID, localCounter: 269)
+        let baseline = SyncTextSequenceState.empty
+        let providerChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 0,
+            text: "iOS-op-261\n",
+            modifiedAt: Date(timeIntervalSince1970: 2_290),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            operationID: providerID,
+            state: baseline
+        )
+        guard case .noteBodyTextInsertedAnchored(let providerInsertion) = providerChange else {
+            return XCTFail("Expected anchored provider")
+        }
+        let stateWithProvider = try SyncBatchAnchoredInsertReplay.applying(
+            providerInsertion,
+            to: baseline
+        ).sequenceState
+        let dependentChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 11,
+            text: "!",
+            modifiedAt: Date(timeIntervalSince1970: 2_291),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: stateWithProvider.visibleText),
+            operationID: dependentID,
+            state: stateWithProvider
+        )
+        guard case .noteBodyTextInsertedAnchored(let dependentInsertion) = dependentChange else {
+            return XCTFail("Expected anchored dependent")
+        }
+        XCTAssertEqual(
+            dependentInsertion.payload.anchor,
+            .after(try SyncTextElementID(operationID: providerID, elementOffset: 10))
+        )
+
+        let provider = SyncBatch(
+            id: providerBatchID,
+            originDeviceID: actorID,
+            createdAt: Date(timeIntervalSince1970: 2_290),
+            batchSequence: 264,
+            changes: [providerChange]
+        )
+        let dependent = SyncBatch(
+            id: UUID(uuidString: "E3C5B753-1B2F-46B9-B2B2-D003D68E42F5")!,
+            originDeviceID: actorID,
+            createdAt: Date(timeIntervalSince1970: 2_291),
+            batchSequence: 268,
+            changes: [dependentChange]
+        )
+        let receiverOutcome = try SyncConvergenceAnchoredBatchPlanner().plan(
+            indexedChanges: [(0, dependentChange)],
+            batch: dependent,
+            expectedSnapshot: NoteSequenceStateMutationSnapshot(
+                noteID: noteID,
+                body: "",
+                revision: 0,
+                state: baseline
+            ),
+            recoverySnapshot: SyncBatchAnchoredRecoveryStoreSnapshot(records: [], health: .healthy)
+        )
+        guard case .deferred(let deferred) = receiverOutcome else {
+            return XCTFail("A receiver missing operation 265 must defer operation 269")
+        }
+        XCTAssertEqual(
+            deferred.dependency,
+            .insertionAnchor(try SyncTextElementID(operationID: providerID, elementOffset: 10))
+        )
+
+        failProviderOnce = true
+        try await controller.acceptLocalBatch(provider)
+        try await controller.acceptLocalBatch(dependent)
+
+        XCTAssertEqual(
+            attemptedBatchIDs,
+            [provider.id, provider.id, dependent.id]
+        )
+        XCTAssertEqual(sentBatchIDs, [provider.id, dependent.id])
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id),
+            [provider.id, dependent.id]
+        )
+    }
+
+    func testWithheldHistoricalHeadDoesNotBlockNewerOrdinaryBatch() async throws {
+        let peer = MCPeerID(displayName: "Remote|myr-229-withheld-mac")
+        var bootstrapSnapshotID: UUID?
+        var sentBatchIDs: [SyncBatchID] = []
+        let container = try makeContainer()
+        let controller = makeController(
+            context: container.mainContext,
+            connectedPeers: [peer],
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                switch message.kind {
+                case .bootstrapSnapshot:
+                    bootstrapSnapshotID = try JSONDecoder().decode(
+                        SyncPeerBootstrapSnapshot.self,
+                        from: message.payload
+                    ).id
+                case .batchSync:
+                    sentBatchIDs.append(try SyncBatchEnvelopeCodec.decode(message.payload).batch.id)
+                default:
+                    break
+                }
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "myr-229-withheld-mac"
+        )
+
+        let originDeviceID = UUID(uuidString: "22900000-0000-0000-0000-000000000012")!
+        let historical = SyncBatch(
+            id: UUID(uuidString: "22900000-0000-0000-0000-000000000013")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSince1970: 2_293),
+            batchSequence: 1,
+            changes: []
+        )
+        let newer = SyncBatch(
+            id: UUID(uuidString: "22900000-0000-0000-0000-000000000014")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSince1970: 2_294),
+            batchSequence: 2,
+            changes: []
+        )
+
+        try await controller.acceptLocalBatch(historical)
+        controller.beginBootstrapForTesting(to: peer)
+        let snapshotID = try XCTUnwrap(bootstrapSnapshotID)
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(snapshotID: snapshotID, coveredBatchIDs: []),
+            from: peer
+        )
+
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id),
+            [historical.id]
+        )
+        XCTAssertTrue(sentBatchIDs.isEmpty)
+
+        try await controller.acceptLocalBatch(newer)
+
+        XCTAssertEqual(sentBatchIDs, [newer.id])
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id),
+            [historical.id, newer.id]
+        )
+    }
+
+    private func makeController(
+        context: ModelContext,
+        connectedPeers: [MCPeerID],
+        sendBatchDataOperation: @escaping (Data, [MCPeerID], MCSessionSendDataMode) throws -> Void
+    ) -> MacSyncBatchController {
+        MacSyncBatchController(
+            context: context,
+            conflictStore: SyncConflictStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                    .appendingPathComponent("conflicts.json")
+            ),
+            unsentBatchQueueFileURL: nil,
+            startsNetworking: false,
+            connectedPeersProvider: { connectedPeers },
+            sendBatchDataOperation: sendBatchDataOperation
+        )
+    }
+
+    private func makeContainer() throws -> ModelContainer {
+        let configuration = ModelConfiguration(
+            "MYR229MacQueueDrainRegressionTests-\(UUID().uuidString)",
+            schema: Schema(MyRAMModelRegistry.models),
+            isStoredInMemoryOnly: true
+        )
+        return try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: configuration
+        )
+    }
+}
+
+private enum MYR229MacQueueDrainError: Error {
+    case injected
 }
 
 final class SyncBatchAnchoredBootstrapConflictCoverageTests: XCTestCase {

@@ -321,8 +321,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             lastErrorMessage = "Unable to save nearby sync changes for retry."
             throw error
         }
-        let connectedPeers = connectedPeersProvider()
-        _ = await sendQueuedBatch(batch, connectedPeers: connectedPeers)
+        await flushUnsentBatches()
     }
 
     private func validateDurableAdmission(_ batch: SyncBatch) throws {
@@ -466,12 +465,38 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
     }
 
+    private func isIntentionallyWithheldHistoricalBatch(
+        _ batch: SyncBatch,
+        connectedPeers: [MCPeerID]
+    ) -> Bool {
+        guard !connectedPeers.isEmpty else { return false }
+        return connectedPeers.allSatisfy { peerID in
+            let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+            guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
+                forPeerDeviceID: deviceID
+            ), let state = bootstrapStateByPeerDeviceID[deviceID],
+               state.ordinarySyncReady else {
+                return false
+            }
+            return state.withheldHistoricalBatchIDs.contains(batch.id)
+        }
+    }
+
     private func flushUnsentBatches() async {
         guard !unsentBatches.isEmpty else { return }
         let connectedPeers = connectedPeersProvider()
 
         for batch in unsentBatches.pendingBatches {
-            _ = await sendQueuedBatch(batch, connectedPeers: connectedPeers)
+            // A later anchored batch may depend on structure in this batch. Preserve
+            // durable queue order across real send/routing failures, while bootstrap-
+            // owned historical entries may remain queued without blocking newer work.
+            if await sendQueuedBatch(batch, connectedPeers: connectedPeers) {
+                continue
+            }
+            if isIntentionallyWithheldHistoricalBatch(batch, connectedPeers: connectedPeers) {
+                continue
+            }
+            break
         }
     }
 
