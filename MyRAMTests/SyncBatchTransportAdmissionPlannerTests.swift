@@ -176,6 +176,53 @@ final class SyncBatchTransportAdmissionPlannerTests: XCTestCase {
 
 @MainActor
 final class MYR229QueueDrainRegressionTests: XCTestCase {
+    func testBootstrapCandidateRaceRestartsBeforeFreezingHistory() async throws {
+        let peer = MCPeerID(displayName: "Remote|myr-229-bootstrap-race-ios")
+        let transport = MYR229RecordingTransport(connectedPeers: [peer])
+        let pendingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR229-bootstrap-race-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: pendingURL) }
+        let controller = MyRAMSyncController(
+            unsentBatchQueueFileURL: nil,
+            pendingChangesFileURL: pendingURL,
+            startsNetworking: false,
+            transport: transport
+        )
+        controller.buildBootstrapSnapshot = {
+            SyncPeerBootstrapSnapshot(id: UUID(), folders: [], notes: [])
+        }
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "myr-229-bootstrap-race-ios"
+        )
+        let racedBatch = SyncBatch(
+            id: UUID(uuidString: "22900000-0000-0000-0000-000000000021")!,
+            originDeviceID: UUID(uuidString: "22900000-0000-0000-0000-000000000022")!,
+            createdAt: Date(timeIntervalSince1970: 2_295),
+            batchSequence: 3,
+            changes: []
+        )
+        var injected = false
+        controller.onBootstrapCandidateCapturedForTesting = {
+            guard !injected else { return }
+            injected = true
+            try? await controller.acceptLocalBatch(racedBatch)
+        }
+
+        await controller.beginBootstrapForTesting(to: peer)
+
+        XCTAssertTrue(injected)
+        XCTAssertEqual(transport.bootstrapSnapshots.count, 1)
+        XCTAssertEqual(
+            transport.bootstrapSnapshots[0].historyCoverage.map(\.batchID),
+            [racedBatch.id]
+        )
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshot().pendingBatches.map(\.id),
+            [racedBatch.id]
+        )
+    }
+
     func testWithheldHistoricalHeadDoesNotBlockNewerOrdinaryBatch() async throws {
         let peer = MCPeerID(displayName: "Remote|myr-229-withheld-ios")
         let transport = MYR229RecordingTransport(connectedPeers: [peer])
@@ -248,6 +295,7 @@ final class MYR229QueueDrainRegressionTests: XCTestCase {
 private final class MYR229RecordingTransport: MyRAMSyncTransporting {
     private let peers: [MCPeerID]
     private(set) var sentBatchIDs: [SyncBatchID] = []
+    private(set) var bootstrapSnapshots: [SyncPeerBootstrapSnapshot] = []
 
     init(connectedPeers: [MCPeerID]) {
         peers = connectedPeers
@@ -269,8 +317,16 @@ private final class MYR229RecordingTransport: MyRAMSyncTransporting {
         mode: MCSessionSendDataMode
     ) async throws {
         let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
-        guard message.kind == .batchSync else { return }
-        sentBatchIDs.append(try SyncBatchEnvelopeCodec.decode(message.payload).batch.id)
+        switch message.kind {
+        case .batchSync:
+            sentBatchIDs.append(try SyncBatchEnvelopeCodec.decode(message.payload).batch.id)
+        case .bootstrapSnapshot:
+            bootstrapSnapshots.append(
+                try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
+            )
+        default:
+            break
+        }
     }
 }
 
