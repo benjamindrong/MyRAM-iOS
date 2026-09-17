@@ -206,6 +206,8 @@ final class NotesViewModel: ObservableObject {
     private var recentTextEditByNoteID: [UUID: Date] = [:]
     private var syncBatchReadyTask: Task<Void, Never>?
     private var pendingConvergenceResumeTask: Task<Void, Never>?
+    private var nextSyncBatchCaptureID: UInt64 = 0
+    private var syncBatchCaptureTasks: [UInt64: Task<Void, Never>] = [:]
     private lazy var editorLifecyclePersistence = NoteEditorLifecyclePersistenceCore(
         persist: { [weak self] snapshot in
             guard let self,
@@ -308,6 +310,9 @@ final class NotesViewModel: ObservableObject {
             }
         }
         if let bootstrapController = syncController as? MyRAMSyncBootstrapConfiguring {
+            bootstrapController.onPrepareLocalOwnershipForBootstrap = { [weak self] in
+                await self?.prepareLocalOwnershipForBootstrap()
+            }
             bootstrapController.buildBootstrapSnapshot = { [context] in
                 try SyncPeerBootstrapSnapshotPersistence.build(from: context)
             }
@@ -1849,12 +1854,16 @@ final class NotesViewModel: ObservableObject {
 
     private func recordSyncBatchChange(_ capturedChange: SyncConvergenceCapturedLocalChange) {
         guard !isApplyingRemoteSyncChange else { return }
-        Task {
+        nextSyncBatchCaptureID &+= 1
+        let captureID = nextSyncBatchCaptureID
+        let task = Task { [weak self, syncBatchAccumulator] in
             await syncBatchAccumulator.record(capturedChange)
             if let issue = await syncBatchAccumulator.takeLastSequenceReservationIssue() {
-                syncBatchErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
+                self?.syncBatchErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
             }
+            self?.syncBatchCaptureTasks[captureID] = nil
         }
+        syncBatchCaptureTasks[captureID] = task
     }
 
     private func recordFolderSyncChange(_ folder: Folder) {
@@ -2513,6 +2522,34 @@ final class NotesViewModel: ObservableObject {
         await resumePendingConvergencePresentation()
         return obligation.id
     }
+
+    private func prepareLocalOwnershipForBootstrap() async {
+        while true {
+            let captureBoundary = nextSyncBatchCaptureID
+            let pendingCaptureTasks = syncBatchCaptureTasks
+                .filter { $0.key <= captureBoundary }
+                .sorted { $0.key < $1.key }
+                .map(\.value)
+            for task in pendingCaptureTasks {
+                await task.value
+            }
+
+            await resumePendingConvergencePresentation()
+            if let obligation = await syncBatchAccumulator.takePendingBatchNow() {
+                await handleReadyLocalBatch(obligation)
+                continue
+            }
+
+            guard captureBoundary == nextSyncBatchCaptureID else { continue }
+            return
+        }
+    }
+
+#if DEBUG
+    func prepareLocalOwnershipForBootstrapForTesting() async {
+        await prepareLocalOwnershipForBootstrap()
+    }
+#endif
 
     func resetPendingSync(
         syncController: MyRAMSyncController,
