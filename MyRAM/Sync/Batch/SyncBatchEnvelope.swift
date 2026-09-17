@@ -118,3 +118,28 @@ enum SyncBatchEnvelopeCodec {
 struct SyncBatchAcknowledgement: Codable, Equatable, Sendable {
     let batchID: SyncBatchID
 }
+
+struct SyncBatchAcknowledgementOutbox: Equatable, Sendable {
+    private var batchIDsByPeerDeviceID: [String: [SyncBatchID]] = [:]
+
+    mutating func enqueue(_ batchID: SyncBatchID, forPeerDeviceID peerDeviceID: String) {
+        var pending = batchIDsByPeerDeviceID[peerDeviceID] ?? []
+        guard !pending.contains(batchID) else { return }
+        pending.append(batchID)
+        batchIDsByPeerDeviceID[peerDeviceID] = pending
+    }
+
+    func pendingBatchIDs(forPeerDeviceID peerDeviceID: String) -> [SyncBatchID] {
+        batchIDsByPeerDeviceID[peerDeviceID] ?? []
+    }
+
+    mutating func remove(_ batchID: SyncBatchID, forPeerDeviceID peerDeviceID: String) {
+        guard var pending = batchIDsByPeerDeviceID[peerDeviceID] else { return }
+        pending.removeAll { $0 == batchID }
+        if pending.isEmpty {
+            batchIDsByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        } else {
+            batchIDsByPeerDeviceID[peerDeviceID] = pending
+        }
+    }
+}

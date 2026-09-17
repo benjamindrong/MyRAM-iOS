@@ -839,7 +839,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         let controller = try makeController(
             unsentBatchQueueFileURL: nil,
             unsentBatchQueue: nil,
-            connectedPeersProvider: nil,
+            connectedPeersProvider: { [remotePeerID] },
             sendBatchDataOperation: { data, _, _ in
                 recordedSends.append(data)
                 pendingSnapshotAtSend = FileBackedSyncBatchQueue(
