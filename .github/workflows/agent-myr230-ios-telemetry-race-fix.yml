@@ -1,0 +1,71 @@
+name: Agent MYR-230 iOS telemetry race correction
+
+on:
+  push:
+    branches:
+      - agent-MYR-230-ios-telemetry-race-fix
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact candidate
+        uses: actions/checkout@v7
+        with:
+          ref: cf55fded7b997935a443ac83b31b10337ee03e7f
+          fetch-depth: 0
+
+      - name: Verify exact current PR head
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin MYR-230-Preserve-batch-acknowledgement-ownership-across-disconnect
+          test "$(git rev-parse HEAD)" = "cf55fded7b997935a443ac83b31b10337ee03e7f"
+          test "$(git rev-parse FETCH_HEAD)" = "cf55fded7b997935a443ac83b31b10337ee03e7f"
+
+      - name: Correct terminal telemetry wait
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          p = Path('MyRAMTests/SyncBatchEnvelopeV2Tests.swift')
+          s = p.read_text()
+          old = '''        await waitUntil { transport.sentBatchAcknowledgements.count == 1 }
+
+        XCTAssertEqual(
+'''
+          new = '''        await waitUntil { transport.sentBatchAcknowledgements.count == 1 }
+        await waitUntil {
+            guard let recordedEvents = try? self.events(from: recorder) else { return false }
+            return recordedEvents.contains {
+                $0.eventType == .batchAcknowledgementSent &&
+                $0.batchID == batchID &&
+                $0.peerDeviceID == "ack-reconnect-peer"
+            }
+        }
+
+        XCTAssertEqual(
+'''
+          if s.count(old) != 1:
+              raise SystemExit(f'expected exactly one patch anchor, found {s.count(old)}')
+          p.write_text(s.replace(old, new, 1))
+          PY
+
+      - name: Verify bounded diff
+        run: |
+          set -euo pipefail
+          test "$(git diff --name-only | wc -l | tr -d ' ')" = "1"
+          test "$(git diff --name-only)" = "MyRAMTests/SyncBatchEnvelopeV2Tests.swift"
+          git diff --check
+          git diff -- MyRAMTests/SyncBatchEnvelopeV2Tests.swift
+
+      - name: Commit and push existing PR branch
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add MyRAMTests/SyncBatchEnvelopeV2Tests.swift
+          git commit -m "MYR-230 Stabilize acknowledgement telemetry regression"
+          git push origin HEAD:MYR-230-Preserve-batch-acknowledgement-ownership-across-disconnect
