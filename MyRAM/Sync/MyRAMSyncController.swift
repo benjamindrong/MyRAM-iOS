@@ -343,6 +343,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         !session.connectedPeers.isEmpty
     }
 
+#if DEBUG
+    func connectedPeerDeviceIDsForBenchmark() -> [String] {
+        session.connectedPeers.map { MyRAMPeerIdentity(peerID: $0).deviceID }
+    }
+#endif
+
     var currentDeviceID: String {
         syncEngine.deviceID
     }
@@ -859,18 +865,18 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             return false
         }
 
-        guard !recipients.isEmpty else {
-            return false
-        }
-
-        let pendingRecipients = recipients.filter { peerID in
+        guard !recipients.isEmpty else { return false }
+        var reservations: [(peerID: MCPeerID, reservation: SyncBatchOutstandingDeliveryTracker.Reservation)] = []
+        for peerID in recipients {
             let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
-            return !outstandingBatchDeliveries.isAwaitingAcknowledgement(
+            if let reservation = outstandingBatchDeliveries.reserve(
                 batch.id,
                 forPeerDeviceID: deviceID
-            )
+            ) {
+                reservations.append((peerID, reservation))
+            }
         }
-        guard !pendingRecipients.isEmpty else {
+        guard !reservations.isEmpty else {
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .batchSendDeferred,
                 batchID: String(describing: batch.id),
@@ -880,7 +886,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             return true
         }
 
-        let recipientDeviceIDs = pendingRecipients.map { MyRAMPeerIdentity(peerID: $0).deviceID }
+        let pendingRecipients = reservations.map(\.peerID)
+        let recipientDeviceIDs = reservations.map(\.reservation.peerDeviceID)
         let recipientLabel = recipientDeviceIDs.joined(separator: ",")
         Self.transportLogger.notice(
             "batch=\(batch.id.uuidString, privacy: .public) outcome=sendAttempted targetPeers=\(recipientLabel, privacy: .public)"
@@ -898,10 +905,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
             try await transport.send(data, toPeers: pendingRecipients, mode: .reliable)
             for deviceID in recipientDeviceIDs {
-                _ = outstandingBatchDeliveries.reserve(
-                    batch.id,
-                    forPeerDeviceID: deviceID
-                )
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchSendSucceeded,
                     batchID: String(describing: batch.id),
@@ -918,11 +921,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             return true
         } catch {
             let errorDescription = String(reflecting: error)
-            for deviceID in recipientDeviceIDs {
+            for entry in reservations {
+                outstandingBatchDeliveries.release(entry.reservation)
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchSendFailed,
                     batchID: String(describing: batch.id),
-                    peerDeviceID: deviceID,
+                    peerDeviceID: entry.reservation.peerDeviceID,
                     itemCount: batch.changes.count,
                     outcome: "transportFailed",
                     detail: errorDescription
@@ -996,10 +1000,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         let wasQueued = unsentBatches.contains(acknowledgement.batchID)
         do {
             try unsentBatches.removeBatches(withIDs: [acknowledgement.batchID])
-            outstandingBatchDeliveries.release(
-                acknowledgement.batchID,
-                forPeerDeviceID: peerDeviceID
-            )
+            outstandingBatchDeliveries.release(acknowledgement.batchID)
             await updatePendingCount()
             if wasQueued, !unsentBatches.contains(acknowledgement.batchID) {
                 Self.transportLogger.notice(
@@ -1092,10 +1093,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             )
             return
         }
-        guard pendingBatchReceives.begin(
-            batch.id,
-            forPeerDeviceID: peerDeviceID
-        ) else {
+        guard pendingBatchReceives.begin(batch.id) else {
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .batchCaptureCompleted,
                 batchID: String(describing: batch.id),
@@ -1140,10 +1138,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 }
             }
 
-            pendingBatchReceives.finish(
-                work.batch.id,
-                forPeerDeviceID: peerDeviceID
-            )
+            pendingBatchReceives.finish(work.batch.id)
             rememberTrustedPeer(work.peerID)
             lastConnectionEvent = "Received sync from \(displayName(for: work.peerID))"
             await updatePendingCount()
@@ -1374,10 +1369,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
         do {
             try unsentBatches.removeBatches(withIDs: acknowledgement.coveredBatchIDs)
-            outstandingBatchDeliveries.release(
-                acknowledgement.coveredBatchIDs,
-                forPeerDeviceID: deviceID
-            )
+            outstandingBatchDeliveries.release(acknowledgement.coveredBatchIDs)
         } catch {
             lastErrorMessage = "Unable to update the unsent batch queue."
             await updatePendingCount()
