@@ -59,6 +59,34 @@ def require(condition: bool, message: str, failures: list[str]) -> None:
         failures.append(message)
 
 
+def unrecovered_batch_send_failures(
+    events: list[dict[str, Any]],
+) -> tuple[list[str], list[int]]:
+    """Return send-failed batches lacking a later ACK and malformed failure positions."""
+    last_failure_by_batch: dict[str, int] = {}
+    last_ack_by_batch: dict[str, int] = {}
+    malformed_failure_positions: list[int] = []
+
+    for index, event in enumerate(events, start=1):
+        event_type = event.get("eventType")
+        batch_id = event.get("batchID")
+        if event_type == "batchSendFailed":
+            if isinstance(batch_id, str) and batch_id:
+                last_failure_by_batch[batch_id] = index
+            else:
+                malformed_failure_positions.append(index)
+        elif event_type == "batchAcknowledgementReceived":
+            if isinstance(batch_id, str) and batch_id:
+                last_ack_by_batch[batch_id] = index
+
+    unrecovered = sorted(
+        batch_id
+        for batch_id, failure_index in last_failure_by_batch.items()
+        if last_ack_by_batch.get(batch_id, 0) <= failure_index
+    )
+    return unrecovered, malformed_failure_positions
+
+
 def validate_result(
     result: dict[str, Any], platform: str, run_id: str, failures: list[str]
 ) -> dict[str, str]:
@@ -174,11 +202,23 @@ def validate_telemetry(
     require(event_types["batchAcknowledgementReceived"] >= 20, f"{platform}: fewer than 20 received acknowledgements", failures)
     for failure_event in (
         "queueWriteFailed",
-        "batchSendFailed",
         "batchAcknowledgementSendFailed",
         "bootstrapSnapshotApplyFailed",
     ):
         require(event_types[failure_event] == 0, f"{platform}: telemetry contains {failure_event}", failures)
+
+    unrecovered_send_failures, malformed_send_failures = unrecovered_batch_send_failures(events)
+    require(
+        not malformed_send_failures,
+        f"{platform}: batchSendFailed events missing batchID at positions {malformed_send_failures}",
+        failures,
+    )
+    require(
+        not unrecovered_send_failures,
+        f"{platform}: batch send failures were not later acknowledged: {unrecovered_send_failures}",
+        failures,
+    )
+
     unresolved = sorted(
         batch_id
         for batch_id, outcome in final_convergence_outcome_by_batch.items()
