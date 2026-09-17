@@ -531,7 +531,196 @@ final class MYR229MacQueueDrainRegressionTests: XCTestCase {
     }
 }
 
+@MainActor
+final class MYR232MacDeliveryLifecycleTests: XCTestCase {
+    private let peer = MCPeerID(displayName: "Remote|myr-232-mac")
+
+    func testRepeatedOrdinaryFlushesDoNotResendWhileAcknowledgementIsOutstanding() async throws {
+        let container = try makeContainer()
+        var connectedPeers = [peer]
+        var sentBatchIDs: [SyncBatchID] = []
+        let controller = makeController(
+            context: container.mainContext,
+            connectedPeersProvider: { connectedPeers },
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                guard message.kind == .batchSync else { return }
+                sentBatchIDs.append(try SyncBatchEnvelopeCodec.decode(message.payload).batch.id)
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "myr-232-mac")
+        let batch = makeBatch(idSuffix: 2321)
+
+        try await controller.acceptLocalBatch(batch)
+        controller.flushPendingBatch()
+        controller.flushPendingBatch()
+        await waitUntil { sentBatchIDs.count >= 1 }
+        await Task.yield()
+
+        XCTAssertEqual(sentBatchIDs, [batch.id])
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+        _ = connectedPeers
+    }
+
+    func testSendFailureRemainsEligibleForRetryButSuccessfulRetryDoesNotRepeat() async throws {
+        let container = try makeContainer()
+        var attempted: [SyncBatchID] = []
+        var sent: [SyncBatchID] = []
+        var failOnce = true
+        let controller = makeController(
+            context: container.mainContext,
+            connectedPeersProvider: { [self.peer] },
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                guard message.kind == .batchSync else { return }
+                let batchID = try SyncBatchEnvelopeCodec.decode(message.payload).batch.id
+                attempted.append(batchID)
+                if failOnce {
+                    failOnce = false
+                    throw MYR232MacDeliveryError.injected
+                }
+                sent.append(batchID)
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "myr-232-mac")
+        let batch = makeBatch(idSuffix: 2322)
+
+        try await controller.acceptLocalBatch(batch)
+        controller.flushPendingBatch()
+        await waitUntil { sent == [batch.id] }
+        controller.flushPendingBatch()
+        await Task.yield()
+
+        XCTAssertEqual(attempted, [batch.id, batch.id])
+        XCTAssertEqual(sent, [batch.id])
+    }
+
+    func testDisconnectInvalidatesOnlySessionOwnershipAndReconnectSendsExactlyOnce() async throws {
+        let container = try makeContainer()
+        var connectedPeers = [peer]
+        var sent: [SyncBatchID] = []
+        let controller = makeController(
+            context: container.mainContext,
+            connectedPeersProvider: { connectedPeers },
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                guard message.kind == .batchSync else { return }
+                sent.append(try SyncBatchEnvelopeCodec.decode(message.payload).batch.id)
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "myr-232-mac")
+        let batch = makeBatch(idSuffix: 2323)
+
+        try await controller.acceptLocalBatch(batch)
+        XCTAssertEqual(sent, [batch.id])
+
+        connectedPeers = []
+        controller.handlePeerDisconnectForTesting(peerDeviceID: "myr-232-mac")
+        controller.flushPendingBatch()
+        await Task.yield()
+        XCTAssertEqual(sent, [batch.id])
+
+        connectedPeers = [peer]
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "myr-232-mac")
+        controller.flushPendingBatch()
+        await waitUntil { sent.count == 2 }
+        controller.flushPendingBatch()
+        await Task.yield()
+
+        XCTAssertEqual(sent, [batch.id, batch.id])
+    }
+
+    func testDeliveryReservationTokenPreventsStaleSessionReleaseAndIsolatesPeers() {
+        let batchID = UUID(uuidString: "23200000-0000-0000-0000-000000000099")!
+        var tracker = SyncBatchOutstandingDeliveryTracker()
+        let oldReservation = tracker.reserve(batchID, forPeerDeviceID: "peer-a")
+        XCTAssertNotNil(oldReservation)
+        XCTAssertNotNil(tracker.reserve(batchID, forPeerDeviceID: "peer-b"))
+
+        tracker.invalidateSession(forPeerDeviceID: "peer-a")
+        let newReservation = tracker.reserve(batchID, forPeerDeviceID: "peer-a")
+        XCTAssertNotNil(newReservation)
+        if let oldReservation {
+            tracker.release(oldReservation)
+        }
+
+        XCTAssertTrue(tracker.isAwaitingAcknowledgement(batchID, forPeerDeviceID: "peer-a"))
+        XCTAssertTrue(tracker.isAwaitingAcknowledgement(batchID, forPeerDeviceID: "peer-b"))
+        if let newReservation {
+            tracker.release(newReservation)
+        }
+        XCTAssertFalse(tracker.isAwaitingAcknowledgement(batchID, forPeerDeviceID: "peer-a"))
+        XCTAssertTrue(tracker.isAwaitingAcknowledgement(batchID, forPeerDeviceID: "peer-b"))
+    }
+
+    func testPendingReceiveTrackerCoalescesSameBatchAcrossTransientSessions() {
+        let batchID = UUID(uuidString: "23200000-0000-0000-0000-000000000100")!
+        var tracker = SyncBatchPendingReceiveTracker()
+
+        XCTAssertTrue(tracker.begin(batchID))
+        XCTAssertFalse(tracker.begin(batchID))
+        XCTAssertTrue(tracker.contains(batchID))
+        tracker.finish(batchID)
+        XCTAssertFalse(tracker.contains(batchID))
+        XCTAssertTrue(tracker.begin(batchID))
+    }
+
+    private func makeController(
+        context: ModelContext,
+        connectedPeersProvider: @escaping () -> [MCPeerID],
+        sendBatchDataOperation: @escaping (Data, [MCPeerID], MCSessionSendDataMode) throws -> Void
+    ) -> MacSyncBatchController {
+        MacSyncBatchController(
+            context: context,
+            conflictStore: SyncConflictStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                    .appendingPathComponent("conflicts.json")
+            ),
+            unsentBatchQueueFileURL: nil,
+            startsNetworking: false,
+            connectedPeersProvider: connectedPeersProvider,
+            sendBatchDataOperation: sendBatchDataOperation
+        )
+    }
+
+    private func makeBatch(idSuffix: Int) -> SyncBatch {
+        SyncBatch(
+            id: UUID(uuidString: String(format: "23200000-0000-0000-0000-%012d", idSuffix))!,
+            originDeviceID: UUID(uuidString: "23200000-0000-0000-0000-000000000001")!,
+            createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
+            batchSequence: UInt64(idSuffix),
+            changes: []
+        )
+    }
+
+    private func makeContainer() throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR232MacDeliveryLifecycleTests-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        condition: @escaping @MainActor () -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition(), clock.now < deadline {
+            await Task.yield()
+        }
+    }
+}
+
 private enum MYR229MacQueueDrainError: Error {
+    case injected
+}
+
+private enum MYR232MacDeliveryError: Error {
     case injected
 }
 
