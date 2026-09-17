@@ -474,19 +474,77 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
             try? await Task.sleep(nanoseconds: MyRAMSyncBenchmarkEnduranceWorkload.mutationIntervalNanoseconds)
         }
 
+        guard let finalizationNote = state.vm.refreshedNote(withID: noteIDs[0]) else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                state: state,
+                detail: "unable to load iOS finalization marker note"
+            )
+            return
+        }
+        let finalizationBody = MyRAMSyncBenchmarkEnduranceWorkload.bodyByAppendingCompletionMarker(
+            finalizationNote.content,
+            runID: launch.runID,
+            platform: .iOS
+        )
+        if finalizationBody != finalizationNote.content {
+            guard await state.vm.commitNoteEditForProduction(
+                finalizationNote,
+                title: finalizationNote.title,
+                content: finalizationBody
+            ) else {
+                finishFailure(
+                    recorder: recorder,
+                    launch: launch,
+                    startedAt: startedAt,
+                    attempted: attempted,
+                    committed: committed,
+                    failed: failed,
+                    state: state,
+                    detail: "unable to commit iOS finalization marker"
+                )
+                return
+            }
+        }
+        recorder.record(
+            .phase,
+            phase: "finalizationBarrier",
+            operationCount: operation,
+            outcome: "localMarkerCommitted"
+        )
         recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
-        let finalQueueDepth = await waitForIOSDrain(
+        let finalQueueDepth = await waitForIOSFinalDrain(
             state: state,
+            runID: launch.runID,
             timeoutSeconds: MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds
         )
         let notes = state.vm.fetchSearchableNotes()
         let digests = benchmarkDigests(notes: notes, runID: launch.runID)
         let hasExpectedNotes = expectedTitlesObserved(digests, runID: launch.runID)
+        let completionBarrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+            noteBodiesByTitle: benchmarkNoteBodies(notes: notes, runID: launch.runID),
+            runID: launch.runID
+        )
         let locallyComplete = failed == 0
             && finalQueueDepth == 0
             && state.syncController.hasConnectedPeers
             && ordinaryRoutingReady(state: state)
             && hasExpectedNotes
+            && completionBarrierSatisfied
+
+        let detail: String?
+        if !hasExpectedNotes {
+            detail = "one or more cross-device synthetic notes were absent at final verification"
+        } else if !completionBarrierSatisfied {
+            detail = "cross-device completion barrier was not observed before final verification"
+        } else {
+            detail = nil
+        }
 
         let result = MyRAMSyncBenchmarkEnduranceResult(
             schemaVersion: MyRAMSyncBenchmarkEnduranceResult.currentSchemaVersion,
@@ -502,7 +560,7 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
             connectedAtFinish: state.syncController.hasConnectedPeers,
             expectedBenchmarkNoteCount: MyRAMSyncBenchmarkEnduranceWorkload.expectedTitles(runID: launch.runID).count,
             observedBenchmarkNotes: digests,
-            detail: hasExpectedNotes ? nil : "one or more cross-device synthetic notes were absent at final verification"
+            detail: detail
         )
         recorder.record(
             .verification,
@@ -510,7 +568,7 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
             operationCount: operation,
             queueDepth: finalQueueDepth,
             outcome: result.outcome,
-            detail: "observedBenchmarkNotes=\(digests.count);routingReady=\(ordinaryRoutingReady(state: state))"
+            detail: "observedBenchmarkNotes=\(digests.count);routingReady=\(ordinaryRoutingReady(state: state));completionBarrier=\(completionBarrierSatisfied)"
         )
         recorder.writeResult(result)
         recorder.record(.completed, outcome: result.outcome)
@@ -580,6 +638,35 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
         return lastDepth
     }
 
+    private func waitForIOSFinalDrain(
+        state: NotesListState,
+        runID: String,
+        timeoutSeconds: Int
+    ) async -> Int {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        var stableZeroSamples = 0
+        var lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
+        while Date() < deadline, !Task.isCancelled {
+            lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
+            let notes = state.vm.fetchSearchableNotes()
+            let barrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                noteBodiesByTitle: benchmarkNoteBodies(notes: notes, runID: runID),
+                runID: runID
+            )
+            if lastDepth == 0,
+               state.syncController.hasConnectedPeers,
+               ordinaryRoutingReady(state: state),
+               barrierSatisfied {
+                stableZeroSamples += 1
+                if stableZeroSamples >= 5 { return 0 }
+            } else {
+                stableZeroSamples = 0
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        return lastDepth
+    }
+
     private func waitForMacSeedNotes(
         state: NotesListState,
         runID: String,
@@ -627,6 +714,18 @@ final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
                 )
             }
             .sorted { $0.title < $1.title }
+    }
+
+    private func benchmarkNoteBodies(
+        notes: [Note],
+        runID: String
+    ) -> [String: String] {
+        let prefix = "BEN36-\(runID)-"
+        var bodies: [String: String] = [:]
+        for note in notes where note.deletedAt == nil && note.title.hasPrefix(prefix) {
+            bodies[note.title] = note.content
+        }
+        return bodies
     }
 
     private func expectedTitlesObserved(
