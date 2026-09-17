@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from ben36_evidence import initiate, update
+from ben36_validate_endurance import unrecovered_batch_send_failures
 
 
 class RunIndexTests(unittest.TestCase):
@@ -27,6 +28,31 @@ class RunIndexTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "already indexed"):
                 initiate(index, "BEN36-test", "other", 720, "b" * 40)
             self.assertEqual(index.read_bytes(), before)
+
+
+class ValidatorRecoveryTests(unittest.TestCase):
+    def test_transient_send_failure_is_recovered_only_by_later_ack(self) -> None:
+        recovered = [
+            {"eventType": "batchSendFailed", "batchID": "batch-a"},
+            {"eventType": "batchSendSucceeded", "batchID": "batch-a"},
+            {"eventType": "batchAcknowledgementReceived", "batchID": "batch-a"},
+        ]
+        self.assertEqual(unrecovered_batch_send_failures(recovered), ([], []))
+
+        ack_before_failure = [
+            {"eventType": "batchAcknowledgementReceived", "batchID": "batch-a"},
+            {"eventType": "batchSendFailed", "batchID": "batch-a"},
+        ]
+        self.assertEqual(
+            unrecovered_batch_send_failures(ack_before_failure),
+            (["batch-a"], []),
+        )
+
+    def test_send_failure_without_batch_identity_remains_invalid(self) -> None:
+        self.assertEqual(
+            unrecovered_batch_send_failures([{"eventType": "batchSendFailed"}]),
+            ([], [1]),
+        )
 
 
 class RunnerRetentionTests(unittest.TestCase):
