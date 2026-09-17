@@ -701,7 +701,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
-    func testDiscoveryOnlyAndInvitationOnlyEvidence() {
+    func testRetainedDiscoveryAndInvitationEvidenceRequiresCurrentSessionBinding() {
         var discoveryRegistry = SyncBatchPeerCapabilityRegistry()
         discoveryRegistry.recordDiscoveryValue(
             "1,2",
@@ -713,6 +713,12 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             ),
             .v1AndV2
         )
+        XCTAssertFalse(
+            discoveryRegistry.hasExplicitCurrentSessionV2Support(
+                forPeerDeviceID: "peer"
+            )
+        )
+        discoveryRegistry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
         XCTAssertTrue(
             discoveryRegistry.hasExplicitCurrentSessionV2Support(
                 forPeerDeviceID: "peer"
@@ -730,6 +736,12 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             ),
             .v1AndV2
         )
+        XCTAssertFalse(
+            invitationRegistry.hasExplicitCurrentSessionV2Support(
+                forPeerDeviceID: "peer"
+            )
+        )
+        invitationRegistry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
         XCTAssertTrue(
             invitationRegistry.hasExplicitCurrentSessionV2Support(
                 forPeerDeviceID: "peer"
@@ -753,6 +765,17 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             ),
             .v1AndV2
         )
+        XCTAssertFalse(
+            matchingRegistry.hasExplicitCurrentSessionV2Support(
+                forPeerDeviceID: "peer"
+            )
+        )
+        matchingRegistry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
+        XCTAssertTrue(
+            matchingRegistry.hasExplicitCurrentSessionV2Support(
+                forPeerDeviceID: "peer"
+            )
+        )
 
         var contradictoryRegistry = SyncBatchPeerCapabilityRegistry()
         contradictoryRegistry.recordDiscoveryValue(
@@ -763,6 +786,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             Data("1".utf8),
             forPeerDeviceID: "peer"
         )
+        contradictoryRegistry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
         XCTAssertEqual(
             contradictoryRegistry.effectiveCapability(
                 forPeerDeviceID: "peer"
@@ -783,6 +807,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             Data("2".utf8),
             forPeerDeviceID: "peer"
         )
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
 
         XCTAssertTrue(
             registry.effectiveCapability(
@@ -820,47 +845,61 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
-    func testSameSourceReplacementAndSessionClearing() {
+    func testSessionClearingRetainsEvidenceAndReconnectRebindsSameStableDevice() {
         var registry = SyncBatchPeerCapabilityRegistry()
         registry.recordDiscoveryValue(
             "1,2",
             forPeerDeviceID: "peer"
         )
-        registry.recordDiscoveryValue("1", forPeerDeviceID: "peer")
-        XCTAssertEqual(
-            registry.effectiveCapability(
-                forPeerDeviceID: "peer"
-            ),
-            .v1Only
-        )
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
+        XCTAssertTrue(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
 
-        registry.clearEvidence(forPeerDeviceID: "peer")
-        XCTAssertEqual(
-            registry.effectiveCapability(
-                forPeerDeviceID: "peer"
-            ),
-            .v1Only
-        )
-        XCTAssertNil(
+        registry.clearCurrentSessionEvidence(forPeerDeviceID: "peer")
+
+        XCTAssertFalse(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+        XCTAssertEqual(registry.effectiveCapability(forPeerDeviceID: "peer"), .v1AndV2)
+        XCTAssertNotNil(
             registry.evidence(
                 from: .discoveryInformation,
                 forPeerDeviceID: "peer"
             )
         )
 
-        registry.recordInvitationContext(
-            Data("1,2".utf8),
-            forPeerDeviceID: "peer"
-        )
-        XCTAssertTrue(
-            registry.hasExplicitCurrentSessionV2Support(
-                forPeerDeviceID: "peer"
-            )
-        )
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
+        XCTAssertTrue(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+
+        registry.recordDiscoveryValue("1", forPeerDeviceID: "peer")
+        XCTAssertFalse(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+        registry.recordDiscoveryValue("1,2", forPeerDeviceID: "peer")
+        XCTAssertTrue(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+    }
+
+    func testDifferentStableDeviceCannotConsumeRetainedEvidence() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordDiscoveryValue("1,2", forPeerDeviceID: "peer-a")
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer-b")
+
+        XCTAssertFalse(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer-b"))
+        XCTAssertEqual(registry.effectiveCapability(forPeerDeviceID: "peer-b"), .v1Only)
+        XCTAssertFalse(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer-a"))
+    }
+
+    func testBrowserLossPreservesRetainedAndBoundV2Capability() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordDiscoveryValue("1,2", forPeerDeviceID: "peer")
+        registry.recordBootstrapDiscoveryValue("1", forPeerDeviceID: "peer")
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
+
+        registry.clearDiscoveryEvidence(forPeerDeviceID: "peer")
+
+        XCTAssertTrue(registry.hasExplicitCurrentSessionV2Support(forPeerDeviceID: "peer"))
+        XCTAssertEqual(registry.effectiveCapability(forPeerDeviceID: "peer"), .v1AndV2)
+        XCTAssertFalse(registry.isBootstrapCapabilityResolved(forPeerDeviceID: "peer"))
     }
 
     func testDecodedTrafficDoesNotUpgradeRegistry() throws {
-        let registry = SyncBatchPeerCapabilityRegistry()
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
         _ = try SyncBatchPeerCapabilityCodec.decode("1,2")
 
         XCTAssertEqual(
@@ -898,11 +937,11 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(transport.invitationContexts, [Data("1,2".utf8)])
     }
 
-    func testControllerIntersectsDiscoveryAndInvitationEvidenceAndClearsIt() async {
-        let transport = CapabilityRecordingTransport()
-        let controller = makeController(transport: transport)
+    func testControllerReconnectRebindsWithoutRediscoveryAndUpdatesRevokeImmediately() async {
         let localPeerID = MCPeerID(displayName: "Local|local-device")
         let remotePeerID = MCPeerID(displayName: "Remote|capability-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [remotePeerID])
+        let controller = makeController(transport: transport)
         let browser = MCNearbyServiceBrowser(
             peer: localPeerID,
             serviceType: "myram-sync"
@@ -926,11 +965,11 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             ]
         )
         await Task.yield()
-        XCTAssertTrue(
-            controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "capability-peer"
-            )
-        )
+        XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
+
+        controller.session(session, peer: remotePeerID, didChange: .connected)
+        await Task.yield()
+        XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
         controller.advertiser(
             advertiser,
@@ -939,12 +978,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             invitationHandler: { _, _ in }
         )
         await Task.yield()
-        XCTAssertEqual(
-            controller.effectivePeerCapability(
-                forPeerDeviceID: "capability-peer"
-            ),
-            .v1Only
-        )
+        XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
         controller.advertiser(
             advertiser,
@@ -953,41 +987,23 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             invitationHandler: { _, _ in }
         )
         await Task.yield()
-        XCTAssertTrue(
-            controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "capability-peer"
-            )
-        )
+        XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
         controller.session(session, peer: remotePeerID, didChange: .notConnected)
         await Task.yield()
-        XCTAssertFalse(
-            controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "capability-peer"
-            )
+        XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
+        XCTAssertEqual(
+            controller.effectivePeerCapability(forPeerDeviceID: "capability-peer"),
+            .v1AndV2
         )
 
-        controller.browser(
-            browser,
-            foundPeer: remotePeerID,
-            withDiscoveryInfo: [
-                SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"
-            ]
-        )
+        controller.session(session, peer: remotePeerID, didChange: .connected)
         await Task.yield()
-        XCTAssertTrue(
-            controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "capability-peer"
-            )
-        )
+        XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
 
         controller.browser(browser, lostPeer: remotePeerID)
         await Task.yield()
-        XCTAssertFalse(
-            controller.hasExplicitPeerV2Support(
-                forPeerDeviceID: "capability-peer"
-            )
-        )
+        XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
     }
 
     func testControllerBroadcastsV1BatchToEveryConnectedEntry() async throws {
@@ -1052,6 +1068,10 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             withContext: Data("1,2".utf8),
             invitationHandler: { _, _ in }
         )
+        await Task.yield()
+        XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
+
+        controller.session(session, peer: remotePeerID, didChange: .connected)
         await Task.yield()
         XCTAssertTrue(
             controller.hasExplicitPeerV2Support(
