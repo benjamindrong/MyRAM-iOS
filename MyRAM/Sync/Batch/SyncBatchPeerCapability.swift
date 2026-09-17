@@ -177,6 +177,7 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
 
     private var evidenceByPeerDeviceID:
         [String: [EvidenceSource: NormalizedEvidence]] = [:]
+    private var currentSessionV2PeerDeviceIDs: Set<String> = []
     private var bootstrapDiscoveryEvidenceByPeerDeviceID:
         [String: BootstrapCapabilityEvidence] = [:]
     private var bootstrapSessionEvidenceByPeerDeviceID:
@@ -242,20 +243,35 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         )
     }
 
+    mutating func bindCurrentSessionV2Support(
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        if effectiveCapability(forPeerDeviceID: peerDeviceID).supportsV2 {
+            currentSessionV2PeerDeviceIDs.insert(peerDeviceID)
+        } else {
+            currentSessionV2PeerDeviceIDs.remove(peerDeviceID)
+        }
+    }
+
+    mutating func clearCurrentSessionEvidence(
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        currentSessionV2PeerDeviceIDs.remove(peerDeviceID)
+        bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+    }
+
     mutating func clearEvidence(forPeerDeviceID peerDeviceID: String) {
         evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        currentSessionV2PeerDeviceIDs.remove(peerDeviceID)
         bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
 
     mutating func clearDiscoveryEvidence(forPeerDeviceID peerDeviceID: String) {
-        evidenceByPeerDeviceID[peerDeviceID]?.removeValue(forKey: .discoveryInformation)
-        if evidenceByPeerDeviceID[peerDeviceID]?.isEmpty == true {
-            evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
-        }
-        // Discovery loss alone must never create session capability evidence.
-        // Positive discovery support is bound to session evidence only when a
-        // connected-session path actually consumes it below.
+        // Browser loss ends only the bootstrap discovery marker. Retained batch
+        // capability evidence remains authoritative for the same stable device
+        // so a later reconnect can rebind it without requiring rediscovery.
         bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
 
@@ -275,7 +291,7 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
     func hasExplicitCurrentSessionV2Support(
         forPeerDeviceID peerDeviceID: String
     ) -> Bool {
-        effectiveCapability(forPeerDeviceID: peerDeviceID).supportsV2
+        currentSessionV2PeerDeviceIDs.contains(peerDeviceID)
     }
 
     mutating func hasExplicitCurrentSessionBootstrapV1Support(
