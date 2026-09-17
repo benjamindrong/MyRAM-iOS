@@ -1,0 +1,66 @@
+name: Agent MYR-230 test fixture correction
+
+on:
+  push:
+    branches:
+      - agent-MYR-230-test-fixture-fix
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out exact MYR-230 candidate
+        uses: actions/checkout@v7
+        with:
+          ref: MYR-230-Preserve-batch-acknowledgement-ownership-across-disconnect
+          fetch-depth: 0
+
+      - name: Verify exact starting candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "254a2c95c6043d58219907db0b425603b0272c74"
+
+      - name: Correct connected-peer fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path("MyRAMMacTests/MacSyncBatchControllerTests.swift")
+          text = path.read_text(encoding="utf-8")
+          start_marker = "    func testSessionLevelLegacyBatchAcknowledgesOnlyAfterDurableCapture() async throws {\n"
+          end_marker = "    func testSessionLevelHashlessBodyBatchRemainsDurableWithoutAcknowledgement() async throws {\n"
+          if text.count(start_marker) != 1 or text.count(end_marker) != 1:
+              raise SystemExit("non-unique test anchors")
+          start = text.index(start_marker)
+          end = text.index(end_marker, start)
+          region = text[start:end]
+          old = "            connectedPeersProvider: nil,\n"
+          new = "            connectedPeersProvider: { [remotePeerID] },\n"
+          if region.count(old) != 1:
+              raise SystemExit(f"expected one provider preimage, found {region.count(old)}")
+          region = region.replace(old, new, 1)
+          path.write_text(text[:start] + region + text[end:], encoding="utf-8")
+          PY
+
+      - name: Verify bounded change
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git diff --name-only)" = "MyRAMMacTests/MacSyncBatchControllerTests.swift"
+          git diff --check
+          git diff -- MyRAMMacTests/MacSyncBatchControllerTests.swift
+
+      - name: Commit and push feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add MyRAMMacTests/MacSyncBatchControllerTests.swift
+          git commit -m "MYR-230 Align legacy ACK test with connected peer state"
+          git push origin HEAD:refs/heads/MYR-230-Preserve-batch-acknowledgement-ownership-across-disconnect
