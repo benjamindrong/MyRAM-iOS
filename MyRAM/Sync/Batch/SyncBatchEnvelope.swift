@@ -143,3 +143,84 @@ struct SyncBatchAcknowledgementOutbox: Equatable, Sendable {
         }
     }
 }
+
+/// Session-scoped ownership of a successful transport handoff. Durable queue ownership
+/// remains separate: a batch stays queued until the peer acknowledgement removes it.
+struct SyncBatchOutstandingDeliveryTracker: Equatable, Sendable {
+    private struct Key: Hashable, Sendable {
+        let batchID: SyncBatchID
+        let peerDeviceID: String
+    }
+
+    private var keys: Set<Key> = []
+
+    mutating func reserve(
+        _ batchID: SyncBatchID,
+        forPeerDeviceID peerDeviceID: String
+    ) -> Bool {
+        keys.insert(Key(batchID: batchID, peerDeviceID: peerDeviceID)).inserted
+    }
+
+    func isAwaitingAcknowledgement(
+        _ batchID: SyncBatchID,
+        forPeerDeviceID peerDeviceID: String
+    ) -> Bool {
+        keys.contains(Key(batchID: batchID, peerDeviceID: peerDeviceID))
+    }
+
+    mutating func release(
+        _ batchID: SyncBatchID,
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        keys.remove(Key(batchID: batchID, peerDeviceID: peerDeviceID))
+    }
+
+    mutating func release(
+        _ batchIDs: Set<SyncBatchID>,
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        keys = keys.filter { key in
+            key.peerDeviceID != peerDeviceID || !batchIDs.contains(key.batchID)
+        }
+    }
+
+    mutating func invalidateSession(forPeerDeviceID peerDeviceID: String) {
+        keys = keys.filter { $0.peerDeviceID != peerDeviceID }
+    }
+
+    mutating func reset() {
+        keys.removeAll()
+    }
+}
+
+/// Bounds duplicate receiver work while one delivery of the same batch is already queued
+/// or executing. It is containment only; sender delivery ownership remains authoritative.
+struct SyncBatchPendingReceiveTracker: Equatable, Sendable {
+    private struct Key: Hashable, Sendable {
+        let batchID: SyncBatchID
+        let peerDeviceID: String
+    }
+
+    private var keys: Set<Key> = []
+
+    mutating func begin(
+        _ batchID: SyncBatchID,
+        forPeerDeviceID peerDeviceID: String
+    ) -> Bool {
+        keys.insert(Key(batchID: batchID, peerDeviceID: peerDeviceID)).inserted
+    }
+
+    mutating func finish(
+        _ batchID: SyncBatchID,
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        keys.remove(Key(batchID: batchID, peerDeviceID: peerDeviceID))
+    }
+
+    func contains(
+        _ batchID: SyncBatchID,
+        forPeerDeviceID peerDeviceID: String
+    ) -> Bool {
+        keys.contains(Key(batchID: batchID, peerDeviceID: peerDeviceID))
+    }
+}
