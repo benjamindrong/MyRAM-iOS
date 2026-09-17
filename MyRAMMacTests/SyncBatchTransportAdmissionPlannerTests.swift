@@ -181,6 +181,7 @@ final class MYR229MacQueueDrainRegressionTests: XCTestCase {
     func testReconnectRetriesProvider265BeforeDependent269() async throws {
         let peer = MCPeerID(displayName: "Remote|myr-229-mac")
         let providerBatchID = UUID(uuidString: "7BDBBD6A-7843-4022-AE43-B8C80C033CD3")!
+        let bootstrapSent = expectation(description: "Connected lifecycle sends bootstrap snapshot")
         var bootstrapSnapshotID: UUID?
         var attemptedBatchIDs: [SyncBatchID] = []
         var sentBatchIDs: [SyncBatchID] = []
@@ -197,6 +198,7 @@ final class MYR229MacQueueDrainRegressionTests: XCTestCase {
                         SyncPeerBootstrapSnapshot.self,
                         from: message.payload
                     ).id
+                    bootstrapSent.fulfill()
                 case .batchSync:
                     let batch = try SyncBatchEnvelopeCodec.decode(message.payload).batch
                     attemptedBatchIDs.append(batch.id)
@@ -210,18 +212,51 @@ final class MYR229MacQueueDrainRegressionTests: XCTestCase {
                 }
             }
         )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: MacSyncConvergencePresentationSurface(
+                selectedNoteID: { nil },
+                hasUnsavedChanges: { false },
+                refreshNotesList: {},
+                closeRemovedSelectedEditor: { _ in },
+                applyIncremental: { _, _, _ in
+                    EditorRemoteBatchApplyResult(appliedCount: 0, disposition: .noApplicableMutations)
+                },
+                reloadSelectedEditor: { _ in true },
+                currentEditorBody: { nil }
+            ),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: nil
+        )
+        _ = coordinator
 
+        let localPeerID = MCPeerID(displayName: "Local|myr-229-mac-local")
         let browser = MCNearbyServiceBrowser(
-            peer: MCPeerID(displayName: "Local|myr-229-mac-local"),
+            peer: localPeerID,
             serviceType: "myram-sync"
+        )
+        let session = MCSession(
+            peer: localPeerID,
+            securityIdentity: nil,
+            encryptionPreference: .required
         )
         controller.browser(
             browser,
             foundPeer: peer,
             withDiscoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
         )
-        await Task.yield()
-        controller.beginBootstrapForTesting(to: peer)
+        await waitUntil {
+            controller.effectivePeerCapability(
+                forPeerDeviceID: "myr-229-mac"
+            ).supportsV2
+        }
+        controller.session(session, peer: peer, didChange: .connected)
+        await fulfillment(of: [bootstrapSent], timeout: 1)
         let snapshotID = try XCTUnwrap(bootstrapSnapshotID)
         await controller.handleBootstrapAcknowledgementForTesting(
             SyncPeerBootstrapAcknowledgement(snapshotID: snapshotID, coveredBatchIDs: []),
@@ -470,6 +505,17 @@ final class MYR229MacQueueDrainRegressionTests: XCTestCase {
             connectedPeersProvider: { connectedPeers },
             sendBatchDataOperation: sendBatchDataOperation
         )
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        condition: @escaping @MainActor () -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition(), clock.now < deadline {
+            await Task.yield()
+        }
     }
 
     private func makeContainer() throws -> ModelContainer {
