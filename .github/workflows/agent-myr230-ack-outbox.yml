@@ -1,0 +1,606 @@
+name: Agent MYR-230 acknowledgement remediation
+
+on:
+  push:
+    branches:
+      - agent-MYR-230-ack-outbox
+
+permissions:
+  contents: write
+
+jobs:
+  apply-remediation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout MYR-230 branch
+        uses: actions/checkout@v4
+        with:
+          ref: MYR-230-Preserve-batch-acknowledgement-ownership-across-disconnect
+          fetch-depth: 0
+
+      - name: Verify starting head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "74f37434b526e33768510f1a09642e94dd8487e9"
+
+      - name: Apply acknowledgement ownership remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              p = Path(path)
+              text = p.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected exactly one preimage, found {count}")
+              p.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          # Shared ACK obligation outbox.
+          replace_once(
+              "MyRAM/Sync/Batch/SyncBatchEnvelope.swift",
+              '''struct SyncBatchAcknowledgement: Codable, Equatable, Sendable {
+              let batchID: SyncBatchID
+          }
+          ''',
+              '''struct SyncBatchAcknowledgement: Codable, Equatable, Sendable {
+              let batchID: SyncBatchID
+          }
+
+          struct SyncBatchAcknowledgementOutbox: Equatable, Sendable {
+              private var batchIDsByPeerDeviceID: [String: [SyncBatchID]] = [:]
+
+              mutating func enqueue(
+                  _ batchID: SyncBatchID,
+                  forPeerDeviceID peerDeviceID: String
+              ) {
+                  var pending = batchIDsByPeerDeviceID[peerDeviceID] ?? []
+                  guard !pending.contains(batchID) else { return }
+                  pending.append(batchID)
+                  batchIDsByPeerDeviceID[peerDeviceID] = pending
+              }
+
+              func pendingBatchIDs(forPeerDeviceID peerDeviceID: String) -> [SyncBatchID] {
+                  batchIDsByPeerDeviceID[peerDeviceID] ?? []
+              }
+
+              mutating func remove(
+                  _ batchID: SyncBatchID,
+                  forPeerDeviceID peerDeviceID: String
+              ) {
+                  guard var pending = batchIDsByPeerDeviceID[peerDeviceID] else { return }
+                  pending.removeAll { $0 == batchID }
+                  if pending.isEmpty {
+                      batchIDsByPeerDeviceID.removeValue(forKey: peerDeviceID)
+                  } else {
+                      batchIDsByPeerDeviceID[peerDeviceID] = pending
+                  }
+              }
+          }
+          ''',
+          )
+
+          replace_once(
+              "MyRAM/Sync/MyRAMSyncModels.swift",
+              '''    case batchConvergenceCompleted
+              case batchAcknowledgementSent
+              case batchAcknowledgementSendFailed
+          ''',
+              '''    case batchConvergenceCompleted
+              case batchAcknowledgementDeferred
+              case batchAcknowledgementSent
+              case batchAcknowledgementSendFailed
+          ''',
+          )
+
+          # iOS controller owns ACK obligations until a current transport accepts them.
+          replace_once(
+              "MyRAM/Sync/MyRAMSyncController.swift",
+              '''    private let unsentBatches: FileBackedSyncBatchQueue
+              private var isFlushingLegacy = false
+          ''',
+              '''    private let unsentBatches: FileBackedSyncBatchQueue
+              private var acknowledgementOutbox = SyncBatchAcknowledgementOutbox()
+              private var isFlushingLegacy = false
+          ''',
+          )
+
+          replace_once(
+              "MyRAM/Sync/MyRAMSyncController.swift",
+              '''    private func sendBatchAcknowledgement(batchID: SyncBatchID, to peerID: MCPeerID) async {
+              let peerDeviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
+              do {
+                  let payload = try JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
+                  let data = try MultipeerSyncMessageCoding.encode(kind: .batchAcknowledgement, payload: payload)
+                  try await transport.send(data, toPeers: [peerID], mode: .reliable)
+                  MyRAMSyncBenchmarkTelemetry.shared.record(
+                      .batchAcknowledgementSent,
+                      batchID: String(describing: batchID),
+                      peerDeviceID: peerDeviceID
+                  )
+              } catch {
+                  MyRAMSyncBenchmarkTelemetry.shared.record(
+                      .batchAcknowledgementSendFailed,
+                      batchID: String(describing: batchID),
+                      peerDeviceID: peerDeviceID,
+                      outcome: "transportFailed"
+                  )
+              }
+          }
+          ''',
+              '''    private func enqueueBatchAcknowledgement(
+              batchID: SyncBatchID,
+              peerDeviceID: String
+          ) async {
+              acknowledgementOutbox.enqueue(batchID, forPeerDeviceID: peerDeviceID)
+              await flushBatchAcknowledgements(forPeerDeviceID: peerDeviceID)
+          }
+
+          private func flushBatchAcknowledgements(forPeerDeviceID peerDeviceID: String) async {
+              let connectedPeers = await transport.connectedPeers()
+              guard let peerID = connectedPeers.first(where: {
+                  MyRAMPeerIdentity(peerID: $0).deviceID == peerDeviceID
+              }) else {
+                  for batchID in acknowledgementOutbox.pendingBatchIDs(
+                      forPeerDeviceID: peerDeviceID
+                  ) {
+                      MyRAMSyncBenchmarkTelemetry.shared.record(
+                          .batchAcknowledgementDeferred,
+                          batchID: String(describing: batchID),
+                          peerDeviceID: peerDeviceID,
+                          outcome: "peerNotConnected"
+                      )
+                  }
+                  return
+              }
+
+              for batchID in acknowledgementOutbox.pendingBatchIDs(
+                  forPeerDeviceID: peerDeviceID
+              ) {
+                  do {
+                      let payload = try JSONEncoder().encode(
+                          SyncBatchAcknowledgement(batchID: batchID)
+                      )
+                      let data = try MultipeerSyncMessageCoding.encode(
+                          kind: .batchAcknowledgement,
+                          payload: payload
+                      )
+                      try await transport.send(data, toPeers: [peerID], mode: .reliable)
+                      acknowledgementOutbox.remove(
+                          batchID,
+                          forPeerDeviceID: peerDeviceID
+                      )
+                      MyRAMSyncBenchmarkTelemetry.shared.record(
+                          .batchAcknowledgementSent,
+                          batchID: String(describing: batchID),
+                          peerDeviceID: peerDeviceID
+                      )
+                  } catch {
+                      let peersAfterFailure = await transport.connectedPeers()
+                      let peerStillConnected = peersAfterFailure.contains {
+                          MyRAMPeerIdentity(peerID: $0).deviceID == peerDeviceID
+                      }
+                      MyRAMSyncBenchmarkTelemetry.shared.record(
+                          peerStillConnected
+                              ? .batchAcknowledgementSendFailed
+                              : .batchAcknowledgementDeferred,
+                          batchID: String(describing: batchID),
+                          peerDeviceID: peerDeviceID,
+                          outcome: peerStillConnected
+                              ? "transportFailed"
+                              : "peerDisconnectedDuringSend"
+                      )
+                      return
+                  }
+              }
+          }
+          ''',
+          )
+
+          replace_once(
+              "MyRAM/Sync/MyRAMSyncController.swift",
+              '''                if disposition == .acknowledgementPermitted {
+                  lastSyncAt = work.batch.createdAt
+                  await sendBatchAcknowledgement(batchID: work.batch.id, to: work.peerID)
+              }
+          ''',
+              '''                if disposition == .acknowledgementPermitted {
+                  lastSyncAt = work.batch.createdAt
+                  await enqueueBatchAcknowledgement(
+                      batchID: work.batch.id,
+                      peerDeviceID: peerDeviceID
+                  )
+              }
+          ''',
+          )
+
+          replace_once(
+              "MyRAM/Sync/MyRAMSyncController.swift",
+              '''            if state == .connected {
+                  cancelReconnectRetry(for: identity.deviceID)
+                  rememberTrustedPeer(peerID)
+                  await sendBootstrapCapabilityAnnouncement(to: peerID)
+          ''',
+              '''            if state == .connected {
+                  cancelReconnectRetry(for: identity.deviceID)
+                  rememberTrustedPeer(peerID)
+                  await flushBatchAcknowledgements(forPeerDeviceID: identity.deviceID)
+                  await sendBootstrapCapabilityAnnouncement(to: peerID)
+          ''',
+          )
+
+          # Mac controller mirrors the same stable-device ACK ownership.
+          replace_once(
+              "MyRAM/Mac/Sync/MacSyncBatchController.swift",
+              '''    private let unsentBatches: FileBackedSyncBatchQueue
+              private let legacyReceiver: MacLegacySyncReceiver
+          ''',
+              '''    private let unsentBatches: FileBackedSyncBatchQueue
+              private var acknowledgementOutbox = SyncBatchAcknowledgementOutbox()
+              private let legacyReceiver: MacLegacySyncReceiver
+          ''',
+          )
+
+          replace_once(
+              "MyRAM/Mac/Sync/MacSyncBatchController.swift",
+              '''    private func sendBatchAcknowledgement(batchID: SyncBatchID, to peerID: MCPeerID) throws {
+              let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+              do {
+                  let payload = try JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
+                  let data = try MultipeerSyncMessageCoding.encode(kind: .batchAcknowledgement, payload: payload)
+                  try sendBatchDataOperation(data, [peerID], .reliable)
+                  MyRAMSyncBenchmarkTelemetry.shared.record(
+                      .batchAcknowledgementSent,
+                      batchID: String(describing: batchID),
+                      peerDeviceID: peerDeviceID
+                  )
+              } catch {
+                  MyRAMSyncBenchmarkTelemetry.shared.record(
+                      .batchAcknowledgementSendFailed,
+                      batchID: String(describing: batchID),
+                      peerDeviceID: peerDeviceID,
+                      outcome: "transportFailed"
+                  )
+                  throw error
+              }
+          }
+          ''',
+              '''    private func enqueueBatchAcknowledgement(
+              batchID: SyncBatchID,
+              peerDeviceID: String
+          ) {
+              acknowledgementOutbox.enqueue(batchID, forPeerDeviceID: peerDeviceID)
+              flushBatchAcknowledgements(forPeerDeviceID: peerDeviceID)
+          }
+
+          private func flushBatchAcknowledgements(forPeerDeviceID peerDeviceID: String) {
+              let connectedPeers = connectedPeersProvider()
+              guard let peerID = connectedPeers.first(where: {
+                  MacSyncPeerIdentity(peerID: $0).deviceID == peerDeviceID
+              }) else {
+                  for batchID in acknowledgementOutbox.pendingBatchIDs(
+                      forPeerDeviceID: peerDeviceID
+                  ) {
+                      MyRAMSyncBenchmarkTelemetry.shared.record(
+                          .batchAcknowledgementDeferred,
+                          batchID: String(describing: batchID),
+                          peerDeviceID: peerDeviceID,
+                          outcome: "peerNotConnected"
+                      )
+                  }
+                  return
+              }
+
+              for batchID in acknowledgementOutbox.pendingBatchIDs(
+                  forPeerDeviceID: peerDeviceID
+              ) {
+                  do {
+                      let payload = try JSONEncoder().encode(
+                          SyncBatchAcknowledgement(batchID: batchID)
+                      )
+                      let data = try MultipeerSyncMessageCoding.encode(
+                          kind: .batchAcknowledgement,
+                          payload: payload
+                      )
+                      try sendBatchDataOperation(data, [peerID], .reliable)
+                      acknowledgementOutbox.remove(
+                          batchID,
+                          forPeerDeviceID: peerDeviceID
+                      )
+                      MyRAMSyncBenchmarkTelemetry.shared.record(
+                          .batchAcknowledgementSent,
+                          batchID: String(describing: batchID),
+                          peerDeviceID: peerDeviceID
+                      )
+                  } catch {
+                      let peerStillConnected = connectedPeersProvider().contains {
+                          MacSyncPeerIdentity(peerID: $0).deviceID == peerDeviceID
+                      }
+                      MyRAMSyncBenchmarkTelemetry.shared.record(
+                          peerStillConnected
+                              ? .batchAcknowledgementSendFailed
+                              : .batchAcknowledgementDeferred,
+                          batchID: String(describing: batchID),
+                          peerDeviceID: peerDeviceID,
+                          outcome: peerStillConnected
+                              ? "transportFailed"
+                              : "peerDisconnectedDuringSend"
+                      )
+                      return
+                  }
+              }
+          }
+          ''',
+          )
+
+          replace_once(
+              "MyRAM/Mac/Sync/MacSyncBatchController.swift",
+              '''                if disposition == .acknowledgementPermitted {
+                  try? sendBatchAcknowledgement(batchID: work.batch.id, to: work.peerID)
+              }
+          ''',
+              '''                if disposition == .acknowledgementPermitted {
+                  enqueueBatchAcknowledgement(
+                      batchID: work.batch.id,
+                      peerDeviceID: peerDeviceID
+                  )
+              }
+          ''',
+          )
+
+          replace_once(
+              "MyRAM/Mac/Sync/MacSyncBatchController.swift",
+              '''            if state == .connected {
+                  remember(peerID)
+                  sendBootstrapCapabilityAnnouncement(to: peerID)
+          ''',
+              '''            if state == .connected {
+                  remember(peerID)
+                  flushBatchAcknowledgements(forPeerDeviceID: identity.deviceID)
+                  sendBootstrapCapabilityAnnouncement(to: peerID)
+          ''',
+          )
+
+          # iOS production-seam regression: ACK is deferred while disconnected and
+          # delivered exactly once through the current peer identity after reconnect.
+          replace_once(
+              "MyRAMTests/SyncBatchEnvelopeV2Tests.swift",
+              '''    func testControllerRecordsTransportFailureWithoutSuccess() async throws {
+          ''',
+              '''    func testControllerDefersPermittedAcknowledgementUntilPeerReconnects() async throws {
+              let directory = try benchmarkDirectory()
+              defer { try? FileManager.default.removeItem(at: directory) }
+              let recorder = MyRAMSyncBenchmarkRecorder(
+                  enabled: true,
+                  platform: .iOS,
+                  deviceID: "local-ios",
+                  outputDirectoryURL: directory
+              )
+              MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(recorder)
+              defer { MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(nil) }
+
+              let peer = MCPeerID(displayName: "Remote|ack-reconnect-peer")
+              let transport = BenchmarkRecordingTransport(connectedPeers: [])
+              let controller = MyRAMSyncController(
+                  unsentBatchQueueFileURL: directory.appendingPathComponent("unsent-ack-reconnect.json"),
+                  pendingChangesFileURL: directory.appendingPathComponent("legacy-ack-reconnect.json"),
+                  startsNetworking: false,
+                  transport: transport
+              )
+              controller.onDurablyCaptureIncomingBatch = { _ in true }
+              controller.onBatchReceived = { _ in .acknowledgementPermitted }
+              let batch = makeBatch(idSuffix: 2301)
+              let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
+              let dummySession = MCSession(
+                  peer: MCPeerID(displayName: "Local|local-ios"),
+                  securityIdentity: nil,
+                  encryptionPreference: .required
+              )
+
+              controller.session(dummySession, didReceive: data, fromPeer: peer)
+              let batchID = String(describing: batch.id)
+              await waitUntil {
+                  guard let recordedEvents = try? self.events(from: recorder) else { return false }
+                  return recordedEvents.contains {
+                      $0.eventType == .batchAcknowledgementDeferred &&
+                      $0.batchID == batchID &&
+                      $0.peerDeviceID == "ack-reconnect-peer" &&
+                      $0.outcome == "peerNotConnected"
+                  }
+              }
+              XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
+              XCTAssertFalse(try events(from: recorder).contains {
+                  $0.eventType == .batchAcknowledgementSendFailed && $0.batchID == batchID
+              })
+
+              transport.connectedPeers = [peer]
+              controller.session(dummySession, peer: peer, didChange: .connected)
+              await waitUntil { transport.sentBatchAcknowledgements.count == 1 }
+
+              XCTAssertEqual(transport.sentBatchAcknowledgements, [SyncBatchAcknowledgement(batchID: batch.id)])
+              let finalEvents = try events(from: recorder)
+              XCTAssertTrue(finalEvents.contains {
+                  $0.eventType == .batchAcknowledgementSent &&
+                  $0.batchID == batchID &&
+                  $0.peerDeviceID == "ack-reconnect-peer"
+              })
+              XCTAssertFalse(finalEvents.contains {
+                  $0.eventType == .batchAcknowledgementSendFailed && $0.batchID == batchID
+              })
+          }
+
+              func testControllerRecordsTransportFailureWithoutSuccess() async throws {
+          ''',
+          )
+
+          # Mac production-seam regression mirrors iOS behavior.
+          replace_once(
+              "MyRAMMacTests/MacSyncDeviceIdentityTests.swift",
+              '''    func testControllerRecordsTransportFailureWithoutSuccess() async throws {
+          ''',
+              '''    func testControllerDefersPermittedAcknowledgementUntilPeerReconnects() async throws {
+              let directory = try benchmarkDirectory()
+              defer { try? FileManager.default.removeItem(at: directory) }
+              let recorder = MyRAMSyncBenchmarkRecorder(
+                  enabled: true,
+                  platform: .macOS,
+                  deviceID: "local-mac",
+                  runID: "ack-reconnect",
+                  outputDirectoryURL: directory
+              )
+              MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(recorder)
+              defer { MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(nil) }
+
+              let peer = MCPeerID(displayName: "Remote|ack-reconnect-peer")
+              let container = try makeContainer()
+              var connectedPeers: [MCPeerID] = []
+              var sends: [Data] = []
+              let controller = MacSyncBatchController(
+                  context: container.mainContext,
+                  unsentBatchQueueFileURL: directory.appendingPathComponent("unsent-ack-reconnect.json"),
+                  startsNetworking: false,
+                  identityProvider: {
+                      MacSyncDeviceIdentity(
+                          id: UUID(uuidString: "23000000-0000-0000-0000-000000000012")!,
+                          displayName: "Telemetry Mac"
+                      )
+                  },
+                  connectedPeersProvider: { connectedPeers },
+                  sendBatchDataOperation: { data, _, _ in sends.append(data) }
+              )
+              let coordinator = MacSyncConvergenceCoordinator(
+                  context: container.mainContext,
+                  syncController: controller,
+                  presentationSurface: MacSyncConvergencePresentationSurface(
+                      selectedNoteID: { nil },
+                      hasUnsavedChanges: { false },
+                      refreshNotesList: {},
+                      closeRemovedSelectedEditor: { _ in },
+                      applyIncremental: { _, _, _ in
+                          EditorRemoteBatchApplyResult(
+                              appliedCount: 0,
+                              disposition: .noApplicableMutations
+                          )
+                      },
+                      reloadSelectedEditor: { _ in true },
+                      currentEditorBody: { nil }
+                  ),
+                  incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                      prepareForIncomingBodyMutation: { _ in .ready }
+                  ),
+                  pendingIncomingQueueFileURL: directory.appendingPathComponent("pending-ack-reconnect.json"),
+                  localObligationQueueFileURL: directory.appendingPathComponent("obligations-ack-reconnect.json")
+              )
+              _ = coordinator
+              let note = Note(title: "ACK reconnect fixture", content: "")
+              note.id = UUID(uuidString: "23000000-0000-0000-0000-000000000030")!
+              container.mainContext.insert(note)
+              try container.mainContext.save()
+              let batch = SyncBatch(
+                  id: UUID(uuidString: "00000000-0000-0000-0000-000000002301")!,
+                  originDeviceID: UUID(uuidString: "23000000-0000-0000-0000-000000000020")!,
+                  createdAt: Date(timeIntervalSince1970: 2_301),
+                  changes: [
+                      .noteBodyTextInserted(.init(
+                          noteID: note.id,
+                          utf16Offset: 0,
+                          text: "A",
+                          modifiedAt: Date(timeIntervalSince1970: 2_301),
+                          baseContentHash: SyncBatchContentHash.sha256Hex(for: "")
+                      ))
+                  ]
+              )
+              let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
+              let dummySession = MCSession(
+                  peer: MCPeerID(displayName: "Local|local-mac"),
+                  securityIdentity: nil,
+                  encryptionPreference: .required
+              )
+
+              controller.session(dummySession, didReceive: data, fromPeer: peer)
+              let batchID = String(describing: batch.id)
+              await waitUntil {
+                  guard let recordedEvents = try? self.events(from: recorder) else { return false }
+                  return recordedEvents.contains {
+                      $0.eventType == .batchAcknowledgementDeferred &&
+                      $0.batchID == batchID &&
+                      $0.peerDeviceID == "ack-reconnect-peer" &&
+                      $0.outcome == "peerNotConnected"
+                  }
+              }
+              XCTAssertTrue(sends.isEmpty)
+              XCTAssertFalse(try events(from: recorder).contains {
+                  $0.eventType == .batchAcknowledgementSendFailed && $0.batchID == batchID
+              })
+
+              connectedPeers = [peer]
+              controller.session(dummySession, peer: peer, didChange: .connected)
+              await waitUntil {
+                  sends.contains { data in
+                      (try? MultipeerSyncMessageCoding.decodeMessage(from: data).kind)
+                          == .batchAcknowledgement
+                  }
+              }
+
+              let acknowledgements = try sends.compactMap { data -> SyncBatchAcknowledgement? in
+                  let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                  guard message.kind == .batchAcknowledgement else { return nil }
+                  return try JSONDecoder().decode(
+                      SyncBatchAcknowledgement.self,
+                      from: message.payload
+                  )
+              }
+              XCTAssertEqual(acknowledgements, [SyncBatchAcknowledgement(batchID: batch.id)])
+              let finalEvents = try events(from: recorder)
+              XCTAssertTrue(finalEvents.contains {
+                  $0.eventType == .batchAcknowledgementSent &&
+                  $0.batchID == batchID &&
+                  $0.peerDeviceID == "ack-reconnect-peer"
+              })
+              XCTAssertFalse(finalEvents.contains {
+                  $0.eventType == .batchAcknowledgementSendFailed && $0.batchID == batchID
+              })
+          }
+
+              func testControllerRecordsTransportFailureWithoutSuccess() async throws {
+          ''',
+          )
+          PY
+
+      - name: Verify exact scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(cat <<'EOF'
+          MyRAM/Mac/Sync/MacSyncBatchController.swift
+          MyRAM/Sync/Batch/SyncBatchEnvelope.swift
+          MyRAM/Sync/MyRAMSyncController.swift
+          MyRAM/Sync/MyRAMSyncModels.swift
+          MyRAMMacTests/MacSyncDeviceIdentityTests.swift
+          MyRAMTests/SyncBatchEnvelopeV2Tests.swift
+          EOF
+          )
+          actual="$(git diff --name-only | sort)"
+          test "$actual" = "$expected"
+          git diff --check
+          grep -q 'case batchAcknowledgementDeferred' MyRAM/Sync/MyRAMSyncModels.swift
+          grep -q 'struct SyncBatchAcknowledgementOutbox' MyRAM/Sync/Batch/SyncBatchEnvelope.swift
+
+      - name: Commit and push MYR-230 branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            MyRAM/Sync/Batch/SyncBatchEnvelope.swift \
+            MyRAM/Sync/MyRAMSyncModels.swift \
+            MyRAM/Sync/MyRAMSyncController.swift \
+            MyRAM/Mac/Sync/MacSyncBatchController.swift \
+            MyRAMTests/SyncBatchEnvelopeV2Tests.swift \
+            MyRAMMacTests/MacSyncDeviceIdentityTests.swift
+          git commit -m "MYR-230 Preserve acknowledgement ownership across reconnect"
+          git push origin HEAD:refs/heads/MYR-230-Preserve-batch-acknowledgement-ownership-across-disconnect
