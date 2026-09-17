@@ -191,30 +191,12 @@ struct SyncBatchOutstandingDeliveryTracker: Equatable, Sendable {
         tokenByKey.removeValue(forKey: key)
     }
 
-    mutating func release(
-        _ batchID: SyncBatchID,
-        forPeerDeviceID peerDeviceID: String
-    ) {
-        tokenByKey.removeValue(
-            forKey: Key(batchID: batchID, peerDeviceID: peerDeviceID)
-        )
-    }
-
     mutating func release(_ batchID: SyncBatchID) {
         tokenByKey = tokenByKey.filter { $0.key.batchID != batchID }
     }
 
     mutating func release(_ batchIDs: Set<SyncBatchID>) {
         tokenByKey = tokenByKey.filter { !batchIDs.contains($0.key.batchID) }
-    }
-
-    mutating func release(
-        _ batchIDs: Set<SyncBatchID>,
-        forPeerDeviceID peerDeviceID: String
-    ) {
-        tokenByKey = tokenByKey.filter { entry in
-            entry.key.peerDeviceID != peerDeviceID || !batchIDs.contains(entry.key.batchID)
-        }
     }
 
     mutating func invalidateSession(forPeerDeviceID peerDeviceID: String) {
