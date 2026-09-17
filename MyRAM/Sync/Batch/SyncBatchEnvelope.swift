@@ -112,9 +112,8 @@ enum SyncBatchEnvelopeCodec {
     }
 }
 
-/// Transport-level confirmation that a peer has durably captured a batch. It says
-/// nothing about whether the batch has been converged/applied yet — only that the
-/// sender no longer needs to keep retrying redelivery of these bytes.
+/// Confirmation that the remote peer completed convergence for a durable batch.
+/// The sender keeps its durable copy until this acknowledgement is received.
 struct SyncBatchAcknowledgement: Codable, Equatable, Sendable {
     let batchID: SyncBatchID
 }
@@ -144,103 +143,103 @@ struct SyncBatchAcknowledgementOutbox: Equatable, Sendable {
     }
 }
 
-/// Session-scoped ownership of a successful transport handoff. Durable queue ownership
-/// remains separate: a batch stays queued until the peer acknowledgement removes it.
+/// Session-scoped ownership of one transport handoff for a durable batch and stable peer.
+/// Reservations are tokenized so a stale send completion from an invalidated session cannot
+/// release ownership established by a later reconnect.
 struct SyncBatchOutstandingDeliveryTracker: Equatable, Sendable {
+    struct Reservation: Equatable, Sendable {
+        let batchID: SyncBatchID
+        let peerDeviceID: String
+        fileprivate let token: UUID
+    }
+
     private struct Key: Hashable, Sendable {
         let batchID: SyncBatchID
         let peerDeviceID: String
     }
 
-    private var keys: Set<Key> = []
+    private var tokenByKey: [Key: UUID] = [:]
 
     mutating func reserve(
         _ batchID: SyncBatchID,
         forPeerDeviceID peerDeviceID: String
-    ) -> Bool {
-        keys.insert(Key(batchID: batchID, peerDeviceID: peerDeviceID)).inserted
+    ) -> Reservation? {
+        let key = Key(batchID: batchID, peerDeviceID: peerDeviceID)
+        guard tokenByKey[key] == nil else { return nil }
+        let token = UUID()
+        tokenByKey[key] = token
+        return Reservation(
+            batchID: batchID,
+            peerDeviceID: peerDeviceID,
+            token: token
+        )
     }
 
     func isAwaitingAcknowledgement(
         _ batchID: SyncBatchID,
         forPeerDeviceID peerDeviceID: String
     ) -> Bool {
-        keys.contains(Key(batchID: batchID, peerDeviceID: peerDeviceID))
+        tokenByKey[Key(batchID: batchID, peerDeviceID: peerDeviceID)] != nil
+    }
+
+    mutating func release(_ reservation: Reservation) {
+        let key = Key(
+            batchID: reservation.batchID,
+            peerDeviceID: reservation.peerDeviceID
+        )
+        guard tokenByKey[key] == reservation.token else { return }
+        tokenByKey.removeValue(forKey: key)
     }
 
     mutating func release(
         _ batchID: SyncBatchID,
         forPeerDeviceID peerDeviceID: String
     ) {
-        keys.remove(Key(batchID: batchID, peerDeviceID: peerDeviceID))
+        tokenByKey.removeValue(
+            forKey: Key(batchID: batchID, peerDeviceID: peerDeviceID)
+        )
+    }
+
+    mutating func release(_ batchID: SyncBatchID) {
+        tokenByKey = tokenByKey.filter { $0.key.batchID != batchID }
+    }
+
+    mutating func release(_ batchIDs: Set<SyncBatchID>) {
+        tokenByKey = tokenByKey.filter { !batchIDs.contains($0.key.batchID) }
     }
 
     mutating func release(
         _ batchIDs: Set<SyncBatchID>,
         forPeerDeviceID peerDeviceID: String
     ) {
-        keys = keys.filter { key in
-            key.peerDeviceID != peerDeviceID || !batchIDs.contains(key.batchID)
+        tokenByKey = tokenByKey.filter { entry in
+            entry.key.peerDeviceID != peerDeviceID || !batchIDs.contains(entry.key.batchID)
         }
     }
 
     mutating func invalidateSession(forPeerDeviceID peerDeviceID: String) {
-        keys = keys.filter { $0.peerDeviceID != peerDeviceID }
+        tokenByKey = tokenByKey.filter { $0.key.peerDeviceID != peerDeviceID }
     }
 
     mutating func reset() {
-        keys.removeAll()
+        tokenByKey.removeAll()
     }
 }
 
 /// Bounds duplicate receiver work while one delivery of the same batch is already queued
-/// or executing. It is containment only; sender delivery ownership remains authoritative.
+/// or executing. Batch identity, not transient peer/session identity, owns convergence work.
 struct SyncBatchPendingReceiveTracker: Equatable, Sendable {
-    private struct Key: Hashable, Sendable {
-        let batchID: SyncBatchID
-        let peerDeviceID: String
+    private var batchIDs: Set<SyncBatchID> = []
+
+    mutating func begin(_ batchID: SyncBatchID) -> Bool {
+        batchIDs.insert(batchID).inserted
     }
 
-    private var keys: Set<Key> = []
-
-    mutating func begin(
-        _ batchID: SyncBatchID,
-        forPeerDeviceID peerDeviceID: String
-    ) -> Bool {
-        keys.insert(Key(batchID: batchID, peerDeviceID: peerDeviceID)).inserted
+    mutating func finish(_ batchID: SyncBatchID) {
+        batchIDs.remove(batchID)
     }
 
-    mutating func finish(
-        _ batchID: SyncBatchID,
-        forPeerDeviceID peerDeviceID: String
-    ) {
-        keys.remove(Key(batchID: batchID, peerDeviceID: peerDeviceID))
-    }
-
-    func contains(
-        _ batchID: SyncBatchID,
-        forPeerDeviceID peerDeviceID: String
-    ) -> Bool {
-        keys.contains(Key(batchID: batchID, peerDeviceID: peerDeviceID))
+    func contains(_ batchID: SyncBatchID) -> Bool {
+        batchIDs.contains(batchID)
     }
 }
-
-#if os(iOS)
-extension MyRAMSyncController {
-    func retainCompletedRemoteBatchAcknowledgements(_ batchIDs: Set<SyncBatchID>) {
-        Task { @MainActor in
-            await self.retainCompletedRemoteBatchAcknowledgements(batchIDs)
-        }
-    }
-}
-#endif
-
-#if os(macOS)
-extension MacSyncBatchController {
-    func retainCompletedRemoteBatchAcknowledgements(_ batchIDs: Set<SyncBatchID>) {
-        Task { @MainActor in
-            await self.retainCompletedRemoteBatchAcknowledgements(batchIDs)
-        }
-    }
-}
-#endif
