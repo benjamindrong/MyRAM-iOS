@@ -1,0 +1,47 @@
+name: BEN36 iOS barrier PR remediation
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  patch:
+    if: github.head_ref == 'tmp-ben36-ios-barrier-remediation'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: tmp-ben36-ios-barrier-remediation
+          path: helper
+      - uses: actions/checkout@v4
+        with:
+          ref: BEN-36-MyRAM-sync-endurance-harness
+          fetch-depth: 0
+          path: target
+      - name: Verify exact target head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C target rev-parse HEAD)" = "675fb9ad55c1568588079aeae94483ae03a4e3f3"
+      - name: Apply and audit harness remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 helper/.github/tmp/ben36_ios_barrier_patch.py target
+          git -C target diff --check
+          changed="$(git -C target diff --name-only | sort)"
+          expected=$'MyRAM/iOS/Sync/Batch/IPhoneSyncBatchAccumulator.swift\nMyRAMTests/IPhoneSyncBatchAccumulatorTests.swift'
+          test "$changed" = "$expected"
+      - name: Commit and push BEN-36
+        shell: bash
+        run: |
+          set -euo pipefail
+          git -C target config user.name "benjamindrong"
+          git -C target config user.email "38218923+benjamindrong@users.noreply.github.com"
+          git -C target add MyRAM/iOS/Sync/Batch/IPhoneSyncBatchAccumulator.swift MyRAMTests/IPhoneSyncBatchAccumulatorTests.swift
+          git -C target commit -m "BEN-36 Complete two-sided endurance finalization"
+          git -C target push origin HEAD:BEN-36-MyRAM-sync-endurance-harness
