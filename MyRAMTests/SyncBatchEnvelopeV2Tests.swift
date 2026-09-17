@@ -699,6 +699,14 @@ final class MyRAMSyncBenchmarkProductionTelemetryTests: XCTestCase {
         transport.connectedPeers = [peer]
         controller.session(dummySession, peer: peer, didChange: .connected)
         await waitUntil { transport.sentBatchAcknowledgements.count == 1 }
+        await waitUntil {
+            guard let recordedEvents = try? self.events(from: recorder) else { return false }
+            return recordedEvents.contains {
+                $0.eventType == .batchAcknowledgementSent &&
+                $0.batchID == batchID &&
+                $0.peerDeviceID == "ack-reconnect-peer"
+            }
+        }
 
         XCTAssertEqual(
             transport.sentBatchAcknowledgements,
