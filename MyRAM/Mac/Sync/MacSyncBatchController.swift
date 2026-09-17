@@ -810,7 +810,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private func handlePeerDisconnect(peerDeviceID: String) {
         bootstrapCapabilityResolutionTasks.removeValue(forKey: peerDeviceID)?.cancel()
         bootstrapRetryTasks.removeValue(forKey: peerDeviceID)?.cancel()
-        peerCapabilityRegistry.clearEvidence(forPeerDeviceID: peerDeviceID)
+        peerCapabilityRegistry.clearCurrentSessionEvidence(forPeerDeviceID: peerDeviceID)
         bootstrapStateByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
 
@@ -999,6 +999,9 @@ extension MacSyncBatchController: MCSessionDelegate {
                 handlePeerDisconnect(peerDeviceID: identity.deviceID)
             }
             if state == .connected {
+                peerCapabilityRegistry.bindCurrentSessionV2Support(
+                    forPeerDeviceID: identity.deviceID
+                )
                 remember(peerID)
                 flushBatchAcknowledgements(forPeerDeviceID: identity.deviceID)
                 sendBootstrapCapabilityAnnouncement(to: peerID)

@@ -1378,7 +1378,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private func handlePeerDisconnect(peerDeviceID: String) {
         bootstrapCapabilityResolutionTasks.removeValue(forKey: peerDeviceID)?.cancel()
         bootstrapRetryTasks.removeValue(forKey: peerDeviceID)?.cancel()
-        peerCapabilityRegistry.clearEvidence(forPeerDeviceID: peerDeviceID)
+        peerCapabilityRegistry.clearCurrentSessionEvidence(forPeerDeviceID: peerDeviceID)
         bootstrapStateByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
 
@@ -1609,6 +1609,9 @@ extension MyRAMSyncController: MCSessionDelegate {
             }
 
             if state == .connected {
+                peerCapabilityRegistry.bindCurrentSessionV2Support(
+                    forPeerDeviceID: identity.deviceID
+                )
                 cancelReconnectRetry(for: identity.deviceID)
                 rememberTrustedPeer(peerID)
                 await flushBatchAcknowledgements(forPeerDeviceID: identity.deviceID)
