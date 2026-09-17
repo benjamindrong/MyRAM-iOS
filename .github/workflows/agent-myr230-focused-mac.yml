@@ -1,0 +1,49 @@
+name: Agent MYR-230 focused Mac diagnostic
+
+on:
+  push:
+    branches:
+      - agent-MYR-230-ack-outbox
+
+permissions:
+  contents: read
+
+jobs:
+  focused-mac:
+    runs-on: macos-26
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact MyRAM candidate
+        uses: actions/checkout@v7
+        with:
+          ref: 254a2c95c6043d58219907db0b425603b0272c74
+          fetch-depth: 0
+          path: MyRAM-iOS
+
+      - name: Check out exact NearbySyncCore sibling
+        uses: actions/checkout@v7
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+
+      - name: Assert exact candidate identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C MyRAM-iOS rev-parse HEAD)" = "254a2c95c6043d58219907db0b425603b0272c74"
+          test "$(git -C NearbySyncCore rev-parse HEAD)" = "4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2"
+
+      - name: Run focused MYR-230 Mac regression
+        working-directory: MyRAM-iOS
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project MyRAM.xcodeproj \
+            -scheme MyRAMMac \
+            -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:MyRAMMacTests/MacSyncDeviceIdentityTests/testControllerDefersPermittedAcknowledgementUntilPeerReconnects \
+            test 2>&1 | tee /tmp/myr230-focused-mac.log
