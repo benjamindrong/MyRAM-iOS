@@ -47,6 +47,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     let conflictStore: SyncConflictStore
     private var readyBatchTask: Task<Void, Never>?
     private let unsentBatches: FileBackedSyncBatchQueue
+    private var acknowledgementOutbox = SyncBatchAcknowledgementOutbox()
     private let legacyReceiver: MacLegacySyncReceiver
     private let startAdvertisingOperation: () -> Void
     private let startBrowsingOperation: () -> Void
@@ -515,25 +516,56 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         unsentBatches.removeAll(withIDs: [acknowledgement.batchID])
     }
 
-    private func sendBatchAcknowledgement(batchID: SyncBatchID, to peerID: MCPeerID) throws {
-        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
-        do {
-            let payload = try JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
-            let data = try MultipeerSyncMessageCoding.encode(kind: .batchAcknowledgement, payload: payload)
-            try sendBatchDataOperation(data, [peerID], .reliable)
-            MyRAMSyncBenchmarkTelemetry.shared.record(
-                .batchAcknowledgementSent,
-                batchID: String(describing: batchID),
-                peerDeviceID: peerDeviceID
-            )
-        } catch {
-            MyRAMSyncBenchmarkTelemetry.shared.record(
-                .batchAcknowledgementSendFailed,
-                batchID: String(describing: batchID),
-                peerDeviceID: peerDeviceID,
-                outcome: "transportFailed"
-            )
-            throw error
+    private func enqueueBatchAcknowledgement(
+        batchID: SyncBatchID,
+        peerDeviceID: String
+    ) {
+        acknowledgementOutbox.enqueue(batchID, forPeerDeviceID: peerDeviceID)
+        flushBatchAcknowledgements(forPeerDeviceID: peerDeviceID)
+    }
+
+    private func flushBatchAcknowledgements(forPeerDeviceID peerDeviceID: String) {
+        let connectedPeers = connectedPeersProvider()
+        guard let peerID = connectedPeers.first(where: {
+            MacSyncPeerIdentity(peerID: $0).deviceID == peerDeviceID
+        }) else {
+            for batchID in acknowledgementOutbox.pendingBatchIDs(forPeerDeviceID: peerDeviceID) {
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    .batchAcknowledgementDeferred,
+                    batchID: String(describing: batchID),
+                    peerDeviceID: peerDeviceID,
+                    outcome: "peerNotConnected"
+                )
+            }
+            return
+        }
+
+        for batchID in acknowledgementOutbox.pendingBatchIDs(forPeerDeviceID: peerDeviceID) {
+            do {
+                let payload = try JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
+                let data = try MultipeerSyncMessageCoding.encode(
+                    kind: .batchAcknowledgement,
+                    payload: payload
+                )
+                try sendBatchDataOperation(data, [peerID], .reliable)
+                acknowledgementOutbox.remove(batchID, forPeerDeviceID: peerDeviceID)
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    .batchAcknowledgementSent,
+                    batchID: String(describing: batchID),
+                    peerDeviceID: peerDeviceID
+                )
+            } catch {
+                let peerStillConnected = connectedPeersProvider().contains {
+                    MacSyncPeerIdentity(peerID: $0).deviceID == peerDeviceID
+                }
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    peerStillConnected ? .batchAcknowledgementSendFailed : .batchAcknowledgementDeferred,
+                    batchID: String(describing: batchID),
+                    peerDeviceID: peerDeviceID,
+                    outcome: peerStillConnected ? "transportFailed" : "peerDisconnectedDuringSend"
+                )
+                return
+            }
         }
     }
 
@@ -864,7 +896,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                     outcome: String(describing: disposition)
                 )
                 if disposition == .acknowledgementPermitted {
-                    try? sendBatchAcknowledgement(batchID: work.batch.id, to: work.peerID)
+                    enqueueBatchAcknowledgement(
+                        batchID: work.batch.id,
+                        peerDeviceID: peerDeviceID
+                    )
                 }
             }
 
@@ -965,6 +1000,7 @@ extension MacSyncBatchController: MCSessionDelegate {
             }
             if state == .connected {
                 remember(peerID)
+                flushBatchAcknowledgements(forPeerDeviceID: identity.deviceID)
                 sendBootstrapCapabilityAnnouncement(to: peerID)
                 await beginBootstrap(to: peerID)
                 startBootstrapCapabilityResolution(for: peerID)

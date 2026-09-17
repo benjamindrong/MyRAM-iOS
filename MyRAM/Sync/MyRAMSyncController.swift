@@ -261,6 +261,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         await self?.requestLegacyFlush()
     }
     private let unsentBatches: FileBackedSyncBatchQueue
+    private var acknowledgementOutbox = SyncBatchAcknowledgementOutbox()
     private var isFlushingLegacy = false
     private var pendingLegacyFlushAfterActiveSend = false
     private var outboundFlushRequestedWhileRecoverySuspended = false
@@ -1025,24 +1026,56 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
     }
 
-    private func sendBatchAcknowledgement(batchID: SyncBatchID, to peerID: MCPeerID) async {
-        let peerDeviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
-        do {
-            let payload = try JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
-            let data = try MultipeerSyncMessageCoding.encode(kind: .batchAcknowledgement, payload: payload)
-            try await transport.send(data, toPeers: [peerID], mode: .reliable)
-            MyRAMSyncBenchmarkTelemetry.shared.record(
-                .batchAcknowledgementSent,
-                batchID: String(describing: batchID),
-                peerDeviceID: peerDeviceID
-            )
-        } catch {
-            MyRAMSyncBenchmarkTelemetry.shared.record(
-                .batchAcknowledgementSendFailed,
-                batchID: String(describing: batchID),
-                peerDeviceID: peerDeviceID,
-                outcome: "transportFailed"
-            )
+    private func enqueueBatchAcknowledgement(
+        batchID: SyncBatchID,
+        peerDeviceID: String
+    ) async {
+        acknowledgementOutbox.enqueue(batchID, forPeerDeviceID: peerDeviceID)
+        await flushBatchAcknowledgements(forPeerDeviceID: peerDeviceID)
+    }
+
+    private func flushBatchAcknowledgements(forPeerDeviceID peerDeviceID: String) async {
+        let connectedPeers = await transport.connectedPeers()
+        guard let peerID = connectedPeers.first(where: {
+            MyRAMPeerIdentity(peerID: $0).deviceID == peerDeviceID
+        }) else {
+            for batchID in acknowledgementOutbox.pendingBatchIDs(forPeerDeviceID: peerDeviceID) {
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    .batchAcknowledgementDeferred,
+                    batchID: String(describing: batchID),
+                    peerDeviceID: peerDeviceID,
+                    outcome: "peerNotConnected"
+                )
+            }
+            return
+        }
+
+        for batchID in acknowledgementOutbox.pendingBatchIDs(forPeerDeviceID: peerDeviceID) {
+            do {
+                let payload = try JSONEncoder().encode(SyncBatchAcknowledgement(batchID: batchID))
+                let data = try MultipeerSyncMessageCoding.encode(
+                    kind: .batchAcknowledgement,
+                    payload: payload
+                )
+                try await transport.send(data, toPeers: [peerID], mode: .reliable)
+                acknowledgementOutbox.remove(batchID, forPeerDeviceID: peerDeviceID)
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    .batchAcknowledgementSent,
+                    batchID: String(describing: batchID),
+                    peerDeviceID: peerDeviceID
+                )
+            } catch {
+                let peerStillConnected = await transport.connectedPeers().contains {
+                    MyRAMPeerIdentity(peerID: $0).deviceID == peerDeviceID
+                }
+                MyRAMSyncBenchmarkTelemetry.shared.record(
+                    peerStillConnected ? .batchAcknowledgementSendFailed : .batchAcknowledgementDeferred,
+                    batchID: String(describing: batchID),
+                    peerDeviceID: peerDeviceID,
+                    outcome: peerStillConnected ? "transportFailed" : "peerDisconnectedDuringSend"
+                )
+                return
+            }
         }
     }
 
@@ -1077,7 +1110,10 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 )
                 if disposition == .acknowledgementPermitted {
                     lastSyncAt = work.batch.createdAt
-                    await sendBatchAcknowledgement(batchID: work.batch.id, to: work.peerID)
+                    await enqueueBatchAcknowledgement(
+                        batchID: work.batch.id,
+                        peerDeviceID: peerDeviceID
+                    )
                 }
             }
 
@@ -1575,6 +1611,7 @@ extension MyRAMSyncController: MCSessionDelegate {
             if state == .connected {
                 cancelReconnectRetry(for: identity.deviceID)
                 rememberTrustedPeer(peerID)
+                await flushBatchAcknowledgements(forPeerDeviceID: identity.deviceID)
                 await sendBootstrapCapabilityAnnouncement(to: peerID)
                 await beginBootstrap(to: peerID)
                 startBootstrapCapabilityResolution(for: peerID)

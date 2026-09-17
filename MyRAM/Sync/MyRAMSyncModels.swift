@@ -232,6 +232,7 @@ enum MyRAMSyncBenchmarkEventType: String, Codable, Sendable {
     case batchReceived
     case batchCaptureCompleted
     case batchConvergenceCompleted
+    case batchAcknowledgementDeferred
     case batchAcknowledgementSent
     case batchAcknowledgementSendFailed
     case batchAcknowledgementReceived
