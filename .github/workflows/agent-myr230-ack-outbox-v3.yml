@@ -1,0 +1,67 @@
+name: Agent MYR-230 acknowledgement remediation v3
+
+on:
+  push:
+    branches:
+      - agent-MYR-230-ack-outbox
+
+permissions:
+  contents: write
+
+jobs:
+  apply-remediation:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact MYR-230 branch
+        uses: actions/checkout@v4
+        with:
+          ref: MYR-230-Preserve-batch-acknowledgement-ownership-across-disconnect
+          fetch-depth: 0
+
+      - name: Verify starting head
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "74f37434b526e33768510f1a09642e94dd8487e9"
+
+      - name: Apply remediation
+        shell: bash
+        run: |
+          set -euo pipefail
+          git show origin/agent-MYR-230-ack-outbox:Scripts/agent_myr230_patch.py > /tmp/agent_myr230_patch.py
+          python3 /tmp/agent_myr230_patch.py
+
+      - name: Verify exact scope
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected=$(cat <<'EOF'
+          MyRAM/Mac/Sync/MacSyncBatchController.swift
+          MyRAM/Sync/Batch/SyncBatchEnvelope.swift
+          MyRAM/Sync/MyRAMSyncController.swift
+          MyRAM/Sync/MyRAMSyncModels.swift
+          MyRAMMacTests/MacSyncDeviceIdentityTests.swift
+          MyRAMTests/SyncBatchEnvelopeV2Tests.swift
+          EOF
+          )
+          actual="$(git diff --name-only | sort)"
+          test "$actual" = "$expected"
+          git diff --check
+          grep -q 'case batchAcknowledgementDeferred' MyRAM/Sync/MyRAMSyncModels.swift
+          grep -q 'struct SyncBatchAcknowledgementOutbox' MyRAM/Sync/Batch/SyncBatchEnvelope.swift
+
+      - name: Commit and push feature branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            MyRAM/Sync/Batch/SyncBatchEnvelope.swift \
+            MyRAM/Sync/MyRAMSyncModels.swift \
+            MyRAM/Sync/MyRAMSyncController.swift \
+            MyRAM/Mac/Sync/MacSyncBatchController.swift \
+            MyRAMTests/SyncBatchEnvelopeV2Tests.swift \
+            MyRAMMacTests/MacSyncDeviceIdentityTests.swift
+          git commit -m "MYR-230 Preserve acknowledgement ownership across reconnect"
+          git push origin HEAD:refs/heads/MYR-230-Preserve-batch-acknowledgement-ownership-across-disconnect
