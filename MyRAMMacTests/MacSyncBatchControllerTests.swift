@@ -8,6 +8,25 @@ import XCTest
 final class MacSyncBatchControllerTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
+    func testBenchmarkReconnectInvitationGateSerializesPollingAndAllowsLaterAttempts() {
+        var gate = MyRAMSyncBenchmarkEnduranceMacReconnectInvitationGate()
+        let startedAt = Date(timeIntervalSince1970: 1_000)
+        var invitationCount = 0
+        let invite = { invitationCount += 1 }
+
+        XCTAssertTrue(gate.inviteIfEligible(at: startedAt, timeout: 12, operation: invite))
+        XCTAssertFalse(gate.inviteIfEligible(at: startedAt.addingTimeInterval(0.25), timeout: 12, operation: invite))
+        XCTAssertFalse(gate.inviteIfEligible(at: startedAt.addingTimeInterval(11.999), timeout: 12, operation: invite))
+        XCTAssertEqual(invitationCount, 1)
+        XCTAssertTrue(gate.inviteIfEligible(at: startedAt.addingTimeInterval(12), timeout: 12, operation: invite))
+        XCTAssertEqual(invitationCount, 2)
+
+        gate.resolveAttempt()
+
+        XCTAssertTrue(gate.inviteIfEligible(at: startedAt.addingTimeInterval(12.25), timeout: 12, operation: invite))
+        XCTAssertEqual(invitationCount, 3)
+    }
+
     func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
         let peerID = MCPeerID(displayName: "remote|connected-mac")
         var invitedPeerIDs: [MCPeerID] = []

@@ -1292,6 +1292,28 @@ final class MyRAMSyncBenchmarkEnduranceIOSDriver {
 #endif
 
 #if DEBUG && os(macOS)
+struct MyRAMSyncBenchmarkEnduranceMacReconnectInvitationGate {
+    private var activeAttemptExpiresAt: Date?
+
+    @discardableResult
+    mutating func inviteIfEligible(
+        at now: Date,
+        timeout: TimeInterval,
+        operation: () -> Void
+    ) -> Bool {
+        if let activeAttemptExpiresAt, now < activeAttemptExpiresAt {
+            return false
+        }
+        activeAttemptExpiresAt = now.addingTimeInterval(timeout)
+        operation()
+        return true
+    }
+
+    mutating func resolveAttempt() {
+        activeAttemptExpiresAt = nil
+    }
+}
+
 @MainActor
 final class MyRAMSyncBenchmarkEnduranceMacDriver {
     static let shared = MyRAMSyncBenchmarkEnduranceMacDriver()
@@ -1299,6 +1321,7 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
     private static let initialSeedDrainSeconds = 45
     private var task: Task<Void, Never>?
     private var convergenceCoordinator: MacSyncConvergenceCoordinator?
+    private var reconnectInvitationGate = MyRAMSyncBenchmarkEnduranceMacReconnectInvitationGate()
 
     private init() {}
 
@@ -1767,12 +1790,18 @@ final class MyRAMSyncBenchmarkEnduranceMacDriver {
     }
 
     private func inviteExpectedIOSPeerIfNeeded(controller: MacSyncBatchController) {
-        guard !controller.connectedPeerDeviceIDsForBenchmark().contains(
+        if controller.connectedPeerDeviceIDsForBenchmark().contains(
             MyRAMSyncBenchmarkConfiguration.enduranceIOSDeviceID
-        ), let peer = controller.availablePeers.first(where: {
+        ) {
+            reconnectInvitationGate.resolveAttempt()
+            return
+        }
+        guard let peer = controller.availablePeers.first(where: {
             $0.deviceID == MyRAMSyncBenchmarkConfiguration.enduranceIOSDeviceID
         }) else { return }
-        controller.invite(peer)
+        reconnectInvitationGate.inviteIfEligible(at: .now, timeout: 12) {
+            controller.invite(peer)
+        }
     }
 
     private func finishFailure(
