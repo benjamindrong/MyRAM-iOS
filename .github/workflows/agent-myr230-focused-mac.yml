@@ -45,5 +45,5 @@ jobs:
             -destination 'platform=macOS' \
             -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=NO \
-            -only-testing:MyRAMMacTests/MacSyncDeviceIdentityTests/testControllerDefersPermittedAcknowledgementUntilPeerReconnects \
+            -only-testing:MyRAMMacTests/MyRAMMacSyncBenchmarkProductionTelemetryTests/testControllerDefersPermittedAcknowledgementUntilPeerReconnects \
             test 2>&1 | tee /tmp/myr230-focused-mac.log
