@@ -19,6 +19,7 @@ jobs:
           fetch-depth: 0
 
       - name: Verify exact current PR head
+        shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin MYR-230-Preserve-batch-acknowledgement-ownership-across-disconnect
@@ -26,46 +27,52 @@ jobs:
           test "$(git rev-parse FETCH_HEAD)" = "cf55fded7b997935a443ac83b31b10337ee03e7f"
 
       - name: Correct terminal telemetry wait
+        shell: bash
         run: |
           set -euo pipefail
-          python3 <<'PY'
+          python3 - <<'PY'
           from pathlib import Path
-          p = Path('MyRAMTests/SyncBatchEnvelopeV2Tests.swift')
-          s = p.read_text()
-          old = '''        await waitUntil { transport.sentBatchAcknowledgements.count == 1 }
-
-        XCTAssertEqual(
-'''
-          new = '''        await waitUntil { transport.sentBatchAcknowledgements.count == 1 }
-        await waitUntil {
-            guard let recordedEvents = try? self.events(from: recorder) else { return false }
-            return recordedEvents.contains {
-                $0.eventType == .batchAcknowledgementSent &&
-                $0.batchID == batchID &&
-                $0.peerDeviceID == "ack-reconnect-peer"
-            }
-        }
-
-        XCTAssertEqual(
-'''
-          if s.count(old) != 1:
-              raise SystemExit(f'expected exactly one patch anchor, found {s.count(old)}')
-          p.write_text(s.replace(old, new, 1))
+          path = Path("MyRAMTests/SyncBatchEnvelopeV2Tests.swift")
+          text = path.read_text(encoding="utf-8")
+          test_start = "    func testControllerDefersPermittedAcknowledgementUntilPeerReconnects() async throws {\n"
+          test_end = "    func testControllerRecordsTransportFailureWithoutSuccess() async throws {\n"
+          if text.count(test_start) != 1 or text.count(test_end) != 1:
+              raise SystemExit("non-unique test anchors")
+          start = text.index(test_start)
+          end = text.index(test_end, start)
+          region = text[start:end]
+          needle = "        await waitUntil { transport.sentBatchAcknowledgements.count == 1 }\n"
+          if region.count(needle) != 1:
+              raise SystemExit(f"expected one transport wait, found {region.count(needle)}")
+          terminal_wait = (
+              needle
+              + "        await waitUntil {\n"
+              + "            guard let recordedEvents = try? self.events(from: recorder) else { return false }\n"
+              + "            return recordedEvents.contains {\n"
+              + "                $0.eventType == .batchAcknowledgementSent &&\n"
+              + "                $0.batchID == batchID &&\n"
+              + "                $0.peerDeviceID == \"ack-reconnect-peer\"\n"
+              + "            }\n"
+              + "        }\n"
+          )
+          region = region.replace(needle, terminal_wait, 1)
+          path.write_text(text[:start] + region + text[end:], encoding="utf-8")
           PY
 
       - name: Verify bounded diff
+        shell: bash
         run: |
           set -euo pipefail
-          test "$(git diff --name-only | wc -l | tr -d ' ')" = "1"
           test "$(git diff --name-only)" = "MyRAMTests/SyncBatchEnvelopeV2Tests.swift"
           git diff --check
           git diff -- MyRAMTests/SyncBatchEnvelopeV2Tests.swift
 
       - name: Commit and push existing PR branch
+        shell: bash
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add MyRAMTests/SyncBatchEnvelopeV2Tests.swift
           git commit -m "MYR-230 Stabilize acknowledgement telemetry regression"
-          git push origin HEAD:MYR-230-Preserve-batch-acknowledgement-ownership-across-disconnect
+          git push origin HEAD:refs/heads/MYR-230-Preserve-batch-acknowledgement-ownership-across-disconnect
