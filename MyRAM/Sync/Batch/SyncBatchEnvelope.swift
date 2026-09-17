@@ -224,3 +224,23 @@ struct SyncBatchPendingReceiveTracker: Equatable, Sendable {
         keys.contains(Key(batchID: batchID, peerDeviceID: peerDeviceID))
     }
 }
+
+#if os(iOS)
+extension MyRAMSyncController {
+    func retainCompletedRemoteBatchAcknowledgements(_ batchIDs: Set<SyncBatchID>) {
+        Task { @MainActor in
+            await self.retainCompletedRemoteBatchAcknowledgements(batchIDs)
+        }
+    }
+}
+#endif
+
+#if os(macOS)
+extension MacSyncBatchController {
+    func retainCompletedRemoteBatchAcknowledgements(_ batchIDs: Set<SyncBatchID>) {
+        Task { @MainActor in
+            await self.retainCompletedRemoteBatchAcknowledgements(batchIDs)
+        }
+    }
+}
+#endif
