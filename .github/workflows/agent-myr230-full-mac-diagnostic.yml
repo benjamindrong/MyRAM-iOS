@@ -1,0 +1,65 @@
+name: Agent MYR-230 full Mac diagnostic
+
+on:
+  push:
+    branches:
+      - agent-MYR-230-ack-outbox
+
+permissions:
+  contents: read
+
+jobs:
+  full-mac:
+    runs-on: macos-26
+    timeout-minutes: 35
+    steps:
+      - name: Check out exact MyRAM candidate
+        uses: actions/checkout@v7
+        with:
+          ref: 254a2c95c6043d58219907db0b425603b0272c74
+          fetch-depth: 0
+          path: MyRAM-iOS
+
+      - name: Check out exact NearbySyncCore sibling
+        uses: actions/checkout@v7
+        with:
+          repository: benjamindrong/NearbySyncCore
+          ref: 4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2
+          path: NearbySyncCore
+
+      - name: Assert exact candidate identities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C MyRAM-iOS rev-parse HEAD)" = "254a2c95c6043d58219907db0b425603b0272c74"
+          test "$(git -C NearbySyncCore rev-parse HEAD)" = "4ab9eb91e6390947a7a2e9a4c2ec74012b4bc0e2"
+
+      - name: Run full Mac suite with deterministic failure summary
+        working-directory: MyRAM-iOS
+        shell: bash
+        run: |
+          set +e
+          xcodebuild \
+            -project MyRAM.xcodeproj \
+            -scheme MyRAMMac \
+            -destination 'platform=macOS' \
+            -parallel-testing-enabled NO \
+            CODE_SIGNING_ALLOWED=NO \
+            -only-testing:MyRAMMacTests \
+            -resultBundlePath /tmp/MYR230-FullMac.xcresult \
+            test > /tmp/myr230-full-mac.log 2>&1
+          status=$?
+          echo '===== MYR-230 FULL MAC FAILURE SUMMARY ====='
+          grep -n -E -C 4 '(Test Case.*failed|XCTAssert|Assertion| error: |error:|failed:|Failure|TEST FAILED|Testing failed)' /tmp/myr230-full-mac.log | tail -n 400 || true
+          echo '===== FINAL 120 LINES ====='
+          tail -n 120 /tmp/myr230-full-mac.log
+          echo "===== XCODEBUILD_EXIT_STATUS=$status ====="
+          exit "$status"
+
+      - name: Upload xcresult
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: MYR-230-FullMac-xcresult
+          path: /tmp/MYR230-FullMac.xcresult
+          if-no-files-found: warn
