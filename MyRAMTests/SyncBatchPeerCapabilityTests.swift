@@ -288,6 +288,17 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         let peer = MCPeerID(displayName: "Remote|myr-229-peer")
         let transport = CapabilityRecordingTransport(connectedPeers: [peer])
         let controller = makeController(transport: transport)
+        let connectedLifecycleStarted = expectation(
+            description: "Connected lifecycle announces bootstrap capability"
+        )
+        let bootstrapSent = expectation(description: "Bootstrap lifecycle sends snapshot")
+        transport.onSendKind = { kind in
+            if kind == .bootstrapCapability {
+                connectedLifecycleStarted.fulfill()
+            } else if kind == .bootstrapSnapshot {
+                bootstrapSent.fulfill()
+            }
+        }
         let snapshotID = UUID(uuidString: "00000000-0000-0000-0000-000000229000")!
         let noteID = UUID(uuidString: "300BB942-B5DA-49D4-BDEA-D251D56D58CF")!
         let actorID = UUID(uuidString: "280CD3D7-6663-4881-B097-CD79AF5C88AF")!
@@ -362,19 +373,44 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         controller.buildBootstrapSnapshot = {
             try self.makeBootstrapSnapshot(id: snapshotID, noteID: noteID)
         }
+        let localPeerID = MCPeerID(displayName: "Local|myr-229-local")
         let browser = MCNearbyServiceBrowser(
-            peer: MCPeerID(displayName: "Local|myr-229-local"),
+            peer: localPeerID,
             serviceType: "myram-sync"
+        )
+        let session = MCSession(
+            peer: localPeerID,
+            securityIdentity: nil,
+            encryptionPreference: .required
         )
         controller.browser(
             browser,
             foundPeer: peer,
-            withDiscoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
+            withDiscoveryInfo: [
+                SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2"
+            ]
         )
-        await Task.yield()
+        await waitUntil {
+            controller.effectivePeerCapability(
+                forPeerDeviceID: "myr-229-peer"
+            ).supportsV2
+        }
+
+        controller.session(session, peer: peer, didChange: .connected)
+        await fulfillment(of: [connectedLifecycleStarted], timeout: 1)
+        await waitUntil {
+            controller.hasExplicitPeerV2Support(
+                forPeerDeviceID: "myr-229-peer"
+            )
+        }
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "myr-229-peer"
+        )
 
         try await controller.acceptLocalBatch(provider)
         await controller.beginBootstrapForTesting(to: peer)
+        await fulfillment(of: [bootstrapSent], timeout: 1)
         transport.failNextBatchID = provider.id
         await controller.handleBootstrapAcknowledgementForTesting(
             SyncPeerBootstrapAcknowledgement(
@@ -1179,6 +1215,17 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
             .appendingPathComponent("sync-queue.json")
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        condition: @escaping @MainActor () -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition(), clock.now < deadline {
+            await Task.yield()
+        }
     }
 }
 
