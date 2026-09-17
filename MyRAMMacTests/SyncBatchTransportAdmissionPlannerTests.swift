@@ -211,9 +211,15 @@ final class MYR229MacQueueDrainRegressionTests: XCTestCase {
             }
         )
 
+        let localPeerID = MCPeerID(displayName: "Local|myr-229-mac-local")
         let browser = MCNearbyServiceBrowser(
-            peer: MCPeerID(displayName: "Local|myr-229-mac-local"),
+            peer: localPeerID,
             serviceType: "myram-sync"
+        )
+        let session = MCSession(
+            peer: localPeerID,
+            securityIdentity: nil,
+            encryptionPreference: .required
         )
         controller.browser(
             browser,
@@ -221,7 +227,8 @@ final class MYR229MacQueueDrainRegressionTests: XCTestCase {
             withDiscoveryInfo: SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
         )
         await Task.yield()
-        controller.beginBootstrapForTesting(to: peer)
+        controller.session(session, peer: peer, didChange: .connected)
+        await Task.yield()
         let snapshotID = try XCTUnwrap(bootstrapSnapshotID)
         await controller.handleBootstrapAcknowledgementForTesting(
             SyncPeerBootstrapAcknowledgement(snapshotID: snapshotID, coveredBatchIDs: []),
