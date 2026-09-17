@@ -1,0 +1,404 @@
+from pathlib import Path
+
+SOURCE = Path("MyRAM/Sync/MyRAMSyncModels.swift")
+TESTS = Path("MyRAMTests/SyncBatchEnvelopeV2Tests.swift")
+
+
+def insert_before_once(text: str, marker: str, insertion: str, label: str) -> str:
+    count = text.count(marker)
+    if count != 1:
+        raise SystemExit(f"{label}: expected 1 marker, found {count}")
+    return text.replace(marker, insertion + marker, 1)
+
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{label}: expected 1 anchor, found {count}")
+    return text.replace(old, new, 1)
+
+
+text = SOURCE.read_text(encoding="utf-8")
+
+text = insert_before_once(
+    text,
+    "    static func outageWindows(totalDurationSeconds: Int) -> [OutageWindow] {\n",
+    r'''    static func completionMarker(
+        runID: String,
+        platform: MyRAMSyncBenchmarkPlatform
+    ) -> String {
+        "\nBEN36-finalized-\(runID)-\(platform.rawValue)"
+    }
+
+    static func bodyByAppendingCompletionMarker(
+        _ body: String,
+        runID: String,
+        platform: MyRAMSyncBenchmarkPlatform
+    ) -> String {
+        let marker = completionMarker(runID: runID, platform: platform)
+        return body.contains(marker) ? body : body + marker
+    }
+
+    static func completionBarrierSatisfied(
+        noteBodiesByTitle: [String: String],
+        runID: String
+    ) -> Bool {
+        [MyRAMSyncBenchmarkPlatform.iOS, .macOS].allSatisfy { platform in
+            let title = noteTitle(runID: runID, platform: platform, index: 1)
+            guard let body = noteBodiesByTitle[title] else { return false }
+            return body.contains(completionMarker(runID: runID, platform: platform))
+        }
+    }
+
+''',
+    "workload barrier helpers",
+)
+
+text = insert_before_once(
+    text,
+    "    static func expectedTitlesObserved(\n",
+    r'''    static func benchmarkNoteBodies(
+        notes: [Note],
+        runID: String
+    ) -> [String: String] {
+        let prefix = "BEN36-\(runID)-"
+        var bodies: [String: String] = [:]
+        for note in notes where note.deletedAt == nil && note.title.hasPrefix(prefix) {
+            bodies[note.title] = note.content
+        }
+        return bodies
+    }
+
+''',
+    "benchmark note bodies",
+)
+
+ios_start = text.index("#if DEBUG && os(iOS)\n")
+ios_end = text.index("#endif\n\n#if DEBUG && os(macOS)", ios_start)
+ios = text[ios_start:ios_end]
+
+ios = replace_once(
+    ios,
+    '''        recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
+        let finalQueueDepth = await waitForIOSDrain(state: state, timeoutSeconds: MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds)
+''',
+    r'''        guard let finalizationNote = state.vm.refreshedNote(withID: noteIDs[0]) else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                state: state,
+                detail: "unable to load iOS finalization marker note"
+            )
+            return
+        }
+        let finalizationBody = MyRAMSyncBenchmarkEnduranceWorkload.bodyByAppendingCompletionMarker(
+            finalizationNote.content,
+            runID: launch.runID,
+            platform: .iOS
+        )
+        if finalizationBody != finalizationNote.content {
+            guard await state.vm.commitNoteEditForProduction(
+                finalizationNote,
+                title: finalizationNote.title,
+                content: finalizationBody
+            ) else {
+                finishFailure(
+                    recorder: recorder,
+                    launch: launch,
+                    startedAt: startedAt,
+                    attempted: attempted,
+                    committed: committed,
+                    failed: failed,
+                    state: state,
+                    detail: "unable to commit iOS finalization marker"
+                )
+                return
+            }
+        }
+        recorder.record(
+            .phase,
+            phase: "finalizationBarrier",
+            operationCount: operation,
+            outcome: "localMarkerCommitted"
+        )
+        recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
+        let finalQueueDepth = await waitForIOSFinalDrain(
+            state: state,
+            runID: launch.runID,
+            timeoutSeconds: MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds
+        )
+''',
+    "iOS final marker",
+)
+
+ios = replace_once(
+    ios,
+    '''        let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
+        let locallyComplete = failed == 0
+''',
+    '''        let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
+        let completionBarrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+            noteBodiesByTitle: MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkNoteBodies(
+                notes: notes,
+                runID: launch.runID
+            ),
+            runID: launch.runID
+        )
+        let locallyComplete = failed == 0
+''',
+    "iOS result barrier",
+)
+ios = replace_once(
+    ios,
+    '''            && hasExpectedNotes
+
+        let result = MyRAMSyncBenchmarkEnduranceResult(
+''',
+    '''            && hasExpectedNotes
+            && completionBarrierSatisfied
+
+        let result = MyRAMSyncBenchmarkEnduranceResult(
+''',
+    "iOS barrier predicate",
+)
+
+ios = insert_before_once(
+    ios,
+    "    private func waitForIOSDrain(\n",
+    r'''    private func waitForIOSFinalDrain(
+        state: NotesListState,
+        runID: String,
+        timeoutSeconds: Int
+    ) async -> Int {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        var stableZeroSamples = 0
+        var lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
+        while Date() < deadline, !Task.isCancelled {
+            if !state.syncController.hasConnectedPeers,
+               let peer = state.syncController.availablePeers.first {
+                state.syncController.invite(peer)
+            }
+            lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
+            let notes = state.vm.fetchSearchableNotes()
+            let barrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                noteBodiesByTitle: MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkNoteBodies(
+                    notes: notes,
+                    runID: runID
+                ),
+                runID: runID
+            )
+            if lastDepth == 0 && state.syncController.hasConnectedPeers && barrierSatisfied {
+                stableZeroSamples += 1
+                if stableZeroSamples >= 5 { return 0 }
+            } else {
+                stableZeroSamples = 0
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        return lastDepth
+    }
+
+''',
+    "iOS final drain helper",
+)
+text = text[:ios_start] + ios + text[ios_end:]
+
+mac_start = text.index("#if DEBUG && os(macOS)\n")
+mac_end = text.index("\nprivate enum MyRAMSyncBenchmarkEnduranceMacError", mac_start)
+mac = text[mac_start:mac_end]
+
+mac = replace_once(
+    mac,
+    '''        recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
+        let finalQueueDepth = await waitForMacDrain(
+            controller: controller,
+            timeoutSeconds: MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds
+        )
+''',
+    r'''        do {
+            guard let finalizationNote = try adapter.loadNote(id: noteIDs[0]) else {
+                throw MyRAMSyncBenchmarkEnduranceMacError.noteMissing
+            }
+            let finalizationBody = MyRAMSyncBenchmarkEnduranceWorkload.bodyByAppendingCompletionMarker(
+                finalizationNote.content,
+                runID: launch.runID,
+                platform: .macOS
+            )
+            if finalizationBody != finalizationNote.content {
+                let prepared = try await adapter.prepareProductionLocalNoteEdit(
+                    noteID: finalizationNote.id,
+                    proposedAttributedContent: NSAttributedString(string: finalizationBody)
+                )
+                try adapter.persistPreparedLocalNoteEdit(prepared)
+                await controller.record(prepared.capturedChanges, at: prepared.modifiedAt)
+            }
+        } catch {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                controller: controller,
+                adapter: adapter,
+                detail: "unable to commit macOS finalization marker: \(error.localizedDescription)"
+            )
+            return
+        }
+        recorder.record(
+            .phase,
+            phase: "finalizationBarrier",
+            operationCount: operation,
+            outcome: "localMarkerCommitted"
+        )
+        recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
+        let finalQueueDepth = await waitForMacFinalDrain(
+            controller: controller,
+            adapter: adapter,
+            runID: launch.runID,
+            timeoutSeconds: MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds
+        )
+''',
+    "Mac final marker",
+)
+
+mac = replace_once(
+    mac,
+    '''        let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
+        let locallyComplete = failed == 0
+''',
+    '''        let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
+        let completionBarrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+            noteBodiesByTitle: MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkNoteBodies(
+                notes: notes,
+                runID: launch.runID
+            ),
+            runID: launch.runID
+        )
+        let locallyComplete = failed == 0
+''',
+    "Mac result barrier",
+)
+mac = replace_once(
+    mac,
+    '''            && ordinaryRoutingReady(controller: controller)
+            && hasExpectedNotes
+
+        let result = MyRAMSyncBenchmarkEnduranceResult(
+''',
+    '''            && ordinaryRoutingReady(controller: controller)
+            && hasExpectedNotes
+            && completionBarrierSatisfied
+
+        let result = MyRAMSyncBenchmarkEnduranceResult(
+''',
+    "Mac barrier predicate",
+)
+
+mac = insert_before_once(
+    mac,
+    "    private func waitForMacDrain(\n",
+    r'''    private func waitForMacFinalDrain(
+        controller: MacSyncBatchController,
+        adapter: MacNotePersistenceAdapter,
+        runID: String,
+        timeoutSeconds: Int
+    ) async -> Int {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        var stableZeroSamples = 0
+        var lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
+        while Date() < deadline, !Task.isCancelled {
+            inviteExpectedIOSPeerIfNeeded(controller: controller)
+            lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
+            let notes = (try? adapter.loadNotes()) ?? []
+            let barrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                noteBodiesByTitle: MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkNoteBodies(
+                    notes: notes,
+                    runID: runID
+                ),
+                runID: runID
+            )
+            if lastDepth == 0 && ordinaryRoutingReady(controller: controller) && barrierSatisfied {
+                stableZeroSamples += 1
+                if stableZeroSamples >= 5 { return 0 }
+            } else {
+                stableZeroSamples = 0
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        return lastDepth
+    }
+
+''',
+    "Mac final drain helper",
+)
+text = text[:mac_start] + mac + text[mac_end:]
+SOURCE.write_text(text, encoding="utf-8")
+
+tests = TESTS.read_text(encoding="utf-8")
+tests = insert_before_once(
+    tests,
+    "    func testSchemaIsDerivedFromBodyRepresentation() throws {\n",
+    r'''    func testEnduranceFinalizationBarrierRequiresBothPlatformMarkers() {
+        let runID = "BEN36-barrier-test"
+        let iOSTitle = MyRAMSyncBenchmarkEnduranceWorkload.noteTitle(
+            runID: runID,
+            platform: .iOS,
+            index: 1
+        )
+        let macTitle = MyRAMSyncBenchmarkEnduranceWorkload.noteTitle(
+            runID: runID,
+            platform: .macOS,
+            index: 1
+        )
+        var bodies = [iOSTitle: "ios-body", macTitle: "mac-body"]
+        XCTAssertFalse(
+            MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                noteBodiesByTitle: bodies,
+                runID: runID
+            )
+        )
+
+        let iOSMarked = MyRAMSyncBenchmarkEnduranceWorkload.bodyByAppendingCompletionMarker(
+            bodies[iOSTitle]!,
+            runID: runID,
+            platform: .iOS
+        )
+        XCTAssertEqual(
+            MyRAMSyncBenchmarkEnduranceWorkload.bodyByAppendingCompletionMarker(
+                iOSMarked,
+                runID: runID,
+                platform: .iOS
+            ),
+            iOSMarked
+        )
+        bodies[iOSTitle] = iOSMarked
+        XCTAssertFalse(
+            MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                noteBodiesByTitle: bodies,
+                runID: runID
+            )
+        )
+
+        bodies[macTitle] = MyRAMSyncBenchmarkEnduranceWorkload.bodyByAppendingCompletionMarker(
+            bodies[macTitle]!,
+            runID: runID,
+            platform: .macOS
+        )
+        XCTAssertTrue(
+            MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                noteBodiesByTitle: bodies,
+                runID: runID
+            )
+        )
+    }
+
+''',
+    "barrier unit test",
+)
+TESTS.write_text(tests, encoding="utf-8")
