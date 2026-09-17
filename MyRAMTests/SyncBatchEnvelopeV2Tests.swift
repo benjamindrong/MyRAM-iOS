@@ -660,6 +660,79 @@ final class MyRAMSyncBenchmarkProductionTelemetryTests: XCTestCase {
         })
     }
 
+    func testControllerDefersPermittedAcknowledgementUntilPeerReconnects() async throws {
+        let directory = try benchmarkDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recorder = MyRAMSyncBenchmarkRecorder(
+            enabled: true,
+            platform: .iOS,
+            deviceID: "local-ios",
+            outputDirectoryURL: directory
+        )
+        MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(recorder)
+        defer { MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(nil) }
+
+        let peer = MCPeerID(displayName: "Remote|ack-reconnect-peer")
+        let transport = BenchmarkRecordingTransport(connectedPeers: [])
+        let controller = MyRAMSyncController(
+            unsentBatchQueueFileURL: directory.appendingPathComponent("unsent-ack-reconnect.json"),
+            pendingChangesFileURL: directory.appendingPathComponent("legacy-ack-reconnect.json"),
+            startsNetworking: false,
+            transport: transport
+        )
+        controller.onDurablyCaptureIncomingBatch = { _ in true }
+        controller.onBatchReceived = { _ in .acknowledgementPermitted }
+        let batch = makeBatch(idSuffix: 2301)
+        let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
+        let dummySession = MCSession(
+            peer: MCPeerID(displayName: "Local|local-ios"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+
+        controller.session(dummySession, didReceive: data, fromPeer: peer)
+        let batchID = String(describing: batch.id)
+        await waitUntil {
+            guard let recordedEvents = try? self.events(from: recorder) else { return false }
+            return recordedEvents.contains {
+                $0.eventType == .batchAcknowledgementDeferred &&
+                $0.batchID == batchID &&
+                $0.peerDeviceID == "ack-reconnect-peer" &&
+                $0.outcome == "peerNotConnected"
+            }
+        }
+        XCTAssertTrue(transport.sentBatchAcknowledgements.isEmpty)
+        XCTAssertFalse(try events(from: recorder).contains {
+            $0.eventType == .batchAcknowledgementSendFailed && $0.batchID == batchID
+        })
+
+        transport.connectedPeers = [peer]
+        controller.session(dummySession, peer: peer, didChange: .connected)
+        await waitUntil { transport.sentBatchAcknowledgements.count == 1 }
+        await waitUntil {
+            guard let recordedEvents = try? self.events(from: recorder) else { return false }
+            return recordedEvents.contains {
+                $0.eventType == .batchAcknowledgementSent &&
+                $0.batchID == batchID &&
+                $0.peerDeviceID == "ack-reconnect-peer"
+            }
+        }
+
+        XCTAssertEqual(
+            transport.sentBatchAcknowledgements,
+            [SyncBatchAcknowledgement(batchID: batch.id)]
+        )
+        let finalEvents = try events(from: recorder)
+        XCTAssertTrue(finalEvents.contains {
+            $0.eventType == .batchAcknowledgementSent &&
+            $0.batchID == batchID &&
+            $0.peerDeviceID == "ack-reconnect-peer"
+        })
+        XCTAssertFalse(finalEvents.contains {
+            $0.eventType == .batchAcknowledgementSendFailed && $0.batchID == batchID
+        })
+    }
+
     func testControllerRecordsTransportFailureWithoutSuccess() async throws {
         let directory = try benchmarkDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }

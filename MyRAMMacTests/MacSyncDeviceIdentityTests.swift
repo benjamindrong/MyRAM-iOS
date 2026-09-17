@@ -514,6 +514,127 @@ final class MyRAMMacSyncBenchmarkProductionTelemetryTests: XCTestCase {
         XCTAssertEqual(coordinator.pendingIncomingBatchCount, 0)
     }
 
+    func testControllerDefersPermittedAcknowledgementUntilPeerReconnects() async throws {
+        let directory = try benchmarkDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let recorder = MyRAMSyncBenchmarkRecorder(
+            enabled: true,
+            platform: .macOS,
+            deviceID: "local-mac",
+            runID: "ack-reconnect",
+            outputDirectoryURL: directory
+        )
+        MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(recorder)
+        defer { MyRAMSyncBenchmarkTelemetry.shared.replaceRecorderForTesting(nil) }
+
+        let peer = MCPeerID(displayName: "Remote|ack-reconnect-peer")
+        let container = try makeContainer()
+        var connectedPeers: [MCPeerID] = []
+        var sends: [Data] = []
+        let controller = MacSyncBatchController(
+            context: container.mainContext,
+            unsentBatchQueueFileURL: directory.appendingPathComponent("unsent-ack-reconnect.json"),
+            startsNetworking: false,
+            identityProvider: {
+                MacSyncDeviceIdentity(
+                    id: UUID(uuidString: "23000000-0000-0000-0000-000000000012")!,
+                    displayName: "Telemetry Mac"
+                )
+            },
+            connectedPeersProvider: { connectedPeers },
+            sendBatchDataOperation: { data, _, _ in sends.append(data) }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            presentationSurface: MacSyncConvergencePresentationSurface(
+                selectedNoteID: { nil },
+                hasUnsavedChanges: { false },
+                refreshNotesList: {},
+                closeRemovedSelectedEditor: { _ in },
+                applyIncremental: { _, _, _ in
+                    EditorRemoteBatchApplyResult(
+                        appliedCount: 0,
+                        disposition: .noApplicableMutations
+                    )
+                },
+                reloadSelectedEditor: { _ in true },
+                currentEditorBody: { nil }
+            ),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: directory.appendingPathComponent("pending-ack-reconnect.json"),
+            localObligationQueueFileURL: directory.appendingPathComponent("obligations-ack-reconnect.json")
+        )
+        _ = coordinator
+        let note = Note(title: "ACK reconnect fixture", content: "")
+        note.id = UUID(uuidString: "23000000-0000-0000-0000-000000000030")!
+        container.mainContext.insert(note)
+        try container.mainContext.save()
+        let batch = SyncBatch(
+            id: UUID(uuidString: "00000000-0000-0000-0000-000000002301")!,
+            originDeviceID: UUID(uuidString: "23000000-0000-0000-0000-000000000020")!,
+            createdAt: Date(timeIntervalSince1970: 2_301),
+            changes: [
+                .noteBodyTextInserted(.init(
+                    noteID: note.id,
+                    utf16Offset: 0,
+                    text: "A",
+                    modifiedAt: Date(timeIntervalSince1970: 2_301),
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "")
+                ))
+            ]
+        )
+        let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
+        let dummySession = MCSession(
+            peer: MCPeerID(displayName: "Local|local-mac"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+
+        controller.session(dummySession, didReceive: data, fromPeer: peer)
+        let batchID = String(describing: batch.id)
+        await waitUntil {
+            guard let recordedEvents = try? self.events(from: recorder) else { return false }
+            return recordedEvents.contains {
+                $0.eventType == .batchAcknowledgementDeferred &&
+                $0.batchID == batchID &&
+                $0.peerDeviceID == "ack-reconnect-peer" &&
+                $0.outcome == "peerNotConnected"
+            }
+        }
+        XCTAssertTrue(sends.isEmpty)
+        XCTAssertFalse(try events(from: recorder).contains {
+            $0.eventType == .batchAcknowledgementSendFailed && $0.batchID == batchID
+        })
+
+        connectedPeers = [peer]
+        controller.session(dummySession, peer: peer, didChange: .connected)
+        await waitUntil {
+            sends.contains { data in
+                (try? MultipeerSyncMessageCoding.decodeMessage(from: data).kind)
+                    == .batchAcknowledgement
+            }
+        }
+
+        let acknowledgements = try sends.compactMap { data -> SyncBatchAcknowledgement? in
+            let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+            guard message.kind == .batchAcknowledgement else { return nil }
+            return try JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload)
+        }
+        XCTAssertEqual(acknowledgements, [SyncBatchAcknowledgement(batchID: batch.id)])
+        let finalEvents = try events(from: recorder)
+        XCTAssertTrue(finalEvents.contains {
+            $0.eventType == .batchAcknowledgementSent &&
+            $0.batchID == batchID &&
+            $0.peerDeviceID == "ack-reconnect-peer"
+        })
+        XCTAssertFalse(finalEvents.contains {
+            $0.eventType == .batchAcknowledgementSendFailed && $0.batchID == batchID
+        })
+    }
+
     func testControllerRecordsTransportFailureWithoutSuccess() async throws {
         let directory = try benchmarkDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
