@@ -409,14 +409,17 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
 
         guard !recipients.isEmpty else { return false }
-        let pendingRecipients = recipients.filter { peerID in
+        var reservations: [(peerID: MCPeerID, reservation: SyncBatchOutstandingDeliveryTracker.Reservation)] = []
+        for peerID in recipients {
             let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
-            return !outstandingBatchDeliveries.isAwaitingAcknowledgement(
+            if let reservation = outstandingBatchDeliveries.reserve(
                 batch.id,
                 forPeerDeviceID: deviceID
-            )
+            ) {
+                reservations.append((peerID, reservation))
+            }
         }
-        guard !pendingRecipients.isEmpty else {
+        guard !reservations.isEmpty else {
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .batchSendDeferred,
                 batchID: String(describing: batch.id),
@@ -426,7 +429,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             return true
         }
 
-        let recipientDeviceIDs = pendingRecipients.map { MacSyncPeerIdentity(peerID: $0).deviceID }
+        let pendingRecipients = reservations.map(\.peerID)
+        let recipientDeviceIDs = reservations.map(\.reservation.peerDeviceID)
         for deviceID in recipientDeviceIDs {
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .batchSendStarted,
@@ -440,10 +444,6 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
             try sendBatchDataOperation(data, pendingRecipients, .reliable)
             for deviceID in recipientDeviceIDs {
-                _ = outstandingBatchDeliveries.reserve(
-                    batch.id,
-                    forPeerDeviceID: deviceID
-                )
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchSendSucceeded,
                     batchID: String(describing: batch.id),
@@ -456,11 +456,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             lastErrorMessage = nil
             return true
         } catch {
-            for deviceID in recipientDeviceIDs {
+            for entry in reservations {
+                outstandingBatchDeliveries.release(entry.reservation)
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchSendFailed,
                     batchID: String(describing: batch.id),
-                    peerDeviceID: deviceID,
+                    peerDeviceID: entry.reservation.peerDeviceID,
                     itemCount: batch.changes.count,
                     outcome: "transportFailed"
                 )
@@ -514,10 +515,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         )
         unsentBatches.removeAll(withIDs: [acknowledgement.batchID])
         if !unsentBatches.contains(acknowledgement.batchID) {
-            outstandingBatchDeliveries.release(
-                acknowledgement.batchID,
-                forPeerDeviceID: peerDeviceID
-            )
+            outstandingBatchDeliveries.release(acknowledgement.batchID)
         }
     }
 
@@ -786,10 +784,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
         do {
             try unsentBatches.removeBatches(withIDs: acknowledgement.coveredBatchIDs)
-            outstandingBatchDeliveries.release(
-                acknowledgement.coveredBatchIDs,
-                forPeerDeviceID: deviceID
-            )
+            outstandingBatchDeliveries.release(acknowledgement.coveredBatchIDs)
         } catch {
             lastErrorMessage = "Unable to update the unsent batch queue."
             return
@@ -887,10 +882,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             )
             return
         }
-        guard pendingBatchReceives.begin(
-            batch.id,
-            forPeerDeviceID: peerDeviceID
-        ) else {
+        guard pendingBatchReceives.begin(batch.id) else {
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .batchCaptureCompleted,
                 batchID: String(describing: batch.id),
@@ -934,10 +926,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 }
             }
 
-            pendingBatchReceives.finish(
-                work.batch.id,
-                forPeerDeviceID: peerDeviceID
-            )
+            pendingBatchReceives.finish(work.batch.id)
             remember(work.peerID)
             lastConnectionEvent = "Received sync from \(displayName(for: work.peerID))"
         }
