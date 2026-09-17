@@ -292,23 +292,196 @@ final class MYR229QueueDrainRegressionTests: XCTestCase {
     }
 }
 
+@MainActor
+final class MYR232DeliveryLifecycleTests: XCTestCase {
+    private let peer = MCPeerID(displayName: "Remote|myr-232-peer")
+
+    func testRepeatedFlushWhileSendIsInFlightDoesNotMultiplyDelivery() async throws {
+        let transport = MYR229RecordingTransport(connectedPeers: [peer])
+        transport.suspendBatchSends = true
+        let controller = makeController(transport: transport)
+        let batch = makeBatch(idSuffix: 2321)
+
+        let firstSend = Task { try await controller.acceptLocalBatch(batch) }
+        await waitUntil { transport.attemptedBatchIDs == [batch.id] }
+
+        controller.flushAllOutboundWork()
+        controller.flushAllOutboundWork()
+        await Task.yield()
+        XCTAssertEqual(transport.attemptedBatchIDs, [batch.id])
+
+        transport.resumeNextBatchSend()
+        try await firstSend.value
+        XCTAssertEqual(transport.sentBatchIDs, [batch.id])
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
+    }
+
+    func testSendFailureReleasesOnlyItsReservationAndRemainsRetryable() async throws {
+        let transport = MYR229RecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let batch = makeBatch(idSuffix: 2322)
+        transport.failNextBatchID = batch.id
+
+        try await controller.acceptLocalBatch(batch)
+        XCTAssertEqual(transport.attemptedBatchIDs, [batch.id])
+        XCTAssertTrue(transport.sentBatchIDs.isEmpty)
+
+        controller.flushAllOutboundWork()
+        await waitUntil { transport.sentBatchIDs == [batch.id] }
+        XCTAssertEqual(transport.attemptedBatchIDs, [batch.id, batch.id])
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [batch])
+    }
+
+    func testDisconnectReconnectAllowsExactlyOneRetransmissionAndStaleSendCannotReleaseIt() async throws {
+        let transport = MYR229RecordingTransport(connectedPeers: [peer])
+        transport.suspendBatchSends = true
+        let controller = makeController(transport: transport)
+        let batch = makeBatch(idSuffix: 2323)
+
+        let oldSessionSend = Task { try await controller.acceptLocalBatch(batch) }
+        await waitUntil { transport.attemptedBatchIDs == [batch.id] }
+
+        transport.connectedPeers = []
+        controller.handlePeerDisconnectForTesting(peerDeviceID: "myr-232-peer")
+        transport.suspendBatchSends = false
+        transport.connectedPeers = [peer]
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "myr-232-peer")
+        controller.flushAllOutboundWork()
+        await waitUntil { transport.sentBatchIDs == [batch.id] }
+        XCTAssertEqual(transport.attemptedBatchIDs, [batch.id, batch.id])
+
+        transport.resumeNextBatchSend()
+        try await oldSessionSend.value
+        controller.flushAllOutboundWork()
+        await Task.yield()
+
+        XCTAssertEqual(transport.attemptedBatchIDs, [batch.id, batch.id])
+        XCTAssertEqual(transport.sentBatchIDs, [batch.id, batch.id])
+    }
+
+    func testDuplicateReceiveWhileOriginalIsPendingDoesNotMultiplyConvergenceWork() async throws {
+        let transport = MYR229RecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let batch = makeBatch(idSuffix: 2324)
+        var captureCount = 0
+        var convergenceCount = 0
+        var captureContinuation: CheckedContinuation<Bool, Never>?
+        controller.onDurablyCaptureIncomingBatch = { _ in
+            captureCount += 1
+            return await withCheckedContinuation { continuation in
+                captureContinuation = continuation
+            }
+        }
+        controller.onBatchReceived = { _ in
+            convergenceCount += 1
+            return .acknowledgementPermitted
+        }
+        let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
+        let session = MCSession(
+            peer: MCPeerID(displayName: "Local|myr-232-local"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+
+        controller.session(session, didReceive: data, fromPeer: peer)
+        await waitUntil { captureCount == 1 }
+        controller.session(session, didReceive: data, fromPeer: peer)
+        await Task.yield()
+
+        XCTAssertEqual(captureCount, 1)
+        captureContinuation?.resume(returning: true)
+        await waitUntil { convergenceCount == 1 }
+        XCTAssertEqual(convergenceCount, 1)
+        await waitUntil { transport.sentAcknowledgementBatchIDs == [batch.id] }
+    }
+
+    func testDeferredConvergenceCompletionRetainsAcknowledgementWithoutRedelivery() async throws {
+        let transport = MYR229RecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let batch = makeBatch(idSuffix: 2325)
+        var deliveryCount = 0
+        controller.onDurablyCaptureIncomingBatch = { _ in true }
+        controller.onBatchReceived = { _ in
+            deliveryCount += 1
+            return .acknowledgementDeferred
+        }
+        let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
+        let session = MCSession(
+            peer: MCPeerID(displayName: "Local|myr-232-local"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+
+        controller.session(session, didReceive: data, fromPeer: peer)
+        await waitUntil { deliveryCount == 1 }
+        XCTAssertTrue(transport.sentAcknowledgementBatchIDs.isEmpty)
+
+        await controller.retainCompletedRemoteBatchAcknowledgements([batch.id])
+        await waitUntil { transport.sentAcknowledgementBatchIDs == [batch.id] }
+
+        XCTAssertEqual(deliveryCount, 1)
+        XCTAssertEqual(transport.receivedBatchDeliveryCount, 0)
+    }
+
+    private func makeController(transport: MYR229RecordingTransport) -> MyRAMSyncController {
+        let pendingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR232-legacy-\(UUID().uuidString).json")
+        addTeardownBlock { try? FileManager.default.removeItem(at: pendingURL) }
+        let controller = MyRAMSyncController(
+            unsentBatchQueueFileURL: nil,
+            pendingChangesFileURL: pendingURL,
+            startsNetworking: false,
+            transport: transport
+        )
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "myr-232-peer")
+        return controller
+    }
+
+    private func makeBatch(idSuffix: Int) -> SyncBatch {
+        SyncBatch(
+            id: UUID(uuidString: String(format: "23200000-0000-0000-0000-%012d", idSuffix))!,
+            originDeviceID: UUID(uuidString: "23200000-0000-0000-0000-000000000001")!,
+            createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
+            batchSequence: UInt64(idSuffix),
+            changes: []
+        )
+    }
+
+    private func waitUntil(
+        timeout: Duration = .seconds(1),
+        condition: @escaping @MainActor () -> Bool
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: timeout)
+        while !condition(), clock.now < deadline {
+            await Task.yield()
+        }
+    }
+}
+
 private final class MYR229RecordingTransport: MyRAMSyncTransporting {
-    private let peers: [MCPeerID]
+    var connectedPeers: [MCPeerID]
+    var suspendBatchSends = false
+    var failNextBatchID: SyncBatchID?
+    private(set) var attemptedBatchIDs: [SyncBatchID] = []
     private(set) var sentBatchIDs: [SyncBatchID] = []
+    private(set) var sentAcknowledgementBatchIDs: [SyncBatchID] = []
     private(set) var bootstrapSnapshots: [SyncPeerBootstrapSnapshot] = []
+    private var suspendedBatchSendContinuations: [CheckedContinuation<Void, Never>] = []
+    private(set) var receivedBatchDeliveryCount = 0
 
     init(connectedPeers: [MCPeerID]) {
-        peers = connectedPeers
+        self.connectedPeers = connectedPeers
     }
 
     func invite(_ peerID: MCPeerID, context: Data, timeout: TimeInterval) {}
 
     func connectedPeers() async -> [MCPeerID] {
-        peers
+        connectedPeers
     }
 
     func hasConnectedPeer(_ peerID: MCPeerID) -> Bool {
-        peers.contains(peerID)
+        connectedPeers.contains(peerID)
     }
 
     func send(
@@ -319,7 +492,25 @@ private final class MYR229RecordingTransport: MyRAMSyncTransporting {
         let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
         switch message.kind {
         case .batchSync:
-            sentBatchIDs.append(try SyncBatchEnvelopeCodec.decode(message.payload).batch.id)
+            let batch = try SyncBatchEnvelopeCodec.decode(message.payload).batch
+            attemptedBatchIDs.append(batch.id)
+            if failNextBatchID == batch.id {
+                failNextBatchID = nil
+                throw MYR232RecordingTransportError.injected
+            }
+            if suspendBatchSends {
+                await withCheckedContinuation { continuation in
+                    suspendedBatchSendContinuations.append(continuation)
+                }
+            }
+            sentBatchIDs.append(batch.id)
+        case .batchAcknowledgement:
+            sentAcknowledgementBatchIDs.append(
+                try JSONDecoder().decode(
+                    SyncBatchAcknowledgement.self,
+                    from: message.payload
+                ).batchID
+            )
         case .bootstrapSnapshot:
             bootstrapSnapshots.append(
                 try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
@@ -328,6 +519,15 @@ private final class MYR229RecordingTransport: MyRAMSyncTransporting {
             break
         }
     }
+
+    func resumeNextBatchSend() {
+        guard !suspendedBatchSendContinuations.isEmpty else { return }
+        suspendedBatchSendContinuations.removeFirst().resume()
+    }
+}
+
+private enum MYR232RecordingTransportError: Error {
+    case injected
 }
 
 final class SyncBatchAnchoredBootstrapConflictCoverageTests: XCTestCase {
