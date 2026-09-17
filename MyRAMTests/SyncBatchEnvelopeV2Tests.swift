@@ -16,6 +16,60 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
         localCounter: 5
     )
 
+    func testEnduranceFinalizationBarrierRequiresBothPlatformMarkers() {
+        let runID = "BEN36-barrier-test"
+        let iOSTitle = MyRAMSyncBenchmarkEnduranceWorkload.noteTitle(
+            runID: runID,
+            platform: .iOS,
+            index: 1
+        )
+        let macTitle = MyRAMSyncBenchmarkEnduranceWorkload.noteTitle(
+            runID: runID,
+            platform: .macOS,
+            index: 1
+        )
+        var bodies = [iOSTitle: "ios-body", macTitle: "mac-body"]
+        XCTAssertFalse(
+            MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                noteBodiesByTitle: bodies,
+                runID: runID
+            )
+        )
+
+        let iOSMarked = MyRAMSyncBenchmarkEnduranceWorkload.bodyByAppendingCompletionMarker(
+            bodies[iOSTitle]!,
+            runID: runID,
+            platform: .iOS
+        )
+        XCTAssertEqual(
+            MyRAMSyncBenchmarkEnduranceWorkload.bodyByAppendingCompletionMarker(
+                iOSMarked,
+                runID: runID,
+                platform: .iOS
+            ),
+            iOSMarked
+        )
+        bodies[iOSTitle] = iOSMarked
+        XCTAssertFalse(
+            MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                noteBodiesByTitle: bodies,
+                runID: runID
+            )
+        )
+
+        bodies[macTitle] = MyRAMSyncBenchmarkEnduranceWorkload.bodyByAppendingCompletionMarker(
+            bodies[macTitle]!,
+            runID: runID,
+            platform: .macOS
+        )
+        XCTAssertTrue(
+            MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                noteBodiesByTitle: bodies,
+                runID: runID
+            )
+        )
+    }
+
     func testSchemaIsDerivedFromBodyRepresentation() throws {
         XCTAssertEqual(try roundTrip(metadataBatch()).schemaVersion, .v1)
         XCTAssertEqual(try roundTrip(legacyBatch()).schemaVersion, .v1)
