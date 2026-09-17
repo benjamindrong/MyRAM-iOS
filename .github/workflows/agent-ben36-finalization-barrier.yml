@@ -37,39 +37,22 @@ jobs:
           test_path = Path("MyRAMTests/SyncBatchEnvelopeV2Tests.swift")
           text = source_path.read_text(encoding="utf-8")
 
+          def insert_before_once(haystack, marker, insertion, label):
+              count = haystack.count(marker)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 marker, found {count}")
+              return haystack.replace(marker, insertion + marker, 1)
+
           def replace_once(haystack, old, new, label):
               count = haystack.count(old)
               if count != 1:
                   raise SystemExit(f"{label}: expected 1 anchor, found {count}")
               return haystack.replace(old, new, 1)
 
-          def replace_region(haystack, start_marker, end_marker, old, new, label):
-              start = haystack.index(start_marker)
-              end = haystack.index(end_marker, start)
-              region = haystack[start:end]
-              count = region.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected 1 regional anchor, found {count}")
-              region = region.replace(old, new, 1)
-              return haystack[:start] + region + haystack[end:]
-
-          old = r'''    static func mutationToken(
-              platform: MyRAMSyncBenchmarkPlatform,
-              operation: Int
-          ) -> String {
-              "\n\(platform.rawValue)-op-\(operation)"
-          }
-
-          static func outageWindows(totalDurationSeconds: Int) -> [OutageWindow] {
-          '''
-          new = r'''    static func mutationToken(
-              platform: MyRAMSyncBenchmarkPlatform,
-              operation: Int
-          ) -> String {
-              "\n\(platform.rawValue)-op-\(operation)"
-          }
-
-          static func completionMarker(
+          text = insert_before_once(
+              text,
+              "    static func outageWindows(totalDurationSeconds: Int) -> [OutageWindow] {\n",
+              r'''    static func completionMarker(
               runID: String,
               platform: MyRAMSyncBenchmarkPlatform
           ) -> String {
@@ -96,16 +79,14 @@ jobs:
               }
           }
 
-          static func outageWindows(totalDurationSeconds: Int) -> [OutageWindow] {
-          '''
-          text = replace_once(text, old, new, "workload barrier helpers")
+          ''',
+              "workload barrier helpers"
+          )
 
-          old = r'''    static func expectedTitlesObserved(
-              _ digests: [MyRAMSyncBenchmarkEnduranceNoteDigest],
-              runID: String
-          ) -> Bool {
-          '''
-          new = r'''    static func benchmarkNoteBodies(
+          text = insert_before_once(
+              text,
+              "    static func expectedTitlesObserved(\n",
+              r'''    static func benchmarkNoteBodies(
               notes: [Note],
               runID: String
           ) -> [String: String] {
@@ -117,20 +98,20 @@ jobs:
               return bodies
           }
 
-          static func expectedTitlesObserved(
-              _ digests: [MyRAMSyncBenchmarkEnduranceNoteDigest],
-              runID: String
-          ) -> Bool {
-          '''
-          text = replace_once(text, old, new, "benchmark note bodies")
+          ''',
+              "benchmark note bodies"
+          )
 
-          ios_start = "#if DEBUG && os(iOS)\n"
-          ios_end = "#endif\n\n#if DEBUG && os(macOS)"
+          ios_start = text.index("#if DEBUG && os(iOS)\n")
+          ios_end = text.index("#endif\n\n#if DEBUG && os(macOS)", ios_start)
+          ios = text[ios_start:ios_end]
 
-          old = r'''        recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
+          ios = replace_once(
+              ios,
+              '''        recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
           let finalQueueDepth = await waitForIOSDrain(state: state, timeoutSeconds: MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds)
-          '''
-          new = r'''        guard let finalizationNote = state.vm.refreshedNote(withID: noteIDs[0]) else {
+          ''',
+              r'''        guard let finalizationNote = state.vm.refreshedNote(withID: noteIDs[0]) else {
               finishFailure(
                   recorder: recorder,
                   launch: launch,
@@ -173,29 +154,22 @@ jobs:
               operationCount: operation,
               outcome: "localMarkerCommitted"
           )
-
           recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
-          let finalQueueDepth = await waitForIOSDrain(
+          let finalQueueDepth = await waitForIOSFinalDrain(
               state: state,
               runID: launch.runID,
               timeoutSeconds: MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds
           )
-          '''
-          text = replace_region(text, ios_start, ios_end, old, new, "iOS finalization marker")
+          ''',
+              "iOS final marker"
+          )
 
-          old = r'''        let notes = state.vm.fetchSearchableNotes()
-          let digests = MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkDigests(notes: notes, runID: launch.runID)
-          let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
+          ios = replace_once(
+              ios,
+              '''        let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
           let locallyComplete = failed == 0
-              && finalQueueDepth == 0
-              && state.syncController.hasConnectedPeers
-              && hasExpectedNotes
-
-          let result = MyRAMSyncBenchmarkEnduranceResult(
-          '''
-          new = r'''        let notes = state.vm.fetchSearchableNotes()
-          let digests = MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkDigests(notes: notes, runID: launch.runID)
-          let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
+          ''',
+              '''        let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
           let completionBarrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
               noteBodiesByTitle: MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkNoteBodies(
                   notes: notes,
@@ -204,68 +178,27 @@ jobs:
               runID: launch.runID
           )
           let locallyComplete = failed == 0
-              && finalQueueDepth == 0
-              && state.syncController.hasConnectedPeers
-              && hasExpectedNotes
-              && completionBarrierSatisfied
-          let resultDetail: String?
-          if !hasExpectedNotes {
-              resultDetail = "one or more cross-device synthetic notes were absent at final verification"
-          } else if !completionBarrierSatisfied {
-              resultDetail = "peer workload completion marker was not observed before final verification"
-          } else {
-              resultDetail = nil
-          }
+          ''',
+              "iOS result barrier"
+          )
+          ios = replace_once(
+              ios,
+              '''            && hasExpectedNotes
 
           let result = MyRAMSyncBenchmarkEnduranceResult(
-          '''
-          text = replace_region(text, ios_start, ios_end, old, new, "iOS final barrier result")
-          text = replace_region(
-              text,
-              ios_start,
-              ios_end,
-              r'''            detail: hasExpectedNotes ? nil : "one or more cross-device synthetic notes were absent at final verification"
           ''',
-              r'''            detail: resultDetail
+              '''            && hasExpectedNotes
+              && completionBarrierSatisfied
+
+          let result = MyRAMSyncBenchmarkEnduranceResult(
           ''',
-              "iOS result detail"
-          )
-          text = replace_region(
-              text,
-              ios_start,
-              ios_end,
-              r'''            detail: "observedBenchmarkNotes=\(digests.count)"
-          ''',
-              r'''            detail: "observedBenchmarkNotes=\(digests.count);completionBarrier=\(completionBarrierSatisfied)"
-          ''',
-              "iOS verification detail"
+              "iOS barrier predicate"
           )
 
-          old = r'''    private func waitForIOSDrain(
-              state: NotesListState,
-              timeoutSeconds: Int
-          ) async -> Int {
-              let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
-              var stableZeroSamples = 0
-              var lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
-              while Date() < deadline, !Task.isCancelled {
-                  if !state.syncController.hasConnectedPeers,
-                     let peer = state.syncController.availablePeers.first {
-                      state.syncController.invite(peer)
-                  }
-                  lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
-                  if lastDepth == 0 && state.syncController.hasConnectedPeers {
-                      stableZeroSamples += 1
-                      if stableZeroSamples >= 5 { return 0 }
-                  } else {
-                      stableZeroSamples = 0
-                  }
-                  try? await Task.sleep(nanoseconds: 1_000_000_000)
-              }
-              return lastDepth
-          }
-          '''
-          new = r'''    private func waitForIOSDrain(
+          ios = insert_before_once(
+              ios,
+              "    private func waitForIOSDrain(\n",
+              r'''    private func waitForIOSFinalDrain(
               state: NotesListState,
               runID: String,
               timeoutSeconds: Int
@@ -280,14 +213,14 @@ jobs:
                   }
                   lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
                   let notes = state.vm.fetchSearchableNotes()
-                  let completionBarrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                  let barrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
                       noteBodiesByTitle: MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkNoteBodies(
                           notes: notes,
                           runID: runID
                       ),
                       runID: runID
                   )
-                  if lastDepth == 0 && state.syncController.hasConnectedPeers && completionBarrierSatisfied {
+                  if lastDepth == 0 && state.syncController.hasConnectedPeers && barrierSatisfied {
                       stableZeroSamples += 1
                       if stableZeroSamples >= 5 { return 0 }
                   } else {
@@ -297,27 +230,25 @@ jobs:
               }
               return lastDepth
           }
-          '''
-          text = replace_region(text, ios_start, ios_end, old, new, "iOS drain barrier")
 
-          mac_start = "#if DEBUG && os(macOS)\n"
-          mac_end = "#endif"
-          old = r'''        if !networkEnabled {
-              controller.setBenchmarkEnduranceNetworkingEnabled(true)
-              recorder.record(.network, phase: "finalDrain", operationCount: operation, outcome: "resumed")
-          }
-          recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
+          ''',
+              "iOS final drain helper"
+          )
+          text = text[:ios_start] + ios + text[ios_end:]
+
+          mac_start = text.index("#if DEBUG && os(macOS)\n")
+          mac_end = text.index("\nprivate enum MyRAMSyncBenchmarkEnduranceMacError", mac_start)
+          mac = text[mac_start:mac_end]
+
+          mac = replace_once(
+              mac,
+              '''        recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
           let finalQueueDepth = await waitForMacDrain(
               controller: controller,
               timeoutSeconds: MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds
           )
-          '''
-          new = r'''        if !networkEnabled {
-              controller.setBenchmarkEnduranceNetworkingEnabled(true)
-              recorder.record(.network, phase: "finalDrain", operationCount: operation, outcome: "resumed")
-          }
-
-          do {
+          ''',
+              r'''        do {
               guard let finalizationNote = try adapter.loadNote(id: noteIDs[0]) else {
                   throw MyRAMSyncBenchmarkEnduranceMacError.noteMissing
               }
@@ -354,49 +285,23 @@ jobs:
               operationCount: operation,
               outcome: "localMarkerCommitted"
           )
-
           recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
-          let finalQueueDepth = await waitForMacDrain(
+          let finalQueueDepth = await waitForMacFinalDrain(
               controller: controller,
               adapter: adapter,
               runID: launch.runID,
               timeoutSeconds: MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds
           )
-          '''
-          text = replace_region(text, mac_start, mac_end, old, new, "Mac finalization marker")
-
-          text = replace_region(
-              text,
-              mac_start,
-              mac_end,
-              r'''        let seedQueueDepth = await waitForMacDrain(
-              controller: controller,
-              timeoutSeconds: Self.initialSeedDrainSeconds
-          )
           ''',
-              r'''        let seedQueueDepth = await waitForMacDrain(
-              controller: controller,
-              adapter: adapter,
-              timeoutSeconds: Self.initialSeedDrainSeconds
-          )
-          ''',
-              "Mac seed drain adapter"
+              "Mac final marker"
           )
 
-          old = r'''        let notes = (try? adapter.loadNotes()) ?? []
-          let digests = MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkDigests(notes: notes, runID: launch.runID)
-          let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
+          mac = replace_once(
+              mac,
+              '''        let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
           let locallyComplete = failed == 0
-              && finalQueueDepth == 0
-              && controller.hasConnectedPeers
-              && ordinaryRoutingReady(controller: controller)
-              && hasExpectedNotes
-
-          let result = MyRAMSyncBenchmarkEnduranceResult(
-          '''
-          new = r'''        let notes = (try? adapter.loadNotes()) ?? []
-          let digests = MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkDigests(notes: notes, runID: launch.runID)
-          let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
+          ''',
+              '''        let hasExpectedNotes = MyRAMSyncBenchmarkEnduranceDriverSupport.expectedTitlesObserved(digests, runID: launch.runID)
           let completionBarrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
               noteBodiesByTitle: MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkNoteBodies(
                   notes: notes,
@@ -405,69 +310,32 @@ jobs:
               runID: launch.runID
           )
           let locallyComplete = failed == 0
-              && finalQueueDepth == 0
-              && controller.hasConnectedPeers
-              && ordinaryRoutingReady(controller: controller)
+          ''',
+              "Mac result barrier"
+          )
+          mac = replace_once(
+              mac,
+              '''            && ordinaryRoutingReady(controller: controller)
               && hasExpectedNotes
-              && completionBarrierSatisfied
-          let resultDetail: String?
-          if !hasExpectedNotes {
-              resultDetail = "one or more cross-device synthetic notes were absent at final verification"
-          } else if !completionBarrierSatisfied {
-              resultDetail = "peer workload completion marker was not observed before final verification"
-          } else {
-              resultDetail = nil
-          }
 
           let result = MyRAMSyncBenchmarkEnduranceResult(
-          '''
-          text = replace_region(text, mac_start, mac_end, old, new, "Mac final barrier result")
-          text = replace_region(
-              text,
-              mac_start,
-              mac_end,
-              r'''            detail: hasExpectedNotes ? nil : "one or more cross-device synthetic notes were absent at final verification"
           ''',
-              r'''            detail: resultDetail
+              '''            && ordinaryRoutingReady(controller: controller)
+              && hasExpectedNotes
+              && completionBarrierSatisfied
+
+          let result = MyRAMSyncBenchmarkEnduranceResult(
           ''',
-              "Mac result detail"
-          )
-          text = replace_region(
-              text,
-              mac_start,
-              mac_end,
-              r'''            detail: "observedBenchmarkNotes=\(digests.count);routingReady=\(ordinaryRoutingReady(controller: controller))"
-          ''',
-              r'''            detail: "observedBenchmarkNotes=\(digests.count);routingReady=\(ordinaryRoutingReady(controller: controller));completionBarrier=\(completionBarrierSatisfied)"
-          ''',
-              "Mac verification detail"
+              "Mac barrier predicate"
           )
 
-          old = r'''    private func waitForMacDrain(
-              controller: MacSyncBatchController,
-              timeoutSeconds: Int
-          ) async -> Int {
-              let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
-              var stableZeroSamples = 0
-              var lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
-              while Date() < deadline, !Task.isCancelled {
-                  inviteExpectedIOSPeerIfNeeded(controller: controller)
-                  lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
-                  if lastDepth == 0 && ordinaryRoutingReady(controller: controller) {
-                      stableZeroSamples += 1
-                      if stableZeroSamples >= 5 { return 0 }
-                  } else {
-                      stableZeroSamples = 0
-                  }
-                  try? await Task.sleep(nanoseconds: 1_000_000_000)
-              }
-              return lastDepth
-          }
-          '''
-          new = r'''    private func waitForMacDrain(
+          mac = insert_before_once(
+              mac,
+              "    private func waitForMacDrain(\n",
+              r'''    private func waitForMacFinalDrain(
               controller: MacSyncBatchController,
               adapter: MacNotePersistenceAdapter,
-              runID: String? = nil,
+              runID: String,
               timeoutSeconds: Int
           ) async -> Int {
               let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
@@ -476,22 +344,15 @@ jobs:
               while Date() < deadline, !Task.isCancelled {
                   inviteExpectedIOSPeerIfNeeded(controller: controller)
                   lastDepth = controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count
-                  let completionBarrierSatisfied: Bool
-                  if let runID {
-                      let notes = (try? adapter.loadNotes()) ?? []
-                      completionBarrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
-                          noteBodiesByTitle: MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkNoteBodies(
-                              notes: notes,
-                              runID: runID
-                          ),
+                  let notes = (try? adapter.loadNotes()) ?? []
+                  let barrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                      noteBodiesByTitle: MyRAMSyncBenchmarkEnduranceDriverSupport.benchmarkNoteBodies(
+                          notes: notes,
                           runID: runID
-                      )
-                  } else {
-                      completionBarrierSatisfied = true
-                  }
-                  if lastDepth == 0
-                      && ordinaryRoutingReady(controller: controller)
-                      && completionBarrierSatisfied {
+                      ),
+                      runID: runID
+                  )
+                  if lastDepth == 0 && ordinaryRoutingReady(controller: controller) && barrierSatisfied {
                       stableZeroSamples += 1
                       if stableZeroSamples >= 5 { return 0 }
                   } else {
@@ -501,15 +362,18 @@ jobs:
               }
               return lastDepth
           }
-          '''
-          text = replace_region(text, mac_start, mac_end, old, new, "Mac drain barrier")
 
+          ''',
+              "Mac final drain helper"
+          )
+          text = text[:mac_start] + mac + text[mac_end:]
           source_path.write_text(text, encoding="utf-8")
 
           tests = test_path.read_text(encoding="utf-8")
-          anchor = r'''    func testSchemaIsDerivedFromBodyRepresentation() throws {
-          '''
-          test = r'''    func testEnduranceFinalizationBarrierRequiresBothPlatformMarkers() {
+          tests = insert_before_once(
+              tests,
+              "    func testSchemaIsDerivedFromBodyRepresentation() throws {\n",
+              r'''    func testEnduranceFinalizationBarrierRequiresBothPlatformMarkers() {
               let runID = "BEN36-barrier-test"
               let iOSTitle = MyRAMSyncBenchmarkEnduranceWorkload.noteTitle(
                   runID: runID,
@@ -522,7 +386,6 @@ jobs:
                   index: 1
               )
               var bodies = [iOSTitle: "ios-body", macTitle: "mac-body"]
-
               XCTAssertFalse(
                   MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
                       noteBodiesByTitle: bodies,
@@ -564,9 +427,9 @@ jobs:
               )
           }
 
-          func testSchemaIsDerivedFromBodyRepresentation() throws {
-          '''
-          tests = replace_once(tests, anchor, test, "barrier unit test")
+          ''',
+              "barrier unit test"
+          )
           test_path.write_text(tests, encoding="utf-8")
           PY
 
@@ -581,7 +444,6 @@ jobs:
           git diff --check
           grep -q 'completionBarrierSatisfied' MyRAM/Sync/MyRAMSyncModels.swift
           grep -q 'testEnduranceFinalizationBarrierRequiresBothPlatformMarkers' MyRAMTests/SyncBatchEnvelopeV2Tests.swift
-          git diff -- MyRAM/Sync/MyRAMSyncModels.swift MyRAMTests/SyncBatchEnvelopeV2Tests.swift
 
       - name: Commit and push BEN-36 branch
         shell: bash
