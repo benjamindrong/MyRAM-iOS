@@ -177,6 +177,7 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
 
     private var evidenceByPeerDeviceID:
         [String: [EvidenceSource: NormalizedEvidence]] = [:]
+    private var connectedSessionPeerDeviceIDs: Set<String> = []
     private var currentSessionV2PeerDeviceIDs: Set<String> = []
     private var bootstrapDiscoveryEvidenceByPeerDeviceID:
         [String: BootstrapCapabilityEvidence] = [:]
@@ -246,16 +247,14 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
     mutating func bindCurrentSessionV2Support(
         forPeerDeviceID peerDeviceID: String
     ) {
-        if effectiveCapability(forPeerDeviceID: peerDeviceID).supportsV2 {
-            currentSessionV2PeerDeviceIDs.insert(peerDeviceID)
-        } else {
-            currentSessionV2PeerDeviceIDs.remove(peerDeviceID)
-        }
+        connectedSessionPeerDeviceIDs.insert(peerDeviceID)
+        recomputeCurrentSessionV2Support(forPeerDeviceID: peerDeviceID)
     }
 
     mutating func clearCurrentSessionEvidence(
         forPeerDeviceID peerDeviceID: String
     ) {
+        connectedSessionPeerDeviceIDs.remove(peerDeviceID)
         currentSessionV2PeerDeviceIDs.remove(peerDeviceID)
         bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
@@ -263,6 +262,7 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
 
     mutating func clearEvidence(forPeerDeviceID peerDeviceID: String) {
         evidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        connectedSessionPeerDeviceIDs.remove(peerDeviceID)
         currentSessionV2PeerDeviceIDs.remove(peerDeviceID)
         bootstrapDiscoveryEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
         bootstrapSessionEvidenceByPeerDeviceID.removeValue(forKey: peerDeviceID)
@@ -329,5 +329,17 @@ struct SyncBatchPeerCapabilityRegistry: Sendable {
         forPeerDeviceID peerDeviceID: String
     ) {
         evidenceByPeerDeviceID[peerDeviceID, default: [:]][source] = evidence
+        guard connectedSessionPeerDeviceIDs.contains(peerDeviceID) else { return }
+        recomputeCurrentSessionV2Support(forPeerDeviceID: peerDeviceID)
+    }
+
+    private mutating func recomputeCurrentSessionV2Support(
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        if effectiveCapability(forPeerDeviceID: peerDeviceID).supportsV2 {
+            currentSessionV2PeerDeviceIDs.insert(peerDeviceID)
+        } else {
+            currentSessionV2PeerDeviceIDs.remove(peerDeviceID)
+        }
     }
 }
