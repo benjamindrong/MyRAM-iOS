@@ -48,6 +48,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private var readyBatchTask: Task<Void, Never>?
     private let unsentBatches: FileBackedSyncBatchQueue
     private var acknowledgementOutbox = SyncBatchAcknowledgementOutbox()
+    private var outstandingBatchDeliveries = SyncBatchOutstandingDeliveryTracker()
+    private var pendingBatchReceives = SyncBatchPendingReceiveTracker()
+    private var acknowledgementPeerByRemoteBatchID: [SyncBatchID: String] = [:]
     private let legacyReceiver: MacLegacySyncReceiver
     private let startAdvertisingOperation: () -> Void
     private let startBrowsingOperation: () -> Void
@@ -405,66 +408,63 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             return false
         }
 
-        let recipientDeviceIDs = recipients.map { MacSyncPeerIdentity(peerID: $0).deviceID }
-        if recipientDeviceIDs.isEmpty {
+        guard !recipients.isEmpty else { return false }
+        var reservations: [(peerID: MCPeerID, reservation: SyncBatchOutstandingDeliveryTracker.Reservation)] = []
+        for peerID in recipients {
+            let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+            if let reservation = outstandingBatchDeliveries.reserve(
+                batch.id,
+                forPeerDeviceID: deviceID
+            ) {
+                reservations.append((peerID, reservation))
+            }
+        }
+        guard !reservations.isEmpty else {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchSendDeferred,
+                batchID: String(describing: batch.id),
+                itemCount: recipients.count,
+                outcome: "awaitingAcknowledgement"
+            )
+            return true
+        }
+
+        let pendingRecipients = reservations.map(\.peerID)
+        let recipientDeviceIDs = reservations.map(\.reservation.peerDeviceID)
+        for deviceID in recipientDeviceIDs {
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .batchSendStarted,
                 batchID: String(describing: batch.id),
-                itemCount: 0,
-                outcome: "noRecipients"
+                peerDeviceID: deviceID,
+                itemCount: batch.changes.count
             )
-        } else {
-            for deviceID in recipientDeviceIDs {
-                MyRAMSyncBenchmarkTelemetry.shared.record(
-                    .batchSendStarted,
-                    batchID: String(describing: batch.id),
-                    peerDeviceID: deviceID,
-                    itemCount: batch.changes.count
-                )
-            }
         }
 
         do {
             let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
-            try sendBatchDataOperation(data, recipients, .reliable)
-            if recipientDeviceIDs.isEmpty {
+            try sendBatchDataOperation(data, pendingRecipients, .reliable)
+            for deviceID in recipientDeviceIDs {
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchSendSucceeded,
                     batchID: String(describing: batch.id),
-                    itemCount: 0,
-                    outcome: "transportAcceptedNoRecipients"
+                    peerDeviceID: deviceID,
+                    itemCount: batch.changes.count,
+                    outcome: "awaitingAcknowledgement"
                 )
-            } else {
-                for deviceID in recipientDeviceIDs {
-                    MyRAMSyncBenchmarkTelemetry.shared.record(
-                        .batchSendSucceeded,
-                        batchID: String(describing: batch.id),
-                        peerDeviceID: deviceID,
-                        itemCount: batch.changes.count
-                    )
-                }
             }
             lastSyncAt = batch.createdAt
             lastErrorMessage = nil
             return true
         } catch {
-            if recipientDeviceIDs.isEmpty {
+            for entry in reservations {
+                outstandingBatchDeliveries.release(entry.reservation)
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchSendFailed,
                     batchID: String(describing: batch.id),
-                    itemCount: 0,
+                    peerDeviceID: entry.reservation.peerDeviceID,
+                    itemCount: batch.changes.count,
                     outcome: "transportFailed"
                 )
-            } else {
-                for deviceID in recipientDeviceIDs {
-                    MyRAMSyncBenchmarkTelemetry.shared.record(
-                        .batchSendFailed,
-                        batchID: String(describing: batch.id),
-                        peerDeviceID: deviceID,
-                        itemCount: batch.changes.count,
-                        outcome: "transportFailed"
-                    )
-                }
             }
             lastErrorMessage = "Unable to sync nearby batch changes."
             return false
@@ -514,6 +514,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             peerDeviceID: peerDeviceID
         )
         unsentBatches.removeAll(withIDs: [acknowledgement.batchID])
+        if !unsentBatches.contains(acknowledgement.batchID) {
+            outstandingBatchDeliveries.release(acknowledgement.batchID)
+        }
     }
 
     private func enqueueBatchAcknowledgement(
@@ -781,6 +784,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
         do {
             try unsentBatches.removeBatches(withIDs: acknowledgement.coveredBatchIDs)
+            outstandingBatchDeliveries.release(acknowledgement.coveredBatchIDs)
         } catch {
             lastErrorMessage = "Unable to update the unsent batch queue."
             return
@@ -810,6 +814,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private func handlePeerDisconnect(peerDeviceID: String) {
         bootstrapCapabilityResolutionTasks.removeValue(forKey: peerDeviceID)?.cancel()
         bootstrapRetryTasks.removeValue(forKey: peerDeviceID)?.cancel()
+        outstandingBatchDeliveries.invalidateSession(forPeerDeviceID: peerDeviceID)
         peerCapabilityRegistry.clearCurrentSessionEvidence(forPeerDeviceID: peerDeviceID)
         bootstrapStateByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
@@ -867,6 +872,26 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     private func enqueueIncomingBatch(_ batch: SyncBatch, from peerID: MCPeerID) {
+        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        if acknowledgementPeerByRemoteBatchID[batch.id] != nil {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchCaptureCompleted,
+                batchID: String(describing: batch.id),
+                peerDeviceID: peerDeviceID,
+                outcome: "duplicateAlreadyDurable"
+            )
+            return
+        }
+        guard pendingBatchReceives.begin(batch.id) else {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchCaptureCompleted,
+                batchID: String(describing: batch.id),
+                peerDeviceID: peerDeviceID,
+                outcome: "duplicatePendingReceive"
+            )
+            return
+        }
+
         pendingIncomingBatchWork.append(IncomingBatchWork(batch: batch, peerID: peerID))
         guard !isProcessingIncomingBatchWork else { return }
 
@@ -888,6 +913,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 outcome: captured ? "captured" : "notCaptured"
             )
             if captured {
+                acknowledgementPeerByRemoteBatchID[work.batch.id] = peerDeviceID
                 let disposition = await processReceivedBatch(work.batch)
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchConvergenceCompleted,
@@ -896,13 +922,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                     outcome: String(describing: disposition)
                 )
                 if disposition == .acknowledgementPermitted {
-                    enqueueBatchAcknowledgement(
-                        batchID: work.batch.id,
-                        peerDeviceID: peerDeviceID
-                    )
+                    await retainCompletedRemoteBatchAcknowledgements([work.batch.id])
                 }
             }
 
+            pendingBatchReceives.finish(work.batch.id)
             remember(work.peerID)
             lastConnectionEvent = "Received sync from \(displayName(for: work.peerID))"
         }
@@ -982,6 +1006,20 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             .appendingPathComponent("mac-unsent-batch-queue.json")
     }
 
+}
+
+extension MacSyncBatchController: SyncConvergenceRemoteAcknowledgementRetaining {
+    func retainCompletedRemoteBatchAcknowledgements(_ batchIDs: Set<SyncBatchID>) async {
+        for batchID in batchIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let peerDeviceID = acknowledgementPeerByRemoteBatchID.removeValue(forKey: batchID) else {
+                continue
+            }
+            enqueueBatchAcknowledgement(
+                batchID: batchID,
+                peerDeviceID: peerDeviceID
+            )
+        }
+    }
 }
 
 extension MacSyncBatchController: MCSessionDelegate {

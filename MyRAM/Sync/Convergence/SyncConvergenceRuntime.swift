@@ -16,6 +16,10 @@ struct SyncConvergenceDrainCompletion {
     let successfullyCompletedBatchIDs: Set<UUID>
 }
 
+@MainActor
+protocol SyncConvergenceRemoteAcknowledgementRetaining: AnyObject {
+    func retainCompletedRemoteBatchAcknowledgements(_ batchIDs: Set<SyncBatchID>)
+}
 
 enum SyncConvergenceRemoteBatchDisposition: Equatable, Sendable {
     case acknowledgementPermitted
@@ -303,6 +307,10 @@ final class SyncConvergenceRuntime {
         lastCompletedDrainCompletion = nil
         activeDrainSuccessfullyCompletedBatchIDs = []
         let outcome = await performOwnedDrain(activationEnabled: activationEnabled)
+        if !activeDrainSuccessfullyCompletedBatchIDs.isEmpty {
+            (localBatchTransportAdapter as? SyncConvergenceRemoteAcknowledgementRetaining)?
+                .retainCompletedRemoteBatchAcknowledgements(activeDrainSuccessfullyCompletedBatchIDs)
+        }
         isDraining = false
         let completion = SyncConvergenceDrainCompletion(
             outcome: outcome,
@@ -369,6 +377,9 @@ final class SyncConvergenceRuntime {
                     deferredItems: &deferredItems
                 ) {
                     return terminal
+                }
+                if case .complete = outcome {
+                    activeDrainSuccessfullyCompletedBatchIDs.insert(request.sourceBatchID)
                 }
             }
 
@@ -572,6 +583,9 @@ final class SyncConvergenceRuntime {
                             kind: .persistence
                         ))
                     }
+                    let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
+                    blockedNoteIDs.formUnion(affectedNoteIDs)
+                    blockedOrigins.insert(batch.originDeviceID)
                     let reason: SyncConvergenceQuarantineReason
                     switch anchoredQuarantined.evidence {
                     case .terminal(let failure):
