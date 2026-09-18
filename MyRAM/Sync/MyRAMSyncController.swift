@@ -693,6 +693,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     }
 
     private func scheduleReconnectIfPossible(for deviceID: String) {
+        guard !MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() else { return }
         guard let peer = availablePeers.first(where: {
             $0.deviceID == deviceID && $0.isTrusted
         }) else { return }
@@ -1265,6 +1266,13 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 payload: payload
             )
             try await transport.send(data, toPeers: [peerID], mode: .reliable)
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .bootstrapSnapshotSent,
+                peerDeviceID: identity.deviceID,
+                itemCount: state.snapshot.notes.count,
+                outcome: state.snapshot.id.uuidString,
+                detail: "retryAttempt=\(state.retryAttempt)"
+            )
             lastErrorMessage = nil
         } catch {
             lastErrorMessage = "Unable to send nearby bootstrap state."
@@ -1316,11 +1324,24 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         from peerID: MCPeerID
     ) async {
         guard let applyBootstrapSnapshot else { return }
+        let peerDeviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .bootstrapSnapshotReceived,
+            peerDeviceID: peerDeviceID,
+            itemCount: snapshot.notes.count,
+            outcome: snapshot.id.uuidString
+        )
 
         let disposition: SyncPeerBootstrapApplyDisposition
         do {
             disposition = try applyBootstrapSnapshot(snapshot)
         } catch {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .bootstrapSnapshotApplyFailed,
+                peerDeviceID: peerDeviceID,
+                outcome: snapshot.id.uuidString,
+                detail: String(describing: error)
+            )
             lastErrorMessage = "Unable to apply nearby bootstrap state."
             return
         }
@@ -1341,6 +1362,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 payload: payload
             )
             try await transport.send(data, toPeers: [peerID], mode: .reliable)
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .bootstrapAcknowledgementSent,
+                peerDeviceID: peerDeviceID,
+                itemCount: acknowledgement.coveredBatchIDs.count,
+                outcome: acknowledgement.snapshotID.uuidString
+            )
         } catch {
             lastErrorMessage = "Unable to confirm nearby bootstrap state."
             return
@@ -1355,6 +1382,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         from peerID: MCPeerID
     ) async {
         let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .bootstrapAcknowledgementReceived,
+            peerDeviceID: deviceID,
+            itemCount: acknowledgement.coveredBatchIDs.count,
+            outcome: acknowledgement.snapshotID.uuidString
+        )
         guard var state = bootstrapStateByPeerDeviceID[deviceID],
               state.snapshotID == acknowledgement.snapshotID,
               acknowledgement.coveredBatchIDs.isSubset(of: state.coveredBatchIDs) else { return }
@@ -1887,7 +1920,8 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
             )
             addOrUpdateAvailablePeer(discoveredPeer)
 
-            if discoveredPeer.isTrusted {
+            if discoveredPeer.isTrusted,
+               !MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() {
                 invite(discoveredPeer)
             }
         }
