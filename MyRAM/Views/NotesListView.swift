@@ -96,6 +96,15 @@ final class NotesListState: ObservableObject {
     }
 }
 
+enum IOSNoteListRowPlanFactory {
+    static func make(note: Note, bodyPreview: String) -> PinnedTextListPresentationPlan {
+        PinnedTextListPresentationPolicy().plan(
+            pinnedTexts: note.pinnedThoughts,
+            bodyPreview: bodyPreview
+        )
+    }
+}
+
 struct NotesListView: View {
     @Environment(\.colorScheme) private var colorScheme
     private let topBarControlSize: CGFloat = 44
@@ -1296,7 +1305,9 @@ struct NotesListView: View {
     }
 
     private func noteRowContent(_ note: Note) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        let plan = noteRowPlan(for: note)
+
+        return HStack(alignment: .top, spacing: 10) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(note.title.isEmpty ? "Untitled" : note.title)
                     .font(.headline)
@@ -1311,20 +1322,37 @@ struct NotesListView: View {
                         .accessibilityLabel("Pinned note from \(folderHint)")
                 }
 
-                let pinnedThoughtPreview = pinnedThoughtPreviewText(for: note)
-                if !pinnedThoughtPreview.isEmpty {
-                    Text(pinnedThoughtPreview)
-                        .lineLimit(1)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(pinnedHighlightText)
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 4)
-                        .modifier(ChromeListPinnedPreview(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
+                if let firstPinnedTextPreview = plan.firstPinnedTextPreview {
+                    noteRowPinnedTextPreview(firstPinnedTextPreview)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                let contentPreview = noteContentPreviewText(for: note)
-                if !contentPreview.isEmpty {
-                    Text(contentPreview)
-                        .lineLimit(2)
+
+                if let secondPinnedTextPreview = plan.secondPinnedTextPreview {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        noteRowPinnedTextPreview(secondPinnedTextPreview)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .layoutPriority(0)
+
+                        if let visibleCountText = plan.visibleCountText,
+                           let accessibilityCountText = plan.accessibilityCountText,
+                           let countAccessibilityIdentifier = plan.countAccessibilityIdentifier {
+                            Text(visibleCountText)
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .layoutPriority(1)
+                                .accessibilityIdentifier(countAccessibilityIdentifier)
+                                .accessibilityLabel(accessibilityCountText)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if plan.bodyIsEligible, let bodyPreview = plan.bodyPreview {
+                    Text(bodyPreview)
+                        .lineLimit(plan.bodyLineLimit)
+                        .truncationMode(.tail)
                         .font(.subheadline)
                         .foregroundStyle(notePreviewContentTextColor)
                 }
@@ -1342,6 +1370,24 @@ struct NotesListView: View {
         .fixedSize(horizontal: false, vertical: true)
         .modifier(ChromeListRowSurface(style: editorChromeStyle))
         .contentShape(Rectangle())
+    }
+
+    private func noteRowPlan(for note: Note) -> PinnedTextListPresentationPlan {
+        IOSNoteListRowPlanFactory.make(
+            note: note,
+            bodyPreview: noteContentPreviewText(for: note)
+        )
+    }
+
+    private func noteRowPinnedTextPreview(_ text: String) -> some View {
+        Text(text)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .font(.subheadline.weight(.semibold))
+            .foregroundStyle(pinnedHighlightText)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .modifier(ChromeListPinnedPreview(style: editorChromeStyle, pinnedColor: pinnedHighlightColor))
     }
 
     @ViewBuilder
