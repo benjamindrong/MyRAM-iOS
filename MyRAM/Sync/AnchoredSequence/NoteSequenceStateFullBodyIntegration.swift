@@ -510,6 +510,21 @@ enum NoteSequenceStateFullBodyIntegration {
             record: record,
             noteID: note.id
         )
+        let markState: SyncTextMarkState?
+        switch record.markFormatVersion {
+        case 0:
+            markState = nil
+        case NoteStructuralFormattingPersistence.schemaVersion:
+            markState = try decodeMarkState(
+                record: record,
+                pairedWith: state
+            )
+        default:
+            throw NoteSequenceStateStoreError.unsupportedMarkVersion(
+                record.markFormatVersion
+            )
+        }
+
         guard !NoteSequenceStateExactText.matches(state.visibleText, note.content) else {
             return .unchanged(revision: record.revision)
         }
@@ -522,6 +537,13 @@ enum NoteSequenceStateFullBodyIntegration {
                 currentState: state,
                 body: note.content
             )
+            if let markState {
+                do {
+                    try markState.validating(against: finalState)
+                } catch {
+                    throw NoteSequenceStateStoreError.corruptMarkState
+                }
+            }
             try apply(
                 finalState,
                 to: record,

@@ -62,9 +62,16 @@ final class NoteSequenceStateBootstrapMigrator {
             try beforeEachNote(noteID)
 
             if allowsExistingStateReplacement {
-                _ = try await store.ensureBootstrapStateForCurrentBody(
-                    noteID: noteID
-                )
+                do {
+                    _ = try await store.loadOrBootstrapForLegacyMarkMigration(
+                        noteID: noteID
+                    )
+                } catch let error as NoteSequenceStateStoreError {
+                    guard error == .corruptState else { throw error }
+                    _ = try await store.ensureBootstrapStateForCurrentBody(
+                        noteID: noteID
+                    )
+                }
             } else {
                 switch try await store.load(noteID: noteID) {
                 case .missing:
