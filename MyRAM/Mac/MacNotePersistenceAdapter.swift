@@ -323,18 +323,31 @@ final class MacNotePersistenceAdapter {
         return try context.fetch(descriptor).first
     }
 
-    func save(note: Note, attributedContent: NSAttributedString) throws {
+#if DEBUG
+    /// Test-only compatibility seam for pre-structural cache behavior.
+    /// Production editor persistence must use prepareProductionLocalNoteEdit +
+    /// persistPreparedLocalNoteEdit so formatting cannot bypass mark authority.
+    func saveLegacyAttributedCacheForTesting(
+        note: Note,
+        attributedContent: NSAttributedString
+    ) throws {
         guard note.deletedAt == nil else {
             throw MacNotePersistenceError.deletedNote
         }
 
-        let storageText = MacEditorTextColorPolicy.sanitizedForPersistence(attributedContent)
-        assert(storageText.string == attributedContent.string, "Mac Auto-color persistence sanitization changed note text")
+        let storageText = MacEditorTextColorPolicy.sanitizedForPersistence(
+            attributedContent
+        )
+        assert(
+            storageText.string == attributedContent.string,
+            "Mac Auto-color persistence sanitization changed note text"
+        )
         note.content = storageText.string
         note.richTextContentData = RTFCoding.encode(storageText)
         note.modifiedAt = .now
         try context.save()
     }
+#endif
 }
 
 
