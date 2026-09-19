@@ -212,3 +212,157 @@ final class EditorFormattingMutationApplierTests: XCTestCase {
         XCTAssertTrue(result.isEqual(to: originalText))
     }
 }
+
+
+@MainActor
+final class EditorStructuralFormattingAdapterTests: XCTestCase {
+    func testProjectionCanonicalizesSupportedAttributesAndDropsUnsupportedOnRender() throws {
+        let baseFont = UIFont.systemFont(ofSize: 17)
+        var traits = baseFont.fontDescriptor.symbolicTraits
+        traits.insert([.traitBold, .traitItalic])
+        let descriptor = try XCTUnwrap(
+            baseFont.fontDescriptor.withSymbolicTraits(traits)
+        )
+        let explicitFont = UIFont(descriptor: descriptor, size: 17)
+        let source = NSMutableAttributedString(
+            string: "AB",
+            attributes: [
+                .font: explicitFont,
+                .explicitStructuralFontSizeMilliPoints: 17_000,
+                .foregroundColor: UIColor(
+                    red: 0.2,
+                    green: 0.4,
+                    blue: 0.6,
+                    alpha: 0.8
+                ),
+                .underlineStyle: NSUnderlineStyle.single.rawValue,
+                .strikethroughStyle: NSUnderlineStyle.single.rawValue,
+                .backgroundColor: UIColor.systemYellow
+            ]
+        )
+
+        let projection = EditorStructuralFormattingAdapter.project(
+            source,
+            baseBodyFont: baseFont,
+            traitCollection: UITraitCollection.current
+        )
+
+        XCTAssertEqual(projection.plainText, "AB")
+        XCTAssertEqual(projection.runs.count, 1)
+        let assignments = try XCTUnwrap(projection.runs.first?.assignments)
+        XCTAssertEqual(assignments[.bold], .enabled)
+        XCTAssertEqual(assignments[.italic], .enabled)
+        XCTAssertEqual(assignments[.underline], .enabled)
+        XCTAssertEqual(assignments[.strikethrough], .enabled)
+        XCTAssertEqual(assignments[.fontSize], .fontSizeMilliPoints(17_000))
+        XCTAssertEqual(
+            assignments[.textColor],
+            .textColor(
+                SyncTextMarkRGBAColor(
+                    red: 51,
+                    green: 102,
+                    blue: 153,
+                    alpha: 204
+                )
+            )
+        )
+
+        let rendered = EditorStructuralFormattingAdapter.render(
+            projection: projection,
+            baseBodyFont: baseFont,
+            traitCollection: UITraitCollection.current
+        )
+        XCTAssertNil(
+            rendered.attribute(
+                .backgroundColor,
+                at: 0,
+                effectiveRange: nil
+            )
+        )
+        XCTAssertEqual(
+            rendered.attribute(
+                .explicitStructuralFontSizeMilliPoints,
+                at: 0,
+                effectiveRange: nil
+            ) as? Int,
+            17_000
+        )
+    }
+
+    func testProjectionTreatsBaseFontAndAutoColorAsInherited() throws {
+        let baseFont = UIFont.systemFont(ofSize: 17)
+        let source = NSAttributedString(
+            string: "A",
+            attributes: [
+                .font: baseFont,
+                .foregroundColor: UIColor.label,
+                .autoTextColorDisplay: true
+            ]
+        )
+
+        let projection = EditorStructuralFormattingAdapter.project(
+            source,
+            baseBodyFont: baseFont,
+            traitCollection: UITraitCollection.current
+        )
+        let assignments = try XCTUnwrap(projection.runs.first?.assignments)
+
+        XCTAssertEqual(assignments[.fontSize], .clear)
+        XCTAssertEqual(assignments[.textColor], .clear)
+    }
+
+    func testProjectionNormalizesOutOfRangePastedFontSizeToInherited() throws {
+        let baseFont = UIFont.systemFont(ofSize: 17)
+        let source = NSAttributedString(
+            string: "A",
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 9)
+            ]
+        )
+
+        let projection = EditorStructuralFormattingAdapter.project(
+            source,
+            baseBodyFont: baseFont,
+            traitCollection: UITraitCollection.current
+        )
+
+        XCTAssertEqual(
+            try XCTUnwrap(projection.runs.first?.assignments)[.fontSize],
+            .clear
+        )
+    }
+
+    func testRTFEncodingStripsInternalExplicitFontSizeProvenance() throws {
+        let source = NSAttributedString(
+            string: "A",
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 17),
+                .explicitStructuralFontSizeMilliPoints: 17_000
+            ]
+        )
+
+        let data = try XCTUnwrap(RTFCoding.encode(source))
+        let decoded = try NSAttributedString(
+            data: data,
+            options: [
+                .documentType: NSAttributedString.DocumentType.rtf
+            ],
+            documentAttributes: nil
+        )
+
+        XCTAssertNil(
+            decoded.attribute(
+                .explicitStructuralFontSizeMilliPoints,
+                at: 0,
+                effectiveRange: nil
+            )
+        )
+        XCTAssertNotNil(
+            decoded.attribute(
+                .font,
+                at: 0,
+                effectiveRange: nil
+            )
+        )
+    }
+}
