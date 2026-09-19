@@ -37,6 +37,7 @@ private struct PreparedLocalNoteEdit {
     let bodyChanges: [SyncConvergenceCapturedLocalChange]
     let structuralSnapshot: NoteSequenceStateMutationSnapshot?
     let finalStructuralState: SyncTextSequenceState?
+    let finalStructuralMarkState: SyncTextMarkState?
 
     var capturedChanges: [SyncConvergenceCapturedLocalChange] {
         (titleChange.map { [$0] } ?? []) + bodyChanges
@@ -74,6 +75,7 @@ struct NoteEditorLifecycleSnapshot: Equatable {
     let title: String
     let body: String
     let richTextContentData: Data?
+    let structuralFormattingProjection: NoteStructuralFormattingProjection?
     let generation: UUID
 }
 
@@ -218,6 +220,7 @@ final class NotesViewModel: ObservableObject {
                 title: snapshot.title,
                 content: snapshot.body,
                 richTextContentData: snapshot.richTextContentData,
+                structuralFormattingProjection: snapshot.structuralFormattingProjection,
                 activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
                 operationIDReserver: MyRAMSyncOperationIDAllocator.shared
             )
@@ -859,7 +862,10 @@ final class NotesViewModel: ObservableObject {
             syncBatchErrorMessage = "Unable to save the latest edit."
             return false
         }
-        recordActiveNoteTextEdited(note)
+        if oldTitle != title
+            || !NoteSequenceStateExactText.matches(oldContent, content) {
+            recordActiveNoteTextEdited(note)
+        }
         recordPreparedLocalNoteEdit(preparedEdit)
         return true
     }
@@ -869,13 +875,15 @@ final class NotesViewModel: ObservableObject {
         _ note: Note,
         title: String,
         content: String,
-        richTextContentData: Data? = nil
+        richTextContentData: Data? = nil,
+        structuralFormattingProjection: NoteStructuralFormattingProjection? = nil
     ) async -> Bool {
         await commitNoteEditCore(
             note,
             title: title,
             content: content,
             richTextContentData: richTextContentData,
+            structuralFormattingProjection: structuralFormattingProjection,
             activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
             operationIDReserver: MyRAMSyncOperationIDAllocator.shared
         )
@@ -887,6 +895,7 @@ final class NotesViewModel: ObservableObject {
         title: String,
         content: String,
         richTextContentData: Data?,
+        structuralFormattingProjection: NoteStructuralFormattingProjection? = nil,
         generation: UUID
     ) -> Bool {
         let snapshot = NoteEditorLifecycleSnapshot(
@@ -894,6 +903,7 @@ final class NotesViewModel: ObservableObject {
             title: title,
             body: content,
             richTextContentData: richTextContentData,
+            structuralFormattingProjection: structuralFormattingProjection,
             generation: generation
         )
         guard SyncBatchAnchoredPayloadCapability.isEnabled else {
@@ -932,6 +942,7 @@ final class NotesViewModel: ObservableObject {
         title: String,
         content: String,
         richTextContentData: Data? = nil,
+        structuralFormattingProjection: NoteStructuralFormattingProjection? = nil,
         activationEnabled: Bool,
         operationIDReserver: any SyncOperationIDReserving
     ) async -> Bool {
@@ -956,20 +967,34 @@ final class NotesViewModel: ObservableObject {
                 newTitle: title,
                 newBody: content,
                 modifiedAt: modifiedAt,
+                structuralFormattingProjection: structuralFormattingProjection,
                 operationIDReserver: operationIDReserver
             )
             note.title = title
-            note.richTextContentData = richTextContentData
             note.modifiedAt = modifiedAt
             if let snapshot = prepared.structuralSnapshot,
-               let finalState = prepared.finalStructuralState {
-                _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
-                    of: note,
-                    expected: snapshot,
-                    newBody: content,
-                    finalState: finalState,
-                    in: context
-                )
+               let finalState = prepared.finalStructuralState,
+               let finalMarkState = prepared.finalStructuralMarkState {
+                let staged = try NoteSequenceStateFullBodyIntegration
+                    .stageSuppliedStateAndStructuralFormattingMutation(
+                        of: note,
+                        expected: snapshot,
+                        newBody: content,
+                        finalState: finalState,
+                        finalMarkState: finalMarkState,
+                        in: context
+                    )
+                if structuralFormattingProjection != nil {
+                    // The editor produced this cache from its canonical structural
+                    // projection; unsupported attributed input has already been stripped.
+                    note.richTextContentData = richTextContentData
+                } else if staged.textChanged || staged.markChanged {
+                    // Without a canonical platform projection, stale presentation
+                    // bytes must not survive an authority mutation.
+                    note.richTextContentData = nil
+                } else {
+                    note.richTextContentData = oldRichTextContentData
+                }
             }
             try saveContext()
         } catch {
@@ -981,7 +1006,10 @@ final class NotesViewModel: ObservableObject {
             syncBatchErrorMessage = "Unable to save the latest edit."
             return false
         }
-        recordActiveNoteTextEdited(note)
+        if oldTitle != title
+            || !NoteSequenceStateExactText.matches(oldContent, content) {
+            recordActiveNoteTextEdited(note)
+        }
         recordPreparedLocalNoteEdit(prepared)
         return true
     }
@@ -1796,7 +1824,8 @@ final class NotesViewModel: ObservableObject {
             titleChange: titleChange,
             bodyChanges: bodyChanges,
             structuralSnapshot: nil,
-            finalStructuralState: nil
+            finalStructuralState: nil,
+            finalStructuralMarkState: nil
         )
     }
 
@@ -1805,6 +1834,7 @@ final class NotesViewModel: ObservableObject {
         newTitle: String,
         newBody: String,
         modifiedAt: Date,
+        structuralFormattingProjection: NoteStructuralFormattingProjection?,
         operationIDReserver: any SyncOperationIDReserving
     ) async throws -> PreparedLocalNoteEdit {
         let snapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
@@ -1825,11 +1855,24 @@ final class NotesViewModel: ObservableObject {
             initialState: snapshot.state,
             operationIDReserver: operationIDReserver
         )
+        let finalMarkState: SyncTextMarkState
+        if let structuralFormattingProjection {
+            finalMarkState = try await NoteStructuralFormattingEditPlanner.prepare(
+                sequence: capture.finalState,
+                currentMarkState: snapshot.markState,
+                desiredProjection: structuralFormattingProjection,
+                operationIDReserver: operationIDReserver
+            ).finalMarkState
+        } else {
+            finalMarkState = snapshot.markState
+        }
+
         return PreparedLocalNoteEdit(
             titleChange: titleChange,
             bodyChanges: capture.capturedChanges,
             structuralSnapshot: snapshot,
-            finalStructuralState: capture.finalState
+            finalStructuralState: capture.finalState,
+            finalStructuralMarkState: finalMarkState
         )
     }
 
