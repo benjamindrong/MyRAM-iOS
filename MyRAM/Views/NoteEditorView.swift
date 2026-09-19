@@ -110,6 +110,7 @@ struct NoteEditorView: View {
     @State private var editorBufferOwner: EditorBufferOwner = .idle
     @State private var pendingRemoteTitlePublication: PendingRemoteTitlePublication?
     @State private var pendingRichTextContentEncoder: DeferredRichTextContentEncoder?
+    @State private var structuralFormattingProjection: NoteStructuralFormattingProjection?
     @FocusState private var isCurrentNoteSearchFocused: Bool
     @FocusState private var focusedPinnedThoughtID: UUID?
     @AppStorage("editorChromeStyle") private var editorChromeStyleRaw = EditorChromeStyle.standard.rawValue
@@ -339,6 +340,7 @@ struct NoteEditorView: View {
         title = note.title
         content = note.content
         richTextContentData = note.richTextContentData
+        structuralFormattingProjection = nil
         lastSnapshot = currentNoteSnapshot()
         vm.recordNoteOpened(note)
         arePinnedThoughtsExpanded = vm.isPinnedThoughtsSectionExpanded(for: note)
@@ -548,6 +550,9 @@ struct NoteEditorView: View {
             textColor: editorChromeStyle.editorTextUIColor,
             tintColor: editorChromeStyle.editorTintUIColor,
             onContentChanged: handleContentChanged,
+            onStructuralFormattingProjectionChanged: {
+                structuralFormattingProjection = $0
+            },
             onRemoteAttributedTextPublished: publishRemoteAttributedText,
             onMarkedTextEnded: vm.resumePendingConvergencePresentationIfNeeded,
             onUndoManagerChanged: updateActiveUndoManager,
@@ -1470,10 +1475,7 @@ struct NoteEditorView: View {
         guard hasPendingNoteCommit else { return true }
         pendingNoteCommitTask?.cancel()
         pendingNoteCommitTask = nil
-        let committedRichTextContentData = EditorRichTextCommitPolicy.committedRichTextContentData(
-            currentData: richTextContentData,
-            pendingEncoder: pendingRichTextContentEncoder
-        )
+        let committedRichTextContentData = canonicalDerivedRichTextContentData()
         pendingRichTextContentEncoder = nil
         richTextContentData = committedRichTextContentData
         let accepted = vm.acceptEditorLifecycleSnapshot(
@@ -1481,6 +1483,7 @@ struct NoteEditorView: View {
             title: title,
             content: content,
             richTextContentData: committedRichTextContentData,
+            structuralFormattingProjection: structuralFormattingProjection,
             generation: UUID()
         )
         guard accepted else { return false }
@@ -1503,17 +1506,15 @@ struct NoteEditorView: View {
         guard hasPendingNoteCommit else { return true }
         pendingNoteCommitTask?.cancel()
         pendingNoteCommitTask = nil
-        let committedRichTextContentData = EditorRichTextCommitPolicy.committedRichTextContentData(
-            currentData: richTextContentData,
-            pendingEncoder: pendingRichTextContentEncoder
-        )
+        let committedRichTextContentData = canonicalDerivedRichTextContentData()
         pendingRichTextContentEncoder = nil
         richTextContentData = committedRichTextContentData
         guard await vm.commitNoteEditForProduction(
             note,
             title: title,
             content: content,
-            richTextContentData: committedRichTextContentData
+            richTextContentData: committedRichTextContentData,
+            structuralFormattingProjection: structuralFormattingProjection
         ) else {
             // Keep the pending mutation owned by this editor so a later flush can retry it.
             hasPendingNoteCommit = true
@@ -1545,6 +1546,12 @@ struct NoteEditorView: View {
             return
         }
 
+        let recordsRecentTextActivity =
+            currentSnapshot.title != lastSnapshot.title
+            || !NoteSequenceStateExactText.matches(
+                currentSnapshot.content,
+                lastSnapshot.content
+            )
         if !isApplyingUndo {
             undoHistory.append(lastSnapshot)
             redoHistory.removeAll()
@@ -1554,7 +1561,9 @@ struct NoteEditorView: View {
         }
         lastSnapshot = currentSnapshot
         editorBufferOwner = .localEditing
-        vm.recordActiveNoteTextEdited(note)
+        if recordsRecentTextActivity {
+            vm.recordActiveNoteTextEdited(note)
+        }
         scheduleNoteCommit()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
@@ -1567,6 +1576,24 @@ struct NoteEditorView: View {
         }
 
         handleEditorChange()
+    }
+
+    private func canonicalDerivedRichTextContentData() -> Data? {
+        guard let projection = structuralFormattingProjection else {
+            return EditorRichTextCommitPolicy.committedRichTextContentData(
+                currentData: richTextContentData,
+                pendingEncoder: pendingRichTextContentEncoder
+            )
+        }
+        let textView = editorSyncBridge.textView
+        let baseFont = textView?.font ?? EditorTypography.defaultTextFont
+        let traitCollection = textView?.traitCollection ?? UITraitCollection.current
+        let attributed = EditorStructuralFormattingAdapter.render(
+            projection: projection,
+            baseBodyFont: baseFont,
+            traitCollection: traitCollection
+        )
+        return RTFCoding.encode(attributed)
     }
 
     private func handleContentChanged(_ plainText: String, _ richTextUpdate: EditorRichTextContentUpdate) {
@@ -1681,6 +1708,7 @@ struct NoteEditorView: View {
         title = refreshedNote.title
         content = refreshedNote.content
         richTextContentData = refreshedNote.richTextContentData
+        structuralFormattingProjection = nil
         restoreContentToggleToken += 1
         editingPinnedThoughtID = nil
         focusedPinnedThoughtID = nil
@@ -1702,6 +1730,7 @@ struct NoteEditorView: View {
         editorSyncBridge.fullDocumentMetrics?.recordRichTextEncode()
 #endif
         richTextContentData = RichTextContentCodec.encode(attributedText)
+        structuralFormattingProjection = nil
         lastSnapshot = currentNoteSnapshot()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
@@ -3107,6 +3136,7 @@ private struct SelectableTextView: UIViewRepresentable {
     let textColor: UIColor
     let tintColor: UIColor?
     let onContentChanged: (String, EditorRichTextContentUpdate) -> Void
+    let onStructuralFormattingProjectionChanged: (NoteStructuralFormattingProjection) -> Void
     let onRemoteAttributedTextPublished: (NSAttributedString) -> Void
     let onMarkedTextEnded: () -> Void
     let onUndoManagerChanged: (UndoManager?) -> Void
@@ -3400,6 +3430,7 @@ private struct SelectableTextView: UIViewRepresentable {
             text: $text,
             richTextContentData: $richTextContentData,
             onContentChanged: onContentChanged,
+            onStructuralFormattingProjectionChanged: onStructuralFormattingProjectionChanged,
             onRemoteAttributedTextPublished: onRemoteAttributedTextPublished,
             onUndoManagerChanged: onUndoManagerChanged,
             onFormattingStateChanged: onFormattingStateChanged,
@@ -3416,6 +3447,7 @@ private struct SelectableTextView: UIViewRepresentable {
         var text: Binding<String>
         var richTextContentData: Binding<Data?>
         var onContentChanged: (String, EditorRichTextContentUpdate) -> Void
+        var onStructuralFormattingProjectionChanged: (NoteStructuralFormattingProjection) -> Void
         var onRemoteAttributedTextPublished: (NSAttributedString) -> Void
         var onUndoManagerChanged: (UndoManager?) -> Void
         var onFormattingStateChanged: (EditorFormattingState) -> Void
@@ -3468,6 +3500,7 @@ private struct SelectableTextView: UIViewRepresentable {
             text: Binding<String>,
             richTextContentData: Binding<Data?>,
             onContentChanged: @escaping (String, EditorRichTextContentUpdate) -> Void,
+            onStructuralFormattingProjectionChanged: @escaping (NoteStructuralFormattingProjection) -> Void,
             onRemoteAttributedTextPublished: @escaping (NSAttributedString) -> Void,
             onUndoManagerChanged: @escaping (UndoManager?) -> Void,
             onFormattingStateChanged: @escaping (EditorFormattingState) -> Void,
@@ -3481,6 +3514,8 @@ private struct SelectableTextView: UIViewRepresentable {
             self.text = text
             self.richTextContentData = richTextContentData
             self.onContentChanged = onContentChanged
+            self.onStructuralFormattingProjectionChanged =
+                onStructuralFormattingProjectionChanged
             self.onRemoteAttributedTextPublished = onRemoteAttributedTextPublished
             self.onUndoManagerChanged = onUndoManagerChanged
             self.onFormattingStateChanged = onFormattingStateChanged
@@ -3922,8 +3957,15 @@ private struct SelectableTextView: UIViewRepresentable {
                 os_signpost(.end, log: EditorSelectionProfiling.log, name: "Coordinator.syncContent", signpostID: syncSignpostID)
             }
             let plainText = textView.text ?? ""
+            let storageText = storageAttributedText(from: textView)
+            let projection = EditorStructuralFormattingAdapter.project(
+                storageText,
+                baseBodyFont: textView.font ?? EditorTypography.defaultTextFont,
+                traitCollection: textView.traitCollection
+            )
+            onStructuralFormattingProjectionChanged(projection)
             let encodedRichText: Data? = serializesRichTextImmediately
-                ? RichTextContentCodec.encode(storageAttributedText(from: textView))
+                ? RichTextContentCodec.encode(storageText)
                 : nil
             let richTextBindingDisposition: MarkdownPreviewUIKitRichTextBindingDisposition =
                 serializesRichTextImmediately
