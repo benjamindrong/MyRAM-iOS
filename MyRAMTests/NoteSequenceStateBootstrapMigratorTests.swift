@@ -226,7 +226,8 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         let rerun = try XCTUnwrap(fetchRecords(in: container).first)
         XCTAssertEqual(rerun.markRevision, 1)
         XCTAssertEqual(rerun.markStatePayloadData, firstPayload)
-        XCTAssertEqual(await reserver.reservationCount, 1)
+        let reservationCount1 = await reserver.reservationCount
+        XCTAssertEqual(reservationCount1, 1)
     }
 
     func testLegacyFormattingMigrationMismatchCreatesEmptyMarksWithoutChangingBody() async throws {

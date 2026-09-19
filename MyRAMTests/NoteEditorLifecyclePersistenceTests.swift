@@ -240,7 +240,8 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertFalse(
             viewModel.hasRecentTextEditForTesting(noteID: note.id)
         )
-        XCTAssertEqual(await reserver.reservationCount, 1)
+        let reservationCount1 = await reserver.reservationCount
+        XCTAssertEqual(reservationCount1, 1)
 
         let requestedID = note.id
         let freshContext = ModelContext(container)
@@ -702,7 +703,8 @@ final class NoteStructuralFormattingEditPlannerTests: XCTestCase {
         XCTAssertEqual(prepared.emittedOperations.count, 2)
         XCTAssertEqual(prepared.emittedOperations.map(\.key), [.bold, .italic])
         XCTAssertEqual(Set(prepared.emittedOperations.map(\.logicalClock)), [1])
-        XCTAssertEqual(await reserver.reservationCount, 2)
+        let reservationCount2 = await reserver.reservationCount
+        XCTAssertEqual(reservationCount2, 2)
     }
 
     func testPlannerDoesNotReserveForNoOpFormatting() async throws {
@@ -728,7 +730,8 @@ final class NoteStructuralFormattingEditPlannerTests: XCTestCase {
 
         XCTAssertFalse(prepared.hasAuthoritativeMutation)
         XCTAssertEqual(prepared.finalMarkState, .empty)
-        XCTAssertEqual(await reserver.reservationCount, 0)
+        let reservationCount3 = await reserver.reservationCount
+        XCTAssertEqual(reservationCount3, 0)
     }
 
     func testPlannerChecksClockOverflowBeforeReservation() async throws {
@@ -771,7 +774,8 @@ final class NoteStructuralFormattingEditPlannerTests: XCTestCase {
                 .logicalClockOverflow
             )
         }
-        XCTAssertEqual(await reserver.reservationCount, 0)
+        let reservationCount4 = await reserver.reservationCount
+        XCTAssertEqual(reservationCount4, 0)
     }
 
     func testPlannerRejectsProjectionThatDoesNotExactlyCoverFinalText() async throws {
