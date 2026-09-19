@@ -29,7 +29,11 @@ struct PreparedInitialNoteSequenceState: Equatable, Sendable {
     let tombstonedUTF16Count: Int
 
     /// Builds the initial row from the already encoded payload so callers can save once.
-    func makeRevisionZeroRecord() -> NoteSequenceStateRecord {
+    func makeRevisionZeroRecord(
+        markFormatVersion: Int = NoteStructuralFormattingPersistence.schemaVersion,
+        markRevision: UInt64 = 0,
+        markStatePayloadData: Data = NoteStructuralFormattingPersistence.canonicalEmptyPayload
+    ) -> NoteSequenceStateRecord {
         NoteSequenceStateRecord(
             noteID: noteID,
             formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
@@ -37,7 +41,10 @@ struct PreparedInitialNoteSequenceState: Equatable, Sendable {
             visibleUTF16Count: visibleUTF16Count,
             tombstonedUTF16Count: tombstonedUTF16Count,
             payloadByteCount: payload.count,
-            statePayloadData: payload
+            statePayloadData: payload,
+            markFormatVersion: markFormatVersion,
+            markRevision: markRevision,
+            markStatePayloadData: markStatePayloadData
         )
     }
 
@@ -196,6 +203,25 @@ final class SwiftDataNoteSequenceStateStore: NoteSequenceStateStoring {
     }
 
     func loadOrBootstrap(noteID: UUID) async throws -> LoadedNoteSequenceState {
+        try await loadOrBootstrap(
+            noteID: noteID,
+            initializesLegacyMarkSchema: false
+        )
+    }
+
+    func loadOrBootstrapForLegacyMarkMigration(
+        noteID: UUID
+    ) async throws -> LoadedNoteSequenceState {
+        try await loadOrBootstrap(
+            noteID: noteID,
+            initializesLegacyMarkSchema: true
+        )
+    }
+
+    private func loadOrBootstrap(
+        noteID: UUID,
+        initializesLegacyMarkSchema: Bool
+    ) async throws -> LoadedNoteSequenceState {
         let context = makeContext()
         let note: Note
         let existingRecord: NoteSequenceStateRecord?
@@ -234,7 +260,14 @@ final class SwiftDataNoteSequenceStateStore: NoteSequenceStateStoring {
         )
 
         do {
-            context.insert(prepared.makeRevisionZeroRecord())
+            let record = initializesLegacyMarkSchema
+                ? prepared.makeRevisionZeroRecord(
+                    markFormatVersion: 0,
+                    markRevision: 0,
+                    markStatePayloadData: Data()
+                )
+                : prepared.makeRevisionZeroRecord()
+            context.insert(record)
             try testHook(.beforeSave)
             do {
                 try bootstrapSaveOperation(context)
