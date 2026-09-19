@@ -436,7 +436,7 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
             marks.visibleProjection(in: sequence).first
         ).assignments
         XCTAssertEqual(assignments[.underline], .enabled)
-        XCTAssertEqual(assignments[.strikethrough], .clear)
+        XCTAssertNil(assignments[.strikethrough])
         XCTAssertEqual(
             adapter.attributedContent(for: note)
                 .attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int,
