@@ -188,14 +188,16 @@ extension SyncTextMarkAssignment: Codable {
         let hasFontSize = container.contains(.fontSizeMilliPoints)
         let hasTextColor = container.contains(.textColor)
         for key in [CodingKeys.fontSizeMilliPoints, .textColor]
-        where container.contains(key) && (try container.decodeNil(forKey: key)) {
-            throw DecodingError.valueNotFound(
-                String.self,
-                DecodingError.Context(
-                    codingPath: decoder.codingPath + [key],
-                    debugDescription: "Structural mark assignment values cannot be null."
+        where container.contains(key) {
+            if try container.decodeNil(forKey: key) {
+                throw DecodingError.valueNotFound(
+                    String.self,
+                    DecodingError.Context(
+                        codingPath: decoder.codingPath + [key],
+                        debugDescription: "Structural mark assignment values cannot be null."
+                    )
                 )
-            )
+            }
         }
 
         switch kind {
