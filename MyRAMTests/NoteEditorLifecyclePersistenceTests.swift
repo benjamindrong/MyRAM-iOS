@@ -1,5 +1,6 @@
 import XCTest
 import SwiftData
+import AnchoredSequenceCore
 @testable import MyRAM
 
 @MainActor
@@ -487,6 +488,201 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         }
         XCTAssertTrue(condition(), file: file, line: line)
     }
+}
+
+
+final class NoteStructuralFormattingEditPlannerTests: XCTestCase {
+    func testPlannerReservesCanonicalOrderWithOneLogicalClock() async throws {
+        let sequence = try plannerRootState(text: "AB")
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "AB",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: 2,
+                    assignments: plannerAssignments(
+                        bold: .enabled,
+                        italic: .enabled
+                    )
+                )
+            ]
+        )
+        let reserver = PlannerOperationIDReserver()
+
+        let prepared = try await NoteStructuralFormattingEditPlanner.prepare(
+            sequence: sequence,
+            currentMarkState: .empty,
+            desiredProjection: projection,
+            operationIDReserver: reserver
+        )
+
+        XCTAssertEqual(prepared.emittedOperations.count, 2)
+        XCTAssertEqual(prepared.emittedOperations.map(\.key), [.bold, .italic])
+        XCTAssertEqual(Set(prepared.emittedOperations.map(\.logicalClock)), [1])
+        XCTAssertEqual(await reserver.reservationCount, 2)
+    }
+
+    func testPlannerDoesNotReserveForNoOpFormatting() async throws {
+        let sequence = try plannerRootState(text: "AB")
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "AB",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: 2,
+                    assignments: plannerAssignments()
+                )
+            ]
+        )
+        let reserver = PlannerOperationIDReserver()
+
+        let prepared = try await NoteStructuralFormattingEditPlanner.prepare(
+            sequence: sequence,
+            currentMarkState: .empty,
+            desiredProjection: projection,
+            operationIDReserver: reserver
+        )
+
+        XCTAssertFalse(prepared.hasAuthoritativeMutation)
+        XCTAssertEqual(prepared.finalMarkState, .empty)
+        XCTAssertEqual(await reserver.reservationCount, 0)
+    }
+
+    func testPlannerChecksClockOverflowBeforeReservation() async throws {
+        let sequence = try plannerRootState(text: "A")
+        let start = try sequence.operationAnchor(atVisibleUTF16Offset: 0)
+        let end = try sequence.operationAnchor(atVisibleUTF16Offset: 1)
+        let current = try SyncTextMarkState(operations: [
+            SyncTextMarkOperation(
+                operationID: plannerOperation(1),
+                logicalClock: UInt64.max,
+                key: .bold,
+                assignment: .enabled,
+                startAnchor: start,
+                endAnchor: end
+            )
+        ])
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "A",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: 1,
+                    assignments: plannerAssignments()
+                )
+            ]
+        )
+        let reserver = PlannerOperationIDReserver()
+
+        do {
+            _ = try await NoteStructuralFormattingEditPlanner.prepare(
+                sequence: sequence,
+                currentMarkState: current,
+                desiredProjection: projection,
+                operationIDReserver: reserver
+            )
+            XCTFail("Expected logical clock exhaustion")
+        } catch {
+            XCTAssertEqual(
+                error as? SyncTextMarkStateError,
+                .logicalClockOverflow
+            )
+        }
+        XCTAssertEqual(await reserver.reservationCount, 0)
+    }
+
+    func testPlannerRejectsProjectionThatDoesNotExactlyCoverFinalText() async throws {
+        let sequence = try plannerRootState(text: "AB")
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "AB",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: 1,
+                    assignments: plannerAssignments()
+                )
+            ]
+        )
+
+        do {
+            _ = try await NoteStructuralFormattingEditPlanner.prepare(
+                sequence: sequence,
+                currentMarkState: .empty,
+                desiredProjection: projection,
+                operationIDReserver: PlannerOperationIDReserver()
+            )
+            XCTFail("Expected projection coverage failure")
+        } catch {
+            XCTAssertEqual(
+                error as? NoteStructuralFormattingEditPlannerError,
+                .projectionCoverageMismatch
+            )
+        }
+    }
+}
+
+private actor PlannerOperationIDReserver: SyncOperationIDReserving {
+    private var nextCounter: UInt64 = 1
+    private(set) var reservationCount = 0
+
+    func reserveOperationID() async throws -> SyncOperationID {
+        defer {
+            nextCounter += 1
+            reservationCount += 1
+        }
+        return plannerOperation(nextCounter)
+    }
+}
+
+private func plannerAssignments(
+    bold: SyncTextMarkAssignment = .clear,
+    italic: SyncTextMarkAssignment = .clear,
+    underline: SyncTextMarkAssignment = .clear,
+    strikethrough: SyncTextMarkAssignment = .clear,
+    fontSize: SyncTextMarkAssignment = .clear,
+    textColor: SyncTextMarkAssignment = .clear
+) -> [SyncTextMarkKey: SyncTextMarkAssignment] {
+    [
+        .bold: bold,
+        .italic: italic,
+        .underline: underline,
+        .strikethrough: strikethrough,
+        .fontSize: fontSize,
+        .textColor: textColor
+    ]
+}
+
+private func plannerRootState(text: String) throws -> SyncTextSequenceState {
+    let operationID = plannerOperation(0)
+    return try SyncTextSequenceState(
+        runs: [
+            SyncTextSequenceRun(
+                operationID: operationID,
+                origin: SyncTextInsertionOrigin(
+                    leftElementID: nil,
+                    rightElementID: nil
+                ),
+                text: text
+            )
+        ],
+        fragments: [
+            SyncTextSequenceFragment(
+                operationID: operationID,
+                startOffset: 0,
+                utf16Length: text.utf16.count,
+                visibility: .visible
+            )
+        ]
+    )
+}
+
+private func plannerOperation(_ counter: UInt64) -> SyncOperationID {
+    SyncOperationID(
+        deviceID: UUID(
+            uuidString: "00000000-0000-0000-0000-000000002227"
+        )!,
+        localCounter: counter
+    )
 }
 
 private enum MYR179LifecycleTestError: Error {
