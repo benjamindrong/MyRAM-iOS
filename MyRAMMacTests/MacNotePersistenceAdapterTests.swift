@@ -432,11 +432,11 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
             record: record,
             pairedWith: sequence
         )
-        XCTAssertEqual(
-            try XCTUnwrap(marks.visibleProjection(in: sequence).first)
-                .assignments[.underline],
-            .enabled
-        )
+        let assignments = try XCTUnwrap(
+            marks.visibleProjection(in: sequence).first
+        ).assignments
+        XCTAssertEqual(assignments[.underline], .enabled)
+        XCTAssertEqual(assignments[.strikethrough], .clear)
         XCTAssertEqual(
             adapter.attributedContent(for: note)
                 .attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int,

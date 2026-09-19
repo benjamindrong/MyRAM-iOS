@@ -309,6 +309,8 @@ final class EditorStructuralFormattingAdapterTests: XCTestCase {
 
         XCTAssertEqual(assignments[.fontSize], .clear)
         XCTAssertEqual(assignments[.textColor], .clear)
+        XCTAssertEqual(assignments[.underline], .clear)
+        XCTAssertEqual(assignments[.strikethrough], .clear)
     }
 
     func testProjectionNormalizesOutOfRangePastedFontSizeToInherited() throws {

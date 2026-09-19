@@ -298,6 +298,7 @@ enum EditorStructuralFormattingAdapter {
     }
 
     private static func decorationEnabled(_ value: Any?) -> Bool {
-        (value as? NSNumber)?.intValue != 0
+        guard let number = value as? NSNumber else { return false }
+        return number.intValue != 0
     }
 }
