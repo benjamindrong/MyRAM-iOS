@@ -339,7 +339,7 @@ struct NoteEditorView: View {
 
         title = note.title
         content = note.content
-        richTextContentData = note.richTextContentData
+        richTextContentData = vm.editorRichTextContentData(for: note)
         structuralFormattingProjection = nil
         lastSnapshot = currentNoteSnapshot()
         vm.recordNoteOpened(note)
@@ -1707,7 +1707,7 @@ struct NoteEditorView: View {
         editorBufferOwner = .applyingRemoteSync
         title = refreshedNote.title
         content = refreshedNote.content
-        richTextContentData = refreshedNote.richTextContentData
+        richTextContentData = vm.editorRichTextContentData(for: refreshedNote)
         structuralFormattingProjection = nil
         restoreContentToggleToken += 1
         editingPinnedThoughtID = nil

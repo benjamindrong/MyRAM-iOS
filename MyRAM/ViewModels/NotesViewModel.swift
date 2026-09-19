@@ -3,6 +3,7 @@ import NearbySyncCore
 import AnchoredSequenceCore
 import SwiftUI
 import SwiftData
+import UIKit
 
 enum NotesListItem: Identifiable {
     case folder(Folder)
@@ -819,6 +820,45 @@ final class NotesViewModel: ObservableObject {
 
     func refreshedNote(withID noteID: UUID) -> Note? {
         fetchNote(withID: noteID)
+    }
+
+
+    func editorRichTextContentData(for note: Note) -> Data? {
+        let requestedNoteID = note.id
+        var descriptor = FetchDescriptor<NoteSequenceStateRecord>(
+            predicate: #Predicate { $0.noteID == requestedNoteID }
+        )
+        descriptor.fetchLimit = 1
+
+        guard let record = try? context.fetch(descriptor).first else {
+            return note.richTextContentData
+        }
+        guard record.markFormatVersion ==
+            NoteStructuralFormattingPersistence.schemaVersion else {
+            return note.richTextContentData
+        }
+
+        guard let sequence = try? NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(
+                record: record,
+                noteID: note.id
+            ),
+            let marks = try? NoteStructuralFormattingPersistence.decode(
+                record: record,
+                pairedWith: sequence
+            ),
+            let attributed = try? EditorStructuralFormattingAdapter.render(
+                sequence: sequence,
+                marks: marks,
+                baseBodyFont: EditorTypography.defaultTextFont,
+                traitCollection: UITraitCollection.current
+            ) else {
+            // Schema 1 is authoritative. A corrupt structural state must never
+            // fall back to presentation bytes that could hide the corruption.
+            return nil
+        }
+
+        return RTFCoding.encode(attributed)
     }
 
     @discardableResult
