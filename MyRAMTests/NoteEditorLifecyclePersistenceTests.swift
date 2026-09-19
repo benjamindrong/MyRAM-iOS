@@ -1,6 +1,7 @@
 import XCTest
 import SwiftData
 import AnchoredSequenceCore
+import UIKit
 @testable import MyRAM
 
 @MainActor
@@ -179,6 +180,188 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertTrue(durableAfterRedundantRetry)
         XCTAssertEqual(note.title, "Newer")
         XCTAssertEqual(note.content, "Newer")
+    }
+
+    func testFormattingOnlyProductionCommitAdvancesMarksWithoutRecentTextGate() async throws {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR227FormattingOnly-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(
+            for: schema,
+            configurations: configuration
+        )
+        let context = container.mainContext
+        let note = Note(title: "Title", content: "Same")
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: context
+        )
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "Same",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: "Same".utf16.count,
+                    assignments: plannerAssignments(
+                        underline: .enabled
+                    )
+                )
+            ]
+        )
+        let reserver = PlannerOperationIDReserver()
+
+        let committed = await viewModel.commitNoteEditCore(
+            note,
+            title: note.title,
+            content: note.content,
+            richTextContentData: Data("derived-cache".utf8),
+            structuralFormattingProjection: projection,
+            activationEnabled: true,
+            operationIDReserver: reserver
+        )
+
+        XCTAssertTrue(committed)
+        XCTAssertFalse(
+            viewModel.hasRecentTextEditForTesting(noteID: note.id)
+        )
+        XCTAssertEqual(await reserver.reservationCount, 1)
+
+        let requestedID = note.id
+        let freshContext = ModelContext(container)
+        let record = try XCTUnwrap(
+            freshContext.fetch(
+                FetchDescriptor<NoteSequenceStateRecord>(
+                    predicate: #Predicate { $0.noteID == requestedID }
+                )
+            ).first
+        )
+        XCTAssertEqual(record.revision, 0)
+        XCTAssertEqual(record.markRevision, 1)
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(
+                record: record,
+                noteID: note.id
+            )
+        let marks = try NoteStructuralFormattingPersistence.decode(
+            record: record,
+            pairedWith: sequence
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(marks.visibleProjection(in: sequence).first)
+                .assignments[.underline],
+            .enabled
+        )
+    }
+
+    func testFormattingOnlyProductionSaveFailureRestoresMarkAuthority() async throws {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR227FormattingFailure-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(
+            for: schema,
+            configurations: configuration
+        )
+        let context = container.mainContext
+        let note = Note(title: "Title", content: "Same")
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: context
+        )
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveContext: {
+                throw MYR179LifecycleTestError.injectedSaveFailure
+            }
+        )
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "Same",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: "Same".utf16.count,
+                    assignments: plannerAssignments(
+                        strikethrough: .enabled
+                    )
+                )
+            ]
+        )
+
+        let committed = await viewModel.commitNoteEditCore(
+            note,
+            title: note.title,
+            content: note.content,
+            richTextContentData: Data("derived-cache".utf8),
+            structuralFormattingProjection: projection,
+            activationEnabled: true,
+            operationIDReserver: PlannerOperationIDReserver()
+        )
+
+        XCTAssertFalse(committed)
+        XCTAssertFalse(
+            viewModel.hasRecentTextEditForTesting(noteID: note.id)
+        )
+
+        let requestedID = note.id
+        let freshContext = ModelContext(container)
+        let persisted = try XCTUnwrap(
+            freshContext.fetch(
+                FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == requestedID }
+                )
+            ).first
+        )
+        let record = try XCTUnwrap(
+            freshContext.fetch(
+                FetchDescriptor<NoteSequenceStateRecord>(
+                    predicate: #Predicate { $0.noteID == requestedID }
+                )
+            ).first
+        )
+        XCTAssertEqual(persisted.content, "Same")
+        XCTAssertNil(persisted.richTextContentData)
+        XCTAssertEqual(record.revision, 0)
+        XCTAssertEqual(record.markRevision, 0)
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(
+                record: record,
+                noteID: note.id
+            )
+        XCTAssertEqual(
+            try NoteStructuralFormattingPersistence.decode(
+                record: record,
+                pairedWith: sequence
+            ),
+            .empty
+        )
     }
 
     func testLifecyclePersistenceOwnershipTransfersBeforeEditorUnregisters() async {
