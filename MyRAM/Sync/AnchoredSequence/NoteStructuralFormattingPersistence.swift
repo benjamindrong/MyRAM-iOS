@@ -113,3 +113,48 @@ private struct PersistedStructuralMarkStateV1: Codable {
     let formatVersion: Int
     let operations: [SyncTextMarkOperation]
 }
+
+
+enum NoteStructuralFormattingCanonicalization {
+    static func fontSizeMilliPoints(_ pointSize: Double) -> Int? {
+        guard pointSize.isFinite else { return nil }
+        let scaled = pointSize * 1_000
+        guard scaled.isFinite else { return nil }
+        let rounded = scaled.rounded(.toNearestOrAwayFromZero)
+        guard rounded >= Double(Int.min),
+              rounded <= Double(Int.max) else {
+            return nil
+        }
+        let value = Int(rounded)
+        guard (11_000...40_000).contains(value) else { return nil }
+        return value
+    }
+
+    static func rgbaColor(
+        red: Double,
+        green: Double,
+        blue: Double,
+        alpha: Double
+    ) -> SyncTextMarkRGBAColor? {
+        guard let red = rgbaByte(red),
+              let green = rgbaByte(green),
+              let blue = rgbaByte(blue),
+              let alpha = rgbaByte(alpha) else {
+            return nil
+        }
+        return SyncTextMarkRGBAColor(
+            red: red,
+            green: green,
+            blue: blue,
+            alpha: alpha
+        )
+    }
+
+    private static func rgbaByte(_ component: Double) -> UInt8? {
+        guard component.isFinite else { return nil }
+        let clamped = min(max(component, 0), 1)
+        let rounded = (clamped * 255).rounded(.toNearestOrAwayFromZero)
+        guard rounded >= 0, rounded <= 255 else { return nil }
+        return UInt8(rounded)
+    }
+}
