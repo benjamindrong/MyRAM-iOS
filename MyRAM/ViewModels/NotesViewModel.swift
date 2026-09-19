@@ -204,6 +204,7 @@ final class NotesViewModel: ObservableObject {
     private var syncConvergenceRuntime: SyncConvergenceRuntime!
     private var activeEditorPresentationAcknowledgment: ActiveEditorPresentationAcknowledgment?
     private var recentTextEditByNoteID: [UUID: Date] = [:]
+    private var didCompleteStartupModelInitialization = false
     private var syncBatchReadyTask: Task<Void, Never>?
     private var pendingConvergenceResumeTask: Task<Void, Never>?
     private var nextSyncBatchCaptureID: UInt64 = 0
@@ -251,6 +252,7 @@ final class NotesViewModel: ObservableObject {
         bodyHashCapabilityEnabled: Bool = true,
         syncBatchQuietWindow: TimeInterval = 3,
         resumesPendingConvergenceOnInit: Bool = true,
+        defersModelInitializationUntilMigration: Bool = false,
         saveContext: (() throws -> Void)? = nil,
         saveLegacyIncomingApplyContext: ((ModelContext) throws -> Void)? = nil,
         commitLegacyIncomingEffects: ((LegacyIncomingBufferedEffects) throws -> Void)? = nil
@@ -362,13 +364,27 @@ final class NotesViewModel: ObservableObject {
             }
         }
         syncConflicts = syncConflictService.activeConflicts()
+        if !defersModelInitializationUntilMigration {
+            completeStartupInitializationAfterMigration()
+            if resumesPendingConvergenceOnInit {
+                resumePendingConvergencePresentationIfNeeded()
+            }
+        }
+    }
+
+    func completeStartupInitializationAfterMigration() {
+        guard !didCompleteStartupModelInitialization else { return }
+        didCompleteStartupModelInitialization = true
         purgeExpiredDeletedNotes()
         refreshCurrentFolderContent()
         loadLastNote()
-        if resumesPendingConvergenceOnInit {
-            resumePendingConvergencePresentationIfNeeded()
-        }
     }
+
+#if DEBUG
+    var didCompleteStartupModelInitializationForTesting: Bool {
+        didCompleteStartupModelInitialization
+    }
+#endif
 
     deinit {
         syncBatchReadyTask?.cancel()

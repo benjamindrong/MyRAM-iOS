@@ -165,7 +165,23 @@ struct MyRAMMacRootView: View {
         MacStartupCoordinator.Actions(
             migrateNoteSequenceStates: {
                 try await NoteSequenceStateBootstrapMigrator(
-                    container: PersistenceManager.shared.container
+                    container: PersistenceManager.shared.container,
+                    legacyFormattingProjection: { data, _ in
+                        await MainActor.run {
+                            MacStructuralFormattingAdapter.strictLegacyProjection(
+                                data: data
+                            )
+                        }
+                    },
+                    renderDerivedFormattingCache: { sequence, marks in
+                        try await MainActor.run {
+                            let attributed = try MacStructuralFormattingAdapter.render(
+                                sequence: sequence,
+                                marks: marks
+                            )
+                            return RTFCoding.encode(attributed)
+                        }
+                    }
                 ).runToCompletion()
             },
             loadNotesCreatingFirstIfNeeded: {
