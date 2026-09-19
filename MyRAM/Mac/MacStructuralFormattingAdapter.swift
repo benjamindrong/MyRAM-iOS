@@ -124,6 +124,83 @@ enum MacStructuralFormattingAdapter {
         return mutable
     }
 
+    static func render(
+        projection: NoteStructuralFormattingProjection,
+        baseBodyFont: NSFont = defaultBodyFont
+    ) -> NSAttributedString {
+        let mutable = NSMutableAttributedString(
+            string: projection.plainText,
+            attributes: [.font: baseBodyFont]
+        )
+        for run in projection.runs {
+            let range = NSRange(
+                location: run.startUTF16Offset,
+                length: run.utf16Length
+            )
+            guard range.location >= 0,
+                  range.length > 0,
+                  range.location <= mutable.length,
+                  range.length <= mutable.length - range.location else {
+                continue
+            }
+
+            let assignments = run.assignments
+            var traits = baseBodyFont.fontDescriptor.symbolicTraits
+            traits.remove([.bold, .italic])
+            if assignments[.bold] == .enabled { traits.insert(.bold) }
+            if assignments[.italic] == .enabled { traits.insert(.italic) }
+            let descriptor = baseBodyFont.fontDescriptor
+                .withSymbolicTraits(traits)
+            let sizeAssignment = assignments[.fontSize] ?? .clear
+            let pointSize: CGFloat
+            if case .fontSizeMilliPoints(let milliPoints) = sizeAssignment {
+                pointSize = CGFloat(milliPoints) / 1_000
+            } else {
+                pointSize = baseBodyFont.pointSize
+            }
+            let font = NSFont(
+                descriptor: descriptor,
+                size: pointSize
+            ) ?? NSFont.systemFont(ofSize: pointSize)
+            mutable.addAttribute(.font, value: font, range: range)
+
+            if case .fontSizeMilliPoints(let milliPoints) = sizeAssignment {
+                mutable.addAttribute(
+                    .explicitStructuralFontSizeMilliPoints,
+                    value: milliPoints,
+                    range: range
+                )
+            }
+            if assignments[.underline] == .enabled {
+                mutable.addAttribute(
+                    .underlineStyle,
+                    value: NSUnderlineStyle.single.rawValue,
+                    range: range
+                )
+            }
+            if assignments[.strikethrough] == .enabled {
+                mutable.addAttribute(
+                    .strikethroughStyle,
+                    value: NSUnderlineStyle.single.rawValue,
+                    range: range
+                )
+            }
+            if case .textColor(let rgba) = assignments[.textColor] {
+                mutable.addAttribute(
+                    .foregroundColor,
+                    value: NSColor(
+                        srgbRed: CGFloat(rgba.red) / 255,
+                        green: CGFloat(rgba.green) / 255,
+                        blue: CGFloat(rgba.blue) / 255,
+                        alpha: CGFloat(rgba.alpha) / 255
+                    ),
+                    range: range
+                )
+            }
+        }
+        return mutable
+    }
+
     static func strictLegacyProjection(
         data: Data,
         baseBodyFont: NSFont = defaultBodyFont
