@@ -564,11 +564,20 @@ enum NoteSequenceStateFullBodyIntegration {
             let previousRevision = record.revision
             let nextRevision = try nextRevision(after: previousRevision)
             if SyncBatchAnchoredPayloadCapability.isEnabled {
+                let markState = try decodeMarkState(
+                    record: record,
+                    pairedWith: state
+                )
                 let finalState = try SyncTextLegacyBootstrap.makeLineagePreservingState(
                     noteID: note.id,
                     currentState: state,
                     body: authoritativeBody
                 )
+                do {
+                    try markState.validating(against: finalState)
+                } catch {
+                    throw NoteSequenceStateStoreError.corruptMarkState
+                }
                 try apply(
                     finalState,
                     to: record,
@@ -620,7 +629,16 @@ enum NoteSequenceStateFullBodyIntegration {
             )
         }
 
+        let markState = try decodeMarkState(
+            record: record,
+            pairedWith: localState
+        )
         let mergedState = try localState.mergingRetainedLineage(with: remoteState)
+        do {
+            try markState.validating(against: mergedState)
+        } catch {
+            throw NoteSequenceStateStoreError.corruptMarkState
+        }
         guard mergedState != localState else {
             return .unchanged(revision: record.revision)
         }
