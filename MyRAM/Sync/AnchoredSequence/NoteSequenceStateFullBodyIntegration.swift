@@ -13,6 +13,32 @@ struct NoteSequenceStateMutationSnapshot: Equatable, Sendable {
     let body: String
     let revision: UInt64
     let state: SyncTextSequenceState
+    let markFormatVersion: Int
+    let markRevision: UInt64
+    let markState: SyncTextMarkState
+
+    init(
+        noteID: UUID,
+        body: String,
+        revision: UInt64,
+        state: SyncTextSequenceState,
+        markFormatVersion: Int = NoteStructuralFormattingPersistence.schemaVersion,
+        markRevision: UInt64 = 0,
+        markState: SyncTextMarkState = .empty
+    ) {
+        self.noteID = noteID
+        self.body = body
+        self.revision = revision
+        self.state = state
+        self.markFormatVersion = markFormatVersion
+        self.markRevision = markRevision
+        self.markState = markState
+    }
+}
+
+enum NoteStructuralFormattingMutationResult: Equatable {
+    case unchanged(revision: UInt64)
+    case replaced(previousRevision: UInt64, revision: UInt64)
 }
 
 /// Keeps a complete note body and its dark anchored-sequence state in one caller-owned transaction.
@@ -35,11 +61,18 @@ enum NoteSequenceStateFullBodyIntegration {
                 actual: note.content
             )
         }
+        let markState = try decodeMarkState(
+            record: record,
+            pairedWith: state
+        )
         return NoteSequenceStateMutationSnapshot(
             noteID: note.id,
             body: note.content,
             revision: record.revision,
-            state: state
+            state: state,
+            markFormatVersion: record.markFormatVersion,
+            markRevision: record.markRevision,
+            markState: markState
         )
     }
 
@@ -72,8 +105,18 @@ enum NoteSequenceStateFullBodyIntegration {
               NoteSequenceStateExactText.matches(currentState.visibleText, snapshot.body) else {
             throw NoteSequenceStateStoreError.verificationFailure
         }
+        try requireMarkSnapshot(
+            snapshot,
+            record: record,
+            pairedWith: currentState
+        )
         guard NoteSequenceStateExactText.matches(finalState.visibleText, newBody) else {
             throw NoteSequenceStateStoreError.newStateBodyMismatch
+        }
+        do {
+            try snapshot.markState.validating(against: finalState)
+        } catch {
+            throw NoteSequenceStateStoreError.corruptMarkState
         }
         let next = try nextRevision(after: snapshot.revision)
         let payload = try NoteSequenceStatePersistenceCodec.encode(state: finalState, noteID: note.id)
@@ -133,6 +176,16 @@ enum NoteSequenceStateFullBodyIntegration {
         guard currentState == failedFinalState else {
             throw NoteSequenceStateStoreError.verificationFailure
         }
+        try requireMarkSnapshot(
+            snapshot,
+            record: record,
+            pairedWith: failedFinalState
+        )
+        do {
+            try snapshot.markState.validating(against: snapshot.state)
+        } catch {
+            throw NoteSequenceStateStoreError.corruptMarkState
+        }
         let payload = try NoteSequenceStatePersistenceCodec.encode(
             state: snapshot.state,
             noteID: note.id
@@ -143,6 +196,74 @@ enum NoteSequenceStateFullBodyIntegration {
         record.tombstonedUTF16Count = snapshot.state.tombstonedUTF16Count
         record.payloadByteCount = payload.count
         record.statePayloadData = payload
+    }
+
+    @discardableResult
+    static func stageStructuralFormattingMutation(
+        of note: Note,
+        expected snapshot: NoteSequenceStateMutationSnapshot,
+        finalMarkState: SyncTextMarkState,
+        in context: ModelContext
+    ) throws -> NoteStructuralFormattingMutationResult {
+        try requireManaged(note, in: context)
+        guard snapshot.noteID == note.id else {
+            throw NoteSequenceStateStoreError.preparedStateNoteIDMismatch
+        }
+        guard NoteSequenceStateExactText.matches(note.content, snapshot.body) else {
+            throw NoteSequenceStateStoreError.visibleBodyChanged(
+                expected: snapshot.body,
+                actual: note.content
+            )
+        }
+        guard let record = try fetchRecord(noteID: note.id, in: context) else {
+            throw NoteSequenceStateStoreError.expectedRowButRowIsMissing
+        }
+        guard record.revision == snapshot.revision else {
+            throw NoteSequenceStateStoreError.staleRevision(
+                expected: snapshot.revision,
+                actual: record.revision
+            )
+        }
+
+        let currentState = try NoteSequenceStatePersistenceCodec.decodeStructurallyValidatedState(
+            record: record,
+            noteID: note.id
+        )
+        guard currentState == snapshot.state else {
+            throw NoteSequenceStateStoreError.verificationFailure
+        }
+        try requireMarkSnapshot(
+            snapshot,
+            record: record,
+            pairedWith: currentState
+        )
+        do {
+            try finalMarkState.validating(against: currentState)
+        } catch {
+            throw NoteSequenceStateStoreError.corruptMarkState
+        }
+
+        guard finalMarkState != snapshot.markState else {
+            return .unchanged(revision: snapshot.markRevision)
+        }
+
+        let nextMarkRevision = try nextMarkRevision(after: snapshot.markRevision)
+        let payload: Data
+        do {
+            payload = try NoteStructuralFormattingPersistence.encode(
+                state: finalMarkState,
+                pairedWith: currentState
+            )
+        } catch {
+            throw NoteSequenceStateStoreError.corruptMarkState
+        }
+        record.markFormatVersion = NoteStructuralFormattingPersistence.schemaVersion
+        record.markRevision = nextMarkRevision
+        record.markStatePayloadData = payload
+        return .replaced(
+            previousRevision: snapshot.markRevision,
+            revision: nextMarkRevision
+        )
     }
 
     static func insertNewNote(
@@ -327,6 +448,52 @@ enum NoteSequenceStateFullBodyIntegration {
         record.statePayloadData = payload
     }
 
+    private static func requireMarkSnapshot(
+        _ snapshot: NoteSequenceStateMutationSnapshot,
+        record: NoteSequenceStateRecord,
+        pairedWith sequence: SyncTextSequenceState
+    ) throws {
+        guard record.markFormatVersion == snapshot.markFormatVersion else {
+            throw NoteSequenceStateStoreError.unsupportedMarkVersion(
+                record.markFormatVersion
+            )
+        }
+        guard record.markRevision == snapshot.markRevision else {
+            throw NoteSequenceStateStoreError.staleMarkRevision(
+                expected: snapshot.markRevision,
+                actual: record.markRevision
+            )
+        }
+        let currentMarkState = try decodeMarkState(
+            record: record,
+            pairedWith: sequence
+        )
+        guard currentMarkState == snapshot.markState else {
+            throw NoteSequenceStateStoreError.verificationFailure
+        }
+    }
+
+    private static func decodeMarkState(
+        record: NoteSequenceStateRecord,
+        pairedWith sequence: SyncTextSequenceState
+    ) throws -> SyncTextMarkState {
+        do {
+            return try NoteStructuralFormattingPersistence.decode(
+                record: record,
+                pairedWith: sequence
+            )
+        } catch let error as NoteStructuralFormattingPersistenceError {
+            switch error {
+            case .unsupportedSchemaVersion(let version):
+                throw NoteSequenceStateStoreError.unsupportedMarkVersion(version)
+            case .corruptPayload, .pairedValidationFailed:
+                throw NoteSequenceStateStoreError.corruptMarkState
+            }
+        } catch {
+            throw NoteSequenceStateStoreError.corruptMarkState
+        }
+    }
+
     private static func requireManaged(
         _ note: Note,
         in context: ModelContext
@@ -335,6 +502,14 @@ enum NoteSequenceStateFullBodyIntegration {
               fetched === note else {
             throw NoteSequenceStateStoreError.noteContextMismatch(note.id)
         }
+    }
+
+    private static func nextMarkRevision(after revision: UInt64) throws -> UInt64 {
+        let (next, overflow) = revision.addingReportingOverflow(1)
+        guard !overflow else {
+            throw NoteSequenceStateStoreError.markRevisionExhaustion
+        }
+        return next
     }
 
     private static func nextRevision(after revision: UInt64) throws -> UInt64 {

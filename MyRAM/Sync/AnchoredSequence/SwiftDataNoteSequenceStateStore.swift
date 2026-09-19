@@ -126,6 +126,10 @@ enum NoteSequenceStateStoreError: Error, Equatable, Sendable {
     case newStateBodyMismatch
     case unsupportedVersion(Int)
     case corruptState
+    case unsupportedMarkVersion(Int)
+    case corruptMarkState
+    case staleMarkRevision(expected: UInt64, actual: UInt64)
+    case markRevisionExhaustion
     case revisionExhaustion
     case persistenceFailure
     case verificationFailure
