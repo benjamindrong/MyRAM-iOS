@@ -339,8 +339,9 @@ struct NoteEditorView: View {
 
         title = note.title
         content = note.content
+        structuralFormattingProjection =
+            vm.editorStructuralFormattingProjection(for: note)
         richTextContentData = vm.editorRichTextContentData(for: note)
-        structuralFormattingProjection = nil
         lastSnapshot = currentNoteSnapshot()
         vm.recordNoteOpened(note)
         arePinnedThoughtsExpanded = vm.isPinnedThoughtsSectionExpanded(for: note)
@@ -1444,6 +1445,7 @@ struct NoteEditorView: View {
             title: title,
             content: content,
             richTextContentData: richTextContentData,
+            structuralFormattingProjection: structuralFormattingProjection,
             pinnedThoughts: sortedPinnedThoughts.map {
                 PinnedThoughtSnapshot(
                     text: $0.text,
@@ -1707,8 +1709,9 @@ struct NoteEditorView: View {
         editorBufferOwner = .applyingRemoteSync
         title = refreshedNote.title
         content = refreshedNote.content
+        structuralFormattingProjection =
+            vm.editorStructuralFormattingProjection(for: refreshedNote)
         richTextContentData = vm.editorRichTextContentData(for: refreshedNote)
-        structuralFormattingProjection = nil
         restoreContentToggleToken += 1
         editingPinnedThoughtID = nil
         focusedPinnedThoughtID = nil
@@ -1729,8 +1732,14 @@ struct NoteEditorView: View {
 #if DEBUG
         editorSyncBridge.fullDocumentMetrics?.recordRichTextEncode()
 #endif
-        richTextContentData = RichTextContentCodec.encode(attributedText)
-        structuralFormattingProjection = nil
+        if vm.editorUsesStructuralFormattingAuthority(for: note) {
+            structuralFormattingProjection =
+                vm.editorStructuralFormattingProjection(for: note)
+            richTextContentData = vm.editorRichTextContentData(for: note)
+        } else {
+            structuralFormattingProjection = nil
+            richTextContentData = RichTextContentCodec.encode(attributedText)
+        }
         lastSnapshot = currentNoteSnapshot()
         toolbarBridge?.title = title.isEmpty ? "Untitled" : title
         refreshUndoState()
@@ -1834,6 +1843,8 @@ struct NoteEditorView: View {
         title = snapshot.title
         content = snapshot.content
         richTextContentData = snapshot.richTextContentData
+        structuralFormattingProjection =
+            snapshot.structuralFormattingProjection
         restoreContentToggleToken += 1
         restorePinnedThoughts(snapshot.pinnedThoughts)
         lastSnapshot = snapshot
@@ -1843,7 +1854,9 @@ struct NoteEditorView: View {
                 note,
                 title: snapshot.title,
                 content: snapshot.content,
-                richTextContentData: snapshot.richTextContentData
+                richTextContentData: snapshot.richTextContentData,
+                structuralFormattingProjection:
+                    snapshot.structuralFormattingProjection
             ) else {
                 return
             }
@@ -2611,6 +2624,7 @@ private struct NoteSnapshot: Equatable {
     var title: String = ""
     var content: String = ""
     var richTextContentData: Data?
+    var structuralFormattingProjection: NoteStructuralFormattingProjection?
     var pinnedThoughts: [PinnedThoughtSnapshot] = []
 
     func replacingTitle(_ title: String) -> NoteSnapshot {

@@ -823,42 +823,71 @@ final class NotesViewModel: ObservableObject {
     }
 
 
-    func editorRichTextContentData(for note: Note) -> Data? {
-        let requestedNoteID = note.id
-        var descriptor = FetchDescriptor<NoteSequenceStateRecord>(
-            predicate: #Predicate { $0.noteID == requestedNoteID }
-        )
-        descriptor.fetchLimit = 1
+    func editorUsesStructuralFormattingAuthority(for note: Note) -> Bool {
+        structuralFormattingRecord(noteID: note.id)?.markFormatVersion
+            == NoteStructuralFormattingPersistence.schemaVersion
+    }
 
-        guard let record = try? context.fetch(descriptor).first else {
-            return note.richTextContentData
-        }
-        guard record.markFormatVersion ==
-            NoteStructuralFormattingPersistence.schemaVersion else {
-            return note.richTextContentData
-        }
-
-        guard let sequence = try? NoteSequenceStatePersistenceCodec
-            .decodeStructurallyValidatedState(
-                record: record,
-                noteID: note.id
-            ),
-            let marks = try? NoteStructuralFormattingPersistence.decode(
+    func editorStructuralFormattingProjection(
+        for note: Note
+    ) -> NoteStructuralFormattingProjection? {
+        guard let record = structuralFormattingRecord(noteID: note.id),
+              record.markFormatVersion ==
+                NoteStructuralFormattingPersistence.schemaVersion,
+              let sequence = try? NoteSequenceStatePersistenceCodec
+                .decodeStructurallyValidatedState(
+                    record: record,
+                    noteID: note.id
+                ),
+              let marks = try? NoteStructuralFormattingPersistence.decode(
                 record: record,
                 pairedWith: sequence
-            ),
-            let attributed = try? EditorStructuralFormattingAdapter.render(
-                sequence: sequence,
-                marks: marks,
-                baseBodyFont: EditorTypography.defaultTextFont,
-                traitCollection: UITraitCollection.current
-            ) else {
+              ),
+              let spans = try? marks.visibleProjection(in: sequence) else {
+            return nil
+        }
+
+        return NoteStructuralFormattingProjection(
+            plainText: sequence.visibleText,
+            runs: spans.map {
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: $0.startUTF16Offset,
+                    utf16Length: $0.utf16Length,
+                    assignments: $0.assignments
+                )
+            }
+        )
+    }
+
+    func editorRichTextContentData(for note: Note) -> Data? {
+        guard editorUsesStructuralFormattingAuthority(for: note) else {
+            return note.richTextContentData
+        }
+        guard let projection = editorStructuralFormattingProjection(
+            for: note
+        ) else {
             // Schema 1 is authoritative. A corrupt structural state must never
             // fall back to presentation bytes that could hide the corruption.
             return nil
         }
 
+        let attributed = EditorStructuralFormattingAdapter.render(
+            projection: projection,
+            baseBodyFont: EditorTypography.defaultTextFont,
+            traitCollection: UITraitCollection.current
+        )
         return RTFCoding.encode(attributed)
+    }
+
+    private func structuralFormattingRecord(
+        noteID: UUID
+    ) -> NoteSequenceStateRecord? {
+        let requestedNoteID = noteID
+        var descriptor = FetchDescriptor<NoteSequenceStateRecord>(
+            predicate: #Predicate { $0.noteID == requestedNoteID }
+        )
+        descriptor.fetchLimit = 1
+        return try? context.fetch(descriptor).first
     }
 
     @discardableResult
