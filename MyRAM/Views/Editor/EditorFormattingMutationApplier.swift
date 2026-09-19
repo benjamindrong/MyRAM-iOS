@@ -90,14 +90,24 @@ enum EditorFormattingMutationApplier {
 
         mutable.enumerateAttribute(.font, in: plan.range) { value, range, _ in
             let baseFont = value as? UIFont ?? fallbackFont
-            mutable.addAttribute(
-                .font,
-                value: EditorFormattingCommandResolver.adjustedFontSize(
-                    from: baseFont,
-                    delta: plan.delta
-                ),
-                range: range
+            let adjustedFont = EditorFormattingCommandResolver.adjustedFontSize(
+                from: baseFont,
+                delta: plan.delta
             )
+            mutable.addAttribute(.font, value: adjustedFont, range: range)
+            if let milliPoints = NoteStructuralFormattingCanonicalization
+                .fontSizeMilliPoints(Double(adjustedFont.pointSize)) {
+                mutable.addAttribute(
+                    .explicitStructuralFontSizeMilliPoints,
+                    value: milliPoints,
+                    range: range
+                )
+            } else {
+                mutable.removeAttribute(
+                    .explicitStructuralFontSizeMilliPoints,
+                    range: range
+                )
+            }
         }
         return mutable
     }
@@ -109,10 +119,19 @@ enum EditorFormattingMutationApplier {
     ) -> [NSAttributedString.Key: Any] {
         var updatedAttributes = typingAttributes
         let baseFont = typingAttributes[.font] as? UIFont ?? fallbackFont
-        updatedAttributes[.font] = EditorFormattingCommandResolver.adjustedFontSize(
+        let adjustedFont = EditorFormattingCommandResolver.adjustedFontSize(
             from: baseFont,
             delta: plan.delta
         )
+        updatedAttributes[.font] = adjustedFont
+        if let milliPoints = NoteStructuralFormattingCanonicalization
+            .fontSizeMilliPoints(Double(adjustedFont.pointSize)) {
+            updatedAttributes[.explicitStructuralFontSizeMilliPoints] = milliPoints
+        } else {
+            updatedAttributes.removeValue(
+                forKey: .explicitStructuralFontSizeMilliPoints
+            )
+        }
         return updatedAttributes
     }
 
