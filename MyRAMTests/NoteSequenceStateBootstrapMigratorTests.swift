@@ -164,6 +164,174 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertTrue(records.allSatisfy { $0.revision == 0 })
     }
 
+    func testLegacyFormattingMigrationPromotesSupportedMarksInReplacementModeAndIsIdempotent() async throws {
+        let container = try makeContainer()
+        let legacyData = Data("legacy-rtf".utf8)
+        let rebuiltCache = Data("canonical-cache".utf8)
+        let noteID = try insertNote(
+            body: "AB",
+            legacyRichTextData: legacyData,
+            in: container
+        )
+        let reserver = MigratorOperationIDReserver()
+
+        let migrator = await makeMigrator(
+            container,
+            allowsExistingStateReplacement: true,
+            operationIDReserver: reserver,
+            legacyFormattingProjection: { _, body in
+                fullProjection(
+                    body: body,
+                    bold: .enabled
+                )
+            },
+            renderDerivedFormattingCache: { _, _ in rebuiltCache }
+        )
+        try await migrator.runToCompletion()
+
+        let first = try XCTUnwrap(fetchRecords(in: container).first)
+        XCTAssertEqual(
+            first.markFormatVersion,
+            NoteStructuralFormattingPersistence.schemaVersion
+        )
+        XCTAssertEqual(first.markRevision, 1)
+        let firstPayload = first.markStatePayloadData
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(
+                record: first,
+                noteID: noteID
+            )
+        let marks = try NoteStructuralFormattingPersistence.decode(
+            record: first,
+            pairedWith: sequence
+        )
+        let projection = try marks.visibleProjection(in: sequence)
+        XCTAssertEqual(projection.count, 1)
+        XCTAssertEqual(projection[0].assignments[.bold], .enabled)
+
+        let verificationContext = ModelContext(container)
+        let requestedID = noteID
+        let note = try XCTUnwrap(
+            verificationContext.fetch(
+                FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == requestedID }
+                )
+            ).first
+        )
+        XCTAssertEqual(note.content, "AB")
+        XCTAssertEqual(note.richTextContentData, rebuiltCache)
+
+        try await migrator.runToCompletion()
+
+        let rerun = try XCTUnwrap(fetchRecords(in: container).first)
+        XCTAssertEqual(rerun.markRevision, 1)
+        XCTAssertEqual(rerun.markStatePayloadData, firstPayload)
+        XCTAssertEqual(await reserver.reservationCount, 1)
+    }
+
+    func testLegacyFormattingMigrationMismatchCreatesEmptyMarksWithoutChangingBody() async throws {
+        let container = try makeContainer()
+        let legacyData = Data("mismatched-rtf".utf8)
+        let rebuiltCache = Data("empty-cache".utf8)
+        let noteID = try insertNote(
+            body: "Authoritative",
+            legacyRichTextData: legacyData,
+            in: container
+        )
+
+        try await makeMigrator(
+            container,
+            operationIDReserver: MigratorOperationIDReserver(),
+            legacyFormattingProjection: { _, _ in
+                fullProjection(
+                    body: "Different",
+                    italic: .enabled
+                )
+            },
+            renderDerivedFormattingCache: { _, marks in
+                XCTAssertEqual(marks, .empty)
+                return rebuiltCache
+            }
+        ).runToCompletion()
+
+        let record = try XCTUnwrap(fetchRecords(in: container).first)
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(
+                record: record,
+                noteID: noteID
+            )
+        XCTAssertEqual(
+            try NoteStructuralFormattingPersistence.decode(
+                record: record,
+                pairedWith: sequence
+            ),
+            .empty
+        )
+        let context = ModelContext(container)
+        let requestedID = noteID
+        let note = try XCTUnwrap(
+            context.fetch(
+                FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == requestedID }
+                )
+            ).first
+        )
+        XCTAssertEqual(note.content, "Authoritative")
+        XCTAssertEqual(note.richTextContentData, rebuiltCache)
+    }
+
+    func testLegacyFormattingMigrationSaveFailureLeavesSchemaZeroAndLegacyCacheRetryable() async throws {
+        let container = try makeContainer()
+        let legacyData = Data("legacy-cache".utf8)
+        let noteID = try insertNote(
+            body: "AB",
+            legacyRichTextData: legacyData,
+            in: container
+        )
+
+        do {
+            try await makeMigrator(
+                container,
+                operationIDReserver: MigratorOperationIDReserver(),
+                legacyFormattingProjection: { _, body in
+                    fullProjection(
+                        body: body,
+                        underline: .enabled
+                    )
+                },
+                renderDerivedFormattingCache: { _, _ in
+                    Data("rebuilt".utf8)
+                },
+                saveOperation: { _ in
+                    throw MigratorTestFailure.interrupted
+                }
+            ).runToCompletion()
+            XCTFail("Expected migration persistence failure")
+        } catch {
+            XCTAssertEqual(
+                error as? NoteSequenceStateStoreError,
+                .persistenceFailure
+            )
+        }
+
+        let record = try XCTUnwrap(fetchRecords(in: container).first)
+        XCTAssertEqual(record.markFormatVersion, 0)
+        XCTAssertEqual(record.markRevision, 0)
+        XCTAssertTrue(record.markStatePayloadData.isEmpty)
+
+        let context = ModelContext(container)
+        let requestedID = noteID
+        let note = try XCTUnwrap(
+            context.fetch(
+                FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == requestedID }
+                )
+            ).first
+        )
+        XCTAssertEqual(note.content, "AB")
+        XCTAssertEqual(note.richTextContentData, legacyData)
+    }
+
     private func makeContainer() throws -> ModelContainer {
         let schema = Schema(MyRAMModelRegistry.models)
         let configuration = ModelConfiguration(
@@ -177,11 +345,19 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
     private func makeMigrator(
         _ container: ModelContainer,
         allowsExistingStateReplacement: Bool = !SyncBatchAnchoredPayloadCapability.isEnabled,
+        operationIDReserver: any SyncOperationIDReserving = MigratorOperationIDReserver(),
+        legacyFormattingProjection: @escaping NoteLegacyFormattingProjectionOperation = { _, _ in nil },
+        renderDerivedFormattingCache: @escaping NoteStructuralFormattingCacheRenderOperation = { _, _ in nil },
+        saveOperation: @escaping @Sendable (ModelContext) throws -> Void = { try $0.save() },
         beforeEachNote: @escaping @Sendable (UUID) throws -> Void = { _ in }
     ) async -> NoteSequenceStateBootstrapMigrator {
         await NoteSequenceStateBootstrapMigrator(
             container: container,
             allowsExistingStateReplacement: allowsExistingStateReplacement,
+            operationIDReserver: operationIDReserver,
+            legacyFormattingProjection: legacyFormattingProjection,
+            renderDerivedFormattingCache: renderDerivedFormattingCache,
+            saveOperation: saveOperation,
             beforeEachNote: beforeEachNote
         )
     }
@@ -191,12 +367,14 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         noteID: UUID = UUID(),
         body: String,
         deleted: Bool = false,
+        legacyRichTextData: Data? = nil,
         in container: ModelContainer
     ) throws -> UUID {
         let context = ModelContext(container)
         let note = Note(content: body)
         note.id = noteID
         note.deletedAt = deleted ? .now : nil
+        note.richTextContentData = legacyRichTextData
         context.insert(note)
         try context.save()
         return noteID
@@ -254,6 +432,58 @@ final class NoteSequenceStateBootstrapMigratorTests: XCTestCase {
         XCTAssertEqual(persisted.statePayloadData, originalPayload)
         XCTAssertEqual(persisted.formatVersion, originalVersion)
     }
+}
+
+private actor MigratorOperationIDReserver: SyncOperationIDReserving {
+    private var nextCounter: UInt64 = 1
+    private(set) var reservationCount = 0
+
+    func reserveOperationID() async throws -> SyncOperationID {
+        defer {
+            nextCounter += 1
+            reservationCount += 1
+        }
+        return SyncOperationID(
+            deviceID: UUID(
+                uuidString: "00000000-0000-0000-0000-000000002227"
+            )!,
+            localCounter: nextCounter
+        )
+    }
+}
+
+private func fullProjection(
+    body: String,
+    bold: SyncTextMarkAssignment = .clear,
+    italic: SyncTextMarkAssignment = .clear,
+    underline: SyncTextMarkAssignment = .clear,
+    strikethrough: SyncTextMarkAssignment = .clear,
+    fontSize: SyncTextMarkAssignment = .clear,
+    textColor: SyncTextMarkAssignment = .clear
+) -> NoteStructuralFormattingProjection {
+    guard !body.isEmpty else {
+        return NoteStructuralFormattingProjection(
+            plainText: body,
+            runs: []
+        )
+    }
+    return NoteStructuralFormattingProjection(
+        plainText: body,
+        runs: [
+            NoteStructuralFormattingProjectionRun(
+                startUTF16Offset: 0,
+                utf16Length: body.utf16.count,
+                assignments: [
+                    .bold: bold,
+                    .italic: italic,
+                    .underline: underline,
+                    .strikethrough: strikethrough,
+                    .fontSize: fontSize,
+                    .textColor: textColor
+                ]
+            )
+        ]
+    )
 }
 
 @MainActor
