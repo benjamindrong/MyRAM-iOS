@@ -67,6 +67,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private var hasStartedNetworking = false
     private var pendingIncomingBatchWork: [IncomingBatchWork] = []
     private var isProcessingIncomingBatchWork = false
+#if DEBUG
+    private var isBenchmarkEnduranceNetworkingEnabled = true
+#endif
 
     init(
         context: ModelContext,
@@ -167,6 +170,27 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     var hasConnectedPeers: Bool {
         !connectedPeersProvider().isEmpty
     }
+
+#if DEBUG
+    func connectedPeerDeviceIDsForBenchmark() -> [String] {
+        connectedPeersProvider().map { MacSyncPeerIdentity(peerID: $0).deviceID }
+    }
+
+    @discardableResult
+    func setBenchmarkEnduranceNetworkingEnabled(_ enabled: Bool) -> Bool {
+        guard case .valid = MyRAMSyncBenchmarkConfiguration.enduranceLaunchValidation() else {
+            return false
+        }
+        isBenchmarkEnduranceNetworkingEnabled = enabled
+        if enabled {
+            advertiser.startAdvertisingPeer()
+        } else {
+            advertiser.stopAdvertisingPeer()
+            session.disconnect()
+        }
+        return true
+    }
+#endif
 
     var advertisedBatchSchemaDiscoveryInfo: [String: String] {
         SyncBatchPeerCapabilityCodec.productionDiscoveryInfo
@@ -678,6 +702,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 payload: payload
             )
             try sendBatchDataOperation(data, [peerID], .reliable)
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .bootstrapSnapshotSent,
+                peerDeviceID: identity.deviceID,
+                itemCount: state.snapshot.notes.count,
+                outcome: state.snapshot.id.uuidString,
+                detail: "retryAttempt=\(state.retryAttempt)"
+            )
             lastErrorMessage = nil
         } catch {
             lastErrorMessage = "Unable to send nearby bootstrap state."
@@ -728,6 +759,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         _ snapshot: SyncPeerBootstrapSnapshot,
         from peerID: MCPeerID
     ) async {
+        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .bootstrapSnapshotReceived,
+            peerDeviceID: peerDeviceID,
+            itemCount: snapshot.notes.count,
+            outcome: snapshot.id.uuidString
+        )
         let disposition: SyncPeerBootstrapApplyDisposition
         do {
             guard let convergenceCoordinator else {
@@ -736,6 +774,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             }
             disposition = try convergenceCoordinator.applyBootstrapSnapshot(snapshot, to: context)
         } catch {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .bootstrapSnapshotApplyFailed,
+                peerDeviceID: peerDeviceID,
+                outcome: snapshot.id.uuidString,
+                detail: String(describing: error)
+            )
             lastErrorMessage = "Unable to apply nearby bootstrap state."
             return
         }
@@ -756,6 +800,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 payload: payload
             )
             try sendBatchDataOperation(data, [peerID], .reliable)
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .bootstrapAcknowledgementSent,
+                peerDeviceID: peerDeviceID,
+                itemCount: acknowledgement.coveredBatchIDs.count,
+                outcome: acknowledgement.snapshotID.uuidString
+            )
         } catch {
             lastErrorMessage = "Unable to confirm nearby bootstrap state."
             return
@@ -770,6 +820,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         from peerID: MCPeerID
     ) async {
         let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .bootstrapAcknowledgementReceived,
+            peerDeviceID: deviceID,
+            itemCount: acknowledgement.coveredBatchIDs.count,
+            outcome: acknowledgement.snapshotID.uuidString
+        )
         guard var state = bootstrapStateByPeerDeviceID[deviceID],
               state.snapshotID == acknowledgement.snapshotID,
               acknowledgement.coveredBatchIDs.isSubset(of: state.coveredBatchIDs) else { return }
@@ -1143,6 +1199,12 @@ extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
     ) {
         Task { @MainActor in
             let identity = MacSyncPeerIdentity(peerID: peerID)
+#if DEBUG
+            guard isBenchmarkEnduranceNetworkingEnabled else {
+                invitationHandler(false, nil)
+                return
+            }
+#endif
             peerCapabilityRegistry.recordInvitationContext(
                 context,
                 forPeerDeviceID: identity.deviceID
@@ -1210,7 +1272,7 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
     }
 }
 
-private struct MacSyncPeerIdentity {
+struct MacSyncPeerIdentity {
     let displayName: String
     let deviceID: String
 

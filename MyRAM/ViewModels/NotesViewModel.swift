@@ -254,7 +254,7 @@ final class NotesViewModel: ObservableObject {
         pendingLocalConvergenceBatchQueueFileURL: URL? = NotesViewModel.pendingLocalConvergenceBatchQueueFileURL(),
         pendingLocalConvergenceBatchQueueLimit: Int = 100,
         bodyHashCapabilityEnabled: Bool = true,
-        syncBatchQuietWindow: TimeInterval = 3,
+        syncBatchQuietWindow: TimeInterval = MyRAMSyncBenchmarkConfiguration.batchQuietWindow(),
         resumesPendingConvergenceOnInit: Bool = true,
         defersModelInitializationUntilMigration: Bool = false,
         saveContext: (() throws -> Void)? = nil,

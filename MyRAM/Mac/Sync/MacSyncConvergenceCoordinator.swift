@@ -79,6 +79,12 @@ final class MacSyncConvergenceCoordinator {
         }
         let completion = await runtime.submitRemoteBatchAwaitingDrainOwnership(batch)
         let outcome = completion.outcome
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .batchConvergenceCompleted,
+            batchID: String(describing: batch.id),
+            outcome: Self.benchmarkRuntimeOutcomeLabel(for: outcome, batchID: batch.id),
+            detail: Self.benchmarkRuntimeOutcomeDetail(for: outcome, batchID: batch.id)
+        )
         await handle(outcome: outcome, sourceBatch: batch)
         if completion.successfullyCompletedBatchIDs.contains(batch.id) {
             return .acknowledgementPermitted
@@ -87,6 +93,45 @@ final class MacSyncConvergenceCoordinator {
             for: outcome,
             batchID: batch.id
         )
+    }
+
+    static func benchmarkRuntimeOutcomeLabel(
+        for outcome: SyncConvergenceRuntimeOutcome,
+        batchID: UUID
+    ) -> String {
+        switch outcome {
+        case .drained(let appliedBatchIDs):
+            return appliedBatchIDs.contains(batchID) ? "runtimeDrainedApplied" : "runtimeDrainedUnapplied"
+        case .pending: return "runtimePending"
+        case .deferred: return "runtimeDeferred"
+        case .quarantined: return "runtimeQuarantined"
+        case .alreadyDraining: return "runtimeAlreadyDraining"
+        case .blocked: return "runtimeBlocked"
+        }
+    }
+
+    static func benchmarkRuntimeOutcomeDetail(
+        for outcome: SyncConvergenceRuntimeOutcome,
+        batchID: UUID
+    ) -> String? {
+        switch outcome {
+        case .blocked(let failure):
+            return "failureKind=\(String(describing: failure.kind))"
+        case .deferred(let work):
+            guard let item = work.incoming.first(where: { $0.batchID == batchID }) else {
+                return "incomingReason=none"
+            }
+            return "incomingReason=\(String(describing: item.reason))"
+        case .quarantined(let work):
+            guard let item = work.items.first(where: { $0.domain == .incoming && $0.batchID == batchID }) else {
+                return "incomingReason=none"
+            }
+            return "incomingReason=\(String(describing: item.reason))"
+        case .pending(let pending):
+            return "pending=\(pending.map { String(describing: $0) }.sorted().joined(separator: ","))"
+        case .drained, .alreadyDraining:
+            return nil
+        }
     }
 
     func submitLocalObligation(_ obligation: SyncConvergenceLocalObligation) async {

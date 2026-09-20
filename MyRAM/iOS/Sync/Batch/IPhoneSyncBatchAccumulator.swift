@@ -1,4 +1,5 @@
 import Foundation
+@preconcurrency import MultipeerConnectivity
 
 actor IPhoneSyncBatchAccumulator {
     private let originDeviceID: SyncBatchDeviceID
@@ -13,7 +14,7 @@ actor IPhoneSyncBatchAccumulator {
 
     init(
         originDeviceID: SyncBatchDeviceID,
-        quietWindow: TimeInterval = 3,
+        quietWindow: TimeInterval = MyRAMSyncBenchmarkConfiguration.batchQuietWindow(),
         batchIDProvider: @escaping @Sendable () -> SyncBatchID = { UUID() },
         batchSequenceProvider: (@Sendable () -> SyncBatchSequenceReservation)? = nil,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = { interval in
@@ -189,3 +190,585 @@ private struct PendingBatch {
     var capturedChanges: [SyncConvergenceCapturedLocalChange]
     var readyAt: Date
 }
+
+#if DEBUG && os(iOS)
+@MainActor
+final class MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver {
+    static let shared = MyRAMSyncBenchmarkEnduranceRoutingGatedIOSDriver()
+
+    private static let syntheticQueueHighWatermark = 80
+    private static let initialSeedDrainSeconds = 45
+    private var task: Task<Void, Never>?
+
+    private init() {}
+
+    func startIfNeeded(state: NotesListState) {
+        guard task == nil,
+              MyRAMSyncBenchmarkConfiguration.isEnduranceRequested() else { return }
+        task = Task { @MainActor in
+            await run(state: state)
+        }
+    }
+
+    private func run(state: NotesListState) async {
+        switch MyRAMSyncBenchmarkConfiguration.enduranceLaunchValidation() {
+        case .notRequested:
+            return
+        case .invalid(let message):
+            print("[MyRAM Sync Endurance] rejected iOS launch: \(message)")
+            return
+        case .valid(let launch):
+            await run(state: state, launch: launch)
+        }
+    }
+
+    private func run(
+        state: NotesListState,
+        launch: MyRAMSyncBenchmarkEnduranceLaunch
+    ) async {
+        let recorder = MyRAMSyncBenchmarkEnduranceRecorder(runID: launch.runID, platform: .iOS)
+        let startedAt = Date()
+        recorder.record(.launch, outcome: "accepted", detail: "durationSeconds=\(launch.durationSeconds);routingGate=v3")
+
+        guard await waitForBootstrapAndRoutingReady(
+            state: state,
+            recorder: recorder,
+            timeoutSeconds: 60
+        ) else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: 0,
+                committed: 0,
+                failed: 0,
+                state: state,
+                detail: "initial peer bootstrap/routing did not become ready"
+            )
+            return
+        }
+        recorder.record(.phase, phase: "initialRoutingReady", outcome: "completed")
+
+        guard await waitForMacSeedNotes(state: state, runID: launch.runID, timeoutSeconds: 60) else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: 0,
+                committed: 0,
+                failed: 0,
+                state: state,
+                detail: "macOS seed traffic did not converge before local seed"
+            )
+            return
+        }
+        recorder.record(.phase, phase: "peerSeed", outcome: "completed")
+
+        recorder.record(.phase, phase: "seed", outcome: "started")
+        var noteIDs: [UUID] = []
+        var attempted = 0
+        var committed = 0
+        var failed = 0
+
+        for _ in 1...MyRAMSyncBenchmarkEnduranceWorkload.notesPerPlatform {
+            guard let note = state.vm.createNewNote() else {
+                failed += 1
+                continue
+            }
+            noteIDs.append(note.id)
+        }
+
+        guard noteIDs.count == MyRAMSyncBenchmarkEnduranceWorkload.notesPerPlatform else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                state: state,
+                detail: "unable to create the complete synthetic iOS note set"
+            )
+            return
+        }
+
+        let creationQueueDepth = await waitForIOSDrain(state: state, timeoutSeconds: 45)
+        guard creationQueueDepth == 0 else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                state: state,
+                detail: "iOS seed creation traffic did not drain before initialization"
+            )
+            return
+        }
+        recorder.record(.phase, phase: "seedCreationDrain", queueDepth: 0, outcome: "completed")
+
+        for (offset, noteID) in noteIDs.enumerated() {
+            guard let note = state.vm.refreshedNote(withID: noteID) else {
+                failed += 1
+                continue
+            }
+            attempted += 1
+            let index = offset + 1
+            let title = MyRAMSyncBenchmarkEnduranceWorkload.noteTitle(
+                runID: launch.runID,
+                platform: .iOS,
+                index: index
+            )
+            let body = MyRAMSyncBenchmarkEnduranceWorkload.initialBody(
+                runID: launch.runID,
+                platform: .iOS,
+                index: index
+            )
+            if await state.vm.commitNoteEditForProduction(note, title: title, content: body) {
+                committed += 1
+            } else {
+                failed += 1
+            }
+        }
+        recorder.record(.phase, phase: "seed", operationCount: attempted, outcome: "completed")
+
+        guard committed == MyRAMSyncBenchmarkEnduranceWorkload.notesPerPlatform else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                state: state,
+                detail: "unable to create the complete synthetic iOS note set"
+            )
+            return
+        }
+
+        let seedQueueDepth = await waitForIOSDrain(
+            state: state,
+            timeoutSeconds: Self.initialSeedDrainSeconds
+        )
+        guard seedQueueDepth == 0, ordinaryRoutingReady(state: state) else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                state: state,
+                detail: "seed traffic did not drain through an ordinary-sync-ready route"
+            )
+            return
+        }
+        recorder.record(.phase, phase: "seedDrain", queueDepth: 0, outcome: "completed")
+
+        let workloadEnd = startedAt.addingTimeInterval(
+            TimeInterval(max(1, launch.durationSeconds - MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds))
+        )
+        recorder.record(.phase, phase: "workload", outcome: "started")
+        var operation = 0
+        var waitingForReconnectRouting = false
+        var highWatermarkRecorded = false
+
+        while Date() < workloadEnd, !Task.isCancelled {
+            let connected = state.syncController.hasConnectedPeers
+            let queueDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
+
+            if !connected {
+                if !waitingForReconnectRouting {
+                    waitingForReconnectRouting = true
+                    recorder.record(
+                        .phase,
+                        phase: "reconnectRoutingWait",
+                        operationCount: operation,
+                        queueDepth: queueDepth,
+                        outcome: "disconnected"
+                    )
+                }
+                if let peer = state.syncController.availablePeers.first {
+                    state.syncController.invite(peer)
+                }
+            } else if waitingForReconnectRouting {
+                guard ordinaryRoutingReady(state: state) else {
+                    try? await Task.sleep(nanoseconds: 250_000_000)
+                    continue
+                }
+                waitingForReconnectRouting = false
+                highWatermarkRecorded = false
+                recorder.record(
+                    .phase,
+                    phase: "reconnectRoutingWait",
+                    operationCount: operation,
+                    queueDepth: queueDepth,
+                    outcome: "routingReady"
+                )
+            } else if !ordinaryRoutingReady(state: state) {
+                // A connected MCSession is not enough. Do not create more synthetic traffic
+                // while MyRAM is deliberately withholding ordinary batches for bootstrap.
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                continue
+            }
+
+            if queueDepth >= Self.syntheticQueueHighWatermark {
+                if !highWatermarkRecorded {
+                    highWatermarkRecorded = true
+                    recorder.record(
+                        .checkpoint,
+                        phase: "queueBackpressure",
+                        operationCount: operation,
+                        queueDepth: queueDepth,
+                        outcome: "paused"
+                    )
+                }
+                try? await Task.sleep(nanoseconds: 500_000_000)
+                continue
+            }
+            highWatermarkRecorded = false
+
+            let noteID = noteIDs[operation % noteIDs.count]
+            attempted += 1
+            if let note = state.vm.refreshedNote(withID: noteID) {
+                let nextBody = note.content + MyRAMSyncBenchmarkEnduranceWorkload.mutationToken(
+                    platform: .iOS,
+                    operation: operation
+                )
+                if await state.vm.commitNoteEditForProduction(
+                    note,
+                    title: note.title,
+                    content: nextBody
+                ) {
+                    committed += 1
+                } else {
+                    failed += 1
+                    recorder.record(
+                        .localMutationFailure,
+                        phase: "workload",
+                        operationCount: operation,
+                        outcome: "commitRejected"
+                    )
+                }
+            } else {
+                failed += 1
+                recorder.record(
+                    .localMutationFailure,
+                    phase: "workload",
+                    operationCount: operation,
+                    outcome: "noteMissing"
+                )
+            }
+
+            operation += 1
+            if operation % 50 == 0 {
+                recorder.record(
+                    .checkpoint,
+                    phase: "workload",
+                    operationCount: operation,
+                    queueDepth: state.syncController.unsentBatchQueueSnapshot().pendingBatches.count,
+                    outcome: state.syncController.hasConnectedPeers ? "connected" : "disconnected"
+                )
+            }
+            try? await Task.sleep(nanoseconds: MyRAMSyncBenchmarkEnduranceWorkload.mutationIntervalNanoseconds)
+        }
+
+        guard let finalizationNote = state.vm.refreshedNote(withID: noteIDs[0]) else {
+            finishFailure(
+                recorder: recorder,
+                launch: launch,
+                startedAt: startedAt,
+                attempted: attempted,
+                committed: committed,
+                failed: failed,
+                state: state,
+                detail: "unable to load iOS finalization marker note"
+            )
+            return
+        }
+        let finalizationBody = MyRAMSyncBenchmarkEnduranceWorkload.bodyByAppendingCompletionMarker(
+            finalizationNote.content,
+            runID: launch.runID,
+            platform: .iOS
+        )
+        if finalizationBody != finalizationNote.content {
+            guard await state.vm.commitNoteEditForProduction(
+                finalizationNote,
+                title: finalizationNote.title,
+                content: finalizationBody
+            ) else {
+                finishFailure(
+                    recorder: recorder,
+                    launch: launch,
+                    startedAt: startedAt,
+                    attempted: attempted,
+                    committed: committed,
+                    failed: failed,
+                    state: state,
+                    detail: "unable to commit iOS finalization marker"
+                )
+                return
+            }
+        }
+        recorder.record(
+            .phase,
+            phase: "finalizationBarrier",
+            operationCount: operation,
+            outcome: "localMarkerCommitted"
+        )
+        recorder.record(.phase, phase: "finalDrain", operationCount: operation, outcome: "started")
+        let finalQueueDepth = await waitForIOSFinalDrain(
+            state: state,
+            runID: launch.runID,
+            timeoutSeconds: MyRAMSyncBenchmarkEnduranceWorkload.finalDrainSeconds
+        )
+        let notes = state.vm.fetchSearchableNotes()
+        let digests = benchmarkDigests(notes: notes, runID: launch.runID)
+        let hasExpectedNotes = expectedTitlesObserved(digests, runID: launch.runID)
+        let completionBarrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+            noteBodiesByTitle: benchmarkNoteBodies(notes: notes, runID: launch.runID),
+            runID: launch.runID
+        )
+        let locallyComplete = failed == 0
+            && finalQueueDepth == 0
+            && state.syncController.hasConnectedPeers
+            && ordinaryRoutingReady(state: state)
+            && hasExpectedNotes
+            && completionBarrierSatisfied
+
+        let detail: String?
+        if !hasExpectedNotes {
+            detail = "one or more cross-device synthetic notes were absent at final verification"
+        } else if !completionBarrierSatisfied {
+            detail = "cross-device completion barrier was not observed before final verification"
+        } else {
+            detail = nil
+        }
+
+        let result = MyRAMSyncBenchmarkEnduranceResult(
+            schemaVersion: MyRAMSyncBenchmarkEnduranceResult.currentSchemaVersion,
+            runID: launch.runID,
+            platform: .iOS,
+            startedAt: startedAt,
+            finishedAt: Date(),
+            outcome: locallyComplete ? "locallyComplete" : "incomplete",
+            attemptedOperations: attempted,
+            committedOperations: committed,
+            failedOperations: failed,
+            finalUnsentBatchCount: finalQueueDepth,
+            connectedAtFinish: state.syncController.hasConnectedPeers,
+            expectedBenchmarkNoteCount: MyRAMSyncBenchmarkEnduranceWorkload.expectedTitles(runID: launch.runID).count,
+            observedBenchmarkNotes: digests,
+            detail: detail
+        )
+        recorder.record(
+            .verification,
+            phase: "finalDrain",
+            operationCount: operation,
+            queueDepth: finalQueueDepth,
+            outcome: result.outcome,
+            detail: "observedBenchmarkNotes=\(digests.count);routingReady=\(ordinaryRoutingReady(state: state));completionBarrier=\(completionBarrierSatisfied)"
+        )
+        recorder.writeResult(result)
+        recorder.record(.completed, outcome: result.outcome)
+    }
+
+    private func waitForBootstrapAndRoutingReady(
+        state: NotesListState,
+        recorder: MyRAMSyncBenchmarkEnduranceRecorder,
+        timeoutSeconds: Int
+    ) async -> Bool {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        var lastProbe: String?
+        while Date() < deadline, !Task.isCancelled {
+            let probe = initialRoutingProbe(state: state)
+            if probe != lastProbe {
+                recorder.record(
+                    .phase,
+                    phase: "initialRoutingProbe",
+                    outcome: "waiting",
+                    detail: probe
+                )
+                lastProbe = probe
+            }
+            if state.bootstrapState == .ready,
+               state.syncController.hasConnectedPeers,
+               ordinaryRoutingReady(state: state) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return false
+    }
+
+    private func initialRoutingProbe(state: NotesListState) -> String {
+        let connectedPeerDeviceIDs = state.syncController.connectedPeerDeviceIDsForBenchmark()
+        let peerStates = connectedPeerDeviceIDs.sorted().map { peerDeviceID in
+            let ordinary = state.syncController.isOrdinarySyncReadyForTesting(
+                peerDeviceID: peerDeviceID
+            )
+            let v2 = state.syncController.hasExplicitPeerV2Support(
+                forPeerDeviceID: peerDeviceID
+            )
+            return "\(peerDeviceID):ordinary=\(ordinary),v2=\(v2)"
+        }.joined(separator: "|")
+        return "startup=\(state.bootstrapState);connected=\(connectedPeerDeviceIDs.count);\(peerStates)"
+    }
+
+    private func waitForIOSDrain(
+        state: NotesListState,
+        timeoutSeconds: Int
+    ) async -> Int {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        var stableZeroSamples = 0
+        var lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
+        while Date() < deadline, !Task.isCancelled {
+            lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
+            if lastDepth == 0,
+               state.syncController.hasConnectedPeers,
+               ordinaryRoutingReady(state: state) {
+                stableZeroSamples += 1
+                if stableZeroSamples >= 5 { return 0 }
+            } else {
+                stableZeroSamples = 0
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        return lastDepth
+    }
+
+    private func waitForIOSFinalDrain(
+        state: NotesListState,
+        runID: String,
+        timeoutSeconds: Int
+    ) async -> Int {
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        var stableZeroSamples = 0
+        var lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
+        while Date() < deadline, !Task.isCancelled {
+            lastDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
+            let notes = state.vm.fetchSearchableNotes()
+            let barrierSatisfied = MyRAMSyncBenchmarkEnduranceWorkload.completionBarrierSatisfied(
+                noteBodiesByTitle: benchmarkNoteBodies(notes: notes, runID: runID),
+                runID: runID
+            )
+            if lastDepth == 0,
+               state.syncController.hasConnectedPeers,
+               ordinaryRoutingReady(state: state),
+               barrierSatisfied {
+                stableZeroSamples += 1
+                if stableZeroSamples >= 5 { return 0 }
+            } else {
+                stableZeroSamples = 0
+            }
+            try? await Task.sleep(nanoseconds: 1_000_000_000)
+        }
+        return lastDepth
+    }
+
+    private func waitForMacSeedNotes(
+        state: NotesListState,
+        runID: String,
+        timeoutSeconds: Int
+    ) async -> Bool {
+        let expected = Set(MyRAMSyncBenchmarkEnduranceWorkload.expectedTitles(
+            runID: runID,
+            platform: .macOS
+        ))
+        let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
+        while Date() < deadline, !Task.isCancelled {
+            let notes = state.vm.notes
+            if expected.isSubset(of: Set(notes.map(\.title))) {
+                return true
+            }
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        return false
+    }
+
+    private func ordinaryRoutingReady(state: NotesListState) -> Bool {
+        return MyRAMSyncBenchmarkEnduranceRoutingGate.isReady(
+            expectedPeerDeviceID: MyRAMSyncBenchmarkConfiguration.enduranceMacDeviceID,
+            connectedPeerDeviceIDs: state.syncController.connectedPeerDeviceIDsForBenchmark(),
+            ordinarySyncReady: { peerDeviceID in
+                state.syncController.isOrdinarySyncReadyForTesting(peerDeviceID: peerDeviceID)
+            },
+            hasExplicitV2Support: { peerDeviceID in
+                state.syncController.hasExplicitPeerV2Support(forPeerDeviceID: peerDeviceID)
+            }
+        )
+    }
+
+    private func benchmarkDigests(
+        notes: [Note],
+        runID: String
+    ) -> [MyRAMSyncBenchmarkEnduranceNoteDigest] {
+        let prefix = "BEN36-\(runID)-"
+        return notes
+            .filter { $0.deletedAt == nil && $0.title.hasPrefix(prefix) }
+            .map {
+                MyRAMSyncBenchmarkEnduranceNoteDigest(
+                    title: $0.title,
+                    bodySHA256: SyncBatchContentHash.sha256Hex(for: $0.content)
+                )
+            }
+            .sorted { $0.title < $1.title }
+    }
+
+    private func benchmarkNoteBodies(
+        notes: [Note],
+        runID: String
+    ) -> [String: String] {
+        let prefix = "BEN36-\(runID)-"
+        var bodies: [String: String] = [:]
+        for note in notes where note.deletedAt == nil && note.title.hasPrefix(prefix) {
+            bodies[note.title] = note.content
+        }
+        return bodies
+    }
+
+    private func expectedTitlesObserved(
+        _ digests: [MyRAMSyncBenchmarkEnduranceNoteDigest],
+        runID: String
+    ) -> Bool {
+        let observed = Set(digests.map(\.title))
+        return Set(MyRAMSyncBenchmarkEnduranceWorkload.expectedTitles(runID: runID)).isSubset(of: observed)
+    }
+
+    private func finishFailure(
+        recorder: MyRAMSyncBenchmarkEnduranceRecorder,
+        launch: MyRAMSyncBenchmarkEnduranceLaunch,
+        startedAt: Date,
+        attempted: Int,
+        committed: Int,
+        failed: Int,
+        state: NotesListState,
+        detail: String
+    ) {
+        let digests = benchmarkDigests(
+            notes: state.vm.fetchSearchableNotes(),
+            runID: launch.runID
+        )
+        let queueDepth = state.syncController.unsentBatchQueueSnapshot().pendingBatches.count
+        let result = MyRAMSyncBenchmarkEnduranceResult(
+            schemaVersion: MyRAMSyncBenchmarkEnduranceResult.currentSchemaVersion,
+            runID: launch.runID,
+            platform: .iOS,
+            startedAt: startedAt,
+            finishedAt: Date(),
+            outcome: "failed",
+            attemptedOperations: attempted,
+            committedOperations: committed,
+            failedOperations: failed,
+            finalUnsentBatchCount: queueDepth,
+            connectedAtFinish: state.syncController.hasConnectedPeers,
+            expectedBenchmarkNoteCount: MyRAMSyncBenchmarkEnduranceWorkload.expectedTitles(runID: launch.runID).count,
+            observedBenchmarkNotes: digests,
+            detail: detail
+        )
+        recorder.writeResult(result)
+        recorder.record(.failed, queueDepth: queueDepth, outcome: "failed", detail: detail)
+    }
+}
+#endif

@@ -8,6 +8,25 @@ import XCTest
 final class MacSyncBatchControllerTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
+    func testBenchmarkReconnectInvitationGateSerializesPollingAndAllowsLaterAttempts() {
+        var gate = MyRAMSyncBenchmarkEnduranceMacReconnectInvitationGate()
+        let startedAt = Date(timeIntervalSince1970: 1_000)
+        var invitationCount = 0
+        let invite = { invitationCount += 1 }
+
+        XCTAssertTrue(gate.inviteIfEligible(at: startedAt, timeout: 12, operation: invite))
+        XCTAssertFalse(gate.inviteIfEligible(at: startedAt.addingTimeInterval(0.25), timeout: 12, operation: invite))
+        XCTAssertFalse(gate.inviteIfEligible(at: startedAt.addingTimeInterval(11.999), timeout: 12, operation: invite))
+        XCTAssertEqual(invitationCount, 1)
+        XCTAssertTrue(gate.inviteIfEligible(at: startedAt.addingTimeInterval(12), timeout: 12, operation: invite))
+        XCTAssertEqual(invitationCount, 2)
+
+        gate.resolveAttempt()
+
+        XCTAssertTrue(gate.inviteIfEligible(at: startedAt.addingTimeInterval(12.25), timeout: 12, operation: invite))
+        XCTAssertEqual(invitationCount, 3)
+    }
+
     func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
         let peerID = MCPeerID(displayName: "remote|connected-mac")
         var invitedPeerIDs: [MCPeerID] = []
@@ -1129,6 +1148,28 @@ final class MacSyncBatchControllerTests: XCTestCase {
                 for: SyncBatchDrainFailure(batchID: item.batchID, kind: .corruptHistory)
             )
         )
+    }
+
+    func testBenchmarkEnduranceOutageKeepsDiscoveryBrowserAlive() throws {
+        let repo = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        try ProtectedRepositoryAuditPolicy.skipIfNeeded(repositoryURL: repo)
+        let source = try String(
+            contentsOf: repo.appendingPathComponent("MyRAM/Mac/Sync/MacSyncBatchController.swift"),
+            encoding: .utf8
+        )
+
+        let start = try XCTUnwrap(
+            source.range(of: "func setBenchmarkEnduranceNetworkingEnabled(_ enabled: Bool) -> Bool")
+        )
+        let tail = source[start.lowerBound...]
+        let end = try XCTUnwrap(tail.range(of: "\n#endif"))
+        let methodSource = String(tail[..<end.lowerBound])
+
+        XCTAssertFalse(methodSource.contains("browser.stopBrowsingForPeers()"))
+        XCTAssertFalse(methodSource.contains("browser.startBrowsingForPeers()"))
+        XCTAssertTrue(methodSource.contains("session.disconnect()"))
     }
 
     func testProductionMacSyncFilesDoNotConstructOldDrainEngine() throws {
