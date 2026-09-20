@@ -61,6 +61,7 @@ struct SyncConvergencePersistedIncorporationIdentity: Equatable {
 struct SyncConvergencePlanningInput: Equatable {
     let incomingBatch: SyncBatch
     let currentNotes: [SyncConvergenceProjectedNote]
+    let currentFolderIDs: Set<UUID>
     let retainedSnapshots: [SyncConvergenceRetainedSnapshot]
     let retainedLocalOperations: [SyncConvergenceRetainedOperation]
     let retainedRemoteOperations: [SyncConvergenceRetainedOperation]
@@ -79,6 +80,7 @@ struct SyncConvergencePlanningInput: Equatable {
     init(
         incomingBatch: SyncBatch,
         currentNotes: [SyncConvergenceProjectedNote] = [],
+        currentFolderIDs: Set<UUID> = [],
         retainedSnapshots: [SyncConvergenceRetainedSnapshot] = [],
         retainedLocalOperations: [SyncConvergenceRetainedOperation] = [],
         retainedRemoteOperations: [SyncConvergenceRetainedOperation] = [],
@@ -94,6 +96,7 @@ struct SyncConvergencePlanningInput: Equatable {
     ) {
         self.incomingBatch = incomingBatch
         self.currentNotes = currentNotes
+        self.currentFolderIDs = currentFolderIDs
         self.retainedSnapshots = retainedSnapshots
         self.retainedLocalOperations = retainedLocalOperations
         self.retainedRemoteOperations = retainedRemoteOperations
