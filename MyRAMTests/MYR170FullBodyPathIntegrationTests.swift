@@ -98,6 +98,52 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         XCTAssertTrue(try fetchStateRecords(in: container).isEmpty)
     }
 
+    func testMYR223ImportPublishesCommittedGraphThroughExistingOwners() async throws {
+        let container = try makeContainer()
+        let controller = MYR223SyncControllerSpy()
+        let viewModel = makeViewModel(
+            context: container.mainContext,
+            syncController: controller,
+            syncBatchQuietWindow: 0
+        )
+        let url = try makeMYR223ImportFile()
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+
+        let imported = try viewModel.importNotes(from: url)
+
+        try await waitUntil {
+            controller.acceptedBatches
+                .flatMap(\.changes)
+                .filter {
+                    if case .noteCreated = $0 { return true }
+                    return false
+                }
+                .count == imported.count
+        }
+
+        let createdNoteIDs = Set(controller.acceptedBatches.flatMap(\.changes).compactMap { change -> UUID? in
+            guard case .noteCreated(let created) = change else { return nil }
+            return created.noteID
+        })
+        XCTAssertEqual(createdNoteIDs, Set(imported.map(\.id)))
+
+        let folderPayloads = controller.legacyChanges.compactMap { recorded -> MyRAMFolderSyncPayload? in
+            guard recorded.entityType == .collection else { return nil }
+            return try? MyRAMSyncPayloadCoding.decodeFolder(from: recorded.payload)
+        }
+        XCTAssertEqual(folderPayloads.map(\.name), ["Parent", "Shared"])
+        XCTAssertEqual(Set(folderPayloads.map(\.id)).count, 2)
+
+        XCTAssertEqual(
+            controller.legacyChanges.filter { $0.entityType == .marker }.count,
+            2
+        )
+        XCTAssertEqual(
+            controller.legacyChanges.filter { $0.entityType == .attachment }.count,
+            1
+        )
+    }
+
     func testImportCreatesOneRevisionZeroStatePerImportedNote() throws {
         let container = try makeContainer()
         let viewModel = makeViewModel(context: container.mainContext)
@@ -114,8 +160,10 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
 
     func testImportFailureRollsBackAllImportedModelsAndStateRows() throws {
         let container = try makeContainer()
+        let controller = MYR223SyncControllerSpy()
         let viewModel = makeViewModel(
             context: container.mainContext,
+            syncController: controller,
             saveContext: { throw MYR170PathTestError.injected }
         )
         let url = try makeImportFile(bodies: ["First", "Second"])
@@ -124,6 +172,8 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         XCTAssertThrowsError(try viewModel.importNotes(from: url))
         XCTAssertTrue(try fetchNotes(in: container).isEmpty)
         XCTAssertTrue(try fetchStateRecords(in: container).isEmpty)
+        XCTAssertTrue(controller.legacyChanges.isEmpty)
+        XCTAssertTrue(controller.acceptedBatches.isEmpty)
     }
 
     func testRestoreNoteReestablishesCurrentBodyStateBeforeLifecyclePublication() throws {
@@ -500,15 +550,19 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
 
     private func makeViewModel(
         context: ModelContext,
+        syncController: MyRAMSyncControlling? = nil,
         conflictStore: SyncConflictStore? = nil,
+        syncBatchQuietWindow: TimeInterval = 3,
         saveContext: (() throws -> Void)? = nil,
         saveLegacyIncomingApplyContext: ((ModelContext) throws -> Void)? = nil
     ) -> NotesViewModel {
         NotesViewModel(
             context: context,
+            syncController: syncController,
             syncConflictStore: conflictStore ?? SyncConflictStore(fileURL: temporaryFileURL("conflicts.json")),
             pendingIncomingBatchQueueFileURL: nil,
             pendingLocalConvergenceBatchQueueFileURL: nil,
+            syncBatchQuietWindow: syncBatchQuietWindow,
             resumesPendingConvergenceOnInit: false,
             saveContext: saveContext,
             saveLegacyIncomingApplyContext: saveLegacyIncomingApplyContext
@@ -692,6 +746,81 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         try context.save()
     }
 
+    private func makeMYR223ImportFile() throws -> URL {
+        let url = temporaryFileURL("myr223-notes.myram")
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        let timestamp = "2026-01-01T00:00:00Z"
+        let notes: [[String: Any]] = [
+            [
+                "id": UUID().uuidString,
+                "title": "First",
+                "content": "First body",
+                "pinnedThoughts": [[
+                    "id": UUID().uuidString,
+                    "text": "First pin",
+                    "order": 0,
+                    "isCollapsed": false,
+                    "createdAt": timestamp,
+                    "modifiedAt": timestamp
+                ]],
+                "createdAt": timestamp,
+                "modifiedAt": timestamp,
+                "deletedAt": NSNull(),
+                "folderPath": ["Parent", "Shared"],
+                "attachments": [[
+                    "id": UUID().uuidString,
+                    "createdAt": timestamp,
+                    "mimeType": "image/png",
+                    "filename": "photo.png",
+                    "data": Data([0x89, 0x50, 0x4E, 0x47]).base64EncodedString()
+                ]]
+            ],
+            [
+                "id": UUID().uuidString,
+                "title": "Second",
+                "content": "Second body",
+                "pinnedThoughts": [[
+                    "id": UUID().uuidString,
+                    "text": "Second pin",
+                    "order": 0,
+                    "isCollapsed": true,
+                    "createdAt": timestamp,
+                    "modifiedAt": timestamp
+                ]],
+                "createdAt": timestamp,
+                "modifiedAt": timestamp,
+                "deletedAt": NSNull(),
+                "folderPath": ["Parent", "Shared"],
+                "attachments": []
+            ]
+        ]
+        let object: [String: Any] = [
+            "format": "myram-note-export",
+            "version": 1,
+            "exportedAt": timestamp,
+            "notes": notes
+        ]
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+        return url
+    }
+
+    private func waitUntil(
+        timeoutNanoseconds: UInt64 = 1_000_000_000,
+        condition: @escaping @MainActor () -> Bool
+    ) async throws {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+        while !condition() {
+            if DispatchTime.now().uptimeNanoseconds >= deadline {
+                XCTFail("Timed out waiting for asynchronous condition")
+                return
+            }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+    }
+
     private func makeImportFile(bodies: [String]) throws -> URL {
         let url = temporaryFileURL("notes.myram")
         try FileManager.default.createDirectory(
@@ -793,6 +922,47 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         )
         note.folder = folder
         return note
+    }
+}
+
+@MainActor
+private final class MYR223SyncControllerSpy: MyRAMSyncControlling {
+    struct RecordedLegacyChange {
+        let entityType: SyncEntityType
+        let entityID: String
+        let operation: SyncOperation
+        let payload: Data
+        let updatedAt: Date
+    }
+
+    var onChangesReceived: (([SyncChange]) async -> [LegacyIncomingChangeResult])?
+    var onLocalChangesAcknowledged: (([SyncChange]) async -> Void)?
+    var onBatchReceived: ((SyncBatch) async -> SyncConvergenceRemoteBatchDisposition)?
+    var onDurablyCaptureIncomingBatch: ((SyncBatch) async -> Bool)?
+
+    private(set) var legacyChanges: [RecordedLegacyChange] = []
+    private(set) var acceptedBatches: [SyncBatch] = []
+
+    func recordLocalChange(
+        entityType: SyncEntityType,
+        entityID: String,
+        operation: SyncOperation,
+        payload: Data,
+        updatedAt: Date
+    ) {
+        legacyChanges.append(RecordedLegacyChange(
+            entityType: entityType,
+            entityID: entityID,
+            operation: operation,
+            payload: payload,
+            updatedAt: updatedAt
+        ))
+    }
+
+    func publishConflictResolutionChecked(_ payload: MyRAMSyncConflictPayload) async throws {}
+
+    func acceptLocalBatch(_ batch: SyncBatch) async throws {
+        acceptedBatches.append(batch)
     }
 }
 
