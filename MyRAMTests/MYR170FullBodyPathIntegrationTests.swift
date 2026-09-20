@@ -2,6 +2,7 @@ import Foundation
 import SwiftData
 import XCTest
 import NearbySyncCore
+import AnchoredSequenceCore
 import UIKit
 @testable import MyRAM
 
