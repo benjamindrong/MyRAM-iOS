@@ -105,6 +105,99 @@ final class SwiftDataNoteSequenceStateStoreTests: XCTestCase {
         XCTAssertEqual(record.statePayloadData, prepared.payload)
     }
 
+    func testProgrammaticSequenceRowStartsWithSchemaOneEmptyMarkAuthority() throws {
+        let prepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: UUID(),
+            body: "Body"
+        )
+        let record = prepared.makeRevisionZeroRecord()
+
+        XCTAssertEqual(
+            record.markFormatVersion,
+            NoteStructuralFormattingPersistence.schemaVersion
+        )
+        XCTAssertEqual(record.markRevision, 0)
+        XCTAssertEqual(
+            record.markStatePayloadData,
+            NoteStructuralFormattingPersistence.canonicalEmptyPayload
+        )
+        XCTAssertEqual(
+            try NoteStructuralFormattingPersistence.decode(
+                record: record,
+                pairedWith: prepared.state
+            ),
+            .empty
+        )
+    }
+
+    func testStructuralMarkPersistenceCanonicalizesEquivalentOperationPermutations() throws {
+        let sequence = try rootState(text: "AB")
+        let start = try sequence.operationAnchor(atVisibleUTF16Offset: 0)
+        let end = try sequence.operationAnchor(atVisibleUTF16Offset: 2)
+        let first = try SyncTextMarkOperation(
+            operationID: operation(11),
+            logicalClock: 2,
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: start,
+            endAnchor: end
+        )
+        let second = try SyncTextMarkOperation(
+            operationID: operation(10),
+            logicalClock: 1,
+            key: .italic,
+            assignment: .enabled,
+            startAnchor: start,
+            endAnchor: end
+        )
+
+        let lhs = try SyncTextMarkState(operations: [first, second])
+        let rhs = try SyncTextMarkState(operations: [second, first])
+
+        XCTAssertEqual(
+            try NoteStructuralFormattingPersistence.encode(
+                state: lhs,
+                pairedWith: sequence
+            ),
+            try NoteStructuralFormattingPersistence.encode(
+                state: rhs,
+                pairedWith: sequence
+            )
+        )
+    }
+
+    func testStructuralMarkPersistenceRejectsForeignAnchorAgainstOwningSequence() throws {
+        let sequence = try rootState(text: "AB")
+        let foreignAnchor = SyncOperationAnchor.after(
+            try SyncTextElementID(
+                operationID: operation(99),
+                elementOffset: 0
+            )
+        )
+        let state = try SyncTextMarkState(operations: [
+            SyncTextMarkOperation(
+                operationID: operation(10),
+                logicalClock: 1,
+                key: .bold,
+                assignment: .enabled,
+                startAnchor: foreignAnchor,
+                endAnchor: try sequence.operationAnchor(atVisibleUTF16Offset: 2)
+            )
+        ])
+
+        XCTAssertThrowsError(
+            try NoteStructuralFormattingPersistence.encode(
+                state: state,
+                pairedWith: sequence
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? NoteStructuralFormattingPersistenceError,
+                .pairedValidationFailed
+            )
+        }
+    }
+
     func testLoadOrBootstrapCreatesRevisionZeroStateForAuthoritativeNonemptyBody() async throws {
         let container = try makeContainer()
         let noteID = try insertNote(body: "Authoritative \u{1F600}", in: container)

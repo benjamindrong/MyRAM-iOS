@@ -264,6 +264,12 @@
 		C17001000000000000000004 /* NoteSequenceStateFullBodyIntegration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000002 /* NoteSequenceStateFullBodyIntegration.swift */; };
 		C17001000000000000000005 /* NoteSequenceStateBootstrapMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000003 /* NoteSequenceStateBootstrapMigrator.swift */; };
 		C17001000000000000000006 /* NoteSequenceStateBootstrapMigrator.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000003 /* NoteSequenceStateBootstrapMigrator.swift */; };
+		D22701000000000000000001 /* NoteStructuralFormattingPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22702000000000000000001 /* NoteStructuralFormattingPersistence.swift */; };
+		D22701000000000000000002 /* NoteStructuralFormattingPersistence.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22702000000000000000001 /* NoteStructuralFormattingPersistence.swift */; };
+		D22701000000000000000003 /* NoteStructuralFormattingEditPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22702000000000000000002 /* NoteStructuralFormattingEditPlanner.swift */; };
+		D22701000000000000000004 /* NoteStructuralFormattingEditPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22702000000000000000002 /* NoteStructuralFormattingEditPlanner.swift */; };
+		D22701000000000000000005 /* EditorStructuralFormattingAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22702000000000000000003 /* EditorStructuralFormattingAdapter.swift */; };
+		D22701000000000000000006 /* MacStructuralFormattingAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = D22702000000000000000004 /* MacStructuralFormattingAdapter.swift */; };
 		C17001000000000000000007 /* NoteSequenceStateFullBodyIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000004 /* NoteSequenceStateFullBodyIntegrationTests.swift */; };
 		C17001000000000000000008 /* ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000005 /* ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift */; };
 		C17001000000000000000009 /* NoteSequenceStateBootstrapMigratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C17002000000000000000006 /* NoteSequenceStateBootstrapMigratorTests.swift */; };
@@ -602,6 +608,10 @@
 		C17002000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateBootstrapAdapter.swift; sourceTree = "<group>"; };
 		C17002000000000000000002 /* NoteSequenceStateFullBodyIntegration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateFullBodyIntegration.swift; sourceTree = "<group>"; };
 		C17002000000000000000003 /* NoteSequenceStateBootstrapMigrator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateBootstrapMigrator.swift; sourceTree = "<group>"; };
+		D22702000000000000000001 /* NoteStructuralFormattingPersistence.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteStructuralFormattingPersistence.swift; sourceTree = "<group>"; };
+		D22702000000000000000002 /* NoteStructuralFormattingEditPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteStructuralFormattingEditPlanner.swift; sourceTree = "<group>"; };
+		D22702000000000000000003 /* EditorStructuralFormattingAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EditorStructuralFormattingAdapter.swift; sourceTree = "<group>"; };
+		D22702000000000000000004 /* MacStructuralFormattingAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MacStructuralFormattingAdapter.swift; sourceTree = "<group>"; };
 		C17002000000000000000004 /* NoteSequenceStateFullBodyIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateFullBodyIntegrationTests.swift; sourceTree = "<group>"; };
 		C17002000000000000000005 /* ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ../MyRAMTests/NoteSequenceStateFullBodyIntegrationTests.swift; sourceTree = "<group>"; };
 		C17002000000000000000006 /* NoteSequenceStateBootstrapMigratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NoteSequenceStateBootstrapMigratorTests.swift; sourceTree = "<group>"; };
@@ -936,6 +946,7 @@
 				E19602000000000000000003 /* MacMarkdownPreviewTextView.swift */,
 				BCA164020000000000000002 /* MacEditorTextColorPolicy.swift */,
 				BCA109020000000000000001 /* MacNotePersistenceAdapter.swift */,
+				D22702000000000000000004 /* MacStructuralFormattingAdapter.swift */,
 				BCA10A020000000000000001 /* MacSidebarCollapsePolicy.swift */,
 			);
 			path = Mac;
@@ -1177,6 +1188,7 @@
 				C097F000E2FF00000000000E /* EditorFormattingStateResolver.swift */,
 				C097F00052FF000000000005 /* EditorProfilingFixtures.swift */,
 				C097F00062FF000000000006 /* EditorRichTextContentCodec.swift */,
+				D22702000000000000000003 /* EditorStructuralFormattingAdapter.swift */,
 				C097F000D2FF00000000000D /* EditorSelectionRangeResolver.swift */,
 				C097F00072FF000000000007 /* EditorSelectionProfiling.swift */,
 				C097F000B2FF00000000000B /* EditorSearchHighlighting.swift */,
@@ -1197,6 +1209,8 @@
 				C17002000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift */,
 				C17002000000000000000002 /* NoteSequenceStateFullBodyIntegration.swift */,
 				C17002000000000000000003 /* NoteSequenceStateBootstrapMigrator.swift */,
+				D22702000000000000000001 /* NoteStructuralFormattingPersistence.swift */,
+				D22702000000000000000002 /* NoteStructuralFormattingEditPlanner.swift */,
 				C16902000000000000000002 /* SwiftDataNoteSequenceStateStore.swift */,
 				C16802000000000000000002 /* FileBackedSyncOperationIDReservationStore.swift */,
 				C16802000000000000000001 /* MyRAMSyncOperationIDAllocator.swift */,
@@ -1552,6 +1566,8 @@
 				C17001000000000000000001 /* NoteSequenceStateBootstrapAdapter.swift in Sources */,
 				C17001000000000000000003 /* NoteSequenceStateFullBodyIntegration.swift in Sources */,
 				C17001000000000000000005 /* NoteSequenceStateBootstrapMigrator.swift in Sources */,
+				D22701000000000000000001 /* NoteStructuralFormattingPersistence.swift in Sources */,
+				D22701000000000000000003 /* NoteStructuralFormattingEditPlanner.swift in Sources */,
 				C16901000000000000000003 /* SwiftDataNoteSequenceStateStore.swift in Sources */,
 				C16801000000000000000001 /* MyRAMSyncOperationIDAllocator.swift in Sources */,
 				C16801000000000000000003 /* FileBackedSyncOperationIDReservationStore.swift in Sources */,
@@ -1631,6 +1647,7 @@
 				C097F010C2FF00000000000C /* EditorSearchMatchResolver.swift in Sources */,
 				C11200102FF1120000000001 /* EditorSearchSession.swift in Sources */,
 				C097F01062FF000000000006 /* EditorRichTextContentCodec.swift in Sources */,
+				D22701000000000000000005 /* EditorStructuralFormattingAdapter.swift in Sources */,
 				C097F010D2FF00000000000D /* EditorSelectionRangeResolver.swift in Sources */,
 				C097F01102FF000000000010 /* EditorFocusSelectionPolicy.swift in Sources */,
 				C097F010F2FF00000000000F /* EditorFormattingCommandResolver.swift in Sources */,
@@ -1744,6 +1761,8 @@
 				C17001000000000000000002 /* NoteSequenceStateBootstrapAdapter.swift in Sources */,
 				C17001000000000000000004 /* NoteSequenceStateFullBodyIntegration.swift in Sources */,
 				C17001000000000000000006 /* NoteSequenceStateBootstrapMigrator.swift in Sources */,
+				D22701000000000000000002 /* NoteStructuralFormattingPersistence.swift in Sources */,
+				D22701000000000000000004 /* NoteStructuralFormattingEditPlanner.swift in Sources */,
 				C16901000000000000000004 /* SwiftDataNoteSequenceStateStore.swift in Sources */,
 				C16801000000000000000002 /* MyRAMSyncOperationIDAllocator.swift in Sources */,
 				C16801000000000000000004 /* FileBackedSyncOperationIDReservationStore.swift in Sources */,
@@ -1762,6 +1781,7 @@
 				BCA104010000000000000002 /* RTFCoding.swift in Sources */,
 				BCA164010000000000000002 /* AttributedTextStorageKeys.swift in Sources */,
 				BCA109010000000000000001 /* MacNotePersistenceAdapter.swift in Sources */,
+				D22701000000000000000006 /* MacStructuralFormattingAdapter.swift in Sources */,
 				BCA164010000000000000003 /* MacEditorTextColorPolicy.swift in Sources */,
 				BCA109010000000000000002 /* Note.swift in Sources */,
 				BCA109010000000000000003 /* Folder.swift in Sources */,
