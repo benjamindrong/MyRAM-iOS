@@ -6178,7 +6178,7 @@ final class MyRAMTests: XCTestCase {
         XCTAssertTrue(conflictStore.activeConflicts().isEmpty)
     }
 
-    func testIncomingResolvedSyncConflictPreservesRichTextFormattingWithoutDefaultTextColor() throws {
+    func testIncomingResolvedSyncConflictDiscardsLegacyRichTextWhenStructuralFormattingAuthorityIsEstablished() throws {
         let container = try makeContainer(isStoredInMemoryOnly: true)
         let context = container.mainContext
         let conflictFileURL = temporarySyncConflictFileURL()
@@ -6227,18 +6227,24 @@ final class MyRAMTests: XCTestCase {
             currentFolderID: nil
         )
 
-        let richTextData = try XCTUnwrap(note.richTextContentData)
-        let attributedText = try decodeRichTextData(richTextData)
-        XCTAssertEqual(attributedText.string, resolvedText)
-        XCTAssertNil(attributedText.attribute(.foregroundColor, at: 0, effectiveRange: nil))
-        XCTAssertEqual(
-            attributedText.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int,
-            NSUnderlineStyle.single.rawValue
+        XCTAssertEqual(note.content, resolvedText)
+        XCTAssertNil(note.richTextContentData)
+        let requestedID = note.id
+        let record = try XCTUnwrap(
+            context.fetch(
+                FetchDescriptor<NoteSequenceStateRecord>(
+                    predicate: #Predicate { $0.noteID == requestedID }
+                )
+            ).first
         )
-        XCTAssertNotNil(attributedText.attribute(.font, at: 0, effectiveRange: nil))
         XCTAssertEqual(
-            (attributedText.attribute(.foregroundColor, at: 8, effectiveRange: nil) as? UIColor)?.rgbaTestComponents,
-            UIColor.systemRed.rgbaTestComponents
+            record.markFormatVersion,
+            NoteStructuralFormattingPersistence.schemaVersion
+        )
+        XCTAssertEqual(record.markRevision, 0)
+        XCTAssertEqual(
+            record.markStatePayloadData,
+            NoteStructuralFormattingPersistence.canonicalEmptyPayload
         )
         XCTAssertTrue(conflictStore.activeConflicts().isEmpty)
     }
