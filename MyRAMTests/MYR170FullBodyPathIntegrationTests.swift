@@ -984,7 +984,10 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
 }
 
 @MainActor
-private final class MYR223SyncControllerSpy: MyRAMSyncControlling {
+private final class MYR223SyncControllerSpy:
+    MyRAMSyncControlling,
+    SyncConvergenceLocalBatchTransportAdapter
+{
     struct RecordedLegacyChange {
         let entityType: SyncEntityType
         let entityID: String
