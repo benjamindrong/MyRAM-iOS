@@ -144,6 +144,63 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         )
     }
 
+    func testMYR223IncomingFolderApplyRedrivesDeferredNoteCreation() async throws {
+        let container = try makeContainer()
+        let context = container.mainContext
+        let viewModel = makeViewModel(context: context)
+        let noteID = UUID()
+        let folderID = UUID()
+        let batch = SyncBatch(
+            originDeviceID: UUID(),
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Imported",
+                    body: "Body",
+                    folderID: folderID,
+                    createdAt: Date(timeIntervalSince1970: 1),
+                    modifiedAt: Date(timeIntervalSince1970: 2)
+                ))
+            ]
+        )
+
+        XCTAssertEqual(
+            await viewModel.applyIncomingSyncBatch(batch),
+            .acknowledgementDeferred
+        )
+        XCTAssertNil(try context.fetch(FetchDescriptor<Note>(
+            predicate: #Predicate { $0.id == noteID }
+        )).first)
+
+        let folder = Folder(name: "Imported Folder")
+        folder.id = folderID
+        folder.createdAt = Date(timeIntervalSince1970: 1)
+        folder.modifiedAt = Date(timeIntervalSince1970: 2)
+        let folderChange = SyncChange(
+            entityType: .collection,
+            entityID: folderID.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMFolderSyncPayload(folder: folder)),
+            updatedAt: folder.modifiedAt,
+            originDeviceID: "remote"
+        )
+
+        XCTAssertEqual(
+            await viewModel.applyIncomingSyncChanges([folderChange]),
+            [LegacyIncomingChangeResult(changeID: folderChange.id, disposition: .applied)]
+        )
+
+        try await waitUntil {
+            let requestedNoteID = noteID
+            guard let created = try? context.fetch(FetchDescriptor<Note>(
+                predicate: #Predicate { $0.id == requestedNoteID }
+            )).first else {
+                return false
+            }
+            return created.folder?.id == folderID
+        }
+    }
+
     func testImportCreatesOneRevisionZeroStatePerImportedNote() throws {
         let container = try makeContainer()
         let viewModel = makeViewModel(context: container.mainContext)
