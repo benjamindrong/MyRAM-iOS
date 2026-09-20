@@ -151,7 +151,9 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         let noteID = UUID()
         let folderID = UUID()
         let batch = SyncBatch(
+            id: UUID(),
             originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 1),
             changes: [
                 .noteCreated(SyncBatchNoteCreatedChange(
                     noteID: noteID,
