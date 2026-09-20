@@ -1,4 +1,5 @@
 import AnchoredSequenceCore
+import NearbySyncCore
 @preconcurrency import MultipeerConnectivity
 import SwiftData
 import XCTest
@@ -47,10 +48,8 @@ final class MacSyncBatchControllerTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(
-            await coordinator.submitRemoteBatch(batch),
-            .acknowledgementDeferred
-        )
+        let initialDisposition = await coordinator.submitRemoteBatch(batch)
+        XCTAssertEqual(initialDisposition, .acknowledgementDeferred)
         XCTAssertEqual(coordinator.pendingIncomingBatchCount, 1)
 
         let folder = Folder(name: "Imported Folder")
