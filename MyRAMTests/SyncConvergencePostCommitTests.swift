@@ -8,6 +8,33 @@ import CryptoKit
 #endif
 
 final class SyncConvergencePostCommitTests: XCTestCase {
+#if !os(macOS)
+    @MainActor
+    func testMYR223MissingFolderDeferralDoesNotSurfaceUserFacingError() {
+        let noteID = UUID()
+        let batchID = UUID()
+        let folderID = UUID()
+        let work = SyncConvergenceDeferredWork(
+            incoming: [
+                SyncConvergenceDeferredItem(
+                    domain: .incoming,
+                    batchID: batchID,
+                    affectedNoteIDs: [noteID],
+                    reason: .planning(.missingFolderDependency(
+                        noteID: noteID,
+                        batchID: batchID,
+                        folderID: folderID
+                    ))
+                )
+            ],
+            localObligations: [],
+            postCommit: []
+        )
+
+        XCTAssertNil(NotesViewModel.syncErrorMessage(for: work))
+    }
+#endif
+
     func testThrowingQueueRemovalRemovesExactlyRequestedIDsAndPreservesOrder() throws {
         let fileURL = temporaryQueueURL()
         let first = batch(id: uuid("00000000-0000-0000-0000-000000000001"))
