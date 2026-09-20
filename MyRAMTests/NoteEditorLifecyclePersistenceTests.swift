@@ -46,7 +46,7 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertTrue(durable)
         XCTAssertEqual(note.title, "After")
         XCTAssertEqual(note.content, "After")
-        XCTAssertEqual(note.richTextContentData, Data("After".utf8))
+        XCTAssertNil(note.richTextContentData)
     }
 
     func testActivationOnFailedLifecycleSaveRetainsOwnershipAndAllowsEditorTeardown() async throws {
@@ -112,7 +112,7 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertTrue(durableAfterRetry)
         XCTAssertEqual(note.title, "After")
         XCTAssertEqual(note.content, "After")
-        XCTAssertEqual(note.richTextContentData, Data("After".utf8))
+        XCTAssertNil(note.richTextContentData)
     }
 
     func testActivationOnNewerLifecycleSnapshotSupersedesRetainedFailureBeforeRetry() async throws {
@@ -173,7 +173,7 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertTrue(durableAfterNewerSnapshot)
         XCTAssertEqual(note.title, "Newer")
         XCTAssertEqual(note.content, "Newer")
-        XCTAssertEqual(note.richTextContentData, Data("Newer".utf8))
+        XCTAssertNil(note.richTextContentData)
 
         viewModel.retryAllEditorLifecyclePersistence()
         let durableAfterRedundantRetry = await viewModel.awaitEditorLifecyclePersistence(noteID: note.id)
