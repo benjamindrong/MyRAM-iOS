@@ -166,10 +166,8 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(
-            await viewModel.applyIncomingSyncBatch(batch),
-            .acknowledgementDeferred
-        )
+        let initialDisposition = await viewModel.applyIncomingSyncBatch(batch)
+        XCTAssertEqual(initialDisposition, .acknowledgementDeferred)
         XCTAssertNil(try context.fetch(FetchDescriptor<Note>(
             predicate: #Predicate { $0.id == noteID }
         )).first)
@@ -187,8 +185,9 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
             originDeviceID: "remote"
         )
 
+        let folderResults = await viewModel.applyIncomingSyncChanges([folderChange])
         XCTAssertEqual(
-            await viewModel.applyIncomingSyncChanges([folderChange]),
+            folderResults,
             [LegacyIncomingChangeResult(changeID: folderChange.id, disposition: .applied)]
         )
 
