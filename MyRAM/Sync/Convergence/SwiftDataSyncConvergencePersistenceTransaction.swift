@@ -29,7 +29,15 @@ final class SwiftDataSyncConvergencePersistenceTransaction: SyncConvergencePersi
     }
 
     func insertNote(_ record: SyncConvergenceNewNoteRecord) throws {
-        let destinationFolder = try folder(id: record.folderID)
+        let destinationFolder: Folder?
+        if let folderID = record.folderID {
+            guard let resolvedFolder = try folder(id: folderID) else {
+                throw SyncConvergenceTransactionFailure.staleAuthoritativeState(noteID: record.noteID)
+            }
+            destinationFolder = resolvedFolder
+        } else {
+            destinationFolder = nil
+        }
         let note = Note(title: record.title, content: record.body)
         note.id = record.noteID
         note.createdAt = record.createdAt
