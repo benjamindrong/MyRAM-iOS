@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import AnchoredSequenceCore
 @testable import MyRAM
 
 final class EditorFormattingMutationApplierTests: XCTestCase {

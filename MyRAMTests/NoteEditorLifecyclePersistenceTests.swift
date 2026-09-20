@@ -647,6 +647,7 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
             title: "Title",
             body: "Body",
             richTextContentData: Data("Body".utf8),
+            structuralFormattingProjection: nil,
             generation: generation
         )
     }
