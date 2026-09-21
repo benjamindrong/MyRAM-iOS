@@ -319,6 +319,19 @@ final class NotesViewModel: ObservableObject {
             bootstrapController.onPrepareLocalOwnershipForBootstrap = { [weak self] in
                 await self?.prepareLocalOwnershipForBootstrap()
             }
+            bootstrapController.localBootstrapOwnershipSnapshotProvider = { [weak self] in
+                self?.pendingLocalConvergenceBatches.snapshot()
+                    ?? FileBackedSyncBatchQueueSnapshot(
+                        pendingBatches: [],
+                        health: .readFailed("Local bootstrap ownership unavailable")
+                    )
+            }
+            bootstrapController.removeLocalBootstrapOwnership = { [weak self] batchIDs in
+                guard let self else {
+                    throw FileBackedSyncConvergenceLocalObligationQueue.QueueError.unhealthyPersistence
+                }
+                try pendingLocalConvergenceBatches.removeObligations(withIDs: batchIDs)
+            }
             bootstrapController.buildBootstrapSnapshot = { [context] in
                 try SyncPeerBootstrapSnapshotPersistence.build(from: context)
             }
