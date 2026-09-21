@@ -254,6 +254,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private var reconnectRetryDelayNanoseconds: UInt64 = 1_000_000_000
     private var peerCapabilityRegistry = SyncBatchPeerCapabilityRegistry()
     private var bootstrapStateByPeerDeviceID: [String: SyncPeerBootstrapPendingState] = [:]
+    private var bootstrapPreparationPeerDeviceIDs: Set<String> = []
     private var bootstrapCapabilityResolutionTasks: [String: Task<Void, Never>] = [:]
     private var bootstrapRetryTasks: [String: Task<Void, Never>] = [:]
     private var bootstrapRetryDelayNanoseconds: [UInt64] = [
@@ -1171,6 +1172,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 expectedSnapshotID: state.snapshotID
             )
             return
+        }
+        guard bootstrapPreparationPeerDeviceIDs.insert(identity.deviceID).inserted else {
+            return
+        }
+        defer {
+            bootstrapPreparationPeerDeviceIDs.remove(identity.deviceID)
         }
         guard let buildBootstrapSnapshot else {
             lastErrorMessage = "Unable to prepare nearby bootstrap state."
