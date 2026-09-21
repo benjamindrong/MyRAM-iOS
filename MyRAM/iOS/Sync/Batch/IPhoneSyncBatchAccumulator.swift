@@ -58,8 +58,20 @@ actor IPhoneSyncBatchAccumulator {
         affecting noteID: UUID,
         at date: Date = .now
     ) -> SyncConvergenceLocalObligation? {
+        recordAndTakeBoundaryObligations(
+            adding: capturedChanges,
+            affecting: noteID,
+            at: date
+        ).first
+    }
+
+    func recordAndTakeBoundaryObligations(
+        adding capturedChanges: [SyncConvergenceCapturedLocalChange],
+        affecting noteID: UUID,
+        at date: Date = .now
+    ) -> [SyncConvergenceLocalObligation] {
         appendCapturedChanges(capturedChanges, at: date)
-        return extractPendingBatch { pendingBatch in
+        return extractPendingBatches { pendingBatch in
             pendingBatch.capturedChanges.contains { captured in
                 guard SyncConvergenceLocalEvidenceCapture.isBodyTextOperation(captured.change) else { return false }
                 return SyncConvergenceLocalEvidenceCapture.noteID(for: captured.change) == noteID
@@ -70,21 +82,10 @@ actor IPhoneSyncBatchAccumulator {
     private func appendCapturedChanges(_ capturedChanges: [SyncConvergenceCapturedLocalChange], at date: Date) {
         guard !capturedChanges.isEmpty else { return }
         if pendingBatch == nil {
-            let reservation = batchSequenceProvider()
-            let batchSequence: UInt64?
-            switch reservation {
-            case .reserved(let sequence):
-                batchSequence = sequence
-                lastSequenceReservationIssue = nil
-            case .sequenceLess(let issue):
-                batchSequence = nil
-                lastSequenceReservationIssue = issue
-            }
-
             pendingBatch = PendingBatch(
                 id: batchIDProvider(),
                 createdAt: date,
-                batchSequence: batchSequence,
+                batchSequence: reserveBatchSequence(),
                 capturedChanges: [],
                 readyAt: date.addingTimeInterval(quietWindow)
             )
@@ -109,26 +110,35 @@ actor IPhoneSyncBatchAccumulator {
     }
 
     func emitReadyBatches(at date: Date = .now) {
-        guard let batch = readyBatchIfAvailable(at: date) else { return }
-        for continuation in continuations.values {
-            continuation.yield(batch)
+        let obligations = readyBatchesIfAvailable(at: date)
+        guard !obligations.isEmpty else { return }
+        for obligation in obligations {
+            for continuation in continuations.values {
+                continuation.yield(obligation)
+            }
         }
     }
 
     func takeReadyBatch(at date: Date = .now) -> SyncConvergenceLocalObligation? {
-        extractPendingBatch { pendingBatch in
+        takeReadyBatches(at: date).first
+    }
+
+    func takeReadyBatches(at date: Date = .now) -> [SyncConvergenceLocalObligation] {
+        extractPendingBatches { pendingBatch in
             date >= pendingBatch.readyAt
         }
     }
 
-    private func readyBatchIfAvailable(at date: Date) -> SyncConvergenceLocalObligation? {
-        extractPendingBatch { pendingBatch in
-            date >= pendingBatch.readyAt
-        }
+    private func readyBatchesIfAvailable(at date: Date) -> [SyncConvergenceLocalObligation] {
+        takeReadyBatches(at: date)
     }
 
     func takePendingBatchNow() -> SyncConvergenceLocalObligation? {
-        extractPendingBatch { _ in true }
+        takePendingBatchesNow().first
+    }
+
+    func takePendingBatchesNow() -> [SyncConvergenceLocalObligation] {
+        extractPendingBatches { _ in true }
     }
 
     func containsPendingBodyChange(for noteID: UUID) -> Bool {
@@ -139,26 +149,115 @@ actor IPhoneSyncBatchAccumulator {
     }
 
     func takePendingObligationIfAffecting(noteID: UUID) -> SyncConvergenceLocalObligation? {
-        extractPendingBatch { pendingBatch in
+        takePendingObligationsIfAffecting(noteID: noteID).first
+    }
+
+    func takePendingObligationsIfAffecting(
+        noteID: UUID
+    ) -> [SyncConvergenceLocalObligation] {
+        extractPendingBatches { pendingBatch in
             pendingBatch.capturedChanges.contains {
                 SyncConvergenceLocalEvidenceCapture.noteID(for: $0.change) == noteID
             }
         }
     }
 
-    private func extractPendingBatch(when shouldExtract: (PendingBatch) -> Bool) -> SyncConvergenceLocalObligation? {
-        guard let pendingBatch, shouldExtract(pendingBatch) else { return nil }
+    private func extractPendingBatches(
+        when shouldExtract: (PendingBatch) -> Bool
+    ) -> [SyncConvergenceLocalObligation] {
+        guard let pendingBatch, shouldExtract(pendingBatch) else { return [] }
         readinessTask?.cancel()
         readinessTask = nil
         self.pendingBatch = nil
-        let batch = SyncBatch(
+        return obligations(for: pendingBatch)
+    }
+
+    private func obligations(
+        for pendingBatch: PendingBatch
+    ) -> [SyncConvergenceLocalObligation] {
+        guard let partition = SyncBatchDeliveryPartitionPlanner.partition(
+            pendingBatch.capturedChanges
+        ) else {
+            let batch = makeBatch(
+                id: pendingBatch.id,
+                createdAt: pendingBatch.createdAt,
+                batchSequence: pendingBatch.batchSequence,
+                capturedChanges: pendingBatch.capturedChanges
+            )
+            return [
+                SyncConvergenceLocalObligation(
+                    batch: batch,
+                    capturedChanges: pendingBatch.capturedChanges
+                )
+            ]
+        }
+
+        if partition.structuralMarks.isEmpty || partition.compatible.isEmpty {
+            let captured = partition.structuralMarks.isEmpty
+                ? partition.compatible
+                : partition.structuralMarks
+            let batch = makeBatch(
+                id: pendingBatch.id,
+                createdAt: pendingBatch.createdAt,
+                batchSequence: pendingBatch.batchSequence,
+                capturedChanges: captured
+            )
+            return [
+                SyncConvergenceLocalObligation(
+                    batch: batch,
+                    capturedChanges: captured
+                )
+            ]
+        }
+
+        let compatibleBatch = makeBatch(
             id: pendingBatch.id,
-            originDeviceID: originDeviceID,
             createdAt: pendingBatch.createdAt,
             batchSequence: pendingBatch.batchSequence,
-            changes: pendingBatch.capturedChanges.map(\.change)
+            capturedChanges: partition.compatible
         )
-        return SyncConvergenceLocalObligation(batch: batch, capturedChanges: pendingBatch.capturedChanges)
+        let structuralMarkBatch = makeBatch(
+            id: batchIDProvider(),
+            createdAt: pendingBatch.createdAt,
+            batchSequence: reserveBatchSequence(),
+            capturedChanges: partition.structuralMarks
+        )
+        return [
+            SyncConvergenceLocalObligation(
+                batch: compatibleBatch,
+                capturedChanges: partition.compatible
+            ),
+            SyncConvergenceLocalObligation(
+                batch: structuralMarkBatch,
+                capturedChanges: partition.structuralMarks
+            )
+        ]
+    }
+
+    private func makeBatch(
+        id: SyncBatchID,
+        createdAt: Date,
+        batchSequence: UInt64?,
+        capturedChanges: [SyncConvergenceCapturedLocalChange]
+    ) -> SyncBatch {
+        SyncBatch(
+            id: id,
+            originDeviceID: originDeviceID,
+            createdAt: createdAt,
+            batchSequence: batchSequence,
+            changes: capturedChanges.map(\.change)
+        )
+    }
+
+    private func reserveBatchSequence() -> UInt64? {
+        switch batchSequenceProvider() {
+        case .reserved(let sequence):
+            lastSequenceReservationIssue = nil
+            return sequence
+        case .sequenceLess(let issue):
+            lastSequenceReservationIssue = issue
+            return nil
+        }
     }
 
     private func removeContinuation(id: UUID) {
