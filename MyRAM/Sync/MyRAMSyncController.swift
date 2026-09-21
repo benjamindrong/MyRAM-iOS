@@ -149,6 +149,8 @@ protocol MyRAMSyncConvergenceStatusConfiguring: AnyObject {
 @MainActor
 protocol MyRAMSyncBootstrapConfiguring: AnyObject {
     var onPrepareLocalOwnershipForBootstrap: (() async -> Void)? { get set }
+    var localBootstrapOwnershipSnapshotProvider: (() -> FileBackedSyncBatchQueueSnapshot)? { get set }
+    var removeLocalBootstrapOwnership: ((Set<SyncBatchID>) throws -> Void)? { get set }
     var buildBootstrapSnapshot: (() throws -> SyncPeerBootstrapSnapshot)? { get set }
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)? { get set }
     var onBootstrapPresentationRefresh: (() -> Void)? { get set }
@@ -225,6 +227,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var onFlushLocalConvergenceRequested: (() async -> Void)?
     var localConvergencePendingCountProvider: (() -> Int)?
     var onPrepareLocalOwnershipForBootstrap: (() async -> Void)?
+    var localBootstrapOwnershipSnapshotProvider: (() -> FileBackedSyncBatchQueueSnapshot)?
+    var removeLocalBootstrapOwnership: ((Set<SyncBatchID>) throws -> Void)?
     var buildBootstrapSnapshot: (() throws -> SyncPeerBootstrapSnapshot)?
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)?
     var onBootstrapPresentationRefresh: (() -> Void)?
@@ -1182,16 +1186,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 #if DEBUG
             await onBootstrapOwnershipPreflightCompletedForTesting?()
 #endif
-            guard (localConvergencePendingCountProvider?() ?? 0) == 0 else {
-                lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
-                await updatePendingCount()
-                return
-            }
 
             do {
-                let candidateBatches = unsentBatches.pendingBatches
+                let candidateOwnership = try SyncPeerBootstrapOwnershipCandidate(
+                    unsentSnapshot: unsentBatches.snapshot(),
+                    localObligationSnapshot: localBootstrapOwnershipSnapshot()
+                )
                 let candidateSnapshot = try buildBootstrapSnapshot()
-                    .attachingHistoryCoverage(for: candidateBatches)
+                    .attachingHistoryCoverage(for: candidateOwnership.canonicalBatches)
 #if DEBUG
                 await onBootstrapCandidateCapturedForTesting?()
 #else
@@ -1202,16 +1204,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 } else {
                     await onFlushLocalConvergenceRequested?()
                 }
-                guard (localConvergencePendingCountProvider?() ?? 0) == 0 else {
-                    lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
-                    await updatePendingCount()
-                    return
-                }
 
-                let capturedBatches = unsentBatches.pendingBatches
+                let capturedOwnership = try SyncPeerBootstrapOwnershipCandidate(
+                    unsentSnapshot: unsentBatches.snapshot(),
+                    localObligationSnapshot: localBootstrapOwnershipSnapshot()
+                )
                 let snapshot = try buildBootstrapSnapshot()
-                    .attachingHistoryCoverage(for: capturedBatches)
-                guard candidateBatches.map(\.id) == capturedBatches.map(\.id),
+                    .attachingHistoryCoverage(for: capturedOwnership.canonicalBatches)
+                guard candidateOwnership == capturedOwnership,
                       candidateSnapshot.folders == snapshot.folders,
                       candidateSnapshot.notes == snapshot.notes,
                       candidateSnapshot.historyCoverage == snapshot.historyCoverage else {
@@ -1220,7 +1220,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
                 bootstrapStateByPeerDeviceID[identity.deviceID] = SyncPeerBootstrapPendingState(
                     snapshot: snapshot,
-                    coveredBatchIDs: Set(capturedBatches.map(\.id)),
+                    ownershipCandidate: capturedOwnership,
                     withheldHistoricalBatchIDs: [],
                     ordinarySyncReady: false,
                     retryAttempt: 0
@@ -1232,9 +1232,15 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 return
             } catch {
                 lastErrorMessage = "Unable to prepare nearby bootstrap state."
+                await updatePendingCount()
                 return
             }
         }
+    }
+
+    private func localBootstrapOwnershipSnapshot() -> FileBackedSyncBatchQueueSnapshot {
+        localBootstrapOwnershipSnapshotProvider?()
+            ?? FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .healthy)
     }
 
     private func attemptBootstrapSnapshotTransmission(
@@ -1371,22 +1377,66 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             return
         }
 
+        let coveredBatchIDs = acknowledgement.coveredBatchIDs.intersection(state.coveredBatchIDs)
         do {
-            try unsentBatches.removeBatches(withIDs: acknowledgement.coveredBatchIDs)
-            outstandingBatchDeliveries.release(acknowledgement.coveredBatchIDs)
+            let currentOwnership = try SyncPeerBootstrapOwnershipCandidate(
+                unsentSnapshot: unsentBatches.snapshot(),
+                localObligationSnapshot: localBootstrapOwnershipSnapshot()
+            )
+            for batchID in coveredBatchIDs {
+                guard state.frozenBatch(for: batchID) != nil else {
+                    lastErrorMessage = "Nearby bootstrap acknowledgement did not match frozen local ownership."
+                    await updatePendingCount()
+                    return
+                }
+            }
+            for batch in currentOwnership.canonicalBatches where coveredBatchIDs.contains(batch.id) {
+                guard state.frozenBatch(for: batch.id) == batch else {
+                    lastErrorMessage = "Nearby bootstrap acknowledgement did not match frozen local ownership."
+                    await updatePendingCount()
+                    return
+                }
+            }
+
+            try unsentBatches.removeBatches(withIDs: coveredBatchIDs)
+            if !coveredBatchIDs.isDisjoint(
+                with: state.frozenLocalObligationBatchIDs.union(
+                    currentOwnership.localObligationBatchIDs
+                )
+            ) {
+                guard let removeLocalBootstrapOwnership else {
+                    lastErrorMessage = "Unable to update pending local sync queue."
+                    await updatePendingCount()
+                    return
+                }
+                try removeLocalBootstrapOwnership(coveredBatchIDs)
+            }
+
+            let remainingOwnership = try SyncPeerBootstrapOwnershipCandidate(
+                unsentSnapshot: unsentBatches.snapshot(),
+                localObligationSnapshot: localBootstrapOwnershipSnapshot()
+            )
+            guard remainingOwnership.batchIDs.isDisjoint(with: coveredBatchIDs) else {
+                lastErrorMessage = "Unable to update pending local sync queue."
+                await updatePendingCount()
+                return
+            }
+            outstandingBatchDeliveries.release(coveredBatchIDs)
         } catch {
-            lastErrorMessage = "Unable to update the unsent batch queue."
+            lastErrorMessage = "Unable to update pending sync queues."
             await updatePendingCount()
             return
         }
+
         state.withheldHistoricalBatchIDs = state.coveredBatchIDs
-            .subtracting(acknowledgement.coveredBatchIDs)
+            .subtracting(coveredBatchIDs)
         state.ordinarySyncReady = true
         bootstrapStateByPeerDeviceID[deviceID] = state
         bootstrapRetryTasks.removeValue(forKey: deviceID)?.cancel()
         lastErrorMessage = nil
         await updatePendingCount()
         await flushUnsentBatches()
+        await onFlushLocalConvergenceRequested?()
     }
 
     private func sendBootstrapCapabilityAnnouncement(to peerID: MCPeerID) async {
