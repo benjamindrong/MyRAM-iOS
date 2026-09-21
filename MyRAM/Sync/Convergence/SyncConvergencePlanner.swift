@@ -3115,7 +3115,7 @@ private extension SyncBatchChange {
             return change.expectedText
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
              .noteCreated, .noteTitleChanged, .noteBodyTextInserted,
-             .noteBodyReconciled, .noteLifecycleChanged:
+             .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             return nil
         }
     }
