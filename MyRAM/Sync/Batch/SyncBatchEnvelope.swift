@@ -3,6 +3,7 @@ import Foundation
 enum SyncBatchEnvelopeSchemaVersion: Int, Codable, CaseIterable, Hashable, Sendable {
     case v1 = 1
     case v2 = 2
+    case v3 = 3
 }
 
 enum SyncBatchEnvelopeError: Error, Equatable, Sendable {
@@ -10,7 +11,7 @@ enum SyncBatchEnvelopeError: Error, Equatable, Sendable {
     case mixedBodyOperationRepresentations
     case representationMismatch(
         schema: SyncBatchEnvelopeSchemaVersion,
-        representation: SyncBatchBodyOperationRepresentation
+        representation: SyncBatchDeliveryRepresentation
     )
 }
 
@@ -19,12 +20,14 @@ struct SyncBatchEnvelope: Codable, Equatable, Sendable {
     let batch: SyncBatch
 
     fileprivate init(batch: SyncBatch) throws {
-        switch batch.bodyOperationRepresentation {
-        case .none, .legacy:
+        switch SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes) {
+        case .v1Compatible:
             schemaVersion = .v1
-        case .anchored:
+        case .anchoredV2:
             schemaVersion = .v2
-        case .mixed:
+        case .structuralMarkV3:
+            schemaVersion = .v3
+        case .invalidMixedRepresentation:
             throw SyncBatchEnvelopeError.mixedBodyOperationRepresentations
         }
         self.batch = batch
@@ -53,7 +56,9 @@ struct SyncBatchEnvelope: Codable, Equatable, Sendable {
         let decodedBatch = try container.decode(SyncBatch.self, forKey: .batch)
         try Self.validateExact(
             schema: decodedSchemaVersion,
-            representation: decodedBatch.bodyOperationRepresentation
+            representation: SyncBatchDeliveryPartitionPlanner.classification(
+                of: decodedBatch.changes
+            )
         )
 
         schemaVersion = decodedSchemaVersion
@@ -62,14 +67,16 @@ struct SyncBatchEnvelope: Codable, Equatable, Sendable {
 
     private static func validateExact(
         schema: SyncBatchEnvelopeSchemaVersion,
-        representation: SyncBatchBodyOperationRepresentation
+        representation: SyncBatchDeliveryRepresentation
     ) throws {
-        if representation == .mixed {
+        if representation == .invalidMixedRepresentation {
             throw SyncBatchEnvelopeError.mixedBodyOperationRepresentations
         }
 
         switch (schema, representation) {
-        case (.v1, .none), (.v1, .legacy), (.v2, .anchored):
+        case (.v1, .v1Compatible),
+             (.v2, .anchoredV2),
+             (.v3, .structuralMarkV3):
             return
         default:
             throw SyncBatchEnvelopeError.representationMismatch(
@@ -85,7 +92,7 @@ enum SyncBatchEnvelopeCodec {
         let envelope = try SyncBatchEnvelope(batch: batch)
 
         let encoder = JSONEncoder()
-        if envelope.schemaVersion == .v2 {
+        if envelope.schemaVersion == .v2 || envelope.schemaVersion == .v3 {
             encoder.outputFormatting = [.sortedKeys]
         }
         let data = try encoder.encode(envelope)
