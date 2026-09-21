@@ -621,12 +621,13 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     private func validateDurableAdmission(_ batch: SyncBatch) throws {
         let decision = SyncBatchTransportAdmissionPlanner.durableAdmission(
-            representation: batch.bodyOperationRepresentation,
+            deliveryRepresentation:
+                SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes),
             activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
         )
 
         switch decision {
-        case .admitV1, .admitV2:
+        case .admitV1, .admitV2, .admitV3:
             try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
         case .reject:
             try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
@@ -824,11 +825,17 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                     peerCapabilityRegistry
                         .hasExplicitCurrentSessionV2Support(
                             forPeerDeviceID: identity.deviceID
+                        ),
+                hasExplicitCurrentSessionStructuralMarkSupport:
+                    peerCapabilityRegistry
+                        .hasExplicitCurrentSessionStructuralMarkSupport(
+                            forPeerDeviceID: identity.deviceID
                         )
             )
         }
         let routing = SyncBatchTransportAdmissionPlanner.outboundRouting(
-            representation: batch.bodyOperationRepresentation,
+            deliveryRepresentation:
+                SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes),
             activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
             connectedPeers: plannerPeers
         )
@@ -957,6 +964,26 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
     }
 
+    private func isIntentionallyWithheldStructuralMarkBatch(
+        _ batch: SyncBatch,
+        connectedPeers: [MCPeerID]
+    ) -> Bool {
+        guard SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes)
+                == .structuralMarkV3,
+              !connectedPeers.isEmpty else {
+            return false
+        }
+        let structurallyCapablePeerCount = connectedPeers.reduce(into: 0) { count, peerID in
+            let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
+            if peerCapabilityRegistry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: deviceID
+            ) {
+                count += 1
+            }
+        }
+        return structurallyCapablePeerCount != 1
+    }
+
     private func flushUnsentBatches() async {
         if isOutboundSuspendedForRecovery {
             outboundFlushRequestedWhileRecoverySuspended = true
@@ -971,7 +998,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             if await sendQueuedBatch(batch, connectedPeers: connectedPeers) {
                 continue
             }
-            if isIntentionallyWithheldHistoricalBatch(batch, connectedPeers: connectedPeers) {
+            if isIntentionallyWithheldHistoricalBatch(batch, connectedPeers: connectedPeers)
+                || isIntentionallyWithheldStructuralMarkBatch(
+                    batch,
+                    connectedPeers: connectedPeers
+                ) {
                 continue
             }
             break
@@ -1027,8 +1058,13 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         switch reason {
         case .noConnectedPeers: "noConnectedPeers"
         case .anchoredPayloadDisabled: "anchoredPayloadDisabled"
+        case .structuralMarkPayloadDisabled: "structuralMarkPayloadDisabled"
         case .requiresExactlyOneConnectedPeer: "requiresExactlyOneConnectedPeer"
+        case .requiresExactlyOneStructuralMarkCapablePeer:
+            "requiresExactlyOneStructuralMarkCapablePeer"
         case .peerLacksExplicitCurrentSessionV2Support: "peerLacksExplicitCurrentSessionV2Support"
+        case .peerLacksExplicitCurrentSessionStructuralMarkSupport:
+            "peerLacksExplicitCurrentSessionStructuralMarkSupport"
         case .mixedBodyOperationRepresentations: "mixedBodyOperationRepresentations"
         }
     }
@@ -1419,6 +1455,10 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
         let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
         peerCapabilityRegistry.recordBootstrapV1Announcement(forPeerDeviceID: deviceID)
+        peerCapabilityRegistry.recordBootstrapStructuralMarkSchemaVersion(
+            announcement.structuralMarkSchemaVersion,
+            forPeerDeviceID: deviceID
+        )
         bootstrapCapabilityResolutionTasks.removeValue(forKey: deviceID)?.cancel()
         if (await transport.connectedPeers()).contains(peerID) {
             await beginBootstrap(to: peerID)
@@ -1696,9 +1736,16 @@ extension MyRAMSyncController: MCSessionDelegate {
                         peerCapabilityRegistry
                             .hasExplicitCurrentSessionV2Support(
                                 forPeerDeviceID: identity.deviceID
+                            ),
+                    hasExplicitCurrentSessionStructuralMarkSupport:
+                        peerCapabilityRegistry
+                            .hasExplicitCurrentSessionStructuralMarkSupport(
+                                forPeerDeviceID: identity.deviceID
                             )
                 )
-                guard admission == .admitV1 || admission == .admitV2 else {
+                guard admission == .admitV1
+                        || admission == .admitV2
+                        || admission == .admitV3 else {
                     MyRAMSyncBenchmarkTelemetry.shared.record(
                         .batchCaptureCompleted,
                         batchID: String(describing: envelope.batch.id),
