@@ -53,6 +53,20 @@ final class MacSyncConvergenceCoordinator {
         localObligationQueue.pendingCount
     }
 
+    func localBootstrapOwnershipSnapshot() -> FileBackedSyncBatchQueueSnapshot {
+        localObligationQueue.snapshot()
+    }
+
+    func removeLocalBootstrapOwnership(withIDs batchIDs: Set<SyncBatchID>) throws {
+        try localObligationQueue.removeObligations(withIDs: batchIDs)
+    }
+
+#if DEBUG
+    func injectLocalBootstrapOwnershipPersistenceFailureForTesting() {
+        localObligationQueue.injectPersistenceFailureForNextWrite()
+    }
+#endif
+
     /// Durably persists an incoming batch's raw bytes, independent of whatever
     /// `submitRemoteBatch` later does with them. This is what the transport layer
     /// checks before convergence. Durable capture is necessary but does not by
