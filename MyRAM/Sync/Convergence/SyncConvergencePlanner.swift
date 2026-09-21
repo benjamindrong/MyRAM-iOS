@@ -3596,7 +3596,7 @@ struct SyncConvergenceIncorporationExecutor {
                     createdAt: existing.createdAt,
                     modifiedAt: change.modifiedAtForReplayOrdering
                 )
-            case .noteBodyReconciled, .noteLifecycleChanged:
+            case .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
                 break
             }
         }
@@ -3796,6 +3796,19 @@ struct SyncConvergenceIncorporationExecutor {
                 ))
             }
             guard plan.hasMutableNoteEffect else { continue }
+
+            if let marks = plan.structuralMarkEffect {
+                try transaction.updateStructuralMarks(
+                    SyncConvergenceStructuralMarkUpdatedNoteRecord(
+                        noteID: marks.noteID,
+                        modifiedAt: marks.latestModifiedAt,
+                        expectedSnapshot: marks.expectedSnapshot,
+                        finalMarkState: marks.finalMarkState
+                    )
+                )
+                continue
+            }
+
             let current = try transaction.loadNote(id: plan.noteID)
             let currentTitle = current?.title ?? plan.creationEffect?.title ?? ""
             let currentBody = current?.body ?? plan.creationEffect?.body ?? ""
