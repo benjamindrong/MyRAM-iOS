@@ -3695,15 +3695,21 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
 
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await syncBatchAccumulator.containsPendingBodyChange(for: noteID) else { continue }
-            guard let obligation = await syncBatchAccumulator.takePendingObligationIfAffecting(noteID: noteID) else {
+            let obligations = await syncBatchAccumulator.takePendingObligationsIfAffecting(
+                noteID: noteID
+            )
+            guard !obligations.isEmpty else {
                 return nil
             }
-            let outcome = await syncConvergenceRuntime.admitPendingLocalObligationForIncomingMutation(obligation)
-            switch outcome {
-            case .ready, .evidenceRegistered:
-                continue
-            case .cannotProceed(let outcome):
-                return outcome
+            for obligation in obligations {
+                let outcome = await syncConvergenceRuntime
+                    .admitPendingLocalObligationForIncomingMutation(obligation)
+                switch outcome {
+                case .ready, .evidenceRegistered:
+                    continue
+                case .cannotProceed(let outcome):
+                    return outcome
+                }
             }
         }
         return nil
@@ -3714,8 +3720,18 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
     ) async -> SyncConvergenceIncomingLocalBoundaryPreparation {
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await syncBatchAccumulator.containsPendingBodyChange(for: noteID) else { continue }
-            guard let obligation = await syncBatchAccumulator.takePendingObligationIfAffecting(noteID: noteID) else {
+            let obligations = await syncBatchAccumulator.takePendingObligationsIfAffecting(
+                noteID: noteID
+            )
+            guard let obligation = obligations.first else {
                 return .failed(.boundaryInvariantViolation(noteID: noteID))
+            }
+            for additional in obligations.dropFirst() {
+                let outcome = await syncConvergenceRuntime
+                    .admitPendingLocalObligationForIncomingMutation(additional)
+                if case .cannotProceed = outcome {
+                    return .failed(.boundaryInvariantViolation(noteID: noteID))
+                }
             }
             return .localObligation(obligation)
         }
