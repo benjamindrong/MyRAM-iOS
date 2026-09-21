@@ -179,6 +179,73 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(try MultipeerSyncMessageCoding.decodeMessage(from: sends.last!).kind, .bootstrapSnapshot)
     }
 
+    func testReconnectBootstrapRecoversWithFullUnsentQueueAndDurableLocalObligations() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-full-queue-bootstrap-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let unsentURL = directory.appendingPathComponent("unsent-batches.json")
+        let localURL = directory.appendingPathComponent("local-obligations.json")
+        let unsentQueue = FileBackedSyncBatchQueue(fileURL: unsentURL)
+        for index in 0..<100 {
+            try unsentQueue.enqueueDurably(makeBatch(idSuffix: 233_000 + index))
+        }
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: localURL)
+        for index in 0..<36 {
+            try localQueue.enqueue(
+                SyncConvergenceLocalObligation(
+                    legacyBatch: makeBatch(idSuffix: 234_000 + index)
+                )
+            )
+        }
+
+        let peer = MCPeerID(displayName: "remote|myr233-full-queue-mac")
+        var sends: [Data] = []
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let controller = try makeController(
+            context: container.mainContext,
+            unsentBatchQueueFileURL: unsentURL,
+            unsentBatchQueue: unsentQueue,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sends.append(data) }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: localURL
+        )
+        _ = coordinator
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "myr233-full-queue-mac"
+        )
+
+        await controller.beginReconnectBootstrapForTesting(to: peer)
+
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count, 100)
+        XCTAssertEqual(coordinator.pendingLocalObligationCount, 36)
+        let data = try XCTUnwrap(sends.first)
+        let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+        XCTAssertEqual(message.kind, .bootstrapSnapshot)
+        let snapshot = try JSONDecoder().decode(
+            SyncPeerBootstrapSnapshot.self,
+            from: message.payload
+        )
+        XCTAssertEqual(
+            snapshot.historyCoverage.count,
+            136,
+            "Bootstrap must own both full unsent history and durable local obligations without transport promotion."
+        )
+    }
+
     func testReconnectBootstrapCapturesPendingAccumulatorWorkWithoutQuietWindow() async throws {
         let peer = MCPeerID(displayName: "remote|myr229-accumulator-mac")
         var sends: [Data] = []
