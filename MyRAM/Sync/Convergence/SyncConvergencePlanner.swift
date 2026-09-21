@@ -2659,6 +2659,8 @@ struct SyncConvergencePlanValidator {
                       markEffect.resultEvidence.batchID == plan.batchID,
                       markEffect.resultEvidence.preHash == markEffect.preMarkDigest,
                       markEffect.resultEvidence.postHash == markEffect.postMarkDigest,
+                      markEffect.resultEvidence.canonicalReplayKey
+                        == markEffect.operationIdentities.last?.canonicalReplayKey,
                       routing == (
                           markEffect.didChangeApplicationState
                               ? SyncConvergencePresentationRouting.structuralRefresh
