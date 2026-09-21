@@ -377,6 +377,59 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         )
     }
 
+    func testConvergenceStructuralMarkUpdatePreservesBodyAndInvalidatesDerivedCache() throws {
+        let fixture = try makePersistedNote(body: "AB")
+        let context = fixture.container.mainContext
+        let requestedID = fixture.noteID
+        let note = try XCTUnwrap(
+            context.fetch(FetchDescriptor<Note>(
+                predicate: #Predicate { $0.id == requestedID }
+            )).first
+        )
+        note.richTextContentData = Data("derived-cache".utf8)
+        try context.save()
+
+        let snapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: note, in: context)
+        let mark = try SyncTextMarkOperation(
+            operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+            logicalClock: 1,
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: try snapshot.state.operationAnchor(
+                atVisibleUTF16Offset: 0
+            ),
+            endAnchor: try snapshot.state.operationAnchor(
+                atVisibleUTF16Offset: 2
+            )
+        )
+        let finalMarks = try snapshot.markState.merging(
+            with: SyncTextMarkState(operations: [mark])
+        )
+        let transaction = SwiftDataSyncConvergencePersistenceTransaction(
+            context: context
+        )
+
+        try transaction.updateStructuralMarks(
+            SyncConvergenceStructuralMarkUpdatedNoteRecord(
+                noteID: fixture.noteID,
+                modifiedAt: Date(timeIntervalSince1970: 3),
+                expectedSnapshot: snapshot,
+                finalMarkState: finalMarks
+            )
+        )
+        try transaction.save()
+
+        let committed = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: note, in: context)
+        XCTAssertEqual(note.content, "AB")
+        XCTAssertNil(note.richTextContentData)
+        XCTAssertEqual(committed.state, snapshot.state)
+        XCTAssertEqual(committed.revision, snapshot.revision)
+        XCTAssertEqual(committed.markState, finalMarks)
+        XCTAssertEqual(committed.markRevision, snapshot.markRevision + 1)
+    }
+
     func testConvergenceRollbackRemovesPendingBodyAndStateChanges() throws {
         let fixture = try makePersistedNote(body: "Before")
         let transaction = SwiftDataSyncConvergencePersistenceTransaction(
