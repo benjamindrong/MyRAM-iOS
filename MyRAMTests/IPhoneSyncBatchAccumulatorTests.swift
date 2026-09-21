@@ -531,7 +531,8 @@ final class IPhoneSyncBatchAccumulatorTests: XCTestCase {
                     file: file,
                     line: line
                 )
-            case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+            case .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+                 .noteStructuralMarksChanged, .noteLifecycleChanged:
                 XCTFail("Unexpected non-positional body change", file: file, line: line)
             }
             do {
