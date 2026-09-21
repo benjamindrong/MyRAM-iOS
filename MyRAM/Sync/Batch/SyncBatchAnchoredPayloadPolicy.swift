@@ -177,6 +177,7 @@ enum SyncBatchAnchorlessCompatibilityEvaluator {
              .noteBodyTextInsertedAnchored,
              .noteBodyTextDeletedAnchored,
              .noteBodyReconciled,
+             .noteStructuralMarksChanged,
              .noteLifecycleChanged:
             return .notAnchorlessBodyOperation
         }
