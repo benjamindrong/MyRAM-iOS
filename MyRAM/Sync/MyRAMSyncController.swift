@@ -1001,8 +1001,9 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         do {
             try unsentBatches.removeBatches(withIDs: [acknowledgement.batchID])
             outstandingBatchDeliveries.release(acknowledgement.batchID)
+            let didDequeue = wasQueued && !unsentBatches.contains(acknowledgement.batchID)
             await updatePendingCount()
-            if wasQueued, !unsentBatches.contains(acknowledgement.batchID) {
+            if didDequeue {
                 Self.transportLogger.notice(
                     "batch=\(acknowledgement.batchID.uuidString, privacy: .public) outcome=acknowledgementDequeued peer=\(peerDeviceID, privacy: .public)"
                 )
@@ -1010,6 +1011,9 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 Self.transportLogger.notice(
                     "batch=\(acknowledgement.batchID.uuidString, privacy: .public) outcome=acknowledgementIgnoredNotQueued peer=\(peerDeviceID, privacy: .public)"
                 )
+            }
+            if didDequeue, await syncEngine.pendingChangeCount() > 0 {
+                await requestLegacyFlush()
             }
         } catch {
             lastErrorMessage = "Unable to update the unsent batch queue."

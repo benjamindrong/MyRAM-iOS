@@ -572,6 +572,57 @@ final class MyRAMSyncControllerTests: XCTestCase {
         XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches, [secondBatch])
     }
 
+    func testMYR223BatchAcknowledgementWakesRetainedLegacyWork() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(),
+            transport: transport
+        )
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "remote-device")
+
+        controller.recordLocalChange(
+            entityType: .marker,
+            entityID: "imported-pin",
+            payload: Data("payload".utf8),
+            updatedAt: Date(timeIntervalSince1970: 1)
+        )
+        await waitUntil { controller.pendingSyncStatus.legacyChanges == 1 }
+        controller.flushPendingChanges()
+        await waitUntil { transport.sentLegacyEnvelopes.count == 1 }
+        transport.removeAllSentLegacyEnvelopes()
+
+        let batch = makeBatch(idSuffix: 223301)
+        try await controller.acceptLocalBatch(batch)
+        await waitUntil { controller.pendingSyncStatus.unsentBatches == 1 }
+
+        await deliverBatchAcknowledgement(to: controller, batchID: batch.id)
+
+        await waitUntil { transport.sentLegacyEnvelopes.count == 1 }
+        XCTAssertEqual(
+            transport.sentLegacyEnvelopes.first?.changes.map(\.entityID),
+            ["imported-pin"]
+        )
+        XCTAssertEqual(controller.pendingSyncStatus.unsentBatches, 0)
+        XCTAssertEqual(controller.pendingSyncStatus.legacyChanges, 1)
+    }
+
+    func testMYR223BatchAcknowledgementDoesNotFlushWhenLegacyQueueIsEmpty() async throws {
+        let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
+        let controller = try makeController(
+            unsentBatchQueueFileURL: temporaryQueueFileURL(),
+            transport: transport
+        )
+        controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "remote-device")
+        let batch = makeBatch(idSuffix: 223302)
+
+        try await controller.acceptLocalBatch(batch)
+        await deliverBatchAcknowledgement(to: controller, batchID: batch.id)
+        await waitUntil { controller.pendingSyncStatus.unsentBatches == 0 }
+        try await Task.sleep(for: .milliseconds(25))
+
+        XCTAssertTrue(transport.sentLegacyEnvelopes.isEmpty)
+    }
+
     func testIncomingBatchSyncSendsAcknowledgementWhenDurablyCaptured() async throws {
         let transport = FakeMyRAMSyncTransport(connectedPeers: [Self.remotePeerID])
         let controller = try makeController(transport: transport)

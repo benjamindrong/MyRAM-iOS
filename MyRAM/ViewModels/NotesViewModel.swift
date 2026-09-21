@@ -2195,6 +2195,7 @@ final class NotesViewModel: ObservableObject {
         isApplyingRemoteSyncChange = true
         defer { isApplyingRemoteSyncChange = false }
         var dispositions: [LegacyIncomingChangeResult] = []
+        var didApplyFolderChange = false
 
         for change in changes {
             guard !context.hasChanges else {
@@ -2259,6 +2260,12 @@ final class NotesViewModel: ObservableObject {
                 publishActiveEditorReload(noteID: activeNoteID, reason: .unsupportedIntegratedChange)
             }
             dispositions.append(LegacyIncomingChangeResult(changeID: change.id, disposition: .applied))
+            if change.entityType == .collection {
+                didApplyFolderChange = true
+            }
+        }
+        if didApplyFolderChange {
+            resumePendingConvergencePresentationIfNeeded()
         }
         return dispositions
     }
@@ -2819,7 +2826,7 @@ final class NotesViewModel: ObservableObject {
                 return SyncBatchDrainFailureClassifier.userMessage(
                     for: SyncBatchDrainFailure(batchID: item.batchID, kind: .mismatchedBase)
                 )
-            case .unsupportedReconciliation, .historyPressure:
+            case .unsupportedReconciliation, .historyPressure, .missingFolderDependency:
                 continue
                 }
             case .anchoredDependency(_), .legacyLocalEvidenceStale,
@@ -3067,6 +3074,7 @@ final class NotesViewModel: ObservableObject {
             context.rollback()
             throw error
         }
+        publishImportedGraph(importedNotes)
         refreshCurrentFolderContent()
         selectNote(importedNotes[0])
         return importedNotes
@@ -3277,6 +3285,36 @@ final class NotesViewModel: ObservableObject {
 
         folder?.modifiedAt = .now
         return note
+    }
+
+    private func publishImportedGraph(_ importedNotes: [Note]) {
+        var publishedFolderIDs: Set<UUID> = []
+
+        for note in importedNotes {
+            var ancestors: [Folder] = []
+            var folder = note.folder
+            while let currentFolder = folder {
+                ancestors.append(currentFolder)
+                folder = currentFolder.parentFolder
+            }
+            for currentFolder in ancestors.reversed()
+            where publishedFolderIDs.insert(currentFolder.id).inserted {
+                recordFolderSyncChange(currentFolder)
+            }
+        }
+
+        for note in importedNotes {
+            recordSyncBatchChange(SyncConvergenceCapturedLocalChange(
+                change: IPhoneSyncBatchCaptureHook.noteCreated(note),
+                evidence: nil
+            ))
+            for pinnedText in note.pinnedThoughts {
+                recordPinnedThoughtSyncChange(pinnedText)
+            }
+            for attachment in note.photoAttachments {
+                recordPhotoAttachmentSyncChange(attachment, updatedAt: note.modifiedAt)
+            }
+        }
     }
 
     private func folder(forPath path: [String]) -> Folder? {

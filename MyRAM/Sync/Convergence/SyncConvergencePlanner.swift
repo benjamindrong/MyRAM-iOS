@@ -99,6 +99,14 @@ struct SyncConvergencePlanner {
                     )
                     notePlans[created.noteID, default: PartialNotePlan(noteID: created.noteID)].creationEffect = effect
                 } else {
+                    if let folderID = created.folderID,
+                       !input.currentFolderIDs.contains(folderID) {
+                        return .deferred(.missingFolderDependency(
+                            noteID: created.noteID,
+                            batchID: input.incomingBatch.id,
+                            folderID: folderID
+                        ))
+                    }
                     let projected = SyncConvergenceProjectedNote(
                         noteID: created.noteID,
                         folderID: created.folderID,

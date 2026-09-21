@@ -1,4 +1,5 @@
 import AnchoredSequenceCore
+import NearbySyncCore
 @preconcurrency import MultipeerConnectivity
 import SwiftData
 import XCTest
@@ -7,6 +8,95 @@ import XCTest
 @MainActor
 final class MacSyncBatchControllerTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
+
+    func testMYR223LegacyFolderReceiptRedrivesDeferredConvergence() async throws {
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let controller = try makeController(
+            context: context,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: nil
+        )
+
+        let noteID = UUID()
+        let folderID = UUID()
+        let batch = SyncBatch(
+            id: UUID(),
+            originDeviceID: UUID(),
+            createdAt: Date(timeIntervalSince1970: 1),
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Imported",
+                    body: "Body",
+                    folderID: folderID,
+                    createdAt: Date(timeIntervalSince1970: 1),
+                    modifiedAt: Date(timeIntervalSince1970: 2)
+                ))
+            ]
+        )
+
+        let initialDisposition = await coordinator.submitRemoteBatch(batch)
+        XCTAssertEqual(initialDisposition, .acknowledgementDeferred)
+        XCTAssertEqual(coordinator.pendingIncomingBatchCount, 1)
+
+        let folder = Folder(name: "Imported Folder")
+        folder.id = folderID
+        folder.createdAt = Date(timeIntervalSince1970: 1)
+        folder.modifiedAt = Date(timeIntervalSince1970: 2)
+        let folderChange = SyncChange(
+            entityType: .collection,
+            entityID: folderID.uuidString,
+            operation: .upsert,
+            payload: try MyRAMSyncPayloadCoding.encode(MyRAMFolderSyncPayload(folder: folder)),
+            updatedAt: folder.modifiedAt,
+            originDeviceID: "remote"
+        )
+        let envelope = SyncEnvelope(
+            senderDeviceID: "remote",
+            changes: [folderChange]
+        )
+        let data = try MultipeerSyncMessageCoding.encode(
+            kind: .legacySyncEnvelope,
+            payload: JSONEncoder().encode(envelope)
+        )
+        let peer = MCPeerID(displayName: "remote|myr223")
+        let session = MCSession(
+            peer: MCPeerID(displayName: "local|myr223"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+
+        controller.session(session, didReceive: data, fromPeer: peer)
+
+        await waitUntil {
+            let requestedNoteID = noteID
+            guard let created = try? context.fetch(FetchDescriptor<Note>(
+                predicate: #Predicate { $0.id == requestedNoteID }
+            )).first else {
+                return false
+            }
+            return created.folder?.id == folderID
+                && coordinator.pendingIncomingBatchCount == 0
+        }
+
+        let created = try XCTUnwrap(context.fetch(FetchDescriptor<Note>(
+            predicate: #Predicate { $0.id == noteID }
+        )).first)
+        XCTAssertEqual(created.folder?.id, folderID)
+    }
 
     func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
         let peerID = MCPeerID(displayName: "remote|connected-mac")

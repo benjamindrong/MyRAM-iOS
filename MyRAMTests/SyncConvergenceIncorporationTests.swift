@@ -332,6 +332,35 @@ final class SyncConvergenceIncorporationTests: XCTestCase {
         XCTAssertTrue(postCommit.presentationRefreshPending)
     }
 
+    func testMYR223SwiftDataInsertRejectsMissingFolderInsteadOfRootingNote() throws {
+        let container = try ModelContainer(
+            for: Schema(MyRAMModelRegistry.models),
+            configurations: [ModelConfiguration(isStoredInMemoryOnly: true)]
+        )
+        let context = ModelContext(container)
+        let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
+        let noteID = UUID()
+        let missingFolderID = UUID()
+
+        XCTAssertThrowsError(
+            try transaction.insertNote(SyncConvergenceNewNoteRecord(
+                noteID: noteID,
+                folderID: missingFolderID,
+                title: "Imported",
+                body: "Body",
+                createdAt: Date(timeIntervalSince1970: 1),
+                modifiedAt: Date(timeIntervalSince1970: 2)
+            ))
+        ) { error in
+            XCTAssertEqual(
+                error as? SyncConvergenceTransactionFailure,
+                .staleAuthoritativeState(noteID: noteID)
+            )
+        }
+
+        XCTAssertTrue(try context.fetch(FetchDescriptor<Note>()).isEmpty)
+    }
+
     func testMYR158SwiftDataTransactionPersistsPostCommitIndexMatrix() throws {
         let container = try ModelContainer(
             for: Schema(MyRAMModelRegistry.models),

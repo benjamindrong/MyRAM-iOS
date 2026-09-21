@@ -615,6 +615,7 @@ enum SyncConvergenceDeferredReason: Equatable {
     case unreconstructableBase(noteID: UUID, batchID: UUID, baseContentHash: String)
     case unsupportedReconciliation(noteID: UUID, batchID: UUID)
     case historyPressure(noteID: UUID, blockingBatchID: UUID?)
+    case missingFolderDependency(noteID: UUID, batchID: UUID, folderID: UUID)
 }
 
 enum SyncConvergenceTransactionFailure: Error, Equatable {

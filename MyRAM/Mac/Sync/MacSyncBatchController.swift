@@ -959,9 +959,23 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         lastErrorMessage = "Some nearby sync work is quarantined until local evidence can be inspected."
     }
 
-    private func receiveLegacyEnvelope(_ envelope: SyncEnvelope, from peerID: MCPeerID) {
+    private func receiveLegacyEnvelope(_ envelope: SyncEnvelope, from peerID: MCPeerID) async {
         do {
             let result = try legacyReceiver.receive(envelope)
+            let terminalChangeIDs = Set(
+                result.applyResult.outcomes
+                    .filter(\.shouldAcknowledge)
+                    .map(\.changeID)
+            )
+            let didApplyFolder = envelope.changes.contains { change in
+                terminalChangeIDs.contains(change.id)
+                    && change.entityType == .collection
+                    && change.operation != .delete
+            }
+            if didApplyFolder {
+                await convergenceCoordinator?.resumePendingWork()
+            }
+
             guard !result.acknowledgementIDs.isEmpty else { return }
             try sendLegacyAcknowledgement(ids: result.acknowledgementIDs, to: peerID)
             lastErrorMessage = nil
@@ -1100,7 +1114,7 @@ extension MacSyncBatchController: MCSessionDelegate {
                 return
             case .legacySyncEnvelope:
                 guard let envelope = try? JSONDecoder().decode(SyncEnvelope.self, from: message.payload) else { return }
-                receiveLegacyEnvelope(envelope, from: peerID)
+                await receiveLegacyEnvelope(envelope, from: peerID)
             case .batchAcknowledgement:
                 guard let acknowledgement = try? JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload) else { return }
                 handleBatchAcknowledgement(acknowledgement, from: peerID)

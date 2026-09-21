@@ -9,6 +9,90 @@ import XCTest
 #endif
 
 final class SyncConvergencePlanningTests: XCTestCase {
+    func testMissingFolderDefersNoteCreationAndAcknowledgement() {
+        let noteID = uuid("00000000-0000-0000-0000-000000223001")
+        let folderID = uuid("00000000-0000-0000-0000-000000223002")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000223003"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000223004"),
+            createdAt: date(1),
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Imported",
+                    body: "Body",
+                    folderID: folderID,
+                    createdAt: date(1),
+                    modifiedAt: date(2)
+                ))
+            ]
+        )
+        let reason = SyncConvergenceDeferredReason.missingFolderDependency(
+            noteID: noteID,
+            batchID: batch.id,
+            folderID: folderID
+        )
+
+        let planningOutcome = SyncConvergencePlanner().plan(
+            input: SyncConvergencePlanningInput(incomingBatch: batch)
+        )
+        XCTAssertEqual(planningOutcome, .deferred(reason))
+
+        let runtimeOutcome = SyncConvergenceRuntimeOutcome.deferred(
+            SyncConvergenceDeferredWork(
+                incoming: [
+                    SyncConvergenceDeferredItem(
+                        domain: .incoming,
+                        batchID: batch.id,
+                        affectedNoteIDs: [noteID],
+                        reason: .planning(reason)
+                    )
+                ],
+                localObligations: [],
+                postCommit: []
+            )
+        )
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: runtimeOutcome,
+                batchID: batch.id
+            ),
+            .acknowledgementDeferred
+        )
+    }
+
+    func testPresentFolderAllowsNoteCreationPlanning() {
+        let noteID = uuid("00000000-0000-0000-0000-000000223011")
+        let folderID = uuid("00000000-0000-0000-0000-000000223012")
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000223013"),
+            originDeviceID: uuid("00000000-0000-0000-0000-000000223014"),
+            createdAt: date(1),
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Imported",
+                    body: "Body",
+                    folderID: folderID,
+                    createdAt: date(1),
+                    modifiedAt: date(2)
+                ))
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(
+            input: SyncConvergencePlanningInput(
+                incomingBatch: batch,
+                currentFolderIDs: [folderID]
+            )
+        )
+
+        guard case .planned(let validated) = outcome else {
+            return XCTFail("Expected planned creation, got \(outcome)")
+        }
+        XCTAssertEqual(validated.plan.affectedNotePlans.first?.creationEffect?.folderID, folderID)
+    }
+
     func testMYR179FailureFirstEveryNonSuccessRuntimeOutcomeIsFailClosedForAcknowledgement() {
         let batchID = UUID()
         let outcomes: [SyncConvergenceRuntimeOutcome] = [

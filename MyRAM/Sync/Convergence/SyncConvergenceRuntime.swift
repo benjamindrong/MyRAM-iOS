@@ -57,7 +57,7 @@ enum SyncConvergenceRemoteBatchDispositionPolicy {
                 switch reason {
                 case .anchorlessMatchingBaseEvidenceUnavailable, .unreconstructableBase:
                     return .recoverableAnchorlessCompatibilityRejection
-                case .unsupportedReconciliation, .historyPressure:
+                case .unsupportedReconciliation, .historyPressure, .missingFolderDependency:
                     continue
                 }
             }
@@ -827,6 +827,7 @@ final class SyncConvergenceRuntime {
         return SyncConvergencePlanningInput(
             incomingBatch: batch,
             currentNotes: try loadCurrentNotes(noteIDs: noteIDs),
+            currentFolderIDs: try loadCurrentFolderIDs(),
             retainedSnapshots: try loadRetainedSnapshots(noteIDs: noteIDs),
             retainedLocalOperations: try loadRetainedOperations(noteIDs: noteIDs, source: .local),
             retainedRemoteOperations: try loadRetainedOperations(noteIDs: noteIDs, source: .remote),
@@ -1241,6 +1242,10 @@ final class SyncConvergenceRuntime {
         }
     }
 
+    private func loadCurrentFolderIDs() throws -> Set<UUID> {
+        Set(try context.fetch(FetchDescriptor<Folder>()).map(\.id))
+    }
+
     private func loadTitleWinners(noteIDs: Set<UUID>) throws -> [SyncConvergenceTitleWinnerProjection] {
         let transaction = SwiftDataSyncConvergencePersistenceTransaction(context: context)
         return try noteIDs.compactMap { try transaction.loadTitleWinner(noteID: $0) }
@@ -1562,23 +1567,6 @@ final class SyncConvergenceRuntime {
         }
     }
 
-    private static func drainFailure(
-        for reason: SyncConvergenceDeferredReason,
-        batchID: UUID
-    ) -> SyncBatchDrainFailure {
-        let kind: SyncBatchDrainFailureKind
-        switch reason {
-        case .anchorlessMatchingBaseEvidenceUnavailable:
-            kind = .anchorlessBaseUnavailable
-        case .unreconstructableBase:
-            kind = .mismatchedBase
-        case .unsupportedReconciliation:
-            kind = .unsupportedReconciliation
-        case .historyPressure:
-            kind = .corruptHistory
-        }
-        return SyncBatchDrainFailure(batchID: batchID, kind: kind)
-    }
 }
 
 #if os(iOS)
