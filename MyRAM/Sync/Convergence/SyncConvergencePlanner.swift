@@ -1039,11 +1039,13 @@ struct CanonicalPayloadDigestFormatV1 {
         static let lifecycle: UInt32 = 0x00000006
         static let anchoredInsert: UInt32 = 0x00000007
         static let anchoredDelete: UInt32 = 0x00000008
+        static let structuralMarks: UInt32 = 0x00000009
         static let committedResultSchemaVersion: UInt32 = 0x00000001
         static let committedBodyResult: UInt32 = 0x00000001
         static let committedTitleResult: UInt32 = 0x00000002
         static let committedCreationResult: UInt32 = 0x00000003
         static let committedReconciliationResult: UInt32 = 0x00000004
+        static let committedStructuralMarksResult: UInt32 = 0x00000005
     }
 
     private(set) var data = Data()
@@ -1099,6 +1101,16 @@ struct CanonicalPayloadDigestFormatV1 {
                 appendString(reconciliation.replacementBody)
                 appendString(reconciliation.replacementContentHash)
                 appendUInt64(SyncConvergenceDateBits.bitPattern(for: reconciliation.modifiedAt))
+            case .noteStructuralMarksChanged(let marks):
+                appendUInt32(Domain.structuralMarks)
+                try appendUUID(marks.noteID)
+                appendString(
+                    try SyncConvergenceStableEncoding.encode(marks)
+                        .base64EncodedString()
+                )
+                appendUInt64(
+                    SyncConvergenceDateBits.bitPattern(for: marks.modifiedAt)
+                )
             case .noteLifecycleChanged(let lifecycle):
                 appendUInt32(Domain.lifecycle)
                 try appendUUID(lifecycle.noteID)
@@ -1196,6 +1208,22 @@ struct CanonicalPayloadDigestFormatV1 {
                 try appendDigestOperationIdentity(identity)
                 appendString(finalBodyHash)
                 appendString(replacementContentHash)
+            case .structuralMarks(
+                let noteID,
+                let preMarkDigest,
+                let postMarkDigest,
+                let identities
+            ):
+                appendUInt32(Domain.committedStructuralMarksResult)
+                try appendUUID(noteID)
+                appendString(preMarkDigest)
+                appendString(postMarkDigest)
+                appendUInt64(UInt64(identities.count))
+                for identity in identities.sorted(by: {
+                    $0.operationIndex < $1.operationIndex
+                }) {
+                    try appendDigestOperationIdentity(identity)
+                }
             }
         }
     }
@@ -1269,6 +1297,8 @@ struct CanonicalPayloadDigestFormatV1 {
             appendUInt32(0x00000006)
         case "anchoredDelete":
             appendUInt32(0x00000007)
+        case "structuralMarks":
+            appendUInt32(0x00000008)
         default:
             throw SyncConvergenceCanonicalBatchDigest.Error.invalidPayload("operationIdentity.operationKind")
         }
@@ -1808,7 +1838,8 @@ private struct SyncOperationReplayEngine {
                 )
             ))
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
-             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+             .noteStructuralMarksChanged, .noteLifecycleChanged:
             return .failed(.invalidMergePlan(noteID: noteID))
         }
     }
@@ -1852,7 +1883,8 @@ private struct SyncOperationReplayEngine {
                 baseContentHash: delete.baseContentHash
             ))
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
-             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+             .noteStructuralMarksChanged, .noteLifecycleChanged:
             return change
         }
     }
@@ -1864,7 +1896,8 @@ private struct SyncOperationReplayEngine {
         case .noteBodyTextDeleted(let delete):
             delete.utf16Offset
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
-             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+             .noteStructuralMarksChanged, .noteLifecycleChanged:
             0
         }
     }
@@ -2924,6 +2957,8 @@ private extension SyncBatchChange {
             return "anchoredDelete"
         case .noteBodyReconciled:
             return "reconciliation"
+        case .noteStructuralMarksChanged:
+            return "structuralMarks"
         case .noteLifecycleChanged:
             return "lifecycle"
         }
@@ -2934,7 +2969,8 @@ private extension SyncBatchChange {
         case .noteBodyTextInserted, .noteBodyTextDeleted,
              .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
             return true
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+             .noteStructuralMarksChanged, .noteLifecycleChanged:
             return false
         }
     }
@@ -2953,7 +2989,8 @@ private extension SyncBatchChange {
         case .noteBodyTextDeleted(let change):
             return change.utf16Offset
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
-             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+             .noteStructuralMarksChanged, .noteLifecycleChanged:
             return 0
         }
     }
