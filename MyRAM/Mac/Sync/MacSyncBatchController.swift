@@ -236,6 +236,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
         let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
         peerCapabilityRegistry.recordBootstrapV1Announcement(forPeerDeviceID: deviceID)
+        peerCapabilityRegistry.recordBootstrapStructuralMarkSchemaVersion(
+            announcement.structuralMarkSchemaVersion,
+            forPeerDeviceID: deviceID
+        )
         bootstrapCapabilityResolutionTasks.removeValue(forKey: deviceID)?.cancel()
         if connectedPeersProvider().contains(peerID) {
             beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
@@ -295,17 +299,31 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         if !capturedChanges.isEmpty {
             localCaptureGeneration &+= 1
         }
-        let obligation = await accumulator.recordAndTakeBoundaryObligation(
+        let obligations = await accumulator.recordAndTakeBoundaryObligations(
             adding: capturedChanges,
             affecting: noteID,
             at: date
         )
         await updateSequenceReservationIssue()
-        return obligation
+        await durablySubmitAdditionalBoundaryObligations(obligations.dropFirst())
+        return obligations.first
     }
 
     func takePendingLocalObligationIfAffecting(noteID: UUID) async -> SyncConvergenceLocalObligation? {
-        await accumulator.takePendingObligationIfAffecting(noteID: noteID)
+        let obligations = await accumulator.takePendingObligationsIfAffecting(
+            noteID: noteID
+        )
+        await durablySubmitAdditionalBoundaryObligations(obligations.dropFirst())
+        return obligations.first
+    }
+
+    private func durablySubmitAdditionalBoundaryObligations(
+        _ obligations: ArraySlice<SyncConvergenceLocalObligation>
+    ) async {
+        guard let convergenceCoordinator else { return }
+        for obligation in obligations {
+            await convergenceCoordinator.submitLocalObligation(obligation)
+        }
     }
 
     private func updateSequenceReservationIssue() async {
@@ -335,12 +353,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     private func validateDurableAdmission(_ batch: SyncBatch) throws {
         let decision = SyncBatchTransportAdmissionPlanner.durableAdmission(
-            representation: batch.bodyOperationRepresentation,
+            deliveryRepresentation:
+                SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes),
             activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
         )
 
         switch decision {
-        case .admitV1, .admitV2:
+        case .admitV1, .admitV2, .admitV3:
             try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
         case .reject:
             try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
@@ -375,11 +394,17 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                     peerCapabilityRegistry
                         .hasExplicitCurrentSessionV2Support(
                             forPeerDeviceID: identity.deviceID
+                        ),
+                hasExplicitCurrentSessionStructuralMarkSupport:
+                    peerCapabilityRegistry
+                        .hasExplicitCurrentSessionStructuralMarkSupport(
+                            forPeerDeviceID: identity.deviceID
                         )
             )
         }
         let routing = SyncBatchTransportAdmissionPlanner.outboundRouting(
-            representation: batch.bodyOperationRepresentation,
+            deliveryRepresentation:
+                SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes),
             activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
             connectedPeers: plannerPeers
         )
@@ -592,8 +617,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         while true {
             let captureGeneration = localCaptureGeneration
             await convergenceCoordinator.resumePendingWork()
-            while let obligation = await accumulator.takePendingObligationNow() {
-                await convergenceCoordinator.submitLocalObligation(obligation)
+            while true {
+                let obligations = await accumulator.takePendingObligationsNow()
+                guard !obligations.isEmpty else { break }
+                for obligation in obligations {
+                    await convergenceCoordinator.submitLocalObligation(obligation)
+                }
             }
 #if DEBUG
             await onBootstrapOwnershipPreflightCompletedForTesting?()
@@ -1090,9 +1119,16 @@ extension MacSyncBatchController: MCSessionDelegate {
                         peerCapabilityRegistry
                             .hasExplicitCurrentSessionV2Support(
                                 forPeerDeviceID: identity.deviceID
+                            ),
+                    hasExplicitCurrentSessionStructuralMarkSupport:
+                        peerCapabilityRegistry
+                            .hasExplicitCurrentSessionStructuralMarkSupport(
+                                forPeerDeviceID: identity.deviceID
                             )
                 )
-                guard admission == .admitV1 || admission == .admitV2 else {
+                guard admission == .admitV1
+                        || admission == .admitV2
+                        || admission == .admitV3 else {
                     MyRAMSyncBenchmarkTelemetry.shared.record(
                         .batchCaptureCompleted,
                         batchID: String(describing: envelope.batch.id),
