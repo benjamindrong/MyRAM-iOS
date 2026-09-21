@@ -9,6 +9,227 @@ import XCTest
 #endif
 
 final class SyncConvergencePlanningTests: XCTestCase {
+    func testStructuralMarkBatchPlansMarkOnlyConvergenceAndRefresh() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000227201")
+        let originID = uuid("00000000-0000-0000-0000-000000227202")
+        let body = "AB"
+        let prepared = try NoteSequenceStateBootstrapPersistence
+            .prepareInitialState(noteID: noteID, body: body)
+        let snapshot = NoteSequenceStateMutationSnapshot(
+            noteID: noteID,
+            body: body,
+            revision: 0,
+            state: prepared.state
+        )
+        let mark = try SyncTextMarkOperation(
+            operationID: SyncOperationID(deviceID: originID, localCounter: 41),
+            logicalClock: 1,
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: try prepared.state.operationAnchor(
+                atVisibleUTF16Offset: 0
+            ),
+            endAnchor: try prepared.state.operationAnchor(
+                atVisibleUTF16Offset: body.utf16.count
+            )
+        )
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000227203"),
+            originDeviceID: originID,
+            createdAt: date(1),
+            batchSequence: 1,
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: noteID,
+                        operations: [mark],
+                        modifiedAt: date(2)
+                    )
+                )
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: batch,
+            currentNotes: [projectedNote(noteID: noteID, body: body)],
+            anchoredSequenceSnapshots: [snapshot]
+        ))
+
+        guard case .planned(let validated) = outcome,
+              let notePlan = validated.plan.affectedNotePlans.first,
+              let effect = notePlan.structuralMarkEffect else {
+            return XCTFail("Expected structural-mark convergence plan, got \(outcome)")
+        }
+        XCTAssertNil(notePlan.bodyEffect)
+        XCTAssertEqual(effect.finalMarkState.operations, [mark])
+        XCTAssertTrue(effect.didChangeApplicationState)
+        XCTAssertEqual(
+            validated.plan.presentationPlan.noteRoutings[noteID],
+            .structuralRefresh
+        )
+        XCTAssertEqual(
+            validated.plan.incorporationEvidence.operationIdentities.map(
+                \.operationKind
+            ),
+            ["structuralMarks"]
+        )
+        XCTAssertEqual(effect.resultEvidence.kind, .structuralMarks)
+        XCTAssertNotEqual(effect.preMarkDigest, effect.postMarkDigest)
+    }
+
+    func testStructuralMarkBatchDefersForMissingSequenceLineage() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000227211")
+        let originID = uuid("00000000-0000-0000-0000-000000227212")
+        let missingOperationID = SyncOperationID(
+            deviceID: uuid("00000000-0000-0000-0000-000000227213"),
+            localCounter: 9
+        )
+        let body = "AB"
+        let prepared = try NoteSequenceStateBootstrapPersistence
+            .prepareInitialState(noteID: noteID, body: body)
+        let snapshot = NoteSequenceStateMutationSnapshot(
+            noteID: noteID,
+            body: body,
+            revision: 0,
+            state: prepared.state
+        )
+        let missingElement = try SyncTextElementID(
+            operationID: missingOperationID,
+            elementOffset: 0
+        )
+        let mark = try SyncTextMarkOperation(
+            operationID: SyncOperationID(deviceID: originID, localCounter: 42),
+            logicalClock: 1,
+            key: .italic,
+            assignment: .enabled,
+            startAnchor: .before(missingElement),
+            endAnchor: .after(missingElement)
+        )
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000227214"),
+            originDeviceID: originID,
+            createdAt: date(1),
+            batchSequence: 2,
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: noteID,
+                        operations: [mark],
+                        modifiedAt: date(2)
+                    )
+                )
+            ]
+        )
+
+        XCTAssertEqual(
+            SyncConvergencePlanner().plan(input: .init(
+                incomingBatch: batch,
+                currentNotes: [projectedNote(noteID: noteID, body: body)],
+                anchoredSequenceSnapshots: [snapshot]
+            )),
+            .deferred(.structuralMarkDependency(
+                noteID: noteID,
+                batchID: batch.id,
+                operationID: missingOperationID
+            ))
+        )
+    }
+
+    func testStructuralMarkReplayIsIdempotentAndNeedsNoRefresh() throws {
+        let noteID = uuid("00000000-0000-0000-0000-000000227221")
+        let originID = uuid("00000000-0000-0000-0000-000000227222")
+        let body = "AB"
+        let prepared = try NoteSequenceStateBootstrapPersistence
+            .prepareInitialState(noteID: noteID, body: body)
+        let mark = try SyncTextMarkOperation(
+            operationID: SyncOperationID(deviceID: originID, localCounter: 43),
+            logicalClock: 1,
+            key: .underline,
+            assignment: .enabled,
+            startAnchor: try prepared.state.operationAnchor(
+                atVisibleUTF16Offset: 0
+            ),
+            endAnchor: try prepared.state.operationAnchor(
+                atVisibleUTF16Offset: body.utf16.count
+            )
+        )
+        let markState = try SyncTextMarkState(operations: [mark])
+        let snapshot = NoteSequenceStateMutationSnapshot(
+            noteID: noteID,
+            body: body,
+            revision: 0,
+            state: prepared.state,
+            markRevision: 1,
+            markState: markState
+        )
+        let batch = SyncBatch(
+            id: uuid("00000000-0000-0000-0000-000000227223"),
+            originDeviceID: originID,
+            createdAt: date(1),
+            batchSequence: 3,
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: noteID,
+                        operations: [mark],
+                        modifiedAt: date(2)
+                    )
+                )
+            ]
+        )
+
+        let outcome = SyncConvergencePlanner().plan(input: .init(
+            incomingBatch: batch,
+            currentNotes: [projectedNote(noteID: noteID, body: body)],
+            anchoredSequenceSnapshots: [snapshot]
+        ))
+        guard case .planned(let validated) = outcome,
+              let effect = validated.plan.affectedNotePlans.first?
+                .structuralMarkEffect else {
+            return XCTFail("Expected idempotent structural-mark plan, got \(outcome)")
+        }
+        XCTAssertFalse(effect.didChangeApplicationState)
+        XCTAssertEqual(effect.finalMarkState, markState)
+        XCTAssertEqual(validated.plan.presentationPlan.noteRoutings[noteID], .none)
+    }
+
+    func testStructuralMarkDependencyAllowsSupplyingAnchoredCandidatePastBlock() {
+        let noteID = uuid("00000000-0000-0000-0000-000000227231")
+        let originID = uuid("00000000-0000-0000-0000-000000227232")
+        let dependency = SyncOperationID(
+            deviceID: uuid("00000000-0000-0000-0000-000000227233"),
+            localCounter: 7
+        )
+        let blockedBatchID = uuid("00000000-0000-0000-0000-000000227234")
+        let supplierBatchID = uuid("00000000-0000-0000-0000-000000227235")
+        let candidates = [
+            SyncConvergenceQueueCandidate(
+                batchID: blockedBatchID,
+                originDeviceID: originID,
+                affectedNoteIDs: [noteID],
+                queuePosition: 0
+            ),
+            SyncConvergenceQueueCandidate(
+                batchID: supplierBatchID,
+                originDeviceID: originID,
+                affectedNoteIDs: [noteID],
+                queuePosition: 1,
+                anchoredOperationIDs: [dependency]
+            )
+        ]
+
+        XCTAssertEqual(
+            SyncConvergenceDrainPassScheduler.nextEligibleIndex(
+                candidates: candidates,
+                attemptedBatchIDs: [blockedBatchID],
+                blockedNoteIDs: [noteID],
+                blockedOrigins: [originID],
+                anchoredDependenciesByNoteID: [noteID: [dependency]]
+            ),
+            1
+        )
+    }
+
     func testMissingFolderDefersNoteCreationAndAcknowledgement() {
         let noteID = uuid("00000000-0000-0000-0000-000000223001")
         let folderID = uuid("00000000-0000-0000-0000-000000223002")
