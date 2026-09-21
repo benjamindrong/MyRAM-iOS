@@ -914,11 +914,11 @@ struct SyncConvergencePlanner {
                 return .failed(.invalidMergePlan(noteID: noteID))
             }
 
-            let preDigest = try structuralMarkDigest(
+            let preDigest = try SyncConvergenceStructuralMarkDigest.digest(
                 expectedSnapshot.markState,
                 sequence: expectedSnapshot.state
             )
-            let postDigest = try structuralMarkDigest(
+            let postDigest = try SyncConvergenceStructuralMarkDigest.digest(
                 finalMarkState,
                 sequence: expectedSnapshot.state
             )
@@ -968,19 +968,6 @@ struct SyncConvergencePlanner {
             .first
     }
 
-    private func structuralMarkDigest(
-        _ state: SyncTextMarkState,
-        sequence: SyncTextSequenceState
-    ) throws -> String {
-        let bytes = try NoteStructuralFormattingPersistence.encode(
-            state: state,
-            pairedWith: sequence
-        )
-        return SHA256.hash(data: bytes)
-            .map { String(format: "%02x", $0) }
-            .joined()
-    }
-
     private func operationIdentity(
         for change: SyncBatchChange,
         in batch: SyncBatch,
@@ -997,6 +984,21 @@ struct SyncConvergencePlanner {
             operationKind: kind,
             canonicalReplayKey: replayKey
         )
+    }
+}
+
+private enum SyncConvergenceStructuralMarkDigest {
+    static func digest(
+        _ state: SyncTextMarkState,
+        sequence: SyncTextSequenceState
+    ) throws -> String {
+        let bytes = try NoteStructuralFormattingPersistence.encode(
+            state: state,
+            pairedWith: sequence
+        )
+        return SHA256.hash(data: bytes)
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 }
 
