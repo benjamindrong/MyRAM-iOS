@@ -1867,6 +1867,10 @@ extension MyRAMSyncController: MCNearbyServiceBrowserDelegate {
                 info?[SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey],
                 forPeerDeviceID: identity.deviceID
             )
+            peerCapabilityRegistry.recordStructuralMarkDiscoveryValue(
+                info?[SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoKey],
+                forPeerDeviceID: identity.deviceID
+            )
             if peerCapabilityRegistry.isBootstrapCapabilityResolved(
                 forPeerDeviceID: identity.deviceID
             ) {
