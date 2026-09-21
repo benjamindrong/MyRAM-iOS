@@ -157,9 +157,88 @@ struct SyncPeerBootstrapApplyDisposition: Equatable, Sendable {
     }
 }
 
+enum SyncPeerBootstrapOwnershipError: Error, Equatable {
+    case unhealthyUnsentQueue
+    case unhealthyLocalObligationQueue
+    case conflictingDuplicateBatchID(SyncBatchID)
+}
+
+struct SyncPeerBootstrapOwnershipCandidate: Equatable, Sendable {
+    let unsentBatches: [SyncBatch]
+    let localObligationBatches: [SyncBatch]
+    let canonicalBatches: [SyncBatch]
+
+    private let canonicalBatchesByID: [SyncBatchID: SyncBatch]
+
+    init(
+        unsentSnapshot: FileBackedSyncBatchQueueSnapshot,
+        localObligationSnapshot: FileBackedSyncBatchQueueSnapshot
+    ) throws {
+        guard Self.permitsCapture(unsentSnapshot.health) else {
+            throw SyncPeerBootstrapOwnershipError.unhealthyUnsentQueue
+        }
+        guard Self.permitsCapture(localObligationSnapshot.health) else {
+            throw SyncPeerBootstrapOwnershipError.unhealthyLocalObligationQueue
+        }
+
+        try unsentSnapshot.pendingBatches.forEach(
+            SyncBatchAnchoredPayloadPolicy.validateDurableAdmission
+        )
+        try localObligationSnapshot.pendingBatches.forEach(
+            SyncBatchAnchoredPayloadPolicy.validateDurableAdmission
+        )
+
+        unsentBatches = unsentSnapshot.pendingBatches
+        localObligationBatches = localObligationSnapshot.pendingBatches
+
+        var byID: [SyncBatchID: SyncBatch] = [:]
+        var ordered: [SyncBatch] = []
+        for batch in unsentBatches + localObligationBatches {
+            if let existing = byID[batch.id] {
+                guard existing == batch else {
+                    throw SyncPeerBootstrapOwnershipError.conflictingDuplicateBatchID(batch.id)
+                }
+                continue
+            }
+            byID[batch.id] = batch
+            ordered.append(batch)
+        }
+        canonicalBatchesByID = byID
+        canonicalBatches = ordered
+    }
+
+    var batchIDs: Set<SyncBatchID> {
+        Set(canonicalBatchesByID.keys)
+    }
+
+    var unsentBatchIDs: Set<SyncBatchID> {
+        Set(unsentBatches.map(\.id))
+    }
+
+    var localObligationBatchIDs: Set<SyncBatchID> {
+        Set(localObligationBatches.map(\.id))
+    }
+
+    func canonicalBatch(for batchID: SyncBatchID) -> SyncBatch? {
+        canonicalBatchesByID[batchID]
+    }
+
+    private static func permitsCapture(_ health: PersistedQueueHealth) -> Bool {
+        switch health {
+        case .healthy, .fileMissing:
+            return true
+        case .corrupt, .unsupportedVersion, .unsupportedAnchoredPayload, .readFailed:
+            return false
+        }
+    }
+}
+
 struct SyncPeerBootstrapPendingState: Equatable, Sendable {
     let snapshot: SyncPeerBootstrapSnapshot
     private let capturedBatchIDs: Set<SyncBatchID>
+    let frozenUnsentBatchIDs: Set<SyncBatchID>
+    let frozenLocalObligationBatchIDs: Set<SyncBatchID>
+    private let frozenCanonicalBatchesByID: [SyncBatchID: SyncBatch]
     /// IDs the frozen snapshot manifest actually represents. Bootstrap ACKs may
     /// prune only this set, never every batch that happened to be queued at capture.
     let coveredBatchIDs: Set<SyncBatchID>
@@ -174,13 +253,18 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
 
     init(
         snapshot: SyncPeerBootstrapSnapshot,
-        coveredBatchIDs capturedBatchIDs: Set<SyncBatchID>,
+        ownershipCandidate: SyncPeerBootstrapOwnershipCandidate,
         withheldHistoricalBatchIDs: Set<SyncBatchID>,
         ordinarySyncReady: Bool,
         retryAttempt: Int
     ) {
         self.snapshot = snapshot
-        self.capturedBatchIDs = capturedBatchIDs
+        capturedBatchIDs = ownershipCandidate.batchIDs
+        frozenUnsentBatchIDs = ownershipCandidate.unsentBatchIDs
+        frozenLocalObligationBatchIDs = ownershipCandidate.localObligationBatchIDs
+        frozenCanonicalBatchesByID = Dictionary(
+            uniqueKeysWithValues: ownershipCandidate.canonicalBatches.map { ($0.id, $0) }
+        )
         coveredBatchIDs = Set(snapshot.historyCoverage.map(\.batchID))
         self.withheldHistoricalBatchIDs = withheldHistoricalBatchIDs
         self.ordinarySyncReady = ordinarySyncReady
@@ -192,6 +276,10 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
     }
 
     var snapshotID: UUID { snapshot.id }
+
+    func frozenBatch(for batchID: SyncBatchID) -> SyncBatch? {
+        frozenCanonicalBatchesByID[batchID]
+    }
 
     private var historicalBatchIDsThatRemainWithheld: Set<SyncBatchID> {
         let absentFromManifest = capturedBatchIDs.subtracting(coveredBatchIDs)
