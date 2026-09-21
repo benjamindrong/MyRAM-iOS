@@ -4707,6 +4707,11 @@ private extension SyncConvergenceNotePlan {
         case .compatibilityNoopMissingNote:
             throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
         case nil:
+            if let structuralMarkEffect {
+                return SyncBatchContentHash.sha256Hex(
+                    for: structuralMarkEffect.expectedSnapshot.body
+                )
+            }
             guard let creationEffect else {
                 throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
             }
@@ -4726,10 +4731,19 @@ private extension SyncConvergenceNotePlan {
         case .none, .noteRemoved:
             return nil
         case .structuralRefresh:
-            guard case .anchoredStructural(let plan) = bodyEffect else {
-                throw PostCommitPayloadConstructionError.invalidMergePlan(noteID: noteID)
+            if case .anchoredStructural(let plan) = bodyEffect {
+                return SyncBatchContentHash.sha256Hex(
+                    for: plan.expectedSnapshot.body
+                )
             }
-            return SyncBatchContentHash.sha256Hex(for: plan.expectedSnapshot.body)
+            if let structuralMarkEffect {
+                return SyncBatchContentHash.sha256Hex(
+                    for: structuralMarkEffect.expectedSnapshot.body
+                )
+            }
+            throw PostCommitPayloadConstructionError.invalidMergePlan(
+                noteID: noteID
+            )
         case .incremental:
             switch bodyEffect {
             case .matchingBaseIncremental(let plan):
