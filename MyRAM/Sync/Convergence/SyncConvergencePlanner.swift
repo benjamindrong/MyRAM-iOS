@@ -4273,6 +4273,14 @@ struct CanonicalCommittedResultDigestPayloadV1 {
             if let title = notePlan.titleEffect?.committedTitleResult(noteID: notePlan.noteID) {
                 results.append(title)
             }
+            if let marks = notePlan.structuralMarkEffect {
+                results.append(.structuralMarks(
+                    noteID: marks.noteID,
+                    preMarkDigest: marks.preMarkDigest,
+                    postMarkDigest: marks.postMarkDigest,
+                    identities: marks.operationIdentities
+                ))
+            }
             if let creation = notePlan.creationEffect {
                 results.append(.creation(
                     noteID: creation.noteID,
@@ -4305,11 +4313,20 @@ enum CanonicalCommittedResultV1: Equatable, Comparable {
         finalBodyHash: String,
         replacementContentHash: String
     )
+    case structuralMarks(
+        noteID: UUID,
+        preMarkDigest: String,
+        postMarkDigest: String,
+        identities: [OperationIdentityPayload]
+    )
 
     private var noteID: UUID {
         switch self {
-        case .body(let noteID, _, _, _), .title(let noteID, _, _, _), .creation(let noteID, _, _, _, _, _),
-                .reconciliation(let noteID, _, _, _):
+        case .body(let noteID, _, _, _),
+             .title(let noteID, _, _, _),
+             .creation(let noteID, _, _, _, _, _),
+             .reconciliation(let noteID, _, _, _),
+             .structuralMarks(let noteID, _, _, _):
             return noteID
         }
     }
@@ -4324,6 +4341,8 @@ enum CanonicalCommittedResultV1: Equatable, Comparable {
             return 3
         case .reconciliation:
             return 4
+        case .structuralMarks:
+            return 5
         }
     }
 
@@ -4337,6 +4356,8 @@ enum CanonicalCommittedResultV1: Equatable, Comparable {
             return identity.operationIndex
         case .reconciliation(_, let identity, _, _):
             return identity.operationIndex
+        case .structuralMarks(_, _, _, let identities):
+            return identities.map(\.operationIndex).min() ?? Int.max
         }
     }
 
@@ -4371,7 +4392,10 @@ private extension SyncConvergenceNotePlan {
         return plan.rewriteSafetyReceipt
     }
     var hasMutableNoteEffect: Bool {
-        plannedFinalBody != nil || plannedResultingTitle != nil || lifecycleEffect?.verdict == .apply
+        plannedFinalBody != nil
+            || structuralMarkEffect?.didChangeApplicationState == true
+            || plannedResultingTitle != nil
+            || lifecycleEffect?.verdict == .apply
     }
 
     var plannedFinalBody: String? {
@@ -4411,7 +4435,12 @@ private extension SyncConvergenceNotePlan {
         if let titleEffect, titleEffect.verdict == .apply {
             return titleEffect.candidateCanonicalKey.modifiedAt
         }
-        return lifecycleEffect?.verdict == .apply ? lifecycleEffect?.modifiedAt ?? latestBodyModifiedAt : latestBodyModifiedAt
+        if let lifecycleEffect, lifecycleEffect.verdict == .apply {
+            return lifecycleEffect.modifiedAt
+        }
+        return [latestBodyModifiedAt, structuralMarkEffect?.latestModifiedAt]
+            .compactMap { $0 }
+            .max()
     }
 
     var latestBodyModifiedAt: Date? {
