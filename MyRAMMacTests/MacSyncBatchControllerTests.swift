@@ -185,7 +185,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let unsentURL = directory.appendingPathComponent("unsent-batches.json")
+        // Mirrors the captured persisted-stuck shape: transport at capacity with local work behind it.\n        let unsentURL = directory.appendingPathComponent("unsent-batches.json")
         let localURL = directory.appendingPathComponent("local-obligations.json")
         let unsentQueue = FileBackedSyncBatchQueue(fileURL: unsentURL)
         for index in 0..<100 {
