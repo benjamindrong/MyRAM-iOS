@@ -85,9 +85,17 @@ struct SyncPeerBootstrapHistoryBatchCoverage: Codable, Equatable, Sendable {
 struct SyncPeerBootstrapCapabilityAnnouncement: Codable, Equatable, Sendable {
     static let currentVersion = 1
     let version: Int
+    let structuralMarkSchemaVersion: Int?
 
-    init(version: Int = Self.currentVersion) {
+    init(
+        version: Int = Self.currentVersion,
+        structuralMarkSchemaVersion: Int? =
+            SyncStructuralMarkTransportCapability.isEnabled
+                ? SyncStructuralMarkTransportSchemaVersion.v1.rawValue
+                : nil
+    ) {
         self.version = version
+        self.structuralMarkSchemaVersion = structuralMarkSchemaVersion
     }
 }
 
