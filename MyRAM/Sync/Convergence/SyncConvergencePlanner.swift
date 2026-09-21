@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import CryptoKit
 import Foundation
 
@@ -68,6 +69,7 @@ struct SyncConvergencePlanner {
         var snapshotAdditions: [SyncConvergenceSnapshotAddition] = []
         var routings: [UUID: SyncConvergencePresentationRouting] = [:]
         var processedBodyNoteIDs: Set<UUID> = []
+        var processedStructuralMarkNoteIDs: Set<UUID> = []
         let queueSelection = SyncConvergenceEvidenceSelector().selectQueuedBatches(
             for: input.incomingBatch,
             queuedBatches: input.queuedBatches,
@@ -281,6 +283,41 @@ struct SyncConvergencePlanner {
                     }
                 } catch { return .failedBeforeCommit(.invalidMergePlan(noteID: noteID)) }
 
+            case .noteStructuralMarksChanged:
+                let noteID = change.noteID
+                guard !processedStructuralMarkNoteIDs.contains(noteID) else {
+                    continue
+                }
+                processedStructuralMarkNoteIDs.insert(noteID)
+                let indexedChanges = input.incomingBatch.changes.enumerated()
+                    .compactMap { operationIndex, candidate
+                        -> (operationIndex: Int, change: SyncBatchNoteStructuralMarksChangedChange)? in
+                        guard candidate.noteID == noteID,
+                              case .noteStructuralMarksChanged(let markChange) = candidate else {
+                            return nil
+                        }
+                        return (operationIndex, markChange)
+                    }
+
+                switch planStructuralMarkChanges(
+                    indexedChanges,
+                    noteID: noteID,
+                    input: input
+                ) {
+                case .success(let effect):
+                    notePlans[noteID, default: PartialNotePlan(noteID: noteID)]
+                        .structuralMarkEffect = effect
+                    operationIdentities.append(contentsOf: effect.operationIdentities)
+                    resultEvidence.append(effect.resultEvidence)
+                    routings[noteID] = effect.didChangeApplicationState
+                        ? .structuralRefresh
+                        : .none
+                case .deferred(let reason):
+                    return .deferred(reason)
+                case .failed(let failure):
+                    return .failedBeforeCommit(failure)
+                }
+
             case .noteBodyReconciled:
                 break
 
@@ -345,6 +382,7 @@ struct SyncConvergencePlanner {
         let isAppliedEquivalentRecoveryCleanup = !notePlans.isEmpty &&
             notePlans.values.allSatisfy { partial in
                 guard partial.creationEffect == nil,
+                      partial.structuralMarkEffect == nil,
                       partial.titleEffect == nil,
                       partial.lifecycleEffect == nil,
                       case .anchoredStructural(let anchored)? = partial.bodyEffect else {
@@ -802,6 +840,145 @@ struct SyncConvergencePlanner {
                 )
             }
         }
+    }
+
+    private func planStructuralMarkChanges(
+        _ indexedChanges: [
+            (operationIndex: Int, change: SyncBatchNoteStructuralMarksChangedChange)
+        ],
+        noteID: UUID,
+        input: SyncConvergencePlanningInput
+    ) -> StructuralMarkPlanningResult {
+        guard !indexedChanges.isEmpty else {
+            return .failed(.invalidMergePlan(noteID: noteID))
+        }
+
+        guard let expectedSnapshot = input.anchoredSequenceSnapshots.first(
+            where: { $0.noteID == noteID }
+        ) else {
+            // Formatting can never establish a note or sequence baseline. If the
+            // referenced sequence identity is not present yet, defer until the
+            // supplying creation/anchored batch becomes durable.
+            guard !input.currentNotes.contains(where: { $0.noteID == noteID }),
+                  let dependency = firstStructuralMarkDependency(
+                    in: indexedChanges.flatMap(\.change.operations),
+                    representedOperationIDs: []
+                  ) else {
+                return .failed(.staleAuthoritativeState(noteID: noteID))
+            }
+            return .deferred(.structuralMarkDependency(
+                noteID: noteID,
+                batchID: input.incomingBatch.id,
+                operationID: dependency
+            ))
+        }
+
+        guard input.currentNotes.contains(where: { $0.noteID == noteID }) else {
+            return .failed(.staleAuthoritativeState(noteID: noteID))
+        }
+
+        let representedOperationIDs = Set(
+            expectedSnapshot.state.runs.map(\.operationID)
+        )
+        let operations = indexedChanges.flatMap(\.change.operations)
+        guard !operations.isEmpty else {
+            return .failed(.invalidMergePlan(noteID: noteID))
+        }
+        if let dependency = firstStructuralMarkDependency(
+            in: operations,
+            representedOperationIDs: representedOperationIDs
+        ) {
+            return .deferred(.structuralMarkDependency(
+                noteID: noteID,
+                batchID: input.incomingBatch.id,
+                operationID: dependency
+            ))
+        }
+
+        do {
+            let incoming = try SyncTextMarkState(operations: operations)
+            let finalMarkState = try expectedSnapshot.markState.merging(with: incoming)
+            try finalMarkState.validating(against: expectedSnapshot.state)
+
+            let identities = indexedChanges.map { indexed in
+                operationIdentity(
+                    for: .noteStructuralMarksChanged(indexed.change),
+                    in: input.incomingBatch,
+                    operationIndex: indexed.operationIndex,
+                    kind: "structuralMarks"
+                )
+            }
+            guard let lastIdentity = identities.last,
+                  let latestModifiedAt = indexedChanges.map(\.change.modifiedAt).max()
+            else {
+                return .failed(.invalidMergePlan(noteID: noteID))
+            }
+
+            let preDigest = try structuralMarkDigest(
+                expectedSnapshot.markState,
+                sequence: expectedSnapshot.state
+            )
+            let postDigest = try structuralMarkDigest(
+                finalMarkState,
+                sequence: expectedSnapshot.state
+            )
+            let evidence = SyncConvergenceResultEvidence(
+                batchID: input.incomingBatch.id,
+                noteID: noteID,
+                kind: .structuralMarks,
+                preHash: preDigest,
+                postHash: postDigest,
+                canonicalReplayKey: lastIdentity.canonicalReplayKey
+            )
+            return .success(SyncConvergenceStructuralMarkEffect(
+                noteID: noteID,
+                expectedSnapshot: expectedSnapshot,
+                finalMarkState: finalMarkState,
+                operationIdentities: identities,
+                latestModifiedAt: latestModifiedAt,
+                preMarkDigest: preDigest,
+                postMarkDigest: postDigest,
+                resultEvidence: evidence
+            ))
+        } catch {
+            return .failed(.invalidMergePlan(noteID: noteID))
+        }
+    }
+
+    private func firstStructuralMarkDependency(
+        in operations: [SyncTextMarkOperation],
+        representedOperationIDs: Set<SyncOperationID>
+    ) -> SyncOperationID? {
+        let referenced = Set(operations.flatMap { operation in
+            [
+                operation.startAnchor.leftElementID?.operationID,
+                operation.startAnchor.rightElementID?.operationID,
+                operation.endAnchor.leftElementID?.operationID,
+                operation.endAnchor.rightElementID?.operationID
+            ].compactMap { $0 }
+        })
+        return referenced
+            .filter { !representedOperationIDs.contains($0) }
+            .sorted {
+                if $0.deviceID != $1.deviceID {
+                    return $0.deviceID.uuidString < $1.deviceID.uuidString
+                }
+                return $0.localCounter < $1.localCounter
+            }
+            .first
+    }
+
+    private func structuralMarkDigest(
+        _ state: SyncTextMarkState,
+        sequence: SyncTextSequenceState
+    ) throws -> String {
+        let bytes = try NoteStructuralFormattingPersistence.encode(
+            state: state,
+            pairedWith: sequence
+        )
+        return SHA256.hash(data: bytes)
+            .map { String(format: "%02x", $0) }
+            .joined()
     }
 
     private func operationIdentity(
@@ -2537,6 +2714,7 @@ private struct PartialNotePlan {
     let noteID: UUID
     var creationEffect: SyncConvergenceCreationEffect?
     var bodyEffect: SyncConvergenceBodyEffect?
+    var structuralMarkEffect: SyncConvergenceStructuralMarkEffect?
     var titleEffect: SyncConvergenceTitleEffect?
     var lifecycleEffect: SyncConvergenceLifecycleEffect?
 
@@ -2545,10 +2723,17 @@ private struct PartialNotePlan {
             noteID: noteID,
             creationEffect: creationEffect,
             bodyEffect: bodyEffect,
+            structuralMarkEffect: structuralMarkEffect,
             titleEffect: titleEffect,
             lifecycleEffect: lifecycleEffect
         )
     }
+}
+
+private enum StructuralMarkPlanningResult {
+    case success(SyncConvergenceStructuralMarkEffect)
+    case deferred(SyncConvergenceDeferredReason)
+    case failed(SyncConvergenceTransactionFailure)
 }
 
 private enum BodyPlanningResult {
