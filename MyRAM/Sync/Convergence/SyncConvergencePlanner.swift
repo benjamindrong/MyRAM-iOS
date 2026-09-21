@@ -861,7 +861,7 @@ struct SyncConvergencePlanner {
             // supplying creation/anchored batch becomes durable.
             guard !input.currentNotes.contains(where: { $0.noteID == noteID }),
                   let dependency = firstStructuralMarkDependency(
-                    in: indexedChanges.flatMap(\.change.operations),
+                    in: indexedChanges.flatMap { $0.change.operations },
                     representedOperationIDs: []
                   ) else {
                 return .failed(.staleAuthoritativeState(noteID: noteID))
@@ -880,7 +880,7 @@ struct SyncConvergencePlanner {
         let representedOperationIDs = Set(
             expectedSnapshot.state.runs.map(\.operationID)
         )
-        let operations = indexedChanges.flatMap(\.change.operations)
+        let operations = indexedChanges.flatMap { $0.change.operations }
         guard !operations.isEmpty else {
             return .failed(.invalidMergePlan(noteID: noteID))
         }
@@ -909,7 +909,7 @@ struct SyncConvergencePlanner {
                 )
             }
             guard let lastIdentity = identities.last,
-                  let latestModifiedAt = indexedChanges.map(\.change.modifiedAt).max()
+                  let latestModifiedAt = indexedChanges.map { $0.change.modifiedAt }.max()
             else {
                 return .failed(.invalidMergePlan(noteID: noteID))
             }
@@ -2679,14 +2679,14 @@ struct SyncConvergencePlanValidator {
                 guard markEffect.operationIdentities.map(\.operationIndex)
                         == sourceMarkChanges.map(\.index),
                       markEffect.latestModifiedAt
-                        == sourceMarkChanges.map(\.change.modifiedAt).max()
+                        == sourceMarkChanges.map { $0.change.modifiedAt }.max()
                 else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
 
                 do {
                     let incoming = try SyncTextMarkState(
-                        operations: sourceMarkChanges.flatMap(\.change.operations)
+                        operations: sourceMarkChanges.flatMap { $0.change.operations }
                     )
                     let expectedFinal = try markEffect.expectedSnapshot.markState
                         .merging(with: incoming)
@@ -3093,7 +3093,7 @@ private extension SyncBatchChange {
             return change.utf16Length
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
              .noteCreated, .noteTitleChanged, .noteBodyTextInserted,
-             .noteBodyReconciled, .noteLifecycleChanged:
+             .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             return nil
         }
     }
@@ -3104,7 +3104,7 @@ private extension SyncBatchChange {
             return change.text
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
              .noteCreated, .noteTitleChanged, .noteBodyTextDeleted,
-             .noteBodyReconciled, .noteLifecycleChanged:
+             .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             return nil
         }
     }
