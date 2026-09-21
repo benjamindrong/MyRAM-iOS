@@ -548,6 +548,14 @@ final class SyncConvergenceRuntime {
                     let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
                     blockedNoteIDs.formUnion(affectedNoteIDs)
                     blockedOrigins.insert(batch.originDeviceID)
+                    if case .structuralMarkDependency(
+                        let noteID,
+                        _,
+                        let operationID
+                    ) = reason {
+                        anchoredDependenciesByNoteID[noteID, default: []]
+                            .insert(operationID)
+                    }
                     deferredItems.append(SyncConvergenceDeferredItem(
                         domain: .incoming,
                         batchID: batch.id,
@@ -1017,7 +1025,8 @@ final class SyncConvergenceRuntime {
                 indexedBodyChanges.append((index, change))
             case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
                 throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
-            case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+            case .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+                 .noteStructuralMarksChanged, .noteLifecycleChanged:
                 continue
             }
         }
@@ -1174,7 +1183,8 @@ final class SyncConvergenceRuntime {
                 canonicalReplayKey: replayKey,
                 modifiedAt: deleted.modifiedAt
             )
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+                 .noteStructuralMarksChanged, .noteLifecycleChanged:
             throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
         }
     }
@@ -1201,7 +1211,8 @@ final class SyncConvergenceRuntime {
             mutable.insert(expectedText, at: deleted.utf16Offset)
             return String(mutable)
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
-             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+             .noteStructuralMarksChanged, .noteLifecycleChanged:
             throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
         }
     }
@@ -1218,7 +1229,8 @@ final class SyncConvergenceRuntime {
             noteID = deleted.noteID
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
             throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+                 .noteStructuralMarksChanged, .noteLifecycleChanged:
             return
         }
         if let declared, declared != reconstructedBaseHash {
@@ -1475,8 +1487,14 @@ final class SyncConvergenceRuntime {
                 return inserted.payload.operationID
             case .noteBodyTextDeletedAnchored(let deleted):
                 return deleted.payload.operationID
-            case .noteCreated, .noteTitleChanged, .noteBodyTextInserted,
-                 .noteBodyTextDeleted, .noteBodyReconciled, .noteLifecycleChanged:
+            case .noteCreated(let created):
+                return try? SyncTextLegacyBootstrap.makeDescriptor(
+                    noteID: created.noteID,
+                    body: created.body
+                ).operationID
+            case .noteTitleChanged, .noteBodyTextInserted,
+                 .noteBodyTextDeleted, .noteBodyReconciled,
+                 .noteStructuralMarksChanged, .noteLifecycleChanged:
                 return nil
             }
         })
@@ -1499,7 +1517,7 @@ final class SyncConvergenceRuntime {
                 return payload.noteID
             case .noteLifecycleChanged(let payload):
                 return payload.noteID
-            case .noteTitleChanged:
+            case .noteTitleChanged, .noteStructuralMarksChanged:
                 return nil
             }
         })
@@ -1521,6 +1539,8 @@ final class SyncConvergenceRuntime {
             return "anchoredDelete"
         case .noteBodyReconciled:
             return "reconcile"
+        case .noteStructuralMarksChanged:
+            return "structuralMarks"
         case .noteLifecycleChanged:
             return "lifecycle"
         }
