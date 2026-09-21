@@ -36,12 +36,15 @@ enum PendingSyncRecoveryStatus: Equatable {
 private struct PreparedLocalNoteEdit {
     let titleChange: SyncConvergenceCapturedLocalChange?
     let bodyChanges: [SyncConvergenceCapturedLocalChange]
+    let structuralMarkChange: SyncConvergenceCapturedLocalChange?
     let structuralSnapshot: NoteSequenceStateMutationSnapshot?
     let finalStructuralState: SyncTextSequenceState?
     let finalStructuralMarkState: SyncTextMarkState?
 
     var capturedChanges: [SyncConvergenceCapturedLocalChange] {
-        (titleChange.map { [$0] } ?? []) + bodyChanges
+        (titleChange.map { [$0] } ?? [])
+            + bodyChanges
+            + (structuralMarkChange.map { [$0] } ?? [])
     }
 }
 
@@ -1892,6 +1895,7 @@ final class NotesViewModel: ObservableObject {
         return PreparedLocalNoteEdit(
             titleChange: titleChange,
             bodyChanges: bodyChanges,
+            structuralMarkChange: nil,
             structuralSnapshot: nil,
             finalStructuralState: nil,
             finalStructuralMarkState: nil
@@ -1925,20 +1929,38 @@ final class NotesViewModel: ObservableObject {
             operationIDReserver: operationIDReserver
         )
         let finalMarkState: SyncTextMarkState
+        let structuralMarkChange: SyncConvergenceCapturedLocalChange?
         if let structuralFormattingProjection {
-            finalMarkState = try await NoteStructuralFormattingEditPlanner.prepare(
+            let formattingEdit = try await NoteStructuralFormattingEditPlanner.prepare(
                 sequence: capture.finalState,
                 currentMarkState: snapshot.markState,
                 desiredProjection: structuralFormattingProjection,
                 operationIDReserver: operationIDReserver
-            ).finalMarkState
+            )
+            finalMarkState = formattingEdit.finalMarkState
+            if formattingEdit.emittedOperations.isEmpty {
+                structuralMarkChange = nil
+            } else {
+                structuralMarkChange = SyncConvergenceCapturedLocalChange(
+                    change: .noteStructuralMarksChanged(
+                        SyncBatchNoteStructuralMarksChangedChange(
+                            noteID: note.id,
+                            operations: formattingEdit.emittedOperations,
+                            modifiedAt: modifiedAt
+                        )
+                    ),
+                    evidence: nil
+                )
+            }
         } else {
             finalMarkState = snapshot.markState
+            structuralMarkChange = nil
         }
 
         return PreparedLocalNoteEdit(
             titleChange: titleChange,
             bodyChanges: capture.capturedChanges,
+            structuralMarkChange: structuralMarkChange,
             structuralSnapshot: snapshot,
             finalStructuralState: capture.finalState,
             finalStructuralMarkState: finalMarkState
@@ -1946,7 +1968,7 @@ final class NotesViewModel: ObservableObject {
     }
 
     private func recordPreparedLocalNoteEdit(_ edit: PreparedLocalNoteEdit) {
-        edit.capturedChanges.forEach(recordSyncBatchChange)
+        recordSyncBatchChanges(edit.capturedChanges)
     }
 
     private func legacyIncomingBodyMutationNoteIDs(in changes: [SyncChange]) -> Set<UUID> {
@@ -1974,18 +1996,24 @@ final class NotesViewModel: ObservableObject {
                 return payload.noteID
             case .noteBodyReconciled(let payload):
                 return payload.noteID
-            case .noteTitleChanged, .noteLifecycleChanged:
+            case .noteTitleChanged, .noteStructuralMarksChanged, .noteLifecycleChanged:
                 return nil
             }
         })
     }
 
     private func recordSyncBatchChange(_ capturedChange: SyncConvergenceCapturedLocalChange) {
-        guard !isApplyingRemoteSyncChange else { return }
+        recordSyncBatchChanges([capturedChange])
+    }
+
+    private func recordSyncBatchChanges(
+        _ capturedChanges: [SyncConvergenceCapturedLocalChange]
+    ) {
+        guard !isApplyingRemoteSyncChange, !capturedChanges.isEmpty else { return }
         nextSyncBatchCaptureID &+= 1
         let captureID = nextSyncBatchCaptureID
         let task = Task { [weak self, syncBatchAccumulator] in
-            await syncBatchAccumulator.record(capturedChange)
+            await syncBatchAccumulator.record(capturedChanges)
             if let issue = await syncBatchAccumulator.takeLastSequenceReservationIssue() {
                 self?.syncBatchErrorMessage = SyncBatchSequenceIssueDescription.message(for: issue)
             }
