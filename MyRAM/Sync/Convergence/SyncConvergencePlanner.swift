@@ -2487,7 +2487,11 @@ struct SyncConvergencePlanValidator {
         var expectedSnapshotAdditions: [SyncConvergenceSnapshotAddition] = []
         var expectedResultEvidence: [SyncConvergenceResultEvidence] = []
         for notePlan in plan.affectedNotePlans {
-            guard notePlan.creationEffect != nil || notePlan.bodyEffect != nil || notePlan.titleEffect != nil || notePlan.lifecycleEffect != nil else {
+            guard notePlan.creationEffect != nil
+                    || notePlan.bodyEffect != nil
+                    || notePlan.structuralMarkEffect != nil
+                    || notePlan.titleEffect != nil
+                    || notePlan.lifecycleEffect != nil else {
                 return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
             }
             let routing = plan.presentationPlan.noteRoutings[notePlan.noteID]
@@ -2620,12 +2624,98 @@ struct SyncConvergencePlanValidator {
                 expectedResultEvidence.append(bodyPlan.resultEvidence)
             case nil:
                 guard routing == nil || (
-                    (routing == SyncConvergencePresentationRouting.none || routing == .noteRemoved) &&
-                    (notePlan.titleEffect != nil || notePlan.creationEffect != nil || notePlan.lifecycleEffect != nil)
+                    (routing == SyncConvergencePresentationRouting.none
+                        || routing == .noteRemoved
+                        || routing == .structuralRefresh) &&
+                    (notePlan.structuralMarkEffect != nil
+                        || notePlan.titleEffect != nil
+                        || notePlan.creationEffect != nil
+                        || notePlan.lifecycleEffect != nil)
                 ) else {
                     return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
                 }
             }
+
+            if let markEffect = notePlan.structuralMarkEffect {
+                // V3 delivery partitioning makes mark work its own immutable
+                // obligation; a valid mark plan therefore cannot smuggle another
+                // mutation class under the same delivery/ACK identity.
+                guard notePlan.creationEffect == nil,
+                      notePlan.bodyEffect == nil,
+                      notePlan.titleEffect == nil,
+                      notePlan.lifecycleEffect == nil,
+                      markEffect.noteID == notePlan.noteID,
+                      markEffect.expectedSnapshot.noteID == notePlan.noteID,
+                      markEffect.expectedSnapshot.state.visibleText
+                        == markEffect.expectedSnapshot.body,
+                      !markEffect.operationIdentities.isEmpty,
+                      markEffect.operationIdentities.allSatisfy({
+                          plannedIdentityKeys.contains($0.planIdentityKey)
+                      }),
+                      markEffect.resultEvidence.kind == .structuralMarks,
+                      markEffect.resultEvidence.noteID == notePlan.noteID,
+                      markEffect.resultEvidence.batchID == plan.batchID,
+                      markEffect.resultEvidence.preHash == markEffect.preMarkDigest,
+                      markEffect.resultEvidence.postHash == markEffect.postMarkDigest,
+                      routing == (
+                          markEffect.didChangeApplicationState
+                              ? SyncConvergencePresentationRouting.structuralRefresh
+                              : .none
+                      ) else {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+
+                let sourceMarkChanges = input.incomingBatch.changes.enumerated()
+                    .compactMap { index, change
+                        -> (index: Int, change: SyncBatchNoteStructuralMarksChangedChange)? in
+                        guard change.noteID == notePlan.noteID,
+                              case .noteStructuralMarksChanged(let marks) = change else {
+                            return nil
+                        }
+                        return (index, marks)
+                    }
+                guard markEffect.operationIdentities.map(\.operationIndex)
+                        == sourceMarkChanges.map(\.index),
+                      markEffect.latestModifiedAt
+                        == sourceMarkChanges.map(\.change.modifiedAt).max()
+                else {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+
+                do {
+                    let incoming = try SyncTextMarkState(
+                        operations: sourceMarkChanges.flatMap(\.change.operations)
+                    )
+                    let expectedFinal = try markEffect.expectedSnapshot.markState
+                        .merging(with: incoming)
+                    guard expectedFinal == markEffect.finalMarkState else {
+                        return .failedBeforeCommit(
+                            .invalidMergePlan(noteID: notePlan.noteID)
+                        )
+                    }
+                    try markEffect.finalMarkState.validating(
+                        against: markEffect.expectedSnapshot.state
+                    )
+                    let preDigest = try SyncConvergenceStructuralMarkDigest.digest(
+                        markEffect.expectedSnapshot.markState,
+                        sequence: markEffect.expectedSnapshot.state
+                    )
+                    let postDigest = try SyncConvergenceStructuralMarkDigest.digest(
+                        markEffect.finalMarkState,
+                        sequence: markEffect.expectedSnapshot.state
+                    )
+                    guard preDigest == markEffect.preMarkDigest,
+                          postDigest == markEffect.postMarkDigest else {
+                        return .failedBeforeCommit(
+                            .invalidMergePlan(noteID: notePlan.noteID)
+                        )
+                    }
+                } catch {
+                    return .failedBeforeCommit(.invalidMergePlan(noteID: notePlan.noteID))
+                }
+                expectedResultEvidence.append(markEffect.resultEvidence)
+            }
+
             if let titleEffect = notePlan.titleEffect {
                 do {
                     _ = try ValidatedCanonicalReplayKey(titleEffect.candidateCanonicalKey)
