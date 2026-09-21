@@ -80,7 +80,7 @@ enum SyncConvergenceLocalEvidenceCapture {
             return SyncConvergenceCapturedLocalChange(change: change, evidence: evidence)
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
             throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: change.noteID)
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             return SyncConvergenceCapturedLocalChange(change: change, evidence: nil)
         }
     }
@@ -212,7 +212,7 @@ enum SyncConvergenceLocalEvidenceCapture {
             throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(
                 noteID: change.noteID
             )
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             return body
         }
     }
@@ -246,7 +246,7 @@ enum SyncConvergenceLocalEvidenceCapture {
         case .noteBodyTextInserted, .noteBodyTextDeleted,
              .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
             true
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             false
         }
     }
