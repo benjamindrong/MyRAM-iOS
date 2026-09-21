@@ -2,6 +2,8 @@ import Foundation
 import SwiftData
 import XCTest
 import NearbySyncCore
+import AnchoredSequenceCore
+import UIKit
 @testable import MyRAM
 
 @MainActor
@@ -16,6 +18,9 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
                 NotesListState.BootstrapActions(
                     rollbackIfNeededOnLaunch: { events.append("rollback") },
                     migrateNoteSequenceStates: { events.append("migration") },
+                    completeModelInitializationAfterMigration: {
+                        events.append("initialize")
+                    },
                     refreshPendingSyncStatus: { events.append("status") },
                     resumeOutboundAfterRecovery: { events.append("outbound") },
                     startNetworkingIfNeeded: { events.append("networking") },
@@ -30,7 +35,7 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
 
         XCTAssertEqual(
             events,
-            ["rollback", "migration", "status", "outbound", "networking", "convergence"]
+            ["rollback", "migration", "initialize", "status", "outbound", "networking", "convergence"]
         )
         XCTAssertEqual(state.bootstrapState, .ready)
     }
@@ -48,6 +53,9 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
                         events.append("migration")
                         throw MYR170PathTestError.injected
                     },
+                    completeModelInitializationAfterMigration: {
+                        events.append("initialize")
+                    },
                     refreshPendingSyncStatus: { events.append("status") },
                     resumeOutboundAfterRecovery: { events.append("outbound") },
                     startNetworkingIfNeeded: { events.append("networking") },
@@ -64,6 +72,34 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         guard case .failed = state.bootstrapState else {
             return XCTFail("Migration failure must keep the startup gate closed")
         }
+    }
+
+    func testDeferredViewModelInitializationCompletesOnlyAfterMigrationGate() throws {
+        let container = try makeContainer()
+        let viewModel = NotesViewModel(
+            context: container.mainContext,
+            syncConflictStore: SyncConflictStore(
+                fileURL: temporaryFileURL("deferred-conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            defersModelInitializationUntilMigration: true
+        )
+
+        XCTAssertFalse(
+            viewModel.didCompleteStartupModelInitializationForTesting
+        )
+
+        viewModel.completeStartupInitializationAfterMigration()
+        XCTAssertTrue(
+            viewModel.didCompleteStartupModelInitializationForTesting
+        )
+
+        viewModel.completeStartupInitializationAfterMigration()
+        XCTAssertTrue(
+            viewModel.didCompleteStartupModelInitializationForTesting
+        )
     }
 
     func testCreateNewNoteSavesNoteAndStateBeforePublishingSyncOrUndo() throws {
@@ -459,6 +495,183 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
             revision: 1,
             in: fixture.container
         )
+    }
+
+    func testIOSLegacySchemaOneIgnoresRTFOnlyDifferenceAndStoresPlainTextBaseline() async throws {
+        let fixture = try makePersistedNote(body: "Same")
+        let context = fixture.container.mainContext
+        let requestedID = fixture.noteID
+        let note = try XCTUnwrap(
+            context.fetch(
+                FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == requestedID }
+                )
+            ).first
+        )
+        note.title = "Incoming"
+        note.modifiedAt = Date(timeIntervalSince1970: 1)
+        let localCache = Data("local-derived-cache".utf8)
+        note.richTextContentData = localCache
+        try context.save()
+
+        let store = SyncConflictStore(
+            fileURL: temporaryFileURL("schema-one-conflicts.json")
+        )
+        store.saveNoteContentBaseline(
+            noteID: fixture.noteID,
+            content: "Same",
+            richTextContentData: Data("historical-rtf-baseline".utf8),
+            modifiedAt: Date(timeIntervalSince1970: 0),
+            originDeviceID: "remote"
+        )
+        let viewModel = makeViewModel(
+            context: context,
+            conflictStore: store
+        )
+        let change = try makeNoteChange(
+            noteID: fixture.noteID,
+            body: "Same",
+            baseBody: "Same",
+            richTextContentData: Data("remote-rtf".utf8),
+            baseRichTextContentData: Data("remote-base-rtf".utf8)
+        )
+
+        let result = await viewModel.applyIncomingSyncChanges([change])
+
+        XCTAssertEqual(result.first?.disposition, .applied)
+        let freshContext = ModelContext(fixture.container)
+        let persisted = try XCTUnwrap(
+            freshContext.fetch(
+                FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == requestedID }
+                )
+            ).first
+        )
+        XCTAssertEqual(persisted.content, "Same")
+        XCTAssertEqual(persisted.richTextContentData, localCache)
+        XCTAssertNil(
+            store.remoteBaseline(
+                entityType: .note,
+                entityID: fixture.noteID,
+                field: .noteContent
+            )?.richTextContentData
+        )
+        let record = try XCTUnwrap(
+            freshContext.fetch(
+                FetchDescriptor<NoteSequenceStateRecord>(
+                    predicate: #Predicate { $0.noteID == requestedID }
+                )
+            ).first
+        )
+        XCTAssertEqual(record.revision, 0)
+        XCTAssertEqual(record.markRevision, 0)
+    }
+
+    func testIOSEditorReloadUsesMarksInsteadOfStaleRTFCache() throws {
+        let fixture = try makePersistedNote(body: "Same")
+        let context = fixture.container.mainContext
+        let requestedID = fixture.noteID
+        let note = try XCTUnwrap(
+            context.fetch(
+                FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == requestedID }
+                )
+            ).first
+        )
+        let snapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: note, in: context)
+        let bold = try SyncTextMarkOperation(
+            operationID: SyncOperationID(
+                deviceID: UUID(
+                    uuidString: "00000000-0000-0000-0000-000000227001"
+                )!,
+                localCounter: 1
+            ),
+            logicalClock: 1,
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: snapshot.state.operationAnchor(
+                atVisibleUTF16Offset: 0
+            ),
+            endAnchor: snapshot.state.operationAnchor(
+                atVisibleUTF16Offset: snapshot.state.visibleUTF16Count
+            )
+        )
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: note,
+                expected: snapshot,
+                finalMarkState: SyncTextMarkState(operations: [bold]),
+                in: context
+            )
+
+        let stale = NSMutableAttributedString(
+            string: "Same",
+            attributes: [.font: EditorTypography.defaultTextFont]
+        )
+        stale.addAttribute(
+            .strikethroughStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 0, length: stale.length)
+        )
+        note.richTextContentData = RTFCoding.encode(stale)
+        try context.save()
+
+        let viewModel = makeViewModel(context: context)
+        let data = try XCTUnwrap(
+            viewModel.editorRichTextContentData(for: note)
+        )
+        let rendered = try NSAttributedString(
+            data: data,
+            options: [.documentType: NSAttributedString.DocumentType.rtf],
+            documentAttributes: nil
+        )
+        let font = try XCTUnwrap(
+            rendered.attribute(.font, at: 0, effectiveRange: nil)
+                as? UIFont
+        )
+        XCTAssertTrue(
+            font.fontDescriptor.symbolicTraits.contains(.traitBold)
+        )
+        XCTAssertNil(
+            rendered.attribute(
+                .strikethroughStyle,
+                at: 0,
+                effectiveRange: nil
+            )
+        )
+    }
+
+    func testIOSEditorReloadDoesNotFallBackToRTFWhenSchemaOneMarksAreCorrupt() throws {
+        let fixture = try makePersistedNote(body: "Same")
+        let context = fixture.container.mainContext
+        let requestedID = fixture.noteID
+        let note = try XCTUnwrap(
+            context.fetch(
+                FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == requestedID }
+                )
+            ).first
+        )
+        note.richTextContentData = RTFCoding.encode(
+            NSAttributedString(
+                string: "Same",
+                attributes: [.font: UIFont.boldSystemFont(ofSize: 17)]
+            )
+        )
+        let record = try XCTUnwrap(
+            context.fetch(
+                FetchDescriptor<NoteSequenceStateRecord>(
+                    predicate: #Predicate { $0.noteID == requestedID }
+                )
+            ).first
+        )
+        record.markStatePayloadData = Data("corrupt".utf8)
+        try context.save()
+
+        let viewModel = makeViewModel(context: context)
+
+        XCTAssertNil(viewModel.editorRichTextContentData(for: note))
     }
 
     func testIOSLegacyStateFailureReturnsRetryRequiredWithoutSideEffects() async throws {
@@ -912,11 +1125,14 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         noteID: UUID,
         body: String,
         baseBody: String? = nil,
-        folderID: UUID? = nil
+        folderID: UUID? = nil,
+        richTextContentData: Data? = nil,
+        baseRichTextContentData: Data? = nil
     ) throws -> SyncChange {
         let note = Note(title: "Incoming", content: body)
         note.id = noteID
         note.modifiedAt = Date(timeIntervalSince1970: 10)
+        note.richTextContentData = richTextContentData
         if let folderID {
             let folder = Folder(name: "Incoming Folder")
             folder.id = folderID
@@ -929,7 +1145,8 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
             payload: try MyRAMSyncPayloadCoding.encode(MyRAMNoteSyncPayload(
                 note: note,
                 baseTitle: baseBody == nil ? nil : "",
-                baseContent: baseBody
+                baseContent: baseBody,
+                baseRichTextContentData: baseRichTextContentData
             )),
             updatedAt: note.modifiedAt,
             originDeviceID: "remote"

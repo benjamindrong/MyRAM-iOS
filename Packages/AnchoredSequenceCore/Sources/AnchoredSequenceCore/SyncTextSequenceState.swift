@@ -837,6 +837,126 @@ public struct SyncTextSequenceState: Equatable, Sendable {
         )
     }
 
+
+    /// Resolves one authoritative mark range against this exact retained lineage.
+    ///
+    /// Positions are measured in retained UTF-16 elements, including tombstones. A
+    /// syntactically valid anchor is accepted only when the canonical sequence
+    /// traversal exposes that exact durable scalar boundary.
+    func markRangePositions(
+        startAnchor: SyncOperationAnchor,
+        endAnchor: SyncOperationAnchor
+    ) throws -> (start: Int, end: Int) {
+        let layout = try SyncTextSequenceStateValidator.projectStructuralLayout(
+            runs: runs
+        )
+        let startGap = Self.structuralGap(forMarkAnchor: startAnchor)
+        let endGap = Self.structuralGap(forMarkAnchor: endAnchor)
+
+        guard let start = layout.gapPositions[startGap] else {
+            throw SyncTextMarkRangeFailure.invalidAnchor(startAnchor)
+        }
+        guard let end = layout.gapPositions[endGap] else {
+            throw SyncTextMarkRangeFailure.invalidAnchor(endAnchor)
+        }
+        guard start < end else {
+            throw SyncTextMarkRangeFailure.nonforward(
+                start: startAnchor,
+                end: endAnchor
+            )
+        }
+        return (start, end)
+    }
+
+    /// Returns every retained element covered by a structural mark range.
+    ///
+    /// Roots inserted at either exact outer boundary are deliberately excluded,
+    /// together with their descendants. Interior-root descendants remain covered.
+    /// This keeps V1 mark boundaries non-expanding without consulting arrival order
+    /// or current visible offsets.
+    func markRangeElementIDs(
+        startAnchor: SyncOperationAnchor,
+        endAnchor: SyncOperationAnchor
+    ) throws -> Set<SyncTextElementID> {
+        let positions = try markRangePositions(
+            startAnchor: startAnchor,
+            endAnchor: endAnchor
+        )
+        let startGap = Self.structuralGap(forMarkAnchor: startAnchor)
+        let endGap = Self.structuralGap(forMarkAnchor: endAnchor)
+        let boundaryGaps: Set<SyncTextSequenceGap> = [startGap, endGap]
+
+        var excludedOperationIDs = Set(
+            runs.lazy
+                .filter {
+                    boundaryGaps.contains(SyncTextSequenceGap(
+                        left: $0.origin.leftElementID,
+                        right: $0.origin.rightElementID
+                    ))
+                }
+                .map(\.operationID)
+        )
+
+        var changed = true
+        while changed {
+            changed = false
+            for run in runs where !excludedOperationIDs.contains(run.operationID) {
+                let parentOperationIDs = [
+                    run.origin.leftElementID?.operationID,
+                    run.origin.rightElementID?.operationID
+                ].compactMap { $0 }
+                if parentOperationIDs.contains(where: excludedOperationIDs.contains),
+                   excludedOperationIDs.insert(run.operationID).inserted {
+                    changed = true
+                }
+            }
+        }
+
+        var result = Set<SyncTextElementID>()
+        var structuralOffset = 0
+        for fragment in fragments {
+            let endOffset = fragment.startOffset + fragment.utf16Length
+            for elementOffset in fragment.startOffset..<endOffset {
+                if positions.start <= structuralOffset,
+                   structuralOffset < positions.end,
+                   !excludedOperationIDs.contains(fragment.operationID) {
+                    result.insert(try SyncTextElementID(
+                        operationID: fragment.operationID,
+                        elementOffset: elementOffset
+                    ))
+                }
+                structuralOffset += 1
+            }
+        }
+        return result
+    }
+
+    /// Materializes visible retained identities in the same UTF-16 order as the
+    /// visible text. This is projection-only data and is never persisted.
+    func visibleElementIDsForMarkProjection() throws -> [SyncTextElementID] {
+        var result: [SyncTextElementID] = []
+        result.reserveCapacity(visibleUTF16Count)
+        for fragment in fragments where fragment.visibility == .visible {
+            let endOffset = fragment.startOffset + fragment.utf16Length
+            for elementOffset in fragment.startOffset..<endOffset {
+                result.append(try SyncTextElementID(
+                    operationID: fragment.operationID,
+                    elementOffset: elementOffset
+                ))
+            }
+        }
+        return result
+    }
+
+    private static func structuralGap(
+        forMarkAnchor anchor: SyncOperationAnchor
+    ) -> SyncTextSequenceGap {
+        SyncTextSequenceGap(
+            left: anchor.leftElementID,
+            right: anchor.rightElementID
+        )
+    }
+
     private func canonicalOperationAnchor(
         leftElementID: SyncTextElementID?,
         rightElementID: SyncTextElementID?,
@@ -1188,6 +1308,11 @@ private struct SyncTextSequenceStructuralSpan {
     let utf16Length: Int
 }
 
+private struct SyncTextSequenceStructuralLayout {
+    let spans: [SyncTextSequenceStructuralSpan]
+    let gapPositions: [SyncTextSequenceGap: Int]
+}
+
 private enum SyncTextSequenceTraversalCommand {
     case expandGap(SyncTextSequenceGap)
     case expandRun(Int)
@@ -1205,6 +1330,12 @@ private enum SyncTextSequenceStateValidator {
     static func projectStructuralSpans(
         runs: [SyncTextSequenceRun]
     ) throws -> [SyncTextSequenceStructuralSpan] {
+        try projectStructuralLayout(runs: runs).spans
+    }
+
+    static func projectStructuralLayout(
+        runs: [SyncTextSequenceRun]
+    ) throws -> SyncTextSequenceStructuralLayout {
         let runIndex = try validatedRunIndex(runs)
         try validateCanonicalRunOrder(runs)
         let scalarSpans = runs.map {
@@ -1221,7 +1352,7 @@ private enum SyncTextSequenceStateValidator {
         try validateAcyclicOrigins(runs, runIndex: runIndex)
 
         var metrics = SyncTextSequenceTraversalMetrics()
-        return try deriveStructuralSpans(
+        return try deriveStructuralLayout(
             runs: runs,
             scalarSpans: scalarSpans,
             gapIndex: makeGapIndex(runs),
@@ -1392,17 +1523,36 @@ private enum SyncTextSequenceStateValidator {
         gapIndex: [SyncTextSequenceGap: [Int]],
         metrics: inout SyncTextSequenceTraversalMetrics
     ) throws -> [SyncTextSequenceStructuralSpan] {
+        try deriveStructuralLayout(
+            runs: runs,
+            scalarSpans: scalarSpans,
+            gapIndex: gapIndex,
+            metrics: &metrics
+        ).spans
+    }
+
+    private static func deriveStructuralLayout(
+        runs: [SyncTextSequenceRun],
+        scalarSpans: [[SyncTextSequenceScalarSpan]],
+        gapIndex: [SyncTextSequenceGap: [Int]],
+        metrics: inout SyncTextSequenceTraversalMetrics
+    ) throws -> SyncTextSequenceStructuralLayout {
         var commands: [SyncTextSequenceTraversalCommand] = [
             .expandGap(SyncTextSequenceGap(left: nil, right: nil))
         ]
         var reached = Set<SyncOperationID>()
         var output: [SyncTextSequenceStructuralSpan] = []
+        var gapPositions: [SyncTextSequenceGap: Int] = [:]
+        var structuralElementCount = 0
 
         while let command = commands.popLast() {
             metrics.processedFrames += 1
             switch command {
             case .expandGap(let gap):
                 metrics.gapIndexLookups += 1
+                if gapPositions[gap] == nil {
+                    gapPositions[gap] = structuralElementCount
+                }
                 // Reverse-push ordered roots so LIFO traversal expands each subtree contiguously.
                 for runIndex in (gapIndex[gap] ?? []).reversed() {
                     commands.append(.expandRun(runIndex))
@@ -1451,6 +1601,14 @@ private enum SyncTextSequenceStateValidator {
                 }
 
             case .emit(let span):
+                let (nextCount, overflow) = structuralElementCount.addingReportingOverflow(
+                    span.utf16Length
+                )
+                guard !overflow else {
+                    throw SyncTextSequenceStateError.countOverflow
+                }
+                structuralElementCount = nextCount
+
                 if let previous = output.last,
                    previous.operationID == span.operationID,
                    previous.startOffset + previous.utf16Length == span.startOffset {
@@ -1469,7 +1627,10 @@ private enum SyncTextSequenceStateValidator {
            let unreachable = runs.first(where: { !reached.contains($0.operationID) }) {
             throw SyncTextSequenceStateError.unreachableOriginGap(unreachable.operationID)
         }
-        return output
+        return SyncTextSequenceStructuralLayout(
+            spans: output,
+            gapPositions: gapPositions
+        )
     }
 
     private static func validateFragments(

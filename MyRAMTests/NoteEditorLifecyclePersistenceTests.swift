@@ -1,5 +1,7 @@
 import XCTest
 import SwiftData
+import AnchoredSequenceCore
+import UIKit
 @testable import MyRAM
 
 @MainActor
@@ -44,7 +46,7 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertTrue(durable)
         XCTAssertEqual(note.title, "After")
         XCTAssertEqual(note.content, "After")
-        XCTAssertEqual(note.richTextContentData, Data("After".utf8))
+        XCTAssertNil(note.richTextContentData)
     }
 
     func testActivationOnFailedLifecycleSaveRetainsOwnershipAndAllowsEditorTeardown() async throws {
@@ -110,7 +112,7 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertTrue(durableAfterRetry)
         XCTAssertEqual(note.title, "After")
         XCTAssertEqual(note.content, "After")
-        XCTAssertEqual(note.richTextContentData, Data("After".utf8))
+        XCTAssertNil(note.richTextContentData)
     }
 
     func testActivationOnNewerLifecycleSnapshotSupersedesRetainedFailureBeforeRetry() async throws {
@@ -171,13 +173,196 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         XCTAssertTrue(durableAfterNewerSnapshot)
         XCTAssertEqual(note.title, "Newer")
         XCTAssertEqual(note.content, "Newer")
-        XCTAssertEqual(note.richTextContentData, Data("Newer".utf8))
+        XCTAssertNil(note.richTextContentData)
 
         viewModel.retryAllEditorLifecyclePersistence()
         let durableAfterRedundantRetry = await viewModel.awaitEditorLifecyclePersistence(noteID: note.id)
         XCTAssertTrue(durableAfterRedundantRetry)
         XCTAssertEqual(note.title, "Newer")
         XCTAssertEqual(note.content, "Newer")
+    }
+
+    func testFormattingOnlyProductionCommitAdvancesMarksWithoutRecentTextGate() async throws {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR227FormattingOnly-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(
+            for: schema,
+            configurations: configuration
+        )
+        let context = container.mainContext
+        let note = Note(title: "Title", content: "Same")
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: context
+        )
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false
+        )
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "Same",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: "Same".utf16.count,
+                    assignments: plannerAssignments(
+                        underline: .enabled
+                    )
+                )
+            ]
+        )
+        let reserver = PlannerOperationIDReserver()
+
+        let committed = await viewModel.commitNoteEditCore(
+            note,
+            title: note.title,
+            content: note.content,
+            richTextContentData: Data("derived-cache".utf8),
+            structuralFormattingProjection: projection,
+            activationEnabled: true,
+            operationIDReserver: reserver
+        )
+
+        XCTAssertTrue(committed)
+        XCTAssertFalse(
+            viewModel.hasRecentTextEditForTesting(noteID: note.id)
+        )
+        let reservationCount1 = await reserver.reservationCount
+        XCTAssertEqual(reservationCount1, 1)
+
+        let requestedID = note.id
+        let freshContext = ModelContext(container)
+        let record = try XCTUnwrap(
+            freshContext.fetch(
+                FetchDescriptor<NoteSequenceStateRecord>(
+                    predicate: #Predicate { $0.noteID == requestedID }
+                )
+            ).first
+        )
+        XCTAssertEqual(record.revision, 0)
+        XCTAssertEqual(record.markRevision, 1)
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(
+                record: record,
+                noteID: note.id
+            )
+        let marks = try NoteStructuralFormattingPersistence.decode(
+            record: record,
+            pairedWith: sequence
+        )
+        XCTAssertEqual(
+            try XCTUnwrap(marks.visibleProjection(in: sequence).first)
+                .assignments[.underline],
+            .enabled
+        )
+    }
+
+    func testFormattingOnlyProductionSaveFailureRestoresMarkAuthority() async throws {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR227FormattingFailure-\(UUID().uuidString)",
+            schema: schema,
+            isStoredInMemoryOnly: true
+        )
+        let container = try ModelContainer(
+            for: schema,
+            configurations: configuration
+        )
+        let context = container.mainContext
+        let note = Note(title: "Title", content: "Same")
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: context
+        )
+        try context.save()
+        let viewModel = NotesViewModel(
+            context: context,
+            syncConflictStore: SyncConflictStore(
+                fileURL: FileManager.default.temporaryDirectory
+                    .appendingPathComponent(UUID().uuidString)
+                    .appendingPathComponent("conflicts.json")
+            ),
+            pendingIncomingBatchQueueFileURL: nil,
+            pendingLocalConvergenceBatchQueueFileURL: nil,
+            resumesPendingConvergenceOnInit: false,
+            saveContext: {
+                throw MYR179LifecycleTestError.injectedSaveFailure
+            }
+        )
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "Same",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: "Same".utf16.count,
+                    assignments: plannerAssignments(
+                        strikethrough: .enabled
+                    )
+                )
+            ]
+        )
+
+        let committed = await viewModel.commitNoteEditCore(
+            note,
+            title: note.title,
+            content: note.content,
+            richTextContentData: Data("derived-cache".utf8),
+            structuralFormattingProjection: projection,
+            activationEnabled: true,
+            operationIDReserver: PlannerOperationIDReserver()
+        )
+
+        XCTAssertFalse(committed)
+        XCTAssertFalse(
+            viewModel.hasRecentTextEditForTesting(noteID: note.id)
+        )
+
+        let requestedID = note.id
+        let freshContext = ModelContext(container)
+        let persisted = try XCTUnwrap(
+            freshContext.fetch(
+                FetchDescriptor<Note>(
+                    predicate: #Predicate { $0.id == requestedID }
+                )
+            ).first
+        )
+        let record = try XCTUnwrap(
+            freshContext.fetch(
+                FetchDescriptor<NoteSequenceStateRecord>(
+                    predicate: #Predicate { $0.noteID == requestedID }
+                )
+            ).first
+        )
+        XCTAssertEqual(persisted.content, "Same")
+        XCTAssertNil(persisted.richTextContentData)
+        XCTAssertEqual(record.revision, 0)
+        XCTAssertEqual(record.markRevision, 0)
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(
+                record: record,
+                noteID: note.id
+            )
+        XCTAssertEqual(
+            try NoteStructuralFormattingPersistence.decode(
+                record: record,
+                pairedWith: sequence
+            ),
+            .empty
+        )
     }
 
     func testLifecyclePersistenceOwnershipTransfersBeforeEditorUnregisters() async {
@@ -462,6 +647,7 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
             title: "Title",
             body: "Body",
             richTextContentData: Data("Body".utf8),
+            structuralFormattingProjection: nil,
             generation: generation
         )
     }
@@ -487,6 +673,204 @@ final class NoteEditorLifecyclePersistenceTests: XCTestCase {
         }
         XCTAssertTrue(condition(), file: file, line: line)
     }
+}
+
+
+final class NoteStructuralFormattingEditPlannerTests: XCTestCase {
+    func testPlannerReservesCanonicalOrderWithOneLogicalClock() async throws {
+        let sequence = try plannerRootState(text: "AB")
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "AB",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: 2,
+                    assignments: plannerAssignments(
+                        bold: .enabled,
+                        italic: .enabled
+                    )
+                )
+            ]
+        )
+        let reserver = PlannerOperationIDReserver()
+
+        let prepared = try await NoteStructuralFormattingEditPlanner.prepare(
+            sequence: sequence,
+            currentMarkState: .empty,
+            desiredProjection: projection,
+            operationIDReserver: reserver
+        )
+
+        XCTAssertEqual(prepared.emittedOperations.count, 2)
+        XCTAssertEqual(prepared.emittedOperations.map(\.key), [.bold, .italic])
+        XCTAssertEqual(Set(prepared.emittedOperations.map(\.logicalClock)), [1])
+        let reservationCount2 = await reserver.reservationCount
+        XCTAssertEqual(reservationCount2, 2)
+    }
+
+    func testPlannerDoesNotReserveForNoOpFormatting() async throws {
+        let sequence = try plannerRootState(text: "AB")
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "AB",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: 2,
+                    assignments: plannerAssignments()
+                )
+            ]
+        )
+        let reserver = PlannerOperationIDReserver()
+
+        let prepared = try await NoteStructuralFormattingEditPlanner.prepare(
+            sequence: sequence,
+            currentMarkState: .empty,
+            desiredProjection: projection,
+            operationIDReserver: reserver
+        )
+
+        XCTAssertFalse(prepared.hasAuthoritativeMutation)
+        XCTAssertEqual(prepared.finalMarkState, .empty)
+        let reservationCount3 = await reserver.reservationCount
+        XCTAssertEqual(reservationCount3, 0)
+    }
+
+    func testPlannerChecksClockOverflowBeforeReservation() async throws {
+        let sequence = try plannerRootState(text: "A")
+        let start = try sequence.operationAnchor(atVisibleUTF16Offset: 0)
+        let end = try sequence.operationAnchor(atVisibleUTF16Offset: 1)
+        let current = try SyncTextMarkState(operations: [
+            SyncTextMarkOperation(
+                operationID: plannerOperation(1),
+                logicalClock: UInt64.max,
+                key: .bold,
+                assignment: .enabled,
+                startAnchor: start,
+                endAnchor: end
+            )
+        ])
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "A",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: 1,
+                    assignments: plannerAssignments()
+                )
+            ]
+        )
+        let reserver = PlannerOperationIDReserver()
+
+        do {
+            _ = try await NoteStructuralFormattingEditPlanner.prepare(
+                sequence: sequence,
+                currentMarkState: current,
+                desiredProjection: projection,
+                operationIDReserver: reserver
+            )
+            XCTFail("Expected logical clock exhaustion")
+        } catch {
+            XCTAssertEqual(
+                error as? SyncTextMarkStateError,
+                .logicalClockOverflow
+            )
+        }
+        let reservationCount4 = await reserver.reservationCount
+        XCTAssertEqual(reservationCount4, 0)
+    }
+
+    func testPlannerRejectsProjectionThatDoesNotExactlyCoverFinalText() async throws {
+        let sequence = try plannerRootState(text: "AB")
+        let projection = NoteStructuralFormattingProjection(
+            plainText: "AB",
+            runs: [
+                NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: 1,
+                    assignments: plannerAssignments()
+                )
+            ]
+        )
+
+        do {
+            _ = try await NoteStructuralFormattingEditPlanner.prepare(
+                sequence: sequence,
+                currentMarkState: .empty,
+                desiredProjection: projection,
+                operationIDReserver: PlannerOperationIDReserver()
+            )
+            XCTFail("Expected projection coverage failure")
+        } catch {
+            XCTAssertEqual(
+                error as? NoteStructuralFormattingEditPlannerError,
+                .projectionCoverageMismatch
+            )
+        }
+    }
+}
+
+private actor PlannerOperationIDReserver: SyncOperationIDReserving {
+    private var nextCounter: UInt64 = 1
+    private(set) var reservationCount = 0
+
+    func reserveOperationID() async throws -> SyncOperationID {
+        defer {
+            nextCounter += 1
+            reservationCount += 1
+        }
+        return plannerOperation(nextCounter)
+    }
+}
+
+private func plannerAssignments(
+    bold: SyncTextMarkAssignment = .clear,
+    italic: SyncTextMarkAssignment = .clear,
+    underline: SyncTextMarkAssignment = .clear,
+    strikethrough: SyncTextMarkAssignment = .clear,
+    fontSize: SyncTextMarkAssignment = .clear,
+    textColor: SyncTextMarkAssignment = .clear
+) -> [SyncTextMarkKey: SyncTextMarkAssignment] {
+    [
+        .bold: bold,
+        .italic: italic,
+        .underline: underline,
+        .strikethrough: strikethrough,
+        .fontSize: fontSize,
+        .textColor: textColor
+    ]
+}
+
+private func plannerRootState(text: String) throws -> SyncTextSequenceState {
+    let operationID = plannerOperation(0)
+    return try SyncTextSequenceState(
+        runs: [
+            SyncTextSequenceRun(
+                operationID: operationID,
+                origin: SyncTextInsertionOrigin(
+                    leftElementID: nil,
+                    rightElementID: nil
+                ),
+                text: text
+            )
+        ],
+        fragments: [
+            SyncTextSequenceFragment(
+                operationID: operationID,
+                startOffset: 0,
+                utf16Length: text.utf16.count,
+                visibility: .visible
+            )
+        ]
+    )
+}
+
+private func plannerOperation(_ counter: UInt64) -> SyncOperationID {
+    SyncOperationID(
+        deviceID: UUID(
+            uuidString: "00000000-0000-0000-0000-000000002227"
+        )!,
+        localCounter: counter
+    )
 }
 
 private enum MYR179LifecycleTestError: Error {

@@ -16,6 +16,7 @@ final class NotesListState: ObservableObject {
     struct BootstrapActions {
         var rollbackIfNeededOnLaunch: @MainActor () async throws -> Void
         var migrateNoteSequenceStates: @MainActor () async throws -> Void
+        var completeModelInitializationAfterMigration: @MainActor () -> Void = {}
         var refreshPendingSyncStatus: @MainActor () async -> Void
         var resumeOutboundAfterRecovery: @MainActor () -> Void
         var startNetworkingIfNeeded: @MainActor () -> Void
@@ -39,7 +40,8 @@ final class NotesListState: ObservableObject {
         vm = NotesViewModel(
             context: context,
             syncController: syncController,
-            resumesPendingConvergenceOnInit: false
+            resumesPendingConvergenceOnInit: false,
+            defersModelInitializationUntilMigration: true
         )
         bootstrapActions = bootstrapActionsFactory?(vm, syncController)
             ?? BootstrapActions(
@@ -48,8 +50,31 @@ final class NotesListState: ObservableObject {
                 },
                 migrateNoteSequenceStates: {
                     try await NoteSequenceStateBootstrapMigrator(
-                        container: PersistenceManager.shared.container
+                        container: PersistenceManager.shared.container,
+                        legacyFormattingProjection: { data, _ in
+                            await MainActor.run {
+                                EditorStructuralFormattingAdapter.strictLegacyProjection(
+                                    data: data,
+                                    baseBodyFont: EditorTypography.defaultTextFont,
+                                    traitCollection: UITraitCollection.current
+                                )
+                            }
+                        },
+                        renderDerivedFormattingCache: { sequence, marks in
+                            try await MainActor.run {
+                                let attributed = try EditorStructuralFormattingAdapter.render(
+                                    sequence: sequence,
+                                    marks: marks,
+                                    baseBodyFont: EditorTypography.defaultTextFont,
+                                    traitCollection: UITraitCollection.current
+                                )
+                                return RTFCoding.encode(attributed)
+                            }
+                        }
                     ).runToCompletion()
+                },
+                completeModelInitializationAfterMigration: { [vm] in
+                    vm.completeStartupInitializationAfterMigration()
                 },
                 refreshPendingSyncStatus: { [syncController] in
                     await syncController.refreshPendingSyncStatus()
@@ -83,6 +108,7 @@ final class NotesListState: ObservableObject {
         do {
             try await bootstrapActions.rollbackIfNeededOnLaunch()
             try await bootstrapActions.migrateNoteSequenceStates()
+            bootstrapActions.completeModelInitializationAfterMigration()
             await bootstrapActions.refreshPendingSyncStatus()
             bootstrapActions.resumeOutboundAfterRecovery()
             bootstrapActions.startNetworkingIfNeeded()

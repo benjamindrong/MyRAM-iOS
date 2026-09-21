@@ -514,7 +514,9 @@ final class MyRAMSyncChangeApplier {
             // user's later local edits are compared against this before conflicting.
             note.title = payload.title
             note.content = payload.content
-            note.richTextContentData = payload.richTextContentData
+            note.richTextContentData = hasStructuralMarkAuthority(noteID: note.id)
+                ? nil
+                : payload.richTextContentData
             saveNoteTitleBaseline(note: note, payload: payload, originDeviceID: originDeviceID)
             saveNoteContentBaseline(note: note, payload: payload, originDeviceID: originDeviceID)
             return
@@ -541,7 +543,7 @@ final class MyRAMSyncChangeApplier {
             return true
         }
 
-        if (note.content != payload.content || note.richTextContentData != payload.richTextContentData),
+        if noteContentDiffers(note: note, payload: payload),
            noteContentResolution(note: note, payload: payload, originDeviceID: originDeviceID).freezesOrdinaryPayload {
             return true
         }
@@ -567,7 +569,7 @@ final class MyRAMSyncChangeApplier {
             )
         }
 
-        if note.content != payload.content || note.richTextContentData != payload.richTextContentData,
+        if noteContentDiffers(note: note, payload: payload),
            noteContentResolution(note: note, payload: payload, originDeviceID: originDeviceID) == .conflict {
             preserveSyncConflict(
                 entityType: .note,
@@ -576,10 +578,46 @@ final class MyRAMSyncChangeApplier {
                 field: .noteContent,
                 localText: note.content,
                 remoteText: payload.content,
-                remoteRichTextContentData: payload.richTextContentData,
+                remoteRichTextContentData: hasStructuralMarkAuthority(noteID: note.id)
+                    ? nil
+                    : payload.richTextContentData,
                 remoteModifiedAt: payload.modifiedAt
             )
         }
+    }
+
+    private func noteContentDiffers(
+        note: Note,
+        payload: MyRAMNoteSyncPayload
+    ) -> Bool {
+        if hasStructuralMarkAuthority(noteID: note.id) {
+            return !NoteSequenceStateExactText.matches(
+                note.content,
+                payload.content
+            )
+        }
+        return note.content != payload.content
+            || note.richTextContentData != payload.richTextContentData
+    }
+
+    private func usesStructuralPlainTextAuthority(
+        entityType: SyncConflictEntityType,
+        entityID: UUID,
+        field: SyncConflictField
+    ) -> Bool {
+        entityType == .note
+            && field == .noteContent
+            && hasStructuralMarkAuthority(noteID: entityID)
+    }
+
+    private func hasStructuralMarkAuthority(noteID: UUID) -> Bool {
+        let requestedNoteID = noteID
+        var descriptor = FetchDescriptor<NoteSequenceStateRecord>(
+            predicate: #Predicate { $0.noteID == requestedNoteID }
+        )
+        descriptor.fetchLimit = 1
+        return (try? context.fetch(descriptor).first?.markFormatVersion)
+            == NoteStructuralFormattingPersistence.schemaVersion
     }
 
     private func hasActiveNoteTextConflict(noteID: UUID) -> Bool {
@@ -616,7 +654,7 @@ final class MyRAMSyncChangeApplier {
         }
 
         let contentResolution: RemoteTextResolution?
-        if note.content != payload.content || note.richTextContentData != payload.richTextContentData {
+        if noteContentDiffers(note: note, payload: payload) {
             contentResolution = gatedRemoteTextResolution(
                 entityType: .note,
                 entityID: note.id,
@@ -673,9 +711,13 @@ final class MyRAMSyncChangeApplier {
 
         switch contentResolution {
         case .apply(let text):
-            note.richTextContentData = text == payload.content
-                ? payload.richTextContentData
-                : note.richTextContentData
+            if hasStructuralMarkAuthority(noteID: note.id) {
+                note.richTextContentData = nil
+            } else {
+                note.richTextContentData = text == payload.content
+                    ? payload.richTextContentData
+                    : note.richTextContentData
+            }
             saveNoteContentBaseline(note: note, payload: payload, originDeviceID: originDeviceID)
         case .deferIncoming:
             break
@@ -687,7 +729,9 @@ final class MyRAMSyncChangeApplier {
                 field: .noteContent,
                 localText: note.content,
                 remoteText: payload.content,
-                remoteRichTextContentData: payload.richTextContentData,
+                remoteRichTextContentData: hasStructuralMarkAuthority(noteID: note.id)
+                    ? nil
+                    : payload.richTextContentData,
                 remoteModifiedAt: payload.modifiedAt
             )
         case nil:
@@ -825,7 +869,14 @@ final class MyRAMSyncChangeApplier {
             remoteBaseText: remoteBaseText,
             remoteBaseData: remoteBaseData,
             originDeviceID: originDeviceID
-        ).localHasDiverged(text: localText, data: localData)
+        ).localHasDiverged(
+            text: localText,
+            data: usesStructuralPlainTextAuthority(
+                entityType: entityType,
+                entityID: entityID,
+                field: field
+            ) ? nil : localData
+        )
     }
 
     private func remoteTextResolution(
@@ -840,6 +891,13 @@ final class MyRAMSyncChangeApplier {
         remoteData: Data?,
         originDeviceID: String
     ) -> RemoteTextResolution {
+        let stripsPresentationData = usesStructuralPlainTextAuthority(
+            entityType: entityType,
+            entityID: entityID,
+            field: field
+        )
+        let authoritativeLocalData = stripsPresentationData ? nil : localData
+        let authoritativeRemoteData = stripsPresentationData ? nil : remoteData
         let baseline = selectedBaseline(
             entityType: entityType,
             entityID: entityID,
@@ -849,7 +907,8 @@ final class MyRAMSyncChangeApplier {
             originDeviceID: originDeviceID
         )
 
-        if localData != baseline.data || remoteData != baseline.data {
+        if authoritativeLocalData != baseline.data
+            || authoritativeRemoteData != baseline.data {
             if localText == baseline.text {
                 return .apply(remoteText)
             }
@@ -874,14 +933,35 @@ final class MyRAMSyncChangeApplier {
         remoteBaseData: Data?,
         originDeviceID: String
     ) -> SyncTextSelectedBaseline {
-        SyncTextBaselineSelector.select(
-            trackedBaseline: conflictStore.remoteBaseline(
-                entityType: entityType,
-                entityID: entityID,
-                field: field
-            )?.syncTextBaseline,
+        let stripsPresentationData = usesStructuralPlainTextAuthority(
+            entityType: entityType,
+            entityID: entityID,
+            field: field
+        )
+        let tracked = conflictStore.remoteBaseline(
+            entityType: entityType,
+            entityID: entityID,
+            field: field
+        )
+        let normalizedTracked: SyncRemoteTextBaseline?
+        if stripsPresentationData, let tracked {
+            normalizedTracked = SyncRemoteTextBaseline(
+                entityType: tracked.entityType,
+                entityID: tracked.entityID,
+                field: tracked.field,
+                text: tracked.text,
+                richTextContentData: nil,
+                modifiedAt: tracked.modifiedAt,
+                originDeviceID: tracked.originDeviceID
+            )
+        } else {
+            normalizedTracked = tracked
+        }
+
+        return SyncTextBaselineSelector.select(
+            trackedBaseline: normalizedTracked?.syncTextBaseline,
             incomingBaseText: remoteBaseText,
-            incomingBaseData: remoteBaseData,
+            incomingBaseData: stripsPresentationData ? nil : remoteBaseData,
             incomingOriginDeviceID: originDeviceID
         )
     }
@@ -924,7 +1004,9 @@ final class MyRAMSyncChangeApplier {
         conflictStore.saveNoteContentBaseline(
             noteID: note.id,
             content: payload.content,
-            richTextContentData: payload.richTextContentData,
+            richTextContentData: hasStructuralMarkAuthority(noteID: note.id)
+                ? nil
+                : payload.richTextContentData,
             modifiedAt: payload.modifiedAt,
             originDeviceID: originDeviceID
         )
@@ -1037,7 +1119,9 @@ final class MyRAMSyncChangeApplier {
                 with: text,
                 in: context
             )
-            if text == conflict.remoteText {
+            if hasStructuralMarkAuthority(noteID: note.id) {
+                note.richTextContentData = nil
+            } else if text == conflict.remoteText {
                 note.richTextContentData = sanitizedConflictRichTextData(
                     conflict.remoteRichTextContentData,
                     plainText: conflict.remoteText
@@ -1081,7 +1165,9 @@ final class MyRAMSyncChangeApplier {
             conflictStore.saveNoteContentBaseline(
                 noteID: note.id,
                 content: text,
-                richTextContentData: note.richTextContentData,
+                richTextContentData: hasStructuralMarkAuthority(noteID: note.id)
+                    ? nil
+                    : note.richTextContentData,
                 modifiedAt: note.modifiedAt,
                 originDeviceID: nil
             )

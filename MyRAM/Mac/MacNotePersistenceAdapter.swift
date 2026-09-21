@@ -83,9 +83,25 @@ final class MacNotePersistenceAdapter {
     }
 
     func attributedContent(for note: Note) -> NSAttributedString {
-        // Decode intentionally stays local to the Mac adapter: the Mac fallback omits
-        // a base font because NSTextView manages its own defaults, while the editor
-        // codec requires UIKit fallback attributes.
+        if let record = try? sequenceRecord(noteID: note.id),
+           record.markFormatVersion == NoteStructuralFormattingPersistence.schemaVersion,
+           let sequence = try? NoteSequenceStatePersistenceCodec
+                .decodeStructurallyValidatedState(
+                    record: record,
+                    noteID: note.id
+                ),
+           let marks = try? NoteStructuralFormattingPersistence.decode(
+                record: record,
+                pairedWith: sequence
+           ),
+           let rendered = try? MacStructuralFormattingAdapter.render(
+                sequence: sequence,
+                marks: marks
+           ) {
+            return rendered
+        }
+
+        // Schema-0 is legacy-only presentation input until startup migration finishes.
         if let richTextContentData = note.richTextContentData,
            let attributedText = try? NSAttributedString(
             data: richTextContentData,
@@ -140,7 +156,14 @@ final class MacNotePersistenceAdapter {
 
         let modifiedAt = Date()
         let proposedBody = proposedAttributedContent.string
-        let proposedRichTextContentData = RTFCoding.encode(proposedAttributedContent)
+        let formattingProjection = MacStructuralFormattingAdapter.project(
+            proposedAttributedContent
+        )
+        let proposedRichTextContentData = RTFCoding.encode(
+            MacStructuralFormattingAdapter.render(
+                projection: formattingProjection
+            )
+        )
         let titleChange = SyncBatchNoteChangeCapture.titleChanged(
             noteID: note.id,
             oldTitle: note.title,
@@ -156,6 +179,12 @@ final class MacNotePersistenceAdapter {
             initialState: snapshot.state,
             operationIDReserver: operationIDReserver
         )
+        let finalMarkState = try await NoteStructuralFormattingEditPlanner.prepare(
+            sequence: capture.finalState,
+            currentMarkState: snapshot.markState,
+            desiredProjection: formattingProjection,
+            operationIDReserver: operationIDReserver
+        ).finalMarkState
 
         return MacPreparedLocalNoteEdit(
             noteID: note.id,
@@ -170,8 +199,10 @@ final class MacNotePersistenceAdapter {
             capturedChanges: (titleChange.map { [$0] } ?? []) + capture.capturedChanges,
             hasTitleMutation: titleChange != nil,
             hasBodyMutation: !capture.capturedChanges.isEmpty,
+            hasFormattingMutation: finalMarkState != snapshot.markState,
             structuralSnapshot: snapshot,
-            finalStructuralState: capture.finalState
+            finalStructuralState: capture.finalState,
+            finalStructuralMarkState: finalMarkState
         )
     }
 
@@ -211,8 +242,10 @@ final class MacNotePersistenceAdapter {
             capturedChanges: (titleChange.map { [$0] } ?? []) + bodyChanges,
             hasTitleMutation: titleChange != nil,
             hasBodyMutation: !bodyChanges.isEmpty,
+            hasFormattingMutation: false,
             structuralSnapshot: nil,
-            finalStructuralState: nil
+            finalStructuralState: nil,
+            finalStructuralMarkState: nil
         )
     }
 
@@ -230,15 +263,18 @@ final class MacNotePersistenceAdapter {
         do {
             note.title = prepared.proposedTitle
             if let snapshot = prepared.structuralSnapshot,
-               let finalState = prepared.finalStructuralState {
-                _ = try NoteSequenceStateFullBodyIntegration.stageSuppliedStateMutation(
-                    of: note,
-                    expected: snapshot,
-                    newBody: prepared.proposedBody,
-                    finalState: finalState,
-                    in: context
-                )
-                didStageStructuralMutation = true
+               let finalState = prepared.finalStructuralState,
+               let finalMarkState = prepared.finalStructuralMarkState {
+                let staged = try NoteSequenceStateFullBodyIntegration
+                    .stageSuppliedStateAndStructuralFormattingMutation(
+                        of: note,
+                        expected: snapshot,
+                        newBody: prepared.proposedBody,
+                        finalState: finalState,
+                        finalMarkState: finalMarkState,
+                        in: context
+                    )
+                didStageStructuralMutation = staged.textChanged || staged.markChanged
             } else {
                 note.content = prepared.proposedBody
             }
@@ -250,14 +286,17 @@ final class MacNotePersistenceAdapter {
             var structuralRestorationError: Error?
             if didStageStructuralMutation,
                let snapshot = prepared.structuralSnapshot,
-               let finalState = prepared.finalStructuralState {
+               let finalState = prepared.finalStructuralState,
+               let finalMarkState = prepared.finalStructuralMarkState {
                 do {
-                    try NoteSequenceStateFullBodyIntegration.restoreSuppliedStateMutationAfterFailedSave(
-                        of: note,
-                        expected: snapshot,
-                        failedFinalState: finalState,
-                        in: context
-                    )
+                    try NoteSequenceStateFullBodyIntegration
+                        .restoreSuppliedStateAndStructuralFormattingMutationAfterFailedSave(
+                            of: note,
+                            expected: snapshot,
+                            failedFinalState: finalState,
+                            failedFinalMarkState: finalMarkState,
+                            in: context
+                        )
                 } catch {
                     structuralRestorationError = error
                 }
@@ -273,18 +312,42 @@ final class MacNotePersistenceAdapter {
         }
     }
 
-    func save(note: Note, attributedContent: NSAttributedString) throws {
+    private func sequenceRecord(
+        noteID: UUID
+    ) throws -> NoteSequenceStateRecord? {
+        let requestedNoteID = noteID
+        var descriptor = FetchDescriptor<NoteSequenceStateRecord>(
+            predicate: #Predicate { $0.noteID == requestedNoteID }
+        )
+        descriptor.fetchLimit = 1
+        return try context.fetch(descriptor).first
+    }
+
+#if DEBUG
+    /// Test-only compatibility seam for pre-structural cache behavior.
+    /// Production editor persistence must use prepareProductionLocalNoteEdit +
+    /// persistPreparedLocalNoteEdit so formatting cannot bypass mark authority.
+    func saveLegacyAttributedCacheForTesting(
+        note: Note,
+        attributedContent: NSAttributedString
+    ) throws {
         guard note.deletedAt == nil else {
             throw MacNotePersistenceError.deletedNote
         }
 
-        let storageText = MacEditorTextColorPolicy.sanitizedForPersistence(attributedContent)
-        assert(storageText.string == attributedContent.string, "Mac Auto-color persistence sanitization changed note text")
+        let storageText = MacEditorTextColorPolicy.sanitizedForPersistence(
+            attributedContent
+        )
+        assert(
+            storageText.string == attributedContent.string,
+            "Mac Auto-color persistence sanitization changed note text"
+        )
         note.content = storageText.string
         note.richTextContentData = RTFCoding.encode(storageText)
         note.modifiedAt = .now
         try context.save()
     }
+#endif
 }
 
 
@@ -301,11 +364,13 @@ struct MacPreparedLocalNoteEdit {
     let capturedChanges: [SyncConvergenceCapturedLocalChange]
     let hasTitleMutation: Bool
     let hasBodyMutation: Bool
+    let hasFormattingMutation: Bool
     let structuralSnapshot: NoteSequenceStateMutationSnapshot?
     let finalStructuralState: SyncTextSequenceState?
+    let finalStructuralMarkState: SyncTextMarkState?
 
     var hasAnyAuthoritativeMutation: Bool {
-        hasTitleMutation || hasBodyMutation
+        hasTitleMutation || hasBodyMutation || hasFormattingMutation
     }
 }
 

@@ -388,25 +388,160 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         XCTAssertEqual(note.content, "After")
     }
 
-    func testPrepareLocalNoteEditRichTextOnlyChangeHasNoAuthoritativeMutation() async throws {
+    func testPrepareAndPersistFormattingOnlyEditMutatesMarksWithoutBodySync() async throws {
         let container = try makeInMemoryContainer()
         let context = container.mainContext
         let note = Note(title: "Styled", content: "Same")
         context.insert(note)
-        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: context
+        )
         try context.save()
         let styled = NSMutableAttributedString(string: "Same")
-        styled.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: NSRange(location: 0, length: styled.length))
+        styled.addAttribute(
+            .underlineStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 0, length: styled.length)
+        )
+        let adapter = MacNotePersistenceAdapter(context: context)
 
-        let prepared = try await MacNotePersistenceAdapter(context: context).prepareProductionLocalNoteEdit(
+        let prepared = try await adapter.prepareProductionLocalNoteEdit(
             noteID: note.id,
             proposedAttributedContent: styled
         )
 
-        XCTAssertFalse(prepared.hasAnyAuthoritativeMutation)
+        XCTAssertTrue(prepared.hasAnyAuthoritativeMutation)
         XCTAssertFalse(prepared.hasBodyMutation)
+        XCTAssertTrue(prepared.hasFormattingMutation)
         XCTAssertTrue(prepared.capturedChanges.isEmpty)
-        XCTAssertNotEqual(prepared.previousRichTextContentData, prepared.proposedRichTextContentData)
+
+        try adapter.persistPreparedLocalNoteEdit(prepared)
+
+        let record = try XCTUnwrap(
+            context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+        )
+        XCTAssertEqual(record.revision, 0)
+        XCTAssertEqual(record.markRevision, 1)
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(
+                record: record,
+                noteID: note.id
+            )
+        let marks = try NoteStructuralFormattingPersistence.decode(
+            record: record,
+            pairedWith: sequence
+        )
+        let assignments = try XCTUnwrap(
+            marks.visibleProjection(in: sequence).first
+        ).assignments
+        XCTAssertEqual(assignments[.underline], .enabled)
+        XCTAssertNil(assignments[.strikethrough])
+        XCTAssertEqual(
+            adapter.attributedContent(for: note)
+                .attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int,
+            NSUnderlineStyle.single.rawValue
+        )
+    }
+
+    func testFormattingOnlySaveFailureRestoresMarkAuthorityAndCache() async throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Styled", content: "Same")
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: context
+        )
+        try context.save()
+        let originalCache = note.richTextContentData
+        let styled = NSMutableAttributedString(string: "Same")
+        styled.addAttribute(
+            .strikethroughStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 0, length: styled.length)
+        )
+        let adapter = MacNotePersistenceAdapter(
+            context: context,
+            saveOperation: { _ in
+                throw MacNotePersistenceAdapterTestError.injectedSaveFailure
+            }
+        )
+        let prepared = try await adapter.prepareProductionLocalNoteEdit(
+            noteID: note.id,
+            proposedAttributedContent: styled
+        )
+
+        XCTAssertThrowsError(
+            try adapter.persistPreparedLocalNoteEdit(prepared)
+        )
+
+        XCTAssertEqual(note.content, "Same")
+        XCTAssertEqual(note.richTextContentData, originalCache)
+        let record = try XCTUnwrap(
+            context.fetch(FetchDescriptor<NoteSequenceStateRecord>()).first
+        )
+        XCTAssertEqual(record.revision, 0)
+        XCTAssertEqual(record.markRevision, 0)
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(
+                record: record,
+                noteID: note.id
+            )
+        XCTAssertEqual(
+            try NoteStructuralFormattingPersistence.decode(
+                record: record,
+                pairedWith: sequence
+            ),
+            .empty
+        )
+    }
+
+    func testSchemaOneReloadIgnoresStaleRTFCacheAndRendersMarks() async throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let note = Note(title: "Styled", content: "Same")
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: context
+        )
+        try context.save()
+
+        let underline = NSMutableAttributedString(string: "Same")
+        underline.addAttribute(
+            .underlineStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 0, length: underline.length)
+        )
+        let adapter = MacNotePersistenceAdapter(context: context)
+        let prepared = try await adapter.prepareProductionLocalNoteEdit(
+            noteID: note.id,
+            proposedAttributedContent: underline
+        )
+        try adapter.persistPreparedLocalNoteEdit(prepared)
+
+        let stale = NSMutableAttributedString(string: "Same")
+        stale.addAttribute(
+            .strikethroughStyle,
+            value: NSUnderlineStyle.single.rawValue,
+            range: NSRange(location: 0, length: stale.length)
+        )
+        note.richTextContentData = RTFCoding.encode(stale)
+        try context.save()
+
+        let rendered = adapter.attributedContent(for: note)
+        XCTAssertEqual(
+            rendered.attribute(.underlineStyle, at: 0, effectiveRange: nil) as? Int,
+            NSUnderlineStyle.single.rawValue
+        )
+        XCTAssertNil(
+            rendered.attribute(
+                .strikethroughStyle,
+                at: 0,
+                effectiveRange: nil
+            )
+        )
     }
 
     func testPrepareLocalNoteEditMissingNoteThrowsSemanticFailure() async throws {
@@ -438,7 +573,7 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
             range: NSRange(location: 0, length: attributedText.length)
         )
 
-        try MacNotePersistenceAdapter(context: context).save(note: note, attributedContent: attributedText)
+        try MacNotePersistenceAdapter(context: context).saveLegacyAttributedCacheForTesting(note: note, attributedContent: attributedText)
 
         XCTAssertEqual(note.content, "Saved body")
         XCTAssertNotNil(note.richTextContentData)
@@ -458,7 +593,7 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         context.insert(note)
         try context.save()
 
-        try MacNotePersistenceAdapter(context: context).save(
+        try MacNotePersistenceAdapter(context: context).saveLegacyAttributedCacheForTesting(
             note: note,
             attributedContent: NSAttributedString(string: "")
         )
@@ -480,7 +615,7 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         attributedText.addAttribute(.foregroundColor, value: NSColor.systemBlue, range: fullRange)
 
         let adapter = MacNotePersistenceAdapter(context: context)
-        try adapter.save(note: note, attributedContent: attributedText)
+        try adapter.saveLegacyAttributedCacheForTesting(note: note, attributedContent: attributedText)
 
         XCTAssertNotNil(note.richTextContentData)
         let decodedText = adapter.attributedContent(for: note)
@@ -504,7 +639,7 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         attributedText.addAttribute(.foregroundColor, value: NSColor.textColor, range: fullRange)
         attributedText.addAttribute(.autoTextColorDisplay, value: true, range: fullRange)
 
-        try MacNotePersistenceAdapter(context: context).save(note: note, attributedContent: attributedText)
+        try MacNotePersistenceAdapter(context: context).saveLegacyAttributedCacheForTesting(note: note, attributedContent: attributedText)
 
         XCTAssertEqual(note.content, "Auto body")
         let decodedText = try decodeRawStoredRTF(from: note)
@@ -527,7 +662,7 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         attributedText.addAttribute(.autoTextColorDisplay, value: true, range: NSRange(location: 0, length: 1))
         attributedText.addAttribute(.foregroundColor, value: NSColor.systemRed, range: NSRange(location: 1, length: 1))
 
-        try MacNotePersistenceAdapter(context: context).save(note: note, attributedContent: attributedText)
+        try MacNotePersistenceAdapter(context: context).saveLegacyAttributedCacheForTesting(note: note, attributedContent: attributedText)
 
         let decodedText = try decodeRawStoredRTF(from: note)
         XCTAssertNil(decodedText.attribute(.foregroundColor, at: 0, effectiveRange: nil))
@@ -549,7 +684,7 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         )
 
         let adapter = MacNotePersistenceAdapter(context: context)
-        try adapter.save(note: note, attributedContent: attributedText)
+        try adapter.saveLegacyAttributedCacheForTesting(note: note, attributedContent: attributedText)
         let decodedText = adapter.attributedContent(for: note)
 
         XCTAssertNotNil(decodedText.attribute(.foregroundColor, at: 0, effectiveRange: nil))
@@ -592,7 +727,7 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         context.insert(note)
         try context.save()
 
-        try MacNotePersistenceAdapter(context: context).save(
+        try MacNotePersistenceAdapter(context: context).saveLegacyAttributedCacheForTesting(
             note: note,
             attributedContent: NSAttributedString(string: "Updated")
         )
@@ -609,9 +744,9 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         try context.save()
 
         XCTAssertThrowsError(
-            try MacNotePersistenceAdapter(context: context).save(
-                note: note,
-                attributedContent: NSAttributedString(string: "Changed")
+            try MacNotePersistenceAdapter(context: context).saveLegacyAttributedCacheForTesting(
+            note: note,
+            attributedContent: NSAttributedString(string: "Changed")
             )
         ) { error in
             XCTAssertEqual(error as? MacNotePersistenceError, .deletedNote)
@@ -706,7 +841,7 @@ final class MacNotePersistenceAdapterTests: XCTestCase {
         }
 
         let adapter = MacNotePersistenceAdapter(context: context)
-        try adapter.save(note: note, attributedContent: attributedText)
+        try adapter.saveLegacyAttributedCacheForTesting(note: note, attributedContent: attributedText)
         return adapter.attributedContent(for: note)
     }
 
