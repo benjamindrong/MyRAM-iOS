@@ -861,7 +861,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 }
             }
 
-            try unsentBatches.removeBatches(withIDs: coveredBatchIDs)
+            try unsentBatches.removeBatchesForBootstrapAcknowledgement(withIDs: coveredBatchIDs)
             if !coveredBatchIDs.isDisjoint(
                 with: state.frozenLocalObligationBatchIDs.union(
                     currentOwnership.localObligationBatchIDs
