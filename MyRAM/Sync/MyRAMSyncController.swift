@@ -1405,7 +1405,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 }
             }
 
-            try unsentBatches.removeBatches(withIDs: coveredBatchIDs)
+            try unsentBatches.removeBatchesForBootstrapAcknowledgement(withIDs: coveredBatchIDs)
             if !coveredBatchIDs.isDisjoint(
                 with: state.frozenLocalObligationBatchIDs.union(
                     currentOwnership.localObligationBatchIDs
