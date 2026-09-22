@@ -247,6 +247,232 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
+    func testBootstrapDeduplicatesIdenticalCrossDomainBatchAndAckRetiresBothOwners() async throws {
+        let batch = makeBatch(idSuffix: 235_001)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [batch],
+            peerDeviceID: "myr233-duplicate-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        XCTAssertEqual(snapshot.historyCoverage.map(\.batchID), [batch.id])
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshot.id,
+                coveredBatchIDs: [batch.id]
+            ),
+            from: fixture.peer
+        )
+
+        XCTAssertTrue(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 0)
+        XCTAssertTrue(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-duplicate-mac")?
+                .ordinarySyncReady == true
+        )
+    }
+
+    func testBootstrapRejectsConflictingCrossDomainDuplicateBeforeTransmission() throws {
+        let batch = makeBatch(idSuffix: 235_002)
+        let conflicting = batchWithSameID(batch, createdAtOffset: 1)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [conflicting],
+            peerDeviceID: "myr233-conflict-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+
+        XCTAssertTrue(fixture.sentMessages.values.isEmpty)
+        XCTAssertNil(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-conflict-mac")
+        )
+        XCTAssertEqual(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 1)
+    }
+
+    func testBootstrapUnsentCleanupFailureRemainsRetryableOnAckReplay() async throws {
+        let batch = makeBatch(idSuffix: 235_003)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [],
+            peerDeviceID: "myr233-unsent-replay-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        fixture.unsentQueue.injectPersistenceFailureForNextWrite()
+
+        let acknowledgement = SyncPeerBootstrapAcknowledgement(
+            snapshotID: snapshot.id,
+            coveredBatchIDs: [batch.id]
+        )
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            acknowledgement,
+            from: fixture.peer
+        )
+
+        XCTAssertEqual(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+        XCTAssertFalse(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-unsent-replay-mac")?
+                .ordinarySyncReady == true
+        )
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            acknowledgement,
+            from: fixture.peer
+        )
+
+        XCTAssertTrue(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        XCTAssertTrue(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-unsent-replay-mac")?
+                .ordinarySyncReady == true
+        )
+    }
+
+    func testBootstrapPartialCleanupLocalFailureConvergesOnAckReplay() async throws {
+        let batch = makeBatch(idSuffix: 235_004)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [batch],
+            peerDeviceID: "myr233-local-replay-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        fixture.coordinator.injectLocalBootstrapOwnershipPersistenceFailureForTesting()
+
+        let acknowledgement = SyncPeerBootstrapAcknowledgement(
+            snapshotID: snapshot.id,
+            coveredBatchIDs: [batch.id]
+        )
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            acknowledgement,
+            from: fixture.peer
+        )
+
+        XCTAssertTrue(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 1)
+        XCTAssertFalse(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-local-replay-mac")?
+                .ordinarySyncReady == true
+        )
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            acknowledgement,
+            from: fixture.peer
+        )
+
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 0)
+        XCTAssertTrue(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-local-replay-mac")?
+                .ordinarySyncReady == true
+        )
+    }
+
+    func testFrozenLocalObligationPromotedWhileAckPendingIsRemovedFromBothDomains() async throws {
+        let batch = makeBatch(idSuffix: 235_005)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [],
+            localBatches: [batch],
+            peerDeviceID: "myr233-moved-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        try await fixture.controller.acceptLocalBatch(batch)
+
+        XCTAssertEqual(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 1)
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshot.id,
+                coveredBatchIDs: [batch.id]
+            ),
+            from: fixture.peer
+        )
+
+        XCTAssertTrue(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 0)
+        XCTAssertTrue(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-moved-mac")?
+                .ordinarySyncReady == true
+        )
+    }
+
+    func testFrozenLocalObligationSameIDDifferentContentWhileAckPendingFailsClosed() async throws {
+        let batch = makeBatch(idSuffix: 235_006)
+        let conflicting = batchWithSameID(batch, createdAtOffset: 1)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [],
+            localBatches: [batch],
+            peerDeviceID: "myr233-moved-conflict-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        try await fixture.controller.acceptLocalBatch(conflicting)
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshot.id,
+                coveredBatchIDs: [batch.id]
+            ),
+            from: fixture.peer
+        )
+
+        XCTAssertEqual(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [conflicting])
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 1)
+        XCTAssertFalse(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-moved-conflict-mac")?
+                .ordinarySyncReady == true
+        )
+    }
+
+    func testBootstrapMutationBetweenFreezePassesRetriesBeforeTransmission() async throws {
+        let batch = makeBatch(idSuffix: 235_007)
+        let replacement = batchWithSameID(batch, createdAtOffset: 1)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [],
+            peerDeviceID: "myr233-freeze-race-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        var captureCount = 0
+        var mutationError: Error?
+        fixture.controller.onBootstrapCandidateCapturedForTesting = {
+            captureCount += 1
+            guard captureCount == 1 else { return }
+            do {
+                try fixture.unsentQueue.removeBatches(withIDs: [batch.id])
+                try fixture.unsentQueue.enqueueDurably(replacement)
+            } catch {
+                mutationError = error
+            }
+        }
+
+        await fixture.controller.beginReconnectBootstrapForTesting(to: fixture.peer)
+
+        XCTAssertNil(mutationError)
+        XCTAssertGreaterThanOrEqual(captureCount, 2)
+        XCTAssertEqual(fixture.sentMessages.values.count, 1)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        XCTAssertEqual(snapshot.historyCoverage.map(\.batchID), [batch.id])
+        XCTAssertEqual(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [replacement])
+    }
+
     func testReconnectBootstrapCapturesPendingAccumulatorWorkWithoutQuietWindow() async throws {
         let peer = MCPeerID(displayName: "remote|myr229-accumulator-mac")
         var sends: [Data] = []
@@ -1488,6 +1714,74 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.availablePeers, beforeAvailablePeers)
     }
 
+    private func makeMYR233BootstrapFixture(
+        unsentBatches: [SyncBatch],
+        localBatches: [SyncBatch],
+        peerDeviceID: String
+    ) throws -> MYR233MacBootstrapFixture {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let unsentURL = directory.appendingPathComponent("unsent-batches.json")
+        let localURL = directory.appendingPathComponent("local-obligations.json")
+
+        let unsentQueue = FileBackedSyncBatchQueue(fileURL: unsentURL)
+        for batch in unsentBatches {
+            try unsentQueue.enqueueDurably(batch)
+        }
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: localURL)
+        for batch in localBatches {
+            try localQueue.enqueue(SyncConvergenceLocalObligation(legacyBatch: batch))
+        }
+
+        let peer = MCPeerID(displayName: "remote|\(peerDeviceID)")
+        let sentMessages = MYR233MacSentMessageRecorder()
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let controller = try makeController(
+            context: container.mainContext,
+            unsentBatchQueueFileURL: unsentURL,
+            unsentBatchQueue: unsentQueue,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                sentMessages.values.append(data)
+            }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: localURL
+        )
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: peerDeviceID)
+        return MYR233MacBootstrapFixture(
+            directory: directory,
+            controller: controller,
+            coordinator: coordinator,
+            unsentQueue: unsentQueue,
+            peer: peer,
+            sentMessages: sentMessages
+        )
+    }
+
+    private func batchWithSameID(
+        _ batch: SyncBatch,
+        createdAtOffset: TimeInterval
+    ) -> SyncBatch {
+        SyncBatch(
+            id: batch.id,
+            originDeviceID: batch.originDeviceID,
+            createdAt: batch.createdAt.addingTimeInterval(createdAtOffset),
+            batchSequence: batch.batchSequence,
+            changes: batch.changes
+        )
+    }
+
     private func makeController(unsentBatchQueueFileURL: URL?) throws -> MacSyncBatchController {
         try makeController(unsentBatchQueueFileURL: unsentBatchQueueFileURL, unsentBatchQueue: nil)
     }
@@ -1667,6 +1961,26 @@ final class MacSyncBatchControllerTests: XCTestCase {
             for: Schema(MyRAMModelRegistry.models),
             configurations: configuration
         )
+    }
+}
+
+private final class MYR233MacSentMessageRecorder {
+    var values: [Data] = []
+}
+
+private struct MYR233MacBootstrapFixture {
+    let directory: URL
+    let controller: MacSyncBatchController
+    let coordinator: MacSyncConvergenceCoordinator
+    let unsentQueue: FileBackedSyncBatchQueue
+    let peer: MCPeerID
+    let sentMessages: MYR233MacSentMessageRecorder
+
+    func firstBootstrapSnapshot() throws -> SyncPeerBootstrapSnapshot {
+        let data = try XCTUnwrap(sentMessages.values.first)
+        let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+        XCTAssertEqual(message.kind, .bootstrapSnapshot)
+        return try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
     }
 }
 
