@@ -184,6 +184,20 @@ final class FileBackedSyncBatchQueue {
         }
     }
 
+    func removeBatchesForBootstrapAcknowledgement(withIDs ids: Set<SyncBatchID>) throws {
+        let originalBatches = queue.pendingBatches
+        do {
+            try removeBatches(withIDs: ids)
+        } catch QueueError.persistenceFailed {
+            let reloaded = loadPersistedQueue()
+            health = reloaded.health
+            if canPersistCurrentQueue, reloaded.pendingBatches == originalBatches {
+                queue.replacePendingBatches(reloaded.pendingBatches)
+            }
+            throw QueueError.persistenceFailed
+        }
+    }
+
     func remove(_ batchID: SyncBatchID) {
         let didChange = queue.remove(batchID)
         if didChange {
