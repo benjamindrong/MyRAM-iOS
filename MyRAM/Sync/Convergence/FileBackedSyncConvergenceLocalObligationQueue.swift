@@ -88,6 +88,8 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
             health = reloaded.health
             if canPersistCurrentQueue, reloaded.obligations == original {
                 obligations = reloaded.obligations
+            } else {
+                health = .readFailed("Bootstrap cleanup rollback verification failed")
             }
             throw QueueError.persistenceFailed
         }
