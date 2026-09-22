@@ -58,7 +58,7 @@ final class MacSyncConvergenceCoordinator {
     }
 
     func removeLocalBootstrapOwnership(withIDs batchIDs: Set<SyncBatchID>) throws {
-        try localObligationQueue.removeObligations(withIDs: batchIDs)
+        try localObligationQueue.removeObligationsForBootstrapAcknowledgement(withIDs: batchIDs)
     }
 
 #if DEBUG
