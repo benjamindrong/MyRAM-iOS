@@ -330,7 +330,7 @@ final class NotesViewModel: ObservableObject {
                 guard let self else {
                     throw FileBackedSyncConvergenceLocalObligationQueue.QueueError.unhealthyPersistence
                 }
-                try pendingLocalConvergenceBatches.removeObligations(withIDs: batchIDs)
+                try pendingLocalConvergenceBatches.removeObligationsForBootstrapAcknowledgement(withIDs: batchIDs)
             }
             bootstrapController.buildBootstrapSnapshot = { [context] in
                 try SyncPeerBootstrapSnapshotPersistence.build(from: context)
