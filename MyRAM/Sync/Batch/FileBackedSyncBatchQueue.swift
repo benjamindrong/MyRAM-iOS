@@ -193,6 +193,8 @@ final class FileBackedSyncBatchQueue {
             health = reloaded.health
             if canPersistCurrentQueue, reloaded.pendingBatches == originalBatches {
                 queue.replacePendingBatches(reloaded.pendingBatches)
+            } else {
+                health = .readFailed("Bootstrap cleanup rollback verification failed")
             }
             throw QueueError.persistenceFailed
         }
