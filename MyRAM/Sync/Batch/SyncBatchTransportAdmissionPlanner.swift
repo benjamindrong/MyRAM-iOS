@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import Foundation
 
 enum SyncBatchDeliveryRepresentation: Equatable, Sendable {
@@ -49,6 +50,11 @@ enum SyncBatchDeliveryPartitionPlanner {
         return .v1Compatible
     }
 
+    enum PartitionError: Error, Equatable {
+        case invalidCompatibleRepresentation
+        case conflictingStructuralMarkOperation(noteID: UUID)
+    }
+
     static func partition(
         _ capturedChanges: [SyncConvergenceCapturedLocalChange]
     ) -> (
@@ -70,6 +76,66 @@ enum SyncBatchDeliveryPartitionPlanner {
             return nil
         }
         return (compatible, structuralMarks)
+    }
+
+    /// Freezes durable delivery identity before recipient routing. Compatible work is
+    /// first when present; structural marks are coalesced into exactly one V3 change
+    /// per note in canonical note-ID order.
+    static func durablePartitions(
+        _ capturedChanges: [SyncConvergenceCapturedLocalChange]
+    ) throws -> [[SyncConvergenceCapturedLocalChange]] {
+        guard let split = partition(capturedChanges) else {
+            throw PartitionError.invalidCompatibleRepresentation
+        }
+
+        var result: [[SyncConvergenceCapturedLocalChange]] = []
+        if !split.compatible.isEmpty {
+            result.append(split.compatible)
+        }
+
+        let byNoteID = Dictionary(grouping: split.structuralMarks) { captured in
+            captured.change.noteID
+        }
+        for noteID in byNoteID.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+            guard let capturedForNote = byNoteID[noteID], !capturedForNote.isEmpty else {
+                continue
+            }
+
+            var operations: [SyncTextMarkOperation] = []
+            var latestModifiedAt = Date.distantPast
+            for captured in capturedForNote {
+                guard case .noteStructuralMarksChanged(let change) = captured.change,
+                      change.noteID == noteID else {
+                    throw PartitionError.invalidCompatibleRepresentation
+                }
+                operations.append(contentsOf: change.operations)
+                latestModifiedAt = max(latestModifiedAt, change.modifiedAt)
+            }
+
+            let canonicalState: SyncTextMarkState
+            do {
+                canonicalState = try SyncTextMarkState(operations: operations)
+            } catch {
+                throw PartitionError.conflictingStructuralMarkOperation(noteID: noteID)
+            }
+            guard !canonicalState.operations.isEmpty else {
+                throw PartitionError.conflictingStructuralMarkOperation(noteID: noteID)
+            }
+
+            result.append([
+                SyncConvergenceCapturedLocalChange(
+                    change: .noteStructuralMarksChanged(
+                        SyncBatchNoteStructuralMarksChangedChange(
+                            noteID: noteID,
+                            operations: canonicalState.operations,
+                            modifiedAt: latestModifiedAt
+                        )
+                    ),
+                    evidence: nil
+                )
+            ])
+        }
+        return result
     }
 }
 

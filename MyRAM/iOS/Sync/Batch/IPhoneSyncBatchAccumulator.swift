@@ -166,72 +166,33 @@ actor IPhoneSyncBatchAccumulator {
         when shouldExtract: (PendingBatch) -> Bool
     ) -> [SyncConvergenceLocalObligation] {
         guard let pendingBatch, shouldExtract(pendingBatch) else { return [] }
+        guard let obligations = try? obligations(for: pendingBatch), !obligations.isEmpty else {
+            return []
+        }
         readinessTask?.cancel()
         readinessTask = nil
         self.pendingBatch = nil
-        return obligations(for: pendingBatch)
+        return obligations
     }
 
     private func obligations(
         for pendingBatch: PendingBatch
-    ) -> [SyncConvergenceLocalObligation] {
-        guard let partition = SyncBatchDeliveryPartitionPlanner.partition(
+    ) throws -> [SyncConvergenceLocalObligation] {
+        let partitions = try SyncBatchDeliveryPartitionPlanner.durablePartitions(
             pendingBatch.capturedChanges
-        ) else {
-            let batch = makeBatch(
-                id: pendingBatch.id,
-                createdAt: pendingBatch.createdAt,
-                batchSequence: pendingBatch.batchSequence,
-                capturedChanges: pendingBatch.capturedChanges
-            )
-            return [
-                SyncConvergenceLocalObligation(
-                    batch: batch,
-                    capturedChanges: pendingBatch.capturedChanges
-                )
-            ]
-        }
-
-        if partition.structuralMarks.isEmpty || partition.compatible.isEmpty {
-            let captured = partition.structuralMarks.isEmpty
-                ? partition.compatible
-                : partition.structuralMarks
-            let batch = makeBatch(
-                id: pendingBatch.id,
-                createdAt: pendingBatch.createdAt,
-                batchSequence: pendingBatch.batchSequence,
-                capturedChanges: captured
-            )
-            return [
-                SyncConvergenceLocalObligation(
-                    batch: batch,
-                    capturedChanges: captured
-                )
-            ]
-        }
-
-        let compatibleBatch = makeBatch(
-            id: pendingBatch.id,
-            createdAt: pendingBatch.createdAt,
-            batchSequence: pendingBatch.batchSequence,
-            capturedChanges: partition.compatible
         )
-        let structuralMarkBatch = makeBatch(
-            id: batchIDProvider(),
-            createdAt: pendingBatch.createdAt,
-            batchSequence: reserveBatchSequence(),
-            capturedChanges: partition.structuralMarks
-        )
-        return [
-            SyncConvergenceLocalObligation(
-                batch: compatibleBatch,
-                capturedChanges: partition.compatible
-            ),
-            SyncConvergenceLocalObligation(
-                batch: structuralMarkBatch,
-                capturedChanges: partition.structuralMarks
+        return partitions.enumerated().map { index, capturedChanges in
+            let batch = makeBatch(
+                id: index == 0 ? pendingBatch.id : batchIDProvider(),
+                createdAt: pendingBatch.createdAt,
+                batchSequence: index == 0 ? pendingBatch.batchSequence : reserveBatchSequence(),
+                capturedChanges: capturedChanges
             )
-        ]
+            return SyncConvergenceLocalObligation(
+                batch: batch,
+                capturedChanges: capturedChanges
+            )
+        }
     }
 
     private func makeBatch(
