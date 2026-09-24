@@ -762,7 +762,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         let acknowledgement = SyncPeerBootstrapAcknowledgement(
             snapshotID: snapshot.id,
             coveredBatchIDs: disposition.coveredBatchIDs,
-            coveredNoteIDs: disposition.coveredNoteIDs
+            coveredNoteIDs: disposition.coveredNoteIDs,
+            coveredFormattingNoteIDs: disposition.coveredFormattingNoteIDs
         )
 
         do {
@@ -796,6 +797,18 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
               requiredNoteIDs.isSubset(of: coveredNoteIDs) else {
             lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
             return
+        }
+        if peerCapabilityRegistry.hasExplicitCurrentSessionStructuralMarkSupport(
+            forPeerDeviceID: deviceID
+        ) {
+            let coveredFormattingNoteIDs =
+                acknowledgement.coveredFormattingNoteIDs ?? []
+            guard coveredFormattingNoteIDs.isSubset(of: requiredNoteIDs),
+                  requiredNoteIDs.isSubset(of: coveredFormattingNoteIDs) else {
+                lastErrorMessage =
+                    "Nearby bootstrap did not establish a shared formatting baseline."
+                return
+            }
         }
 
         do {
@@ -844,6 +857,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
         let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
         peerCapabilityRegistry.recordBootstrapV1Announcement(forPeerDeviceID: deviceID)
+        peerCapabilityRegistry.recordBootstrapStructuralMarkSchemaVersion(
+            announcement.structuralMarkSchemaVersion,
+            forPeerDeviceID: deviceID
+        )
         bootstrapCapabilityResolutionTasks.removeValue(forKey: deviceID)?.cancel()
         if connectedPeersProvider().contains(peerID) {
             await beginBootstrap(to: peerID)

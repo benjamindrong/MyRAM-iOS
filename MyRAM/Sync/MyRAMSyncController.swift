@@ -1371,7 +1371,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         let acknowledgement = SyncPeerBootstrapAcknowledgement(
             snapshotID: snapshot.id,
             coveredBatchIDs: disposition.coveredBatchIDs,
-            coveredNoteIDs: disposition.coveredNoteIDs
+            coveredNoteIDs: disposition.coveredNoteIDs,
+            coveredFormattingNoteIDs: disposition.coveredFormattingNoteIDs
         )
 
         do {
@@ -1405,6 +1406,18 @@ final class MyRAMSyncController: NSObject, ObservableObject {
               requiredNoteIDs.isSubset(of: coveredNoteIDs) else {
             lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
             return
+        }
+        if peerCapabilityRegistry.hasExplicitCurrentSessionStructuralMarkSupport(
+            forPeerDeviceID: deviceID
+        ) {
+            let coveredFormattingNoteIDs =
+                acknowledgement.coveredFormattingNoteIDs ?? []
+            guard coveredFormattingNoteIDs.isSubset(of: requiredNoteIDs),
+                  requiredNoteIDs.isSubset(of: coveredFormattingNoteIDs) else {
+                lastErrorMessage =
+                    "Nearby bootstrap did not establish a shared formatting baseline."
+                return
+            }
         }
 
         do {

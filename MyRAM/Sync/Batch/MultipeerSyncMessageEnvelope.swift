@@ -52,11 +52,13 @@ struct SyncPeerBootstrapHistoryBatchCoverage: Codable, Equatable, Sendable {
     let batchID: SyncBatchID
     let noteIDs: Set<SyncBatchNoteID>
     let anchoredRecoveryChanges: [SyncBatchAnchoredRecoveryChange]?
+    let structuralMarkOnly: Bool?
 
     init(batchID: SyncBatchID, noteIDs: Set<SyncBatchNoteID>) {
         self.batchID = batchID
         self.noteIDs = noteIDs
         anchoredRecoveryChanges = nil
+        structuralMarkOnly = nil
     }
 
     init(
@@ -67,11 +69,17 @@ struct SyncPeerBootstrapHistoryBatchCoverage: Codable, Equatable, Sendable {
         self.batchID = batchID
         self.noteIDs = noteIDs
         self.anchoredRecoveryChanges = anchoredRecoveryChanges
+        structuralMarkOnly = nil
     }
 
     init(batch: SyncBatch) {
         batchID = batch.id
         noteIDs = Set(batch.changes.map(\.noteID))
+        structuralMarkOnly =
+            SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes)
+                == .structuralMarkV3
+                ? true
+                : nil
         anchoredRecoveryChanges = batch.changes.compactMap { change in
             switch change {
             case .noteBodyTextInsertedAnchored(let insertion): return .insertion(insertion)
@@ -122,6 +130,47 @@ struct SyncPeerBootstrapNoteSnapshot: Codable, Equatable, Sendable {
     let tombstonedUTF16Count: Int
     let payloadByteCount: Int
     let statePayloadData: Data
+    let markFormatVersion: Int?
+    let markRevision: UInt64?
+    let markStatePayloadData: Data?
+
+    init(
+        id: UUID,
+        title: String,
+        body: String,
+        isPinned: Bool,
+        createdAt: Date,
+        modifiedAt: Date,
+        deletedAt: Date?,
+        folderID: UUID?,
+        formatVersion: Int,
+        revision: UInt64,
+        visibleUTF16Count: Int,
+        tombstonedUTF16Count: Int,
+        payloadByteCount: Int,
+        statePayloadData: Data,
+        markFormatVersion: Int? = nil,
+        markRevision: UInt64? = nil,
+        markStatePayloadData: Data? = nil
+    ) {
+        self.id = id
+        self.title = title
+        self.body = body
+        self.isPinned = isPinned
+        self.createdAt = createdAt
+        self.modifiedAt = modifiedAt
+        self.deletedAt = deletedAt
+        self.folderID = folderID
+        self.formatVersion = formatVersion
+        self.revision = revision
+        self.visibleUTF16Count = visibleUTF16Count
+        self.tombstonedUTF16Count = tombstonedUTF16Count
+        self.payloadByteCount = payloadByteCount
+        self.statePayloadData = statePayloadData
+        self.markFormatVersion = markFormatVersion
+        self.markRevision = markRevision
+        self.markStatePayloadData = markStatePayloadData
+    }
 }
 
 struct SyncPeerBootstrapAcknowledgement: Codable, Equatable, Sendable {
@@ -132,15 +181,18 @@ struct SyncPeerBootstrapAcknowledgement: Codable, Equatable, Sendable {
     /// Optional decoding preserves v1 wire compatibility; a missing value cannot
     /// authorize anchored synchronization for a nonempty snapshot.
     let coveredNoteIDs: Set<SyncBatchNoteID>?
+    let coveredFormattingNoteIDs: Set<SyncBatchNoteID>?
 
     init(
         snapshotID: UUID,
         coveredBatchIDs: Set<SyncBatchID>,
-        coveredNoteIDs: Set<SyncBatchNoteID>? = nil
+        coveredNoteIDs: Set<SyncBatchNoteID>? = nil,
+        coveredFormattingNoteIDs: Set<SyncBatchNoteID>? = nil
     ) {
         self.snapshotID = snapshotID
         self.coveredBatchIDs = coveredBatchIDs
         self.coveredNoteIDs = coveredNoteIDs
+        self.coveredFormattingNoteIDs = coveredFormattingNoteIDs
     }
 }
 
@@ -149,17 +201,20 @@ struct SyncPeerBootstrapApplyDisposition: Equatable, Sendable {
     /// Notes whose exact structural sequence baseline is safe for anchored replay.
     /// This does not imply that title, pin, folder, or other snapshot metadata matched.
     let coveredNoteIDs: Set<SyncBatchNoteID>
+    let coveredFormattingNoteIDs: Set<SyncBatchNoteID>
     let insertedNoteIDs: Set<UUID>
     let presentationRefreshRequired: Bool
 
     init(
         coveredBatchIDs: Set<SyncBatchID>,
         coveredNoteIDs: Set<SyncBatchNoteID> = [],
+        coveredFormattingNoteIDs: Set<SyncBatchNoteID> = [],
         insertedNoteIDs: Set<UUID>,
         presentationRefreshRequired: Bool
     ) {
         self.coveredBatchIDs = coveredBatchIDs
         self.coveredNoteIDs = coveredNoteIDs
+        self.coveredFormattingNoteIDs = coveredFormattingNoteIDs
         self.insertedNoteIDs = insertedNoteIDs
         self.presentationRefreshRequired = presentationRefreshRequired
     }
@@ -225,6 +280,7 @@ enum SyncPeerBootstrapError: Error, Equatable {
     case missingFolder(UUID)
     case missingSequenceState(UUID)
     case invalidSequenceState(UUID)
+    case invalidFormattingState(UUID)
     case noteBodyStateMismatch(UUID)
     case conflictingNoteIdentity(UUID)
     case conflictingMissingSequenceState(UUID)
@@ -258,6 +314,14 @@ enum SyncPeerBootstrapSnapshotPersistence {
             guard NoteSequenceStateExactText.matches(state.visibleText, note.content) else {
                 throw SyncPeerBootstrapError.noteBodyStateMismatch(note.id)
             }
+            do {
+                _ = try NoteStructuralFormattingPersistence.decode(
+                    record: record,
+                    pairedWith: state
+                )
+            } catch {
+                throw SyncPeerBootstrapError.invalidFormattingState(note.id)
+            }
             return SyncPeerBootstrapNoteSnapshot(
                 id: note.id,
                 title: note.title,
@@ -272,7 +336,10 @@ enum SyncPeerBootstrapSnapshotPersistence {
                 visibleUTF16Count: record.visibleUTF16Count,
                 tombstonedUTF16Count: record.tombstonedUTF16Count,
                 payloadByteCount: record.payloadByteCount,
-                statePayloadData: record.statePayloadData
+                statePayloadData: record.statePayloadData,
+                markFormatVersion: record.markFormatVersion,
+                markRevision: record.markRevision,
+                markStatePayloadData: record.markStatePayloadData
             )
         }
 
@@ -314,6 +381,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
         let recordsByNoteID = Dictionary(grouping: existingRecords, by: \.noteID)
         var fullyCoveredNoteIDs: Set<SyncBatchNoteID> = []
         var sequenceBaselineCoveredNoteIDs: Set<SyncBatchNoteID> = []
+        var formattingBaselineCoveredNoteIDs: Set<SyncBatchNoteID> = []
         var insertedNoteIDs: Set<UUID> = []
         var bootstrapOwnershipStatesByNoteID: [SyncBatchNoteID: SyncTextSequenceState] = [:]
         var coveredBatchIDs: Set<SyncBatchID> = []
@@ -393,6 +461,17 @@ enum SyncPeerBootstrapSnapshotPersistence {
                                remoteFingerprint == structuralConflict.localStructuralFingerprint {
                                 sequenceBaselineCoveredNoteIDs.insert(note.id)
                                 bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
+                                let formatting = try mergeFormattingBaselineIfPresent(
+                                    from: noteSnapshot,
+                                    into: note,
+                                    in: context
+                                )
+                                if formatting.covered {
+                                    formattingBaselineCoveredNoteIDs.insert(note.id)
+                                }
+                                if formatting.changed {
+                                    didMutate = true
+                                }
                                 if visibleEquivalent && exactSequenceBaseline {
                                     fullyCoveredNoteIDs.insert(note.id)
                                 }
@@ -443,6 +522,19 @@ enum SyncPeerBootstrapSnapshotPersistence {
                                 }
                             }
                         }
+                        if sequenceBaselineCoveredNoteIDs.contains(note.id) {
+                            let formatting = try mergeFormattingBaselineIfPresent(
+                                from: noteSnapshot,
+                                into: note,
+                                in: context
+                            )
+                            if formatting.covered {
+                                formattingBaselineCoveredNoteIDs.insert(note.id)
+                            }
+                            if formatting.changed {
+                                didMutate = true
+                            }
+                        }
                         if visibleEquivalent && exactSequenceBaseline {
                             fullyCoveredNoteIDs.insert(note.id)
                         }
@@ -462,6 +554,9 @@ enum SyncPeerBootstrapSnapshotPersistence {
                         context.insert(snapshotRecord)
                         sequenceBaselineCoveredNoteIDs.insert(note.id)
                         bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
+                        if hasFormattingBaseline(noteSnapshot) {
+                            formattingBaselineCoveredNoteIDs.insert(note.id)
+                        }
                         if visibleEquivalent {
                             fullyCoveredNoteIDs.insert(note.id)
                         }
@@ -494,6 +589,9 @@ enum SyncPeerBootstrapSnapshotPersistence {
                     insertedNoteIDs.insert(note.id)
                     fullyCoveredNoteIDs.insert(note.id)
                     sequenceBaselineCoveredNoteIDs.insert(note.id)
+                    if hasFormattingBaseline(noteSnapshot) {
+                        formattingBaselineCoveredNoteIDs.insert(note.id)
+                    }
                     bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
                     didMutate = true
                 }
@@ -529,7 +627,10 @@ enum SyncPeerBootstrapSnapshotPersistence {
                 }
             }
             coveredBatchIDs = Set(snapshot.historyCoverage.compactMap { coverage in
-                coverage.noteIDs.isSubset(of: fullyCoveredNoteIDs)
+                let coveredNoteSet = coverage.structuralMarkOnly == true
+                    ? formattingBaselineCoveredNoteIDs
+                    : fullyCoveredNoteIDs
+                return coverage.noteIDs.isSubset(of: coveredNoteSet)
                     ? coverage.batchID
                     : nil
             })
@@ -571,6 +672,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
         return SyncPeerBootstrapApplyDisposition(
             coveredBatchIDs: coveredBatchIDs,
             coveredNoteIDs: sequenceBaselineCoveredNoteIDs,
+            coveredFormattingNoteIDs: formattingBaselineCoveredNoteIDs,
             insertedNoteIDs: insertedNoteIDs,
             presentationRefreshRequired: didMutate || didMaterializeStructuralConflict
         )
@@ -728,6 +830,14 @@ enum SyncPeerBootstrapSnapshotPersistence {
             if let folderID = note.folderID, !folderIDs.contains(folderID) {
                 throw SyncPeerBootstrapError.missingFolder(folderID)
             }
+            let markFieldCount = [
+                note.markFormatVersion != nil,
+                note.markRevision != nil,
+                note.markStatePayloadData != nil
+            ].filter { $0 }.count
+            guard markFieldCount == 0 || markFieldCount == 3 else {
+                throw SyncPeerBootstrapError.invalidFormattingState(note.id)
+            }
             let record = makeRecord(from: note)
             let state: SyncTextSequenceState
             do {
@@ -741,6 +851,16 @@ enum SyncPeerBootstrapSnapshotPersistence {
             guard NoteSequenceStateExactText.matches(state.visibleText, note.body) else {
                 throw SyncPeerBootstrapError.noteBodyStateMismatch(note.id)
             }
+            if hasFormattingBaseline(note) {
+                do {
+                    _ = try NoteStructuralFormattingPersistence.decode(
+                        record: record,
+                        pairedWith: state
+                    )
+                } catch {
+                    throw SyncPeerBootstrapError.invalidFormattingState(note.id)
+                }
+            }
         }
     }
 
@@ -752,8 +872,78 @@ enum SyncPeerBootstrapSnapshotPersistence {
             visibleUTF16Count: note.visibleUTF16Count,
             tombstonedUTF16Count: note.tombstonedUTF16Count,
             payloadByteCount: note.payloadByteCount,
-            statePayloadData: note.statePayloadData
+            statePayloadData: note.statePayloadData,
+            markFormatVersion:
+                note.markFormatVersion
+                    ?? NoteStructuralFormattingPersistence.schemaVersion,
+            markRevision: note.markRevision ?? 0,
+            markStatePayloadData:
+                note.markStatePayloadData
+                    ?? NoteStructuralFormattingPersistence.canonicalEmptyPayload
         )
+    }
+
+    private static func hasFormattingBaseline(
+        _ note: SyncPeerBootstrapNoteSnapshot
+    ) -> Bool {
+        let presence = [
+            note.markFormatVersion != nil,
+            note.markRevision != nil,
+            note.markStatePayloadData != nil
+        ]
+        return presence.allSatisfy { $0 }
+    }
+
+    private static func mergeFormattingBaselineIfPresent(
+        from noteSnapshot: SyncPeerBootstrapNoteSnapshot,
+        into note: Note,
+        in context: ModelContext
+    ) throws -> (covered: Bool, changed: Bool) {
+        guard hasFormattingBaseline(noteSnapshot) else {
+            return (false, false)
+        }
+
+        let localSnapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: note, in: context)
+        let remoteRecord = makeRecord(from: noteSnapshot)
+        let remoteSequence: SyncTextSequenceState
+        let remoteMarks: SyncTextMarkState
+        do {
+            remoteSequence = try NoteSequenceStatePersistenceCodec
+                .decodeStructurallyValidatedState(
+                    record: remoteRecord,
+                    noteID: note.id
+                )
+            remoteMarks = try NoteStructuralFormattingPersistence.decode(
+                record: remoteRecord,
+                pairedWith: remoteSequence
+            )
+        } catch {
+            throw SyncPeerBootstrapError.invalidFormattingState(note.id)
+        }
+
+        let mergedMarks: SyncTextMarkState
+        do {
+            mergedMarks = try localSnapshot.markState.merging(with: remoteMarks)
+            try mergedMarks.validating(against: localSnapshot.state)
+        } catch {
+            throw SyncPeerBootstrapError.invalidFormattingState(note.id)
+        }
+
+        let result = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: note,
+                expected: localSnapshot,
+                finalMarkState: mergedMarks,
+                in: context
+            )
+        switch result {
+        case .unchanged:
+            return (true, false)
+        case .replaced:
+            note.richTextContentData = nil
+            return (true, true)
+        }
     }
 
     private static func recordExactlyMatches(
