@@ -1502,7 +1502,7 @@ final class NotesViewModel: ObservableObject {
 
     func permanentlyDeleteNote(_ note: Note) {
         removeUndoHistoryReferencingDeletedNote(noteID: note.id)
-        context.delete(note)
+        stagePermanentNoteDeletion(note)
         try? context.save()
         refreshCurrentFolderContent()
         if currentNote?.id == note.id {
@@ -3052,11 +3052,18 @@ final class NotesViewModel: ObservableObject {
 
         for note in deletedNotes {
             if let deletedAt = note.deletedAt, deletedAt < cutoff {
-                context.delete(note)
+                stagePermanentNoteDeletion(note)
             }
         }
 
         try? context.save()
+    }
+
+    private func stagePermanentNoteDeletion(_ note: Note) {
+        if let record = structuralFormattingRecord(noteID: note.id) {
+            context.delete(record)
+        }
+        context.delete(note)
     }
 
     func exportNotesForSharing(
