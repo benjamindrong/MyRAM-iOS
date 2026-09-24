@@ -286,6 +286,40 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(sends.count, 1)
     }
 
+    func testIncapablePeerWithheldStructuralMarksDoNotHeadOfLineBlockCompatibleWork() async throws {
+        let peer = MCPeerID(displayName: "remote|incapable-mark-mac")
+        var sentBatchIDs: [UUID] = []
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+                guard message.kind == .batchSync else { return }
+                sentBatchIDs.append(
+                    try MultipeerSyncMessageCoding.decodeBatchPayload(message.payload).batch.id
+                )
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting(
+            nil,
+            forPeerDeviceID: "incapable-mark-mac"
+        )
+        let markBatch = try makeStructuralMarkBatch(idSuffix: 227_610)
+        let compatibleBatch = makeTitleBatch(idSuffix: 227_611)
+
+        try await controller.acceptLocalBatch(markBatch)
+        XCTAssertTrue(sentBatchIDs.isEmpty)
+
+        try await controller.acceptLocalBatch(compatibleBatch)
+
+        XCTAssertEqual(sentBatchIDs, [compatibleBatch.id])
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id),
+            [markBatch.id, compatibleBatch.id]
+        )
+    }
+
     func testMacCapabilityAnnouncementResolvesPeerAndStartsBootstrapBeforeBatchSync() async throws {
         let peer = MCPeerID(displayName: "remote|announcement-mac")
         var kinds: [MultipeerSyncMessageKind] = []
@@ -1463,6 +1497,56 @@ final class MacSyncBatchControllerTests: XCTestCase {
             originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
             createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
             changes: []
+        )
+    }
+
+    private func makeTitleBatch(idSuffix: Int) -> MacSyncBatch {
+        let batch = makeBatch(idSuffix: idSuffix)
+        return SyncBatch(
+            id: batch.id,
+            originDeviceID: batch.originDeviceID,
+            createdAt: batch.createdAt,
+            batchSequence: batch.batchSequence,
+            changes: [
+                .noteTitleChanged(
+                    SyncBatchNoteTitleChangedChange(
+                        noteID: UUID(uuidString: "22700000-0000-0000-0000-000000000611")!,
+                        title: "Compatible",
+                        modifiedAt: batch.createdAt
+                    )
+                )
+            ]
+        )
+    }
+
+    private func makeStructuralMarkBatch(idSuffix: Int) throws -> SyncBatch {
+        let batch = makeBatch(idSuffix: idSuffix)
+        let actorID = UUID(uuidString: "22700000-0000-0000-0000-000000000612")!
+        let operation = try SyncTextMarkOperation(
+            operationID: SyncOperationID(
+                deviceID: actorID,
+                localCounter: UInt64(idSuffix)
+            ),
+            logicalClock: UInt64(idSuffix),
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: .empty,
+            endAnchor: .empty
+        )
+        return SyncBatch(
+            id: batch.id,
+            originDeviceID: batch.originDeviceID,
+            createdAt: batch.createdAt,
+            batchSequence: batch.batchSequence,
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: UUID(uuidString: "22700000-0000-0000-0000-000000000613")!,
+                        operations: [operation],
+                        modifiedAt: batch.createdAt
+                    )
+                )
+            ]
         )
     }
 
