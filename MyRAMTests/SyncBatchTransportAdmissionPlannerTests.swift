@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import Foundation
 import MultipeerConnectivity
 import XCTest
@@ -391,6 +392,69 @@ final class MYR229QueueDrainRegressionTests: XCTestCase {
         XCTAssertEqual(
             controller.unsentBatchQueueSnapshot().pendingBatches.map(\.id),
             [historical.id, newer.id]
+        )
+    }
+    func testIncapablePeerWithheldStructuralMarksDoNotBlockNewerCompatibleBatch() async throws {
+        let peer = MCPeerID(displayName: "Remote|myr-227-incapable-ios")
+        let transport = MYR229RecordingTransport(connectedPeers: [peer])
+        let controller = MyRAMSyncController(
+            unsentBatchQueueFileURL: nil,
+            pendingChangesFileURL: nil,
+            startsNetworking: false,
+            transport: transport
+        )
+        controller.recordBootstrapCapabilityForTesting(
+            nil,
+            forPeerDeviceID: "myr-227-incapable-ios"
+        )
+        let actorID = UUID(
+            uuidString: "22700000-0000-0000-0000-000000000901"
+        )!
+        let mark = try SyncTextMarkOperation(
+            operationID: SyncOperationID(
+                deviceID: actorID,
+                localCounter: 1
+            ),
+            logicalClock: 1,
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: .empty,
+            endAnchor: .empty
+        )
+        let markBatch = SyncBatch(
+            id: UUID(uuidString: "22700000-0000-0000-0000-000000000902")!,
+            originDeviceID: actorID,
+            createdAt: Date(timeIntervalSince1970: 227_902),
+            batchSequence: 1,
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: UUID(
+                            uuidString: "22700000-0000-0000-0000-000000000903"
+                        )!,
+                        operations: [mark],
+                        modifiedAt: Date(timeIntervalSince1970: 227_902)
+                    )
+                )
+            ]
+        )
+        let compatibleBatch = SyncBatch(
+            id: UUID(uuidString: "22700000-0000-0000-0000-000000000904")!,
+            originDeviceID: actorID,
+            createdAt: Date(timeIntervalSince1970: 227_904),
+            batchSequence: 2,
+            changes: []
+        )
+
+        try await controller.acceptLocalBatch(markBatch)
+        XCTAssertTrue(transport.sentBatchIDs.isEmpty)
+
+        try await controller.acceptLocalBatch(compatibleBatch)
+
+        XCTAssertEqual(transport.sentBatchIDs, [compatibleBatch.id])
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshot().pendingBatches.map(\.id),
+            [markBatch.id, compatibleBatch.id]
         )
     }
 }
