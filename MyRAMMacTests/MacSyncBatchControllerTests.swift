@@ -341,6 +341,81 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
+    func testPendingMacStructuralMarkBatchSurvivesRestartAndSendsAfterCapabilityAppears() async throws {
+        let peer = MCPeerID(displayName: "remote|v3-restart-mac")
+        let queueURL = temporaryQueueFileURL(named: "MYR227-v3-restart.json")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(
+                at: queueURL.deletingLastPathComponent()
+            )
+        }
+        let batch = try makeStructuralMarkBatch(idSuffix: 227_620)
+        var firstSentBatchIDs: [UUID] = []
+        let firstController = try makeController(
+            unsentBatchQueueFileURL: queueURL,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(
+                    from: data
+                )
+                guard message.kind == .batchSync else { return }
+                firstSentBatchIDs.append(
+                    try MultipeerSyncMessageCoding.decodeBatchPayload(
+                        message.payload
+                    ).batch.id
+                )
+            }
+        )
+        firstController.recordBootstrapCapabilityForTesting(
+            nil,
+            forPeerDeviceID: "v3-restart-mac"
+        )
+
+        try await firstController.acceptLocalBatch(batch)
+
+        XCTAssertTrue(firstSentBatchIDs.isEmpty)
+        XCTAssertEqual(
+            firstController.unsentBatchQueueSnapshotForTesting().pendingBatches,
+            [batch]
+        )
+
+        var secondSentBatchIDs: [UUID] = []
+        let secondController = try makeController(
+            unsentBatchQueueFileURL: queueURL,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                let message = try MultipeerSyncMessageCoding.decodeMessage(
+                    from: data
+                )
+                guard message.kind == .batchSync else { return }
+                secondSentBatchIDs.append(
+                    try MultipeerSyncMessageCoding.decodeBatchPayload(
+                        message.payload
+                    ).batch.id
+                )
+            }
+        )
+        secondController.recordBootstrapCapabilityForTesting(
+            nil,
+            forPeerDeviceID: "v3-restart-mac"
+        )
+        secondController.recordStructuralMarkCapabilityForTesting(
+            SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue,
+            forPeerDeviceID: "v3-restart-mac"
+        )
+
+        secondController.flushPendingBatch()
+        await waitUntil { secondSentBatchIDs == [batch.id] }
+
+        XCTAssertEqual(secondSentBatchIDs, [batch.id])
+        XCTAssertEqual(
+            secondController.unsentBatchQueueSnapshotForTesting().pendingBatches,
+            [batch]
+        )
+    }
+
     func testMacCapabilityAnnouncementResolvesPeerAndStartsBootstrapBeforeBatchSync() async throws {
         let peer = MCPeerID(displayName: "remote|announcement-mac")
         var kinds: [MultipeerSyncMessageKind] = []

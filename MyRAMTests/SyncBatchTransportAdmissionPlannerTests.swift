@@ -484,6 +484,65 @@ final class MYR229QueueDrainRegressionTests: XCTestCase {
 final class MYR232DeliveryLifecycleTests: XCTestCase {
     private let peer = MCPeerID(displayName: "Remote|myr-232-peer")
 
+    func testPendingStructuralMarkBatchSurvivesRestartAndSendsAfterCapabilityAppears() async throws {
+        let unsentURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR227-v3-restart-\(UUID().uuidString).json")
+        let firstPendingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR227-v3-pending-1-\(UUID().uuidString).json")
+        let secondPendingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR227-v3-pending-2-\(UUID().uuidString).json")
+        addTeardownBlock {
+            try? FileManager.default.removeItem(at: unsentURL)
+            try? FileManager.default.removeItem(at: firstPendingURL)
+            try? FileManager.default.removeItem(at: secondPendingURL)
+        }
+        let batch = try makeStructuralMarkBatch(idSuffix: 232_701)
+        let firstTransport = MYR229RecordingTransport(connectedPeers: [peer])
+        let firstController = MyRAMSyncController(
+            unsentBatchQueueFileURL: unsentURL,
+            pendingChangesFileURL: firstPendingURL,
+            startsNetworking: false,
+            transport: firstTransport
+        )
+        firstController.recordBootstrapCapabilityForTesting(
+            nil,
+            forPeerDeviceID: "myr-232-peer"
+        )
+
+        try await firstController.acceptLocalBatch(batch)
+
+        XCTAssertTrue(firstTransport.sentBatchIDs.isEmpty)
+        XCTAssertEqual(
+            firstController.unsentBatchQueueSnapshot().pendingBatches,
+            [batch]
+        )
+
+        let secondTransport = MYR229RecordingTransport(connectedPeers: [peer])
+        let secondController = MyRAMSyncController(
+            unsentBatchQueueFileURL: unsentURL,
+            pendingChangesFileURL: secondPendingURL,
+            startsNetworking: false,
+            transport: secondTransport
+        )
+        secondController.recordBootstrapCapabilityForTesting(
+            nil,
+            forPeerDeviceID: "myr-232-peer"
+        )
+        secondController.recordStructuralMarkCapabilityForTesting(
+            SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue,
+            forPeerDeviceID: "myr-232-peer"
+        )
+
+        secondController.flushAllOutboundWork()
+        await waitUntil { secondTransport.sentBatchIDs == [batch.id] }
+
+        XCTAssertEqual(secondTransport.sentBatchIDs, [batch.id])
+        XCTAssertEqual(
+            secondController.unsentBatchQueueSnapshot().pendingBatches,
+            [batch]
+        )
+    }
+
     func testRepeatedFlushWhileSendIsInFlightDoesNotMultiplyDelivery() async throws {
         let transport = MYR229RecordingTransport(connectedPeers: [peer])
         transport.suspendBatchSends = true
@@ -623,6 +682,47 @@ final class MYR232DeliveryLifecycleTests: XCTestCase {
         )
         controller.recordBootstrapCapabilityForTesting(nil, forPeerDeviceID: "myr-232-peer")
         return controller
+    }
+
+    private func makeStructuralMarkBatch(idSuffix: Int) throws -> SyncBatch {
+        let actorID = UUID(
+            uuidString: "22700000-0000-0000-0000-000000000950"
+        )!
+        let operation = try SyncTextMarkOperation(
+            operationID: SyncOperationID(
+                deviceID: actorID,
+                localCounter: UInt64(idSuffix)
+            ),
+            logicalClock: UInt64(idSuffix),
+            key: .italic,
+            assignment: .enabled,
+            startAnchor: .empty,
+            endAnchor: .empty
+        )
+        return SyncBatch(
+            id: UUID(
+                uuidString: String(
+                    format: "22700000-0000-0000-0000-%012d",
+                    idSuffix
+                )
+            )!,
+            originDeviceID: actorID,
+            createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
+            batchSequence: UInt64(idSuffix),
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: UUID(
+                            uuidString: "22700000-0000-0000-0000-000000000951"
+                        )!,
+                        operations: [operation],
+                        modifiedAt: Date(
+                            timeIntervalSince1970: TimeInterval(idSuffix)
+                        )
+                    )
+                )
+            ]
+        )
     }
 
     private func makeBatch(idSuffix: Int) -> SyncBatch {
