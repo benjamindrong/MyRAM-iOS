@@ -318,6 +318,27 @@ final class MacSyncBatchControllerTests: XCTestCase {
             controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id),
             [markBatch.id, compatibleBatch.id]
         )
+
+        let acknowledgementData = try MultipeerSyncMessageCoding.encode(
+            kind: .batchAcknowledgement,
+            payload: JSONEncoder().encode(
+                SyncBatchAcknowledgement(batchID: compatibleBatch.id)
+            )
+        )
+        let dummySession = MCSession(
+            peer: MCPeerID(displayName: "Local|local-device")
+        )
+        controller.session(
+            dummySession,
+            didReceive: acknowledgementData,
+            fromPeer: peer
+        )
+        await Task.yield()
+
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id),
+            [markBatch.id]
+        )
     }
 
     func testMacCapabilityAnnouncementResolvesPeerAndStartsBootstrapBeforeBatchSync() async throws {
