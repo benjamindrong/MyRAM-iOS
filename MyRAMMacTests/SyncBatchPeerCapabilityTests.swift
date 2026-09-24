@@ -63,12 +63,81 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             SyncBatchPeerCapabilityCodec.productionDiscoveryInfo,
             [
                 SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
-                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1",
+                SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoKey: "1"
             ]
         )
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.productionInvitationContext,
             Data("1,2".utf8)
+        )
+    }
+
+    func testStructuralMarkCapabilityRebindsSameStableDeviceWithoutRediscovery() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordStructuralMarkDiscoveryValue(
+            SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue,
+            forPeerDeviceID: "peer"
+        )
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
+
+        XCTAssertTrue(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer"
+            )
+        )
+
+        registry.clearCurrentSessionEvidence(forPeerDeviceID: "peer")
+        XCTAssertFalse(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer"
+            )
+        )
+
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
+        XCTAssertTrue(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer"
+            )
+        )
+    }
+
+    func testStructuralMarkCapabilityCannotTransferToDifferentStableDevice() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordStructuralMarkDiscoveryValue(
+            SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue,
+            forPeerDeviceID: "peer-a"
+        )
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer-b")
+
+        XCTAssertFalse(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer-b"
+            )
+        )
+        XCTAssertFalse(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer-a"
+            )
+        )
+    }
+
+    func testContradictoryStructuralMarkEvidenceFailsClosed() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordStructuralMarkDiscoveryValue(
+            nil,
+            forPeerDeviceID: "peer"
+        )
+        registry.recordBootstrapStructuralMarkSchemaVersion(
+            SyncStructuralMarkTransportSchemaVersion.v1.rawValue,
+            forPeerDeviceID: "peer"
+        )
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
+
+        XCTAssertFalse(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer"
+            )
         )
     }
 
