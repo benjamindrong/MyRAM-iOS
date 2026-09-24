@@ -278,4 +278,87 @@ final class MarkdownPreviewParserTests: XCTestCase {
             )
         }
     }
+
+    // MARK: 16. Foundation table intent characterization on deployment SDK
+    func testFoundationTableIntentCharacterizationOnDeploymentSDK() throws {
+        let source = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Ready |
+        | Beta | Pending |
+        """
+
+        let attributed = try AttributedString(
+            markdown: source,
+            options: .init(
+                interpretedSyntax: .full,
+                failurePolicy: .throwError,
+                languageCode: nil
+            )
+        )
+
+        var tableCount = 0
+        var headerRowCount = 0
+        var bodyRowCount = 0
+        var cellsByRowIdentity: [Int: [(column: Int, text: String)]] = [:]
+        var headerRowIdentities: Set<Int> = []
+
+        for run in attributed.runs {
+            guard let intent = run.presentationIntent else { continue }
+
+            var rowIdentity: Int?
+            var column: Int?
+
+            for component in intent.components {
+                switch component.kind {
+                case .table:
+                    tableCount += 1
+                case .tableHeaderRow:
+                    headerRowCount += 1
+                    headerRowIdentities.insert(component.identity)
+                    rowIdentity = component.identity
+                case .tableRow:
+                    bodyRowCount += 1
+                    rowIdentity = component.identity
+                case .tableCell(let cellColumn):
+                    column = cellColumn
+                default:
+                    break
+                }
+            }
+
+            if let rowIdentity, let column {
+                cellsByRowIdentity[rowIdentity, default: []].append(
+                    (column: column, text: String(attributed[run.range].characters))
+                )
+            }
+        }
+
+        XCTAssertGreaterThan(tableCount, 0, "Foundation MUST expose a table intent")
+        XCTAssertGreaterThan(headerRowCount, 0, "Foundation MUST expose a table header-row intent")
+        XCTAssertGreaterThanOrEqual(bodyRowCount, 2, "Foundation MUST expose both body rows")
+        XCTAssertEqual(cellsByRowIdentity.count, 3, "Foundation MUST expose one header row plus two body rows")
+
+        let orderedRows = cellsByRowIdentity
+            .map { identity, cells in
+                (
+                    isHeader: headerRowIdentities.contains(identity),
+                    cells: cells.sorted { $0.column < $1.column }.map(\.text)
+                )
+            }
+
+        XCTAssertTrue(
+            orderedRows.contains { $0.isHeader && $0.cells == ["Name", "Status"] },
+            "Header cells MUST preserve stable column ordering"
+        )
+        XCTAssertTrue(
+            orderedRows.contains { !$0.isHeader && $0.cells == ["Alpha", "Ready"] },
+            "First body row MUST preserve stable column ordering"
+        )
+        XCTAssertTrue(
+            orderedRows.contains { !$0.isHeader && $0.cells == ["Beta", "Pending"] },
+            "Second body row MUST preserve stable column ordering"
+        )
+    }
+
 }
