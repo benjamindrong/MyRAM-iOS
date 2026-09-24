@@ -9,7 +9,7 @@ actor IPhoneSyncBatchAccumulator {
     private var pendingBatch: PendingBatch?
     private var lastSequenceReservationIssue: SyncBatchSequenceReservation.SequenceIssue?
     private var readinessTask: Task<Void, Never>?
-    private var continuations: [UUID: AsyncStream<SyncConvergenceLocalObligation>.Continuation] = [:]
+    private var continuations: [UUID: AsyncStream<SyncPreparedLocalObligationCollection>.Continuation] = [:]
 
     init(
         originDeviceID: SyncBatchDeviceID,
@@ -30,9 +30,9 @@ actor IPhoneSyncBatchAccumulator {
         self.sleep = sleep
     }
 
-    func readyBatches() -> AsyncStream<SyncConvergenceLocalObligation> {
+    func readyBatches() -> AsyncStream<SyncPreparedLocalObligationCollection> {
         let streamID = UUID()
-        let (stream, continuation) = AsyncStream.makeStream(of: SyncConvergenceLocalObligation.self)
+        let (stream, continuation) = AsyncStream.makeStream(of: SyncPreparedLocalObligationCollection.self)
         continuations[streamID] = continuation
         continuation.onTermination = { [weak self] _ in
             Task { await self?.removeContinuation(id: streamID) }
@@ -110,12 +110,9 @@ actor IPhoneSyncBatchAccumulator {
     }
 
     func emitReadyBatches(at date: Date = .now) {
-        let obligations = readyBatchesIfAvailable(at: date)
-        guard !obligations.isEmpty else { return }
-        for obligation in obligations {
-            for continuation in continuations.values {
-                continuation.yield(obligation)
-            }
+        guard let collection = readyCollectionIfAvailable(at: date) else { return }
+        for continuation in continuations.values {
+            continuation.yield(collection)
         }
     }
 
@@ -129,8 +126,12 @@ actor IPhoneSyncBatchAccumulator {
         }
     }
 
-    private func readyBatchesIfAvailable(at date: Date) -> [SyncConvergenceLocalObligation] {
-        takeReadyBatches(at: date)
+    func takeReadyCollection(at date: Date = .now) -> SyncPreparedLocalObligationCollection? {
+        SyncPreparedLocalObligationCollection(takeReadyBatches(at: date))
+    }
+
+    private func readyCollectionIfAvailable(at date: Date) -> SyncPreparedLocalObligationCollection? {
+        takeReadyCollection(at: date)
     }
 
     func takePendingBatchNow() -> SyncConvergenceLocalObligation? {
@@ -139,6 +140,10 @@ actor IPhoneSyncBatchAccumulator {
 
     func takePendingBatchesNow() -> [SyncConvergenceLocalObligation] {
         extractPendingBatches { _ in true }
+    }
+
+    func takePendingCollectionNow() -> SyncPreparedLocalObligationCollection? {
+        SyncPreparedLocalObligationCollection(takePendingBatchesNow())
     }
 
     func containsPendingBodyChange(for noteID: UUID) -> Bool {
@@ -160,6 +165,14 @@ actor IPhoneSyncBatchAccumulator {
                 SyncConvergenceLocalEvidenceCapture.noteID(for: $0.change) == noteID
             }
         }
+    }
+
+    func takePendingCollectionIfAffecting(
+        noteID: UUID
+    ) -> SyncPreparedLocalObligationCollection? {
+        SyncPreparedLocalObligationCollection(
+            takePendingObligationsIfAffecting(noteID: noteID)
+        )
     }
 
     private func extractPendingBatches(

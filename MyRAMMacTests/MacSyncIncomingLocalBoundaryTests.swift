@@ -22,16 +22,16 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         let obligation = try makeCapturedObligation(noteID: Self.noteID(2))
         let adapter = MacSyncIncomingLocalBoundaryAdapter(
             surface: MacSyncIncomingLocalBoundarySurface(prepareForIncomingBodyMutation: { _ in
-                .localObligation(obligation)
+                .localObligations(SyncPreparedLocalObligationCollection([obligation])!)
             })
         )
 
         let result = await adapter.prepareForIncomingBodyMutation(affecting: [Self.noteID(2)])
 
-        guard case .localObligation(let returnedObligation) = result else {
+        guard case .localObligations(let returnedObligations) = result else {
             return XCTFail("Expected local obligation preparation")
         }
-        XCTAssertEqual(returnedObligation, obligation)
+        XCTAssertEqual(returnedObligations.obligations, [obligation])
     }
 
     func testCaptureFailureMapsToSharedLocalCaptureFailure() async {
@@ -111,18 +111,18 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
                 XCTAssertEqual(noteID, selectedID)
                 return .ready
             },
-            takePendingObligation: { noteID in
+            takePendingObligations: { noteID in
                 visitedNoteIDs.append(noteID)
-                return noteID == laterID ? obligation : nil
+                return noteID == laterID ? SyncPreparedLocalObligationCollection([obligation]) : nil
             }
         )
 
         let result = await preparer.prepare(affecting: [selectedID, laterID])
 
-        guard case .localObligation(let returnedObligation) = result else {
+        guard case .localObligations(let returnedObligations) = result else {
             return XCTFail("Expected the later note's pending body obligation")
         }
-        XCTAssertEqual(returnedObligation, obligation)
+        XCTAssertEqual(returnedObligations.obligations, [obligation])
         XCTAssertEqual(visitedNoteIDs, [laterID])
     }
 
@@ -135,7 +135,7 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
             selectedNoteID: { selectedID },
             hasUnsavedChanges: { true },
             saveSelectedNoteForBoundary: { _ in .ready },
-            takePendingObligation: { noteID in
+            takePendingObligations: { noteID in
                 visitedNoteIDs.append(noteID)
                 return nil
             }
@@ -157,7 +157,7 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
             selectedNoteID: { selectedID },
             hasUnsavedChanges: { true },
             saveSelectedNoteForBoundary: { _ in .staleLocalState(noteID: selectedID) },
-            takePendingObligation: { noteID in
+            takePendingObligations: { noteID in
                 if noteID == laterID { extractedLaterNote = true }
                 return nil
             }
@@ -267,7 +267,7 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
                 .completed(
                     attempt: attempt,
                     mutationKind: .body,
-                    publication: .boundaryExtracted(obligation)
+                    publication: .boundaryExtracted(SyncPreparedLocalObligationCollection([obligation])!)
                 )
             }
         )
@@ -447,7 +447,7 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         let attempt = makeAttempt(noteID: Self.noteID(65), revision: Self.noteID(66), body: "A")
         let result = MacIncomingBoundaryCompletionPolicy.result(
             for: completed(attempt),
-            obligation: nil,
+            obligations: nil,
             requestedAttemptStillOwnsEditor: false,
             completingAttemptStillOwnsEditor: false
         )
@@ -467,7 +467,7 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         )
         let result = MacIncomingBoundaryCompletionPolicy.result(
             for: completion,
-            obligation: nil,
+            obligations: nil,
             requestedAttemptStillOwnsEditor: false,
             completingAttemptStillOwnsEditor: false
         )
@@ -487,7 +487,7 @@ final class MacSyncIncomingLocalBoundaryTests: XCTestCase {
         )
         let result = MacIncomingBoundaryCompletionPolicy.result(
             for: completion,
-            obligation: nil,
+            obligations: nil,
             requestedAttemptStillOwnsEditor: true,
             completingAttemptStillOwnsEditor: true
         )

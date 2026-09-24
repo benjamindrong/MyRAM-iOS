@@ -372,8 +372,8 @@ struct MyRAMMacRootView: View {
                     saveSelectedNoteForBoundary: { noteID in
                         await saveNoteForIncomingBoundary(id: noteID, attributedContent: attributedText)
                     },
-                    takePendingObligation: { noteID in
-                        await syncController.recordAndTakeBoundaryObligation(
+                    takePendingObligations: { noteID in
+                        await syncController.recordAndTakeBoundaryObligations(
                             adding: [],
                             affecting: noteID
                         )
@@ -864,12 +864,12 @@ struct MyRAMMacRootView: View {
             await syncController.record(prepared.capturedChanges, at: prepared.modifiedAt)
             publicationOutcome = .ordinaryRecorded
         case .incomingBoundary:
-            let obligation = await syncController.recordAndTakeBoundaryObligation(
+            let obligations = await syncController.recordAndTakeBoundaryObligations(
                 adding: prepared.capturedChanges,
                 affecting: attempt.noteID,
                 at: prepared.modifiedAt
             )
-            publicationOutcome = .boundaryExtracted(obligation)
+            publicationOutcome = .boundaryExtracted(obligations)
         }
 
         return .completed(
@@ -913,20 +913,20 @@ struct MyRAMMacRootView: View {
             return .staleLocalState(noteID: requestedAttempt.noteID)
         case .completed(let attempt, _, let publication):
             refreshNotesAfterSave()
-            let obligation: SyncConvergenceLocalObligation?
+            let obligations: SyncPreparedLocalObligationCollection?
             switch publication {
             case .boundaryExtracted(let extracted):
-                obligation = extracted
+                obligations = extracted
             case .ordinaryRecorded, .none:
                 // An ordinary save proves publication completed, not that no pending body evidence remains.
-                obligation = await syncController.recordAndTakeBoundaryObligation(
+                obligations = await syncController.recordAndTakeBoundaryObligations(
                     adding: [],
                     affecting: attempt.noteID
                 )
             }
             let result = MacIncomingBoundaryCompletionPolicy.result(
                 for: completion,
-                obligation: obligation,
+                obligations: obligations,
                 requestedAttemptStillOwnsEditor: stillOwnsEditorState(requestedAttempt),
                 completingAttemptStillOwnsEditor: stillOwnsEditorState(attempt)
             )

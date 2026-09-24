@@ -147,8 +147,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
         readyBatchTask = Task { [weak self, accumulator] in
             let stream = await accumulator.readyLocalObligations()
-            for await obligation in stream {
-                await self?.convergenceCoordinator?.submitLocalObligation(obligation)
+            for await collection in stream {
+                await self?.convergenceCoordinator?.submitLocalObligations(collection)
             }
         }
     }
@@ -291,11 +291,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         await record([capturedChange], at: date)
     }
 
-    func recordAndTakeBoundaryObligation(
+    func recordAndTakeBoundaryObligations(
         adding capturedChanges: [SyncConvergenceCapturedLocalChange],
         affecting noteID: UUID,
         at date: Date = .now
-    ) async -> SyncConvergenceLocalObligation? {
+    ) async -> SyncPreparedLocalObligationCollection? {
         if !capturedChanges.isEmpty {
             localCaptureGeneration &+= 1
         }
@@ -305,25 +305,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             at: date
         )
         await updateSequenceReservationIssue()
-        await durablySubmitAdditionalBoundaryObligations(obligations.dropFirst())
-        return obligations.first
+        return SyncPreparedLocalObligationCollection(obligations)
     }
 
-    func takePendingLocalObligationIfAffecting(noteID: UUID) async -> SyncConvergenceLocalObligation? {
-        let obligations = await accumulator.takePendingObligationsIfAffecting(
-            noteID: noteID
-        )
-        await durablySubmitAdditionalBoundaryObligations(obligations.dropFirst())
-        return obligations.first
-    }
-
-    private func durablySubmitAdditionalBoundaryObligations(
-        _ obligations: ArraySlice<SyncConvergenceLocalObligation>
-    ) async {
-        guard let convergenceCoordinator else { return }
-        for obligation in obligations {
-            await convergenceCoordinator.submitLocalObligation(obligation)
-        }
+    func takePendingLocalObligationsIfAffecting(
+        noteID: UUID
+    ) async -> SyncPreparedLocalObligationCollection? {
+        await accumulator.takePendingObligationCollectionIfAffecting(noteID: noteID)
     }
 
     private func updateSequenceReservationIssue() async {
@@ -618,11 +606,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             let captureGeneration = localCaptureGeneration
             await convergenceCoordinator.resumePendingWork()
             while true {
-                let obligations = await accumulator.takePendingObligationsNow()
-                guard !obligations.isEmpty else { break }
-                for obligation in obligations {
-                    await convergenceCoordinator.submitLocalObligation(obligation)
+                guard let collection = await accumulator.takePendingObligationCollectionNow() else {
+                    break
                 }
+                await convergenceCoordinator.submitLocalObligations(collection)
             }
 #if DEBUG
             await onBootstrapOwnershipPreflightCompletedForTesting?()

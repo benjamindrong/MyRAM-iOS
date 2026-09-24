@@ -11,7 +11,7 @@ actor MacSyncBatchAccumulator {
     private var lastSequenceReservationIssue: SyncBatchSequenceReservation.SequenceIssue?
     private var readinessTask: Task<Void, Never>?
     private var continuations: [UUID: AsyncStream<MacSyncBatch>.Continuation] = [:]
-    private var obligationContinuations: [UUID: AsyncStream<SyncConvergenceLocalObligation>.Continuation] = [:]
+    private var obligationContinuations: [UUID: AsyncStream<SyncPreparedLocalObligationCollection>.Continuation] = [:]
 
     init(
         originDeviceID: MacSyncDeviceID,
@@ -42,9 +42,9 @@ actor MacSyncBatchAccumulator {
         return stream
     }
 
-    func readyLocalObligations() -> AsyncStream<SyncConvergenceLocalObligation> {
+    func readyLocalObligations() -> AsyncStream<SyncPreparedLocalObligationCollection> {
         let streamID = UUID()
-        let (stream, continuation) = AsyncStream.makeStream(of: SyncConvergenceLocalObligation.self)
+        let (stream, continuation) = AsyncStream.makeStream(of: SyncPreparedLocalObligationCollection.self)
         obligationContinuations[streamID] = continuation
         continuation.onTermination = { [weak self] _ in
             Task { await self?.removeObligationContinuation(id: streamID) }
@@ -118,15 +118,14 @@ actor MacSyncBatchAccumulator {
     }
 
     func emitReadyBatches(at date: Date = .now) {
-        let obligations = readyObligationsIfAvailable(at: date)
-        guard !obligations.isEmpty else { return }
-        for obligation in obligations {
+        guard let collection = readyObligationCollectionIfAvailable(at: date) else { return }
+        for obligation in collection.obligations {
             for continuation in continuations.values {
                 continuation.yield(obligation.batch)
             }
-            for continuation in obligationContinuations.values {
-                continuation.yield(obligation)
-            }
+        }
+        for continuation in obligationContinuations.values {
+            continuation.yield(collection)
         }
     }
 
@@ -148,6 +147,10 @@ actor MacSyncBatchAccumulator {
         extractPendingBatches { _ in true }
     }
 
+    func takePendingObligationCollectionNow() -> SyncPreparedLocalObligationCollection? {
+        SyncPreparedLocalObligationCollection(takePendingObligationsNow())
+    }
+
     func takePendingObligationIfAffecting(noteID: UUID) -> SyncConvergenceLocalObligation? {
         takePendingObligationsIfAffecting(noteID: noteID).first
     }
@@ -162,6 +165,14 @@ actor MacSyncBatchAccumulator {
         }
     }
 
+    func takePendingObligationCollectionIfAffecting(
+        noteID: UUID
+    ) -> SyncPreparedLocalObligationCollection? {
+        SyncPreparedLocalObligationCollection(
+            takePendingObligationsIfAffecting(noteID: noteID)
+        )
+    }
+
     func containsPendingBodyChange(for noteID: UUID) -> Bool {
         pendingBatch?.capturedChanges.contains { captured in
             guard SyncConvergenceLocalEvidenceCapture.isBodyTextOperation(captured.change) else { return false }
@@ -169,10 +180,16 @@ actor MacSyncBatchAccumulator {
         } ?? false
     }
 
-    private func readyObligationsIfAvailable(
+    func takeReadyObligationCollection(
+        at date: Date = .now
+    ) -> SyncPreparedLocalObligationCollection? {
+        SyncPreparedLocalObligationCollection(takeReadyObligations(at: date))
+    }
+
+    private func readyObligationCollectionIfAvailable(
         at date: Date
-    ) -> [SyncConvergenceLocalObligation] {
-        takeReadyObligations(at: date)
+    ) -> SyncPreparedLocalObligationCollection? {
+        takeReadyObligationCollection(at: date)
     }
 
     private func extractPendingBatches(

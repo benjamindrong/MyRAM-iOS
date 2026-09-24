@@ -75,7 +75,7 @@ protocol SyncConvergenceIncomingLocalBoundaryAdapter: AnyObject {
 
 enum SyncConvergenceIncomingLocalBoundaryPreparation {
     case ready
-    case localObligation(SyncConvergenceLocalObligation)
+    case localObligations(SyncPreparedLocalObligationCollection)
     case failed(SyncConvergenceIncomingLocalBoundaryFailure)
 }
 
@@ -245,12 +245,23 @@ final class SyncConvergenceRuntime {
     }
 
     func submitLocalObligation(_ obligation: SyncConvergenceLocalObligation) async -> SyncConvergenceRuntimeOutcome {
+        guard let collection = SyncPreparedLocalObligationCollection([obligation]) else {
+            preconditionFailure("A single local obligation must form a non-empty collection")
+        }
+        return await submitLocalObligations(collection)
+    }
+
+    func submitLocalObligations(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceRuntimeOutcome {
         do {
-            try SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)
-            if case .captured = obligation.evidence {
-                _ = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
+            for obligation in collection.obligations {
+                try SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)
+                if case .captured = obligation.evidence {
+                    _ = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
+                }
             }
-            try localObligationQueue.enqueue(obligation)
+            try localObligationQueue.enqueueAtomically(collection.obligations)
             switch try await satisfyLocalObligations() {
             case .complete:
                 return .drained(appliedBatchIDs: [])
@@ -262,14 +273,28 @@ final class SyncConvergenceRuntime {
                 return .blocked(failure)
             }
         } catch {
-            return .blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: obligation.id))
+            return .blocked(
+                SyncBatchDrainFailureClassifier.classify(
+                    error,
+                    batchID: collection.primary.id
+                )
+            )
         }
     }
 
     func admitPendingLocalObligationForIncomingMutation(
         _ obligation: SyncConvergenceLocalObligation
     ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
-        await admitLocalObligationForIncomingBoundary(obligation)
+        guard let collection = SyncPreparedLocalObligationCollection([obligation]) else {
+            preconditionFailure("A single local obligation must form a non-empty collection")
+        }
+        return await admitLocalObligationsForIncomingBoundary(collection)
+    }
+
+    func admitPendingLocalObligationsForIncomingMutation(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
+        await admitLocalObligationsForIncomingBoundary(collection)
     }
 
     func admitQueuedLocalObligationsForIncomingMutation(
@@ -277,7 +302,7 @@ final class SyncConvergenceRuntime {
     ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             for obligation in localObligationQueue.pendingObligations(affecting: noteID) {
-                let outcome = await admitLocalObligationForIncomingBoundary(obligation)
+                let outcome = await admitPendingLocalObligationForIncomingMutation(obligation)
                 if case .cannotProceed = outcome {
                     return outcome
                 }
@@ -757,8 +782,8 @@ final class SyncConvergenceRuntime {
         switch await incomingLocalBoundaryAdapter.prepareForIncomingBodyMutation(affecting: noteIDs) {
         case .ready:
             return .ready
-        case .localObligation(let obligation):
-            return await admitLocalObligationForIncomingBoundary(obligation)
+        case .localObligations(let collection):
+            return await admitLocalObligationsForIncomingBoundary(collection)
         case .failed(let failure):
             return .cannotProceed(.blocked(Self.drainFailure(for: failure, batchID: batchID)))
         }
@@ -782,15 +807,23 @@ final class SyncConvergenceRuntime {
         return SyncBatchDrainFailure(batchID: batchID, kind: kind)
     }
 
-    private func admitLocalObligationForIncomingBoundary(
-        _ obligation: SyncConvergenceLocalObligation
+    private func admitLocalObligationsForIncomingBoundary(
+        _ collection: SyncPreparedLocalObligationCollection
     ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
         do {
-            try SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)
-            try localObligationQueue.enqueue(obligation)
-            _ = try admitQueuedLocalObligation(obligation)
-            return .evidenceRegistered(obligationID: obligation.id)
+            for obligation in collection.obligations {
+                try SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)
+                if case .captured = obligation.evidence {
+                    _ = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
+                }
+            }
+            try localObligationQueue.enqueueAtomically(collection.obligations)
+            for obligation in collection.obligations {
+                _ = try admitQueuedLocalObligation(obligation)
+            }
+            return .evidenceRegistered(obligationID: collection.primary.id)
         } catch let evidenceError as SyncConvergenceLocalEvidenceCaptureError {
+            let obligation = collection.primary
             return .cannotProceed(.quarantined(SyncConvergenceQuarantinedWork(items: [
                 SyncConvergenceQuarantinedItem(
                     domain: .localObligation,
@@ -801,9 +834,18 @@ final class SyncConvergenceRuntime {
                 )
             ])))
         } catch let failure as SyncConvergenceTransactionFailure {
-            return .cannotProceed(.blocked(Self.drainFailure(for: failure, batchID: obligation.id)))
+            return .cannotProceed(
+                .blocked(Self.drainFailure(for: failure, batchID: collection.primary.id))
+            )
         } catch {
-            return .cannotProceed(.blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: obligation.id)))
+            return .cannotProceed(
+                .blocked(
+                    SyncBatchDrainFailureClassifier.classify(
+                        error,
+                        batchID: collection.primary.id
+                    )
+                )
+            )
         }
     }
 

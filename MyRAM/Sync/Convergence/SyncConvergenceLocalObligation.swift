@@ -41,6 +41,19 @@ struct SyncConvergenceLocalObligation: Codable, Equatable, Identifiable, Sendabl
     }
 }
 
+struct SyncPreparedLocalObligationCollection: Equatable, Sendable {
+    let obligations: [SyncConvergenceLocalObligation]
+
+    init?(_ obligations: [SyncConvergenceLocalObligation]) {
+        guard !obligations.isEmpty else { return nil }
+        self.obligations = obligations
+    }
+
+    var primary: SyncConvergenceLocalObligation {
+        obligations[0]
+    }
+}
+
 enum SyncConvergenceLocalEvidenceCaptureError: Error, Equatable {
     case missingBodyEvidence(noteID: UUID)
     case invalidBodyOperation(noteID: UUID)

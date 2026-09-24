@@ -366,8 +366,8 @@ final class NotesViewModel: ObservableObject {
         )
         syncBatchReadyTask = Task { [weak self, syncBatchAccumulator] in
             let stream = await syncBatchAccumulator.readyBatches()
-            for await obligation in stream {
-                await self?.handleReadyLocalBatch(obligation)
+            for await collection in stream {
+                await self?.handleReadyLocalObligations(collection)
             }
         }
         syncConflicts = syncConflictService.activeConflicts()
@@ -2676,14 +2676,14 @@ final class NotesViewModel: ObservableObject {
     }
 
     func capturePendingLocalBatchForRecovery() async -> SyncBatchID? {
-        guard let obligation = await syncBatchAccumulator.takePendingBatchNow() else {
+        guard let collection = await syncBatchAccumulator.takePendingCollectionNow() else {
             await resumePendingConvergencePresentation()
             return nil
         }
-        let outcome = await syncConvergenceRuntime.submitLocalObligation(obligation)
+        let outcome = await syncConvergenceRuntime.submitLocalObligations(collection)
         await handleConvergenceRuntimeOutcome(outcome)
         await resumePendingConvergencePresentation()
-        return obligation.id
+        return collection.primary.id
     }
 
     private func prepareLocalOwnershipForBootstrap() async {
@@ -2698,8 +2698,8 @@ final class NotesViewModel: ObservableObject {
             }
 
             await resumePendingConvergencePresentation()
-            if let obligation = await syncBatchAccumulator.takePendingBatchNow() {
-                await handleReadyLocalBatch(obligation)
+            if let collection = await syncBatchAccumulator.takePendingCollectionNow() {
+                await handleReadyLocalObligations(collection)
                 continue
             }
 
@@ -2800,8 +2800,10 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func handleReadyLocalBatch(_ obligation: SyncConvergenceLocalObligation) async {
-        let outcome = await syncConvergenceRuntime.submitLocalObligation(obligation)
+    private func handleReadyLocalObligations(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async {
+        let outcome = await syncConvergenceRuntime.submitLocalObligations(collection)
         await handleConvergenceRuntimeOutcome(outcome)
     }
 
@@ -3695,21 +3697,15 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
 
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await syncBatchAccumulator.containsPendingBodyChange(for: noteID) else { continue }
-            let obligations = await syncBatchAccumulator.takePendingObligationsIfAffecting(
+            guard let collection = await syncBatchAccumulator.takePendingCollectionIfAffecting(
                 noteID: noteID
-            )
-            guard !obligations.isEmpty else {
+            ) else {
                 return nil
             }
-            for obligation in obligations {
-                let outcome = await syncConvergenceRuntime
-                    .admitPendingLocalObligationForIncomingMutation(obligation)
-                switch outcome {
-                case .ready, .evidenceRegistered:
-                    continue
-                case .cannotProceed(let outcome):
-                    return outcome
-                }
+            let outcome = await syncConvergenceRuntime
+                .admitPendingLocalObligationsForIncomingMutation(collection)
+            if case .cannotProceed(let runtimeOutcome) = outcome {
+                return runtimeOutcome
             }
         }
         return nil
@@ -3720,20 +3716,12 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
     ) async -> SyncConvergenceIncomingLocalBoundaryPreparation {
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
             guard await syncBatchAccumulator.containsPendingBodyChange(for: noteID) else { continue }
-            let obligations = await syncBatchAccumulator.takePendingObligationsIfAffecting(
+            guard let collection = await syncBatchAccumulator.takePendingCollectionIfAffecting(
                 noteID: noteID
-            )
-            guard let obligation = obligations.first else {
+            ) else {
                 return .failed(.boundaryInvariantViolation(noteID: noteID))
             }
-            for additional in obligations.dropFirst() {
-                let outcome = await syncConvergenceRuntime
-                    .admitPendingLocalObligationForIncomingMutation(additional)
-                if case .cannotProceed = outcome {
-                    return .failed(.boundaryInvariantViolation(noteID: noteID))
-                }
-            }
-            return .localObligation(obligation)
+            return .localObligations(collection)
         }
         return .ready
     }
