@@ -96,8 +96,8 @@ enum MarkdownPreviewResult: Equatable {
 // MARK: - Block projection
 
 /// Immutable, shared block model derived solely from Foundation AttributedString + presentation intents.
-/// Permitted block types (§6.4): paragraph, heading, orderedListItem, unorderedListItem,
-/// blockQuote, codeBlock.
+/// Supported block types: paragraph, heading, orderedListItem, unorderedListItem,
+/// blockQuote, codeBlock, and table.
 /// Inline semantics (emphasis, strong, links, inline code) remain AttributedString attributes
 /// inside each block. They are never separate block cases.
 /// Unknown/future Foundation intents render as .paragraph — never trigger plain-text fallback.
