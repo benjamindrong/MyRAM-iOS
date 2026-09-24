@@ -1501,11 +1501,29 @@ final class NotesViewModel: ObservableObject {
 #endif
 
     func permanentlyDeleteNote(_ note: Note) {
-        removeUndoHistoryReferencingDeletedNote(noteID: note.id)
-        stagePermanentNoteDeletion(note)
-        try? context.save()
+        let noteID = note.id
+        do {
+            try NoteSequenceStateFullBodyIntegration
+                .permanentlyDeleteNoteAndStructuralAuthority(
+                    note,
+                    in: context
+                )
+        } catch {
+            syncBatchErrorMessage =
+                "Unable to permanently delete the note and its structural state."
+            return
+        }
+
+        removeUndoHistoryReferencingDeletedNote(noteID: noteID)
+        do {
+            try pendingLocalConvergenceBatches
+                .removeTerminalStructuralMarkObligations(for: noteID)
+        } catch {
+            syncBatchErrorMessage =
+                "The note was deleted, but pending formatting cleanup must retry."
+        }
         refreshCurrentFolderContent()
-        if currentNote?.id == note.id {
+        if currentNote?.id == noteID {
             currentNote = nil
             UserDefaults.standard.removeObject(forKey: "lastNoteID")
         }
@@ -3114,23 +3132,47 @@ final class NotesViewModel: ObservableObject {
 
     private func purgeExpiredDeletedNotes() {
         let cutoff = Date().addingTimeInterval(-Self.recentlyDeletedRetention)
-        let descriptor = FetchDescriptor<Note>(predicate: #Predicate { $0.deletedAt != nil })
+        let descriptor = FetchDescriptor<Note>(
+            predicate: #Predicate { $0.deletedAt != nil }
+        )
         let deletedNotes = (try? context.fetch(descriptor)) ?? []
+        let expiredNotes = deletedNotes.filter {
+            guard let deletedAt = $0.deletedAt else { return false }
+            return deletedAt < cutoff
+        }
 
-        for note in deletedNotes {
-            if let deletedAt = note.deletedAt, deletedAt < cutoff {
-                stagePermanentNoteDeletion(note)
+        var structurallyAbsentNoteIDs: Set<UUID> = []
+        do {
+            structurallyAbsentNoteIDs.formUnion(
+                try NoteSequenceStateFullBodyIntegration
+                    .stageOrphanedStructuralAuthorityCleanup(in: context)
+            )
+            for note in expiredNotes {
+                structurallyAbsentNoteIDs.insert(note.id)
+                try NoteSequenceStateFullBodyIntegration
+                    .stagePermanentDeletion(of: note, in: context)
             }
+            if context.hasChanges {
+                try context.save()
+            }
+        } catch {
+            context.rollback()
+            syncBatchErrorMessage =
+                "Unable to purge expired notes and structural state."
+            return
         }
 
-        try? context.save()
-    }
-
-    private func stagePermanentNoteDeletion(_ note: Note) {
-        if let record = structuralFormattingRecord(noteID: note.id) {
-            context.delete(record)
+        do {
+            for noteID in structurallyAbsentNoteIDs.sorted(
+                by: { $0.uuidString < $1.uuidString }
+            ) {
+                try pendingLocalConvergenceBatches
+                    .removeTerminalStructuralMarkObligations(for: noteID)
+            }
+        } catch {
+            syncBatchErrorMessage =
+                "Purged notes are waiting for pending formatting cleanup."
         }
-        context.delete(note)
     }
 
     func exportNotesForSharing(

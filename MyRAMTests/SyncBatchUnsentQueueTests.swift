@@ -316,6 +316,70 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(queue.pendingObligations, [existing])
     }
 
+    func testTerminalStructuralMarkCleanupRemovesWholeSingleNoteV3Identity() throws {
+        let fileURL = temporaryQueueFileURL()
+        let first = try makeStructuralMarkBatchForTest(idSuffix: 227_911)
+        let second = try makeStructuralMarkBatchForTest(idSuffix: 227_912)
+        let targetNoteID = first.changes[0].noteID
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: fileURL,
+            limit: 10
+        )
+        try queue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: first)
+        )
+        try queue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: second)
+        )
+
+        let removed = try queue.removeTerminalStructuralMarkObligations(
+            for: targetNoteID
+        )
+
+        XCTAssertEqual(removed, Set([first.id]))
+        XCTAssertEqual(queue.pendingBatches, [second])
+        XCTAssertEqual(
+            FileBackedSyncConvergenceLocalObligationQueue(
+                fileURL: fileURL,
+                limit: 10
+            ).pendingBatches,
+            [second]
+        )
+    }
+
+    func testTerminalStructuralMarkCleanupPersistenceFailureRetainsObligation() throws {
+        let fileURL = temporaryQueueFileURL()
+        let batch = try makeStructuralMarkBatchForTest(idSuffix: 227_913)
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: fileURL,
+            limit: 10
+        )
+        try queue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: batch)
+        )
+
+        queue.injectPersistenceFailureForNextWrite()
+        XCTAssertThrowsError(
+            try queue.removeTerminalStructuralMarkObligations(
+                for: batch.changes[0].noteID
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? FileBackedSyncConvergenceLocalObligationQueue.QueueError,
+                .persistenceFailed
+            )
+        }
+
+        XCTAssertEqual(queue.pendingBatches, [batch])
+        XCTAssertEqual(
+            FileBackedSyncConvergenceLocalObligationQueue(
+                fileURL: fileURL,
+                limit: 10
+            ).pendingBatches,
+            [batch]
+        )
+    }
+
     func testDrainPassSchedulerSkipsBlockedNotesWithoutRotatingQueueOrder() {
         let noteA = UUID(uuidString: "00000000-0000-0000-0000-000000124301")!
         let noteB = UUID(uuidString: "00000000-0000-0000-0000-000000124302")!

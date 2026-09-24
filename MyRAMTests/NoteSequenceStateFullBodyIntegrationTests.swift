@@ -689,6 +689,74 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
         )
     }
 
+    func testPermanentDeletionRollsBackNoteAndStructuralFormattingOnSaveFailure() throws {
+        let fixture = try makeSeededFixture(body: "AB")
+        let snapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: fixture.note, in: fixture.context)
+        let marks = try fullRangeMarkState(
+            key: .bold,
+            assignment: .enabled,
+            sequence: snapshot.state,
+            localCounter: 227_901
+        )
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: fixture.note,
+                expected: snapshot,
+                finalMarkState: marks,
+                in: fixture.context
+            )
+        try fixture.context.save()
+
+        XCTAssertThrowsError(
+            try NoteSequenceStateFullBodyIntegration
+                .permanentlyDeleteNoteAndStructuralAuthority(
+                    fixture.note,
+                    in: fixture.context,
+                    saveContext: { _ in
+                        throw CocoaError(.fileWriteUnknown)
+                    }
+                )
+        )
+
+        let freshContext = ModelContext(fixture.container)
+        let restoredNote = try fetchNote(fixture.note.id, in: freshContext)
+        let restored = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: restoredNote, in: freshContext)
+        XCTAssertEqual(restored.markState, marks)
+    }
+
+    func testOrphanCleanupPreservesSoftDeletedNoteStructuralAuthority() throws {
+        let fixture = try makeSeededFixture(body: "Retained")
+        fixture.note.deletedAt = Date(timeIntervalSince1970: 227_902)
+        let orphanID = UUID(
+            uuidString: "22700000-0000-0000-0000-000000000903"
+        )!
+        let orphan = try NoteSequenceStateBootstrapPersistence
+            .prepareInitialState(
+                noteID: orphanID,
+                body: "Orphan"
+            )
+            .makeRevisionZeroRecord()
+        fixture.context.insert(orphan)
+        try fixture.context.save()
+
+        let removed = try NoteSequenceStateFullBodyIntegration
+            .stageOrphanedStructuralAuthorityCleanup(
+                in: fixture.context
+            )
+        try fixture.context.save()
+
+        XCTAssertEqual(removed, Set([orphanID]))
+        let recordIDs = Set(
+            try fetchRecords(in: fixture.context).map(\.noteID)
+        )
+        XCTAssertEqual(recordIDs, Set([fixture.note.id]))
+        XCTAssertNotNil(
+            try fetchNote(fixture.note.id, in: fixture.context).deletedAt
+        )
+    }
+
     func testReplaceBodyUsesExactUTF16RatherThanCanonicalStringEquality() throws {
         let fixture = try makeSeededFixture(body: "\u{E9}", revision: 2)
 

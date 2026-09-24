@@ -43,6 +43,32 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         obligations.contains { $0.id == batchID }
     }
 
+    @discardableResult
+    func removeTerminalStructuralMarkObligations(
+        for noteID: UUID
+    ) throws -> Set<SyncBatchID> {
+        let ids = Set(obligations.compactMap { obligation -> SyncBatchID? in
+            guard SyncBatchDeliveryPartitionPlanner.classification(
+                of: obligation.changes
+            ) == .structuralMarkV3,
+                  obligation.changes.count == 1,
+                  obligation.changes[0].noteID == noteID else {
+                return nil
+            }
+            return obligation.id
+        })
+        guard !ids.isEmpty else { return [] }
+        let original = obligations
+        obligations.removeAll { ids.contains($0.id) }
+        do {
+            try persistQueueThrowing()
+            return ids
+        } catch {
+            obligations = original
+            throw QueueError.persistenceFailed
+        }
+    }
+
     func pendingObligations(affecting noteID: UUID) -> [SyncConvergenceLocalObligation] {
         obligations.filter { obligation in
             Self.affectedNoteIDs(in: obligation.batch).contains(noteID)
