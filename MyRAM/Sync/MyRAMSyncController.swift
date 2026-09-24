@@ -252,6 +252,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private var reconnectRetryDelayNanoseconds: UInt64 = 1_000_000_000
     private var peerCapabilityRegistry = SyncBatchPeerCapabilityRegistry()
     private var bootstrapStateByPeerDeviceID: [String: SyncPeerBootstrapPendingState] = [:]
+    private var inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID:
+        [String: Set<SyncBatchNoteID>] = [:]
     private var bootstrapCapabilityResolutionTasks: [String: Task<Void, Never>] = [:]
     private var bootstrapRetryTasks: [String: Task<Void, Never>] = [:]
     private var bootstrapPreflightRetryAttemptByPeerDeviceID: [String: Int] = [:]
@@ -415,6 +417,21 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         from peerID: MCPeerID
     ) async {
         await handleBootstrapAcknowledgement(acknowledgement, from: peerID)
+    }
+
+    func inboundFormattingBaselineForTesting(
+        peerDeviceID: String
+    ) -> Set<SyncBatchNoteID> {
+        inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID[
+            peerDeviceID
+        ] ?? []
+    }
+
+    func outboundFormattingBaselineForTesting(
+        peerDeviceID: String
+    ) -> Set<SyncBatchNoteID> {
+        bootstrapStateByPeerDeviceID[peerDeviceID]?
+            .outboundAcknowledgedFormattingNoteIDs ?? []
     }
 
     func isOrdinarySyncReadyForTesting(peerDeviceID: String) -> Bool {
@@ -644,8 +661,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     private func validateDurableAdmission(_ batch: SyncBatch) throws {
         let decision = SyncBatchTransportAdmissionPlanner.durableAdmission(
-            deliveryRepresentation:
-                SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes),
+            deliveryRepresentation: deliveryRepresentation,
             activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
         )
 
@@ -814,6 +830,15 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         connectedPeers: [MCPeerID]
     ) async -> Bool {
         var eligibilityExclusions: [String] = []
+        let deliveryRepresentation =
+            SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes)
+        let structuralMarkNoteID: UUID? = {
+            guard deliveryRepresentation == .structuralMarkV3,
+                  batch.changes.count == 1 else {
+                return nil
+            }
+            return batch.changes[0].noteID
+        }()
         let eligiblePeers = connectedPeers.filter { peerID in
             let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
             guard peerCapabilityRegistry.isBootstrapCapabilityResolved(
@@ -836,6 +861,17 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             guard !state.withheldHistoricalBatchIDs.contains(batch.id) else {
                 eligibilityExclusions.append("\(deviceID):historicalBatchWithheld")
                 return false
+            }
+            if deliveryRepresentation == .structuralMarkV3 {
+                guard let structuralMarkNoteID,
+                      state.outboundAcknowledgedFormattingNoteIDs.contains(
+                        structuralMarkNoteID
+                      ) else {
+                    eligibilityExclusions.append(
+                        "\(deviceID):formattingBaselineNotAcknowledged"
+                    )
+                    return false
+                }
             }
             return true
         }
@@ -1259,9 +1295,21 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             }
 
             do {
+                let formattingCapable =
+                    peerCapabilityRegistry
+                        .hasExplicitCurrentSessionStructuralMarkSupport(
+                            forPeerDeviceID: identity.deviceID
+                        )
                 let candidateBatches = unsentBatches.pendingBatches
-                let candidateSnapshot = try buildBootstrapSnapshot()
-                    .attachingHistoryCoverage(for: candidateBatches)
+                let candidateBaseSnapshot = try buildBootstrapSnapshot()
+                let candidateSnapshot = (
+                    formattingCapable
+                        ? candidateBaseSnapshot
+                        : candidateBaseSnapshot.withoutFormattingPayload()
+                ).attachingHistoryCoverage(
+                    for: candidateBatches,
+                    includeStructuralMarks: formattingCapable
+                )
 #if DEBUG
                 await onBootstrapCandidateCapturedForTesting?()
 #else
@@ -1290,8 +1338,15 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 }
 
                 let capturedBatches = unsentBatches.pendingBatches
-                let snapshot = try buildBootstrapSnapshot()
-                    .attachingHistoryCoverage(for: capturedBatches)
+                let baseSnapshot = try buildBootstrapSnapshot()
+                let snapshot = (
+                    formattingCapable
+                        ? baseSnapshot
+                        : baseSnapshot.withoutFormattingPayload()
+                ).attachingHistoryCoverage(
+                    for: capturedBatches,
+                    includeStructuralMarks: formattingCapable
+                )
                 guard candidateBatches.map(\.id) == capturedBatches.map(\.id),
                       candidateSnapshot.folders == snapshot.folders,
                       candidateSnapshot.notes == snapshot.notes,
@@ -1455,6 +1510,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         from peerID: MCPeerID
     ) async {
         guard let applyBootstrapSnapshot else { return }
+        let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
+        let formattingCapable =
+            peerCapabilityRegistry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: deviceID
+            )
 
         let disposition: SyncPeerBootstrapApplyDisposition
         do {
@@ -1467,11 +1527,24 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         if disposition.presentationRefreshRequired {
             onBootstrapPresentationRefresh?()
         }
+        if formattingCapable {
+            inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID[deviceID] =
+                disposition.coveredFormattingNoteIDs
+        } else {
+            inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID[deviceID] = nil
+        }
         let acknowledgement = SyncPeerBootstrapAcknowledgement(
             snapshotID: snapshot.id,
             coveredBatchIDs: disposition.coveredBatchIDs,
             coveredNoteIDs: disposition.coveredNoteIDs,
-            coveredFormattingNoteIDs: disposition.coveredFormattingNoteIDs
+            coveredFormattingNoteIDs:
+                formattingCapable
+                    ? disposition.coveredFormattingNoteIDs
+                    : nil,
+            coveredFormattingBatchIDs:
+                formattingCapable
+                    ? disposition.coveredFormattingBatchIDs
+                    : nil
         )
 
         do {
@@ -1497,7 +1570,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
         guard var state = bootstrapStateByPeerDeviceID[deviceID],
               state.snapshotID == acknowledgement.snapshotID,
-              acknowledgement.coveredBatchIDs.isSubset(of: state.coveredBatchIDs) else { return }
+              acknowledgement.coveredBatchIDs.isSubset(of: state.coveredBatchIDs)
+        else { return }
+
+        let formattingBatchIDs =
+            acknowledgement.coveredFormattingBatchIDs ?? []
+        guard formattingBatchIDs.isSubset(
+            of: state.coveredFormattingBatchIDs
+        ) else { return }
 
         let requiredNoteIDs = Set(state.snapshot.notes.map(\.id))
         let coveredNoteIDs = acknowledgement.coveredNoteIDs ?? []
@@ -1506,29 +1586,43 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
             return
         }
-        if peerCapabilityRegistry.hasExplicitCurrentSessionStructuralMarkSupport(
-            forPeerDeviceID: deviceID
-        ) {
-            let coveredFormattingNoteIDs =
-                acknowledgement.coveredFormattingNoteIDs ?? []
+        let formattingCapable =
+            peerCapabilityRegistry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: deviceID
+            )
+        let coveredFormattingNoteIDs =
+            acknowledgement.coveredFormattingNoteIDs ?? []
+        if formattingCapable {
             guard coveredFormattingNoteIDs.isSubset(of: requiredNoteIDs),
                   requiredNoteIDs.isSubset(of: coveredFormattingNoteIDs) else {
                 lastErrorMessage =
                     "Nearby bootstrap did not establish a shared formatting baseline."
                 return
             }
+        } else {
+            guard coveredFormattingNoteIDs.isEmpty,
+                  formattingBatchIDs.isEmpty else {
+                return
+            }
         }
 
+        let removableBatchIDs = acknowledgement.coveredBatchIDs.union(
+            formattingBatchIDs
+        )
         do {
-            try unsentBatches.removeBatches(withIDs: acknowledgement.coveredBatchIDs)
-            outstandingBatchDeliveries.release(acknowledgement.coveredBatchIDs)
+            try unsentBatches.removeBatches(withIDs: removableBatchIDs)
+            outstandingBatchDeliveries.release(removableBatchIDs)
         } catch {
             lastErrorMessage = "Unable to update the unsent batch queue."
             await updatePendingCount()
             return
         }
-        state.withheldHistoricalBatchIDs = state.coveredBatchIDs
-            .subtracting(acknowledgement.coveredBatchIDs)
+        state.recordAcknowledgement(
+            compatibleBatchIDs: acknowledgement.coveredBatchIDs,
+            formattingBatchIDs: formattingBatchIDs,
+            formattingNoteIDs:
+                formattingCapable ? coveredFormattingNoteIDs : []
+        )
         state.ordinarySyncReady = true
         bootstrapStateByPeerDeviceID[deviceID] = state
         bootstrapRetryTasks.removeValue(forKey: deviceID)?.cancel()
@@ -1557,6 +1651,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         outstandingBatchDeliveries.invalidateSession(forPeerDeviceID: peerDeviceID)
         peerCapabilityRegistry.clearCurrentSessionEvidence(forPeerDeviceID: peerDeviceID)
         bootstrapStateByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID[peerDeviceID] = nil
     }
 
     private func handleBootstrapCapabilityAnnouncement(
@@ -1866,6 +1961,24 @@ extension MyRAMSyncController: MCSessionDelegate {
                         outcome: "rejectedByAdmission"
                     )
                     return
+                }
+                if admission == .admitV3 {
+                    let coveredNoteIDs =
+                        inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID[
+                            identity.deviceID
+                        ] ?? []
+                    guard envelope.batch.changes.count == 1,
+                          case .noteStructuralMarksChanged(let marks) =
+                            envelope.batch.changes[0],
+                          coveredNoteIDs.contains(marks.noteID) else {
+                        MyRAMSyncBenchmarkTelemetry.shared.record(
+                            .batchCaptureCompleted,
+                            batchID: String(describing: envelope.batch.id),
+                            peerDeviceID: identity.deviceID,
+                            outcome: "rejectedMissingInboundFormattingBaseline"
+                        )
+                        return
+                    }
                 }
                 guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(envelope.batch)) != nil else {
                     MyRAMSyncBenchmarkTelemetry.shared.record(

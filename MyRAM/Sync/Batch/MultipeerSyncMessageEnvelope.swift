@@ -31,7 +31,10 @@ struct SyncPeerBootstrapSnapshot: Codable, Equatable, Sendable {
         }
     }
 
-    func attachingHistoryCoverage(for batches: [SyncBatch]) -> Self {
+    func attachingHistoryCoverage(
+        for batches: [SyncBatch],
+        includeStructuralMarks: Bool = true
+    ) -> Self {
         let representedNoteIDs = Set(notes.map(\.id))
         return Self(
             id: id,
@@ -39,10 +42,39 @@ struct SyncPeerBootstrapSnapshot: Codable, Equatable, Sendable {
             notes: notes,
             historyCoverage: batches.compactMap { batch in
                 let coverage = SyncPeerBootstrapHistoryBatchCoverage(batch: batch)
-                guard coverage.noteIDs.isSubset(of: representedNoteIDs) else {
+                guard coverage.noteIDs.isSubset(of: representedNoteIDs),
+                      includeStructuralMarks || coverage.structuralMarkOnly != true else {
                     return nil
                 }
                 return coverage
+            }
+        )
+    }
+
+    func withoutFormattingPayload() -> Self {
+        Self(
+            id: id,
+            folders: folders,
+            notes: notes.map { note in
+                SyncPeerBootstrapNoteSnapshot(
+                    id: note.id,
+                    title: note.title,
+                    body: note.body,
+                    isPinned: note.isPinned,
+                    createdAt: note.createdAt,
+                    modifiedAt: note.modifiedAt,
+                    deletedAt: note.deletedAt,
+                    folderID: note.folderID,
+                    formatVersion: note.formatVersion,
+                    revision: note.revision,
+                    visibleUTF16Count: note.visibleUTF16Count,
+                    tombstonedUTF16Count: note.tombstonedUTF16Count,
+                    payloadByteCount: note.payloadByteCount,
+                    statePayloadData: note.statePayloadData
+                )
+            },
+            historyCoverage: historyCoverage.filter {
+                $0.structuralMarkOnly != true
             }
         )
     }
@@ -53,12 +85,16 @@ struct SyncPeerBootstrapHistoryBatchCoverage: Codable, Equatable, Sendable {
     let noteIDs: Set<SyncBatchNoteID>
     let anchoredRecoveryChanges: [SyncBatchAnchoredRecoveryChange]?
     let structuralMarkOnly: Bool?
+    let structuralMarkOperations: [SyncTextMarkOperation]?
+    let structuralMarkModifiedAt: Date?
 
     init(batchID: SyncBatchID, noteIDs: Set<SyncBatchNoteID>) {
         self.batchID = batchID
         self.noteIDs = noteIDs
         anchoredRecoveryChanges = nil
         structuralMarkOnly = nil
+        structuralMarkOperations = nil
+        structuralMarkModifiedAt = nil
     }
 
     init(
@@ -70,16 +106,26 @@ struct SyncPeerBootstrapHistoryBatchCoverage: Codable, Equatable, Sendable {
         self.noteIDs = noteIDs
         self.anchoredRecoveryChanges = anchoredRecoveryChanges
         structuralMarkOnly = nil
+        structuralMarkOperations = nil
+        structuralMarkModifiedAt = nil
     }
 
     init(batch: SyncBatch) {
         batchID = batch.id
         noteIDs = Set(batch.changes.map(\.noteID))
-        structuralMarkOnly =
+        let isStructuralMarkOnly =
             SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes)
                 == .structuralMarkV3
-                ? true
-                : nil
+        structuralMarkOnly = isStructuralMarkOnly ? true : nil
+        if isStructuralMarkOnly,
+           batch.changes.count == 1,
+           case .noteStructuralMarksChanged(let marks) = batch.changes[0] {
+            structuralMarkOperations = marks.operations
+            structuralMarkModifiedAt = marks.modifiedAt
+        } else {
+            structuralMarkOperations = nil
+            structuralMarkModifiedAt = nil
+        }
         anchoredRecoveryChanges = batch.changes.compactMap { change in
             switch change {
             case .noteBodyTextInsertedAnchored(let insertion): return .insertion(insertion)
@@ -182,17 +228,20 @@ struct SyncPeerBootstrapAcknowledgement: Codable, Equatable, Sendable {
     /// authorize anchored synchronization for a nonempty snapshot.
     let coveredNoteIDs: Set<SyncBatchNoteID>?
     let coveredFormattingNoteIDs: Set<SyncBatchNoteID>?
+    let coveredFormattingBatchIDs: Set<SyncBatchID>?
 
     init(
         snapshotID: UUID,
         coveredBatchIDs: Set<SyncBatchID>,
         coveredNoteIDs: Set<SyncBatchNoteID>? = nil,
-        coveredFormattingNoteIDs: Set<SyncBatchNoteID>? = nil
+        coveredFormattingNoteIDs: Set<SyncBatchNoteID>? = nil,
+        coveredFormattingBatchIDs: Set<SyncBatchID>? = nil
     ) {
         self.snapshotID = snapshotID
         self.coveredBatchIDs = coveredBatchIDs
         self.coveredNoteIDs = coveredNoteIDs
         self.coveredFormattingNoteIDs = coveredFormattingNoteIDs
+        self.coveredFormattingBatchIDs = coveredFormattingBatchIDs
     }
 }
 
@@ -202,6 +251,7 @@ struct SyncPeerBootstrapApplyDisposition: Equatable, Sendable {
     /// This does not imply that title, pin, folder, or other snapshot metadata matched.
     let coveredNoteIDs: Set<SyncBatchNoteID>
     let coveredFormattingNoteIDs: Set<SyncBatchNoteID>
+    let coveredFormattingBatchIDs: Set<SyncBatchID>
     let insertedNoteIDs: Set<UUID>
     let presentationRefreshRequired: Bool
 
@@ -209,12 +259,14 @@ struct SyncPeerBootstrapApplyDisposition: Equatable, Sendable {
         coveredBatchIDs: Set<SyncBatchID>,
         coveredNoteIDs: Set<SyncBatchNoteID> = [],
         coveredFormattingNoteIDs: Set<SyncBatchNoteID> = [],
+        coveredFormattingBatchIDs: Set<SyncBatchID> = [],
         insertedNoteIDs: Set<UUID>,
         presentationRefreshRequired: Bool
     ) {
         self.coveredBatchIDs = coveredBatchIDs
         self.coveredNoteIDs = coveredNoteIDs
         self.coveredFormattingNoteIDs = coveredFormattingNoteIDs
+        self.coveredFormattingBatchIDs = coveredFormattingBatchIDs
         self.insertedNoteIDs = insertedNoteIDs
         self.presentationRefreshRequired = presentationRefreshRequired
     }
@@ -223,16 +275,15 @@ struct SyncPeerBootstrapApplyDisposition: Equatable, Sendable {
 struct SyncPeerBootstrapPendingState: Equatable, Sendable {
     let snapshot: SyncPeerBootstrapSnapshot
     private let capturedBatchIDs: Set<SyncBatchID>
-    /// IDs the frozen snapshot manifest actually represents. Bootstrap ACKs may
-    /// prune only this set, never every batch that happened to be queued at capture.
+    /// Compatible/anchored history represented by this outbound snapshot.
     let coveredBatchIDs: Set<SyncBatchID>
+    /// Structural-mark history represented by this outbound capable snapshot.
+    let coveredFormattingBatchIDs: Set<SyncBatchID>
+    var acknowledgedBatchIDs: Set<SyncBatchID>
+    var acknowledgedFormattingBatchIDs: Set<SyncBatchID>
+    var outboundAcknowledgedFormattingNoteIDs: Set<SyncBatchNoteID>
     var withheldHistoricalBatchIDs: Set<SyncBatchID>
-    var ordinarySyncReady: Bool {
-        didSet {
-            guard ordinarySyncReady else { return }
-            withheldHistoricalBatchIDs = historicalBatchIDsThatRemainWithheld
-        }
-    }
+    var ordinarySyncReady: Bool
     var retryAttempt: Int
 
     init(
@@ -244,11 +295,18 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
     ) {
         self.snapshot = snapshot
         self.capturedBatchIDs = capturedBatchIDs
-        coveredBatchIDs = Set(snapshot.historyCoverage.map(\.batchID))
+        coveredBatchIDs = Set(snapshot.historyCoverage.compactMap {
+            $0.structuralMarkOnly == true ? nil : $0.batchID
+        })
+        coveredFormattingBatchIDs = Set(snapshot.historyCoverage.compactMap {
+            $0.structuralMarkOnly == true ? $0.batchID : nil
+        })
+        acknowledgedBatchIDs = []
+        acknowledgedFormattingBatchIDs = []
+        outboundAcknowledgedFormattingNoteIDs = []
         self.withheldHistoricalBatchIDs = withheldHistoricalBatchIDs
         self.ordinarySyncReady = ordinarySyncReady
         self.retryAttempt = retryAttempt
-
         if ordinarySyncReady {
             self.withheldHistoricalBatchIDs = historicalBatchIDsThatRemainWithheld
         }
@@ -256,17 +314,32 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
 
     var snapshotID: UUID { snapshot.id }
 
+    mutating func recordAcknowledgement(
+        compatibleBatchIDs: Set<SyncBatchID>,
+        formattingBatchIDs: Set<SyncBatchID>,
+        formattingNoteIDs: Set<SyncBatchNoteID>
+    ) {
+        acknowledgedBatchIDs.formUnion(compatibleBatchIDs)
+        acknowledgedFormattingBatchIDs.formUnion(formattingBatchIDs)
+        outboundAcknowledgedFormattingNoteIDs.formUnion(formattingNoteIDs)
+        withheldHistoricalBatchIDs = historicalBatchIDsThatRemainWithheld
+    }
+
     private var historicalBatchIDsThatRemainWithheld: Set<SyncBatchID> {
-        let absentFromManifest = capturedBatchIDs.subtracting(coveredBatchIDs)
-        // Empty batches carry no note delta. Keeping an unacknowledged empty entry
-        // withheld preserves the existing no-op queue behavior without blocking an
-        // existing note baseline that needs real manifested history to catch up.
+        let manifested = coveredBatchIDs.union(coveredFormattingBatchIDs)
+        let acknowledged = acknowledgedBatchIDs.union(
+            acknowledgedFormattingBatchIDs
+        )
+        let absentFromManifest = capturedBatchIDs.subtracting(manifested)
+        let unacknowledgedManifest = manifested.subtracting(acknowledged)
         let emptyManifestBatchIDs = Set(
             snapshot.historyCoverage.compactMap { coverage in
                 coverage.noteIDs.isEmpty ? coverage.batchID : nil
             }
         )
-        return absentFromManifest.union(emptyManifestBatchIDs)
+        return absentFromManifest
+            .union(unacknowledgedManifest)
+            .union(emptyManifestBatchIDs)
     }
 }
 
@@ -382,6 +455,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
         var fullyCoveredNoteIDs: Set<SyncBatchNoteID> = []
         var sequenceBaselineCoveredNoteIDs: Set<SyncBatchNoteID> = []
         var formattingBaselineCoveredNoteIDs: Set<SyncBatchNoteID> = []
+        var formattingCoveredBatchIDs: Set<SyncBatchID> = []
         var insertedNoteIDs: Set<UUID> = []
         var bootstrapOwnershipStatesByNoteID: [SyncBatchNoteID: SyncTextSequenceState] = [:]
         var coveredBatchIDs: Set<SyncBatchID> = []
@@ -627,13 +701,29 @@ enum SyncPeerBootstrapSnapshotPersistence {
                 }
             }
             coveredBatchIDs = Set(snapshot.historyCoverage.compactMap { coverage in
-                let coveredNoteSet = coverage.structuralMarkOnly == true
-                    ? formattingBaselineCoveredNoteIDs
-                    : fullyCoveredNoteIDs
-                return coverage.noteIDs.isSubset(of: coveredNoteSet)
+                guard coverage.structuralMarkOnly != true else { return nil }
+                return coverage.noteIDs.isSubset(of: fullyCoveredNoteIDs)
                     ? coverage.batchID
                     : nil
             })
+            formattingCoveredBatchIDs = Set(
+                try snapshot.historyCoverage.compactMap { coverage in
+                    guard coverage.structuralMarkOnly == true,
+                          coverage.noteIDs.count == 1,
+                          let noteID = coverage.noteIDs.first,
+                          formattingBaselineCoveredNoteIDs.contains(noteID),
+                          let noteSnapshot = snapshot.notes.first(
+                            where: { $0.id == noteID }
+                          ),
+                          try formattingHistoryCoverageIsSatisfied(
+                            coverage,
+                            by: noteSnapshot
+                          ) else {
+                        return nil
+                    }
+                    return coverage.batchID
+                }
+            )
             if let anchoredRecoveryStore {
                 for (noteID, peerSnapshotState) in bootstrapOwnershipStatesByNoteID.sorted(by: {
                     $0.key.uuidString < $1.key.uuidString
@@ -650,8 +740,11 @@ enum SyncPeerBootstrapSnapshotPersistence {
                             anchoredRecoveryStore: anchoredRecoveryStore
                         )
                     }
+                    let allCoveredBatchIDs = coveredBatchIDs.union(
+                        formattingCoveredBatchIDs
+                    )
                     let ownershipEligibleCoverage = try snapshot.historyCoverage
-                        .filter { !coveredBatchIDs.contains($0.batchID) }
+                        .filter { !allCoveredBatchIDs.contains($0.batchID) }
                         .filter { coverage in
                             try !hasDurableIncorporationEvidence(for: coverage.batchID, in: context)
                         }
@@ -673,9 +766,37 @@ enum SyncPeerBootstrapSnapshotPersistence {
             coveredBatchIDs: coveredBatchIDs,
             coveredNoteIDs: sequenceBaselineCoveredNoteIDs,
             coveredFormattingNoteIDs: formattingBaselineCoveredNoteIDs,
+            coveredFormattingBatchIDs: formattingCoveredBatchIDs,
             insertedNoteIDs: insertedNoteIDs,
             presentationRefreshRequired: didMutate || didMaterializeStructuralConflict
         )
+    }
+
+    private static func formattingHistoryCoverageIsSatisfied(
+        _ coverage: SyncPeerBootstrapHistoryBatchCoverage,
+        by note: SyncPeerBootstrapNoteSnapshot
+    ) throws -> Bool {
+        guard coverage.structuralMarkOnly == true,
+              coverage.noteIDs == Set([note.id]),
+              let operations = coverage.structuralMarkOperations,
+              !operations.isEmpty,
+              let modifiedAt = coverage.structuralMarkModifiedAt,
+              note.modifiedAt >= modifiedAt,
+              hasFormattingBaseline(note) else {
+            return false
+        }
+
+        let record = makeRecord(from: note)
+        let sequence = try NoteSequenceStatePersistenceCodec
+            .decodeStructurallyValidatedState(
+                record: record,
+                noteID: note.id
+            )
+        let marks = try NoteStructuralFormattingPersistence.decode(
+            record: record,
+            pairedWith: sequence
+        )
+        return operations.allSatisfy { marks.operations.contains($0) }
     }
 
     private static func hasDurableIncorporationEvidence(

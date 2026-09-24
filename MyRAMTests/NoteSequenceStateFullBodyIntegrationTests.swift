@@ -861,7 +861,11 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
             fullSnapshot,
             to: ModelContext(coveredDestination)
         )
-        XCTAssertEqual(coveredDisposition.coveredBatchIDs, [markBatch.id])
+        XCTAssertTrue(coveredDisposition.coveredBatchIDs.isEmpty)
+        XCTAssertEqual(
+            coveredDisposition.coveredFormattingBatchIDs,
+            [markBatch.id]
+        )
         XCTAssertEqual(
             coveredDisposition.coveredFormattingNoteIDs,
             [source.note.id]
@@ -898,6 +902,9 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
 
         XCTAssertTrue(legacyDisposition.coveredFormattingNoteIDs.isEmpty)
         XCTAssertFalse(legacyDisposition.coveredBatchIDs.contains(markBatch.id))
+        XCTAssertFalse(
+            legacyDisposition.coveredFormattingBatchIDs.contains(markBatch.id)
+        )
     }
 
     func testBootstrapMissingNoteInstallsNoteAndExactSequenceStateAtomically() throws {
