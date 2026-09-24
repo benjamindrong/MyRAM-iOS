@@ -2675,15 +2675,50 @@ final class NotesViewModel: ObservableObject {
         await refreshPendingSyncStatusForLocalConvergenceMutation?()
     }
 
-    func capturePendingLocalBatchForRecovery() async -> SyncBatchID? {
-        guard let collection = await syncBatchAccumulator.takePendingCollectionNow() else {
-            await resumePendingConvergencePresentation()
-            return nil
+    private enum PreparedLocalAdmissionError: Error {
+        case retryable
+        case terminal
+    }
+
+    private func durablyAdmitPreparedLocalCollection(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceLocalObligationCollectionAdmissionResult {
+        let result = await syncConvergenceRuntime
+            .admitLocalObligationCollection(collection)
+        switch result {
+        case .admitted:
+            guard await syncBatchAccumulator.commitPreparedCollection(
+                token: collection.token
+            ) else {
+                return .terminal(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                ))
+            }
+        case .retryableCapacity, .retryablePersistenceFailure, .terminal:
+            await syncBatchAccumulator.reportPreparedCollectionAdmissionResult(
+                token: collection.token,
+                result: result
+            )
         }
-        let outcome = await syncConvergenceRuntime.submitLocalObligations(collection)
-        await handleConvergenceRuntimeOutcome(outcome)
-        await resumePendingConvergencePresentation()
-        return collection.primary.id
+        return result
+    }
+
+    func capturePendingLocalBatchesForRecovery() async throws -> Set<SyncBatchID> {
+        guard let collection = await syncBatchAccumulator.takePendingCollectionNow() else {
+            return []
+        }
+        switch await durablyAdmitPreparedLocalCollection(collection) {
+        case .admitted:
+            return collection.batchIDs
+        case .retryableCapacity, .retryablePersistenceFailure:
+            throw PreparedLocalAdmissionError.retryable
+        case .terminal(let outcome):
+            await handleConvergenceRuntimeOutcome(outcome)
+            throw PreparedLocalAdmissionError.terminal
+        }
     }
 
     private func prepareLocalOwnershipForBootstrap() async {
@@ -2729,8 +2764,8 @@ final class NotesViewModel: ObservableObject {
             replaceLocalBatches: { [weak self] batches in
                 try await self?.replaceLocalConvergenceBatches(batches)
             },
-            flushReadyLocalBatch: { [weak self] in
-                await self?.capturePendingLocalBatchForRecovery()
+            flushReadyLocalBatches: { [weak self] in
+                try await self?.capturePendingLocalBatchesForRecovery() ?? []
             }
         )
 
@@ -2768,7 +2803,7 @@ final class NotesViewModel: ObservableObject {
             replaceLocalBatches: { [weak self] batches in
                 try await self?.replaceLocalConvergenceBatches(batches)
             },
-            flushReadyLocalBatch: { nil }
+            flushReadyLocalBatches: { [] }
         )
         try await coordinator.rollbackIfNeededOnLaunch()
     }
@@ -2791,7 +2826,7 @@ final class NotesViewModel: ObservableObject {
              SyncRecoveryStateBuilderError.invalidLegacyEntityID,
              SyncRecoveryStateBuilderError.targetCoverageMismatch:
             return "Reset is blocked because some queued sync work cannot be safely represented."
-        case PendingSyncRecoveryCoordinator.RecoveryError.capturedBatchNotDurable:
+        case PendingSyncRecoveryCoordinator.RecoveryError.capturedBatchesNotDurable:
             return "Reset is blocked because the latest edit was not saved into the pending sync queue."
         case PendingSyncRecoveryCoordinator.RecoveryError.rollbackFailed:
             return "Reset failed and rollback could not finish. Restart MyRAM before syncing again."
@@ -2803,8 +2838,17 @@ final class NotesViewModel: ObservableObject {
     private func handleReadyLocalObligations(
         _ collection: SyncPreparedLocalObligationCollection
     ) async {
-        let outcome = await syncConvergenceRuntime.submitLocalObligations(collection)
-        await handleConvergenceRuntimeOutcome(outcome)
+        switch await durablyAdmitPreparedLocalCollection(collection) {
+        case .admitted:
+            let outcome = await syncConvergenceRuntime.resumePendingWork()
+            await handleConvergenceRuntimeOutcome(outcome)
+        case .retryableCapacity, .retryablePersistenceFailure:
+            syncBatchErrorMessage =
+                "Nearby sync is waiting to durably save the latest local changes."
+            await refreshPendingSyncStatusForLocalConvergenceMutation?()
+        case .terminal(let outcome):
+            await handleConvergenceRuntimeOutcome(outcome)
+        }
     }
 
     func resumePendingConvergencePresentationIfNeeded() {
