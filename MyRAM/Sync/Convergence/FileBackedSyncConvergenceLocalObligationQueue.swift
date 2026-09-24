@@ -6,6 +6,7 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         case persistenceFailed
         case unhealthyPersistence
         case invalidStructuralMarkObligation
+        case conflictingDuplicateIdentity(UUID)
     }
 
     private let fileURL: URL?
@@ -58,10 +59,19 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         guard canPersistCurrentQueue else { throw QueueError.unhealthyPersistence }
         guard limit > 0 else { throw QueueError.capacityExceeded }
 
-        var seenIDs = Set(obligations.map(\.id))
+        var existingByID = Dictionary(
+            uniqueKeysWithValues: obligations.map { ($0.id, $0) }
+        )
         var additions: [SyncConvergenceLocalObligation] = []
         additions.reserveCapacity(newObligations.count)
-        for obligation in newObligations where seenIDs.insert(obligation.id).inserted {
+        for obligation in newObligations {
+            if let existing = existingByID[obligation.id] {
+                guard existing == obligation else {
+                    throw QueueError.conflictingDuplicateIdentity(obligation.id)
+                }
+                continue
+            }
+            existingByID[obligation.id] = obligation
             additions.append(obligation)
         }
         guard !additions.isEmpty else { return }
@@ -70,12 +80,20 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         }
 
         let original = obligations
+        let originalHealth = health
         obligations.append(contentsOf: additions)
         do {
             try persistQueueThrowing()
         } catch {
             obligations = original
-            throw QueueError.persistenceFailed
+            if persistedImageMatchesPriorState(
+                obligations: original,
+                health: originalHealth
+            ) {
+                health = originalHealth
+                throw QueueError.persistenceFailed
+            }
+            throw QueueError.unhealthyPersistence
         }
     }
 
@@ -200,7 +218,6 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         }
         if shouldFailNextPersistence {
             shouldFailNextPersistence = false
-            health = .readFailed("Injected persistence failure")
             throw QueueError.persistenceFailed
         }
 
@@ -217,8 +234,62 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
             try data.write(to: fileURL, options: .atomic)
             health = .healthy
         } catch {
-            health = .readFailed(String(describing: error))
             throw error
+        }
+    }
+
+    private func persistedImageMatchesPriorState(
+        obligations expectedObligations: [SyncConvergenceLocalObligation],
+        health priorHealth: PersistedQueueHealth
+    ) -> Bool {
+        guard let fileURL else {
+            return priorHealth == .healthy
+        }
+
+        switch priorHealth {
+        case .fileMissing:
+            guard !FileManager.default.fileExists(atPath: fileURL.path) else {
+                health = .readFailed("Unexpected persisted queue image after failed write")
+                return false
+            }
+            return expectedObligations.isEmpty
+        case .healthy:
+            guard FileManager.default.fileExists(atPath: fileURL.path) else {
+                health = .readFailed("Persisted queue image missing after failed write")
+                return false
+            }
+            do {
+                let data = try Data(contentsOf: fileURL)
+                let version = try JSONDecoder().decode(
+                    PersistedQueueVersion.self,
+                    from: data
+                ).version
+                guard version == PersistedSyncConvergenceLocalObligationQueue.currentVersion else {
+                    health = .unsupportedVersion(version)
+                    return false
+                }
+                let persisted = try JSONDecoder().decode(
+                    PersistedSyncConvergenceLocalObligationQueue.self,
+                    from: data
+                )
+                try persisted.obligations.forEach(Self.validateDurableObligation)
+                guard persisted.obligations == expectedObligations else {
+                    health = .readFailed("Persisted queue image changed after failed write")
+                    return false
+                }
+                return true
+            } catch is SyncBatchAnchoredPayloadPolicyError {
+                health = .unsupportedAnchoredPayload
+                return false
+            } catch _ as DecodingError {
+                health = .corrupt
+                return false
+            } catch {
+                health = .readFailed(String(describing: error))
+                return false
+            }
+        case .corrupt, .unsupportedVersion, .unsupportedAnchoredPayload, .readFailed:
+            return false
         }
     }
 

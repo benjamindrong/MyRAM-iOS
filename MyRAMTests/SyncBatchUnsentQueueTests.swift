@@ -193,6 +193,85 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(reloaded.pendingObligations, [first, second])
     }
 
+    func testLocalObligationQueueRetryableWriteFailurePreservesHealthyImageAndAllowsExactRetry() throws {
+        let fileURL = temporaryQueueFileURL()
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: fileURL,
+            limit: 10
+        )
+        let existing = SyncConvergenceLocalObligation(
+            legacyBatch: makeBatch(idSuffix: 51)
+        )
+        let first = SyncConvergenceLocalObligation(
+            legacyBatch: makeBatch(idSuffix: 52)
+        )
+        let second = SyncConvergenceLocalObligation(
+            legacyBatch: try makeStructuralMarkBatchForTest(idSuffix: 53)
+        )
+        try queue.enqueue(existing)
+
+        queue.injectPersistenceFailureForNextWrite()
+        XCTAssertThrowsError(try queue.enqueueAtomically([first, second])) {
+            XCTAssertEqual(
+                $0 as? FileBackedSyncConvergenceLocalObligationQueue.QueueError,
+                .persistenceFailed
+            )
+        }
+        XCTAssertEqual(queue.pendingObligations, [existing])
+        XCTAssertEqual(queue.snapshot().health, .healthy)
+
+        try queue.enqueueAtomically([first, second])
+
+        XCTAssertEqual(queue.pendingObligations, [existing, first, second])
+        XCTAssertEqual(
+            FileBackedSyncConvergenceLocalObligationQueue(
+                fileURL: fileURL,
+                limit: 10
+            ).pendingObligations,
+            [existing, first, second]
+        )
+    }
+
+    func testLocalObligationQueueRejectsConflictingDuplicateIdentityWithoutMutation() throws {
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: nil,
+            limit: 10
+        )
+        let first = SyncConvergenceLocalObligation(
+            legacyBatch: makeBatch(idSuffix: 61)
+        )
+        var conflictingBatch = makeBatch(idSuffix: 61)
+        conflictingBatch = SyncBatch(
+            id: conflictingBatch.id,
+            originDeviceID: conflictingBatch.originDeviceID,
+            createdAt: conflictingBatch.createdAt,
+            batchSequence: conflictingBatch.batchSequence,
+            changes: [
+                .noteTitleChanged(
+                    SyncBatchNoteTitleChangedChange(
+                        noteID: UUID(
+                            uuidString: "00000000-0000-0000-0000-000000179961"
+                        )!,
+                        title: "conflict",
+                        modifiedAt: Date(timeIntervalSince1970: 61)
+                    )
+                )
+            ]
+        )
+        let conflicting = SyncConvergenceLocalObligation(
+            legacyBatch: conflictingBatch
+        )
+        try queue.enqueue(first)
+
+        XCTAssertThrowsError(try queue.enqueueAtomically([conflicting])) {
+            XCTAssertEqual(
+                $0 as? FileBackedSyncConvergenceLocalObligationQueue.QueueError,
+                .conflictingDuplicateIdentity(first.id)
+            )
+        }
+        XCTAssertEqual(queue.pendingObligations, [first])
+    }
+
     func testLocalObligationQueueAtomicEnqueueRollsBackWholeCollectionOnPersistenceFailure() throws {
         let fileURL = temporaryQueueFileURL()
         let queue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10)
