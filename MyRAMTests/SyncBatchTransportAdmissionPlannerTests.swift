@@ -115,6 +115,107 @@ final class SyncBatchTransportAdmissionPlannerTests: XCTestCase {
         )
     }
 
+    func testV3AdmissionAndRoutingMatrix() {
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.durableAdmission(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: false
+            ),
+            .reject(.structuralMarkPayloadDisabled)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.durableAdmission(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: true
+            ),
+            .admitV3
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.outboundRouting(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: false,
+                connectedPeers: [peer(index: 0, supportsStructuralMarks: true)]
+            ),
+            .withhold(.structuralMarkPayloadDisabled)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.outboundRouting(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: true,
+                connectedPeers: []
+            ),
+            .withhold(.noConnectedPeers)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.outboundRouting(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: true,
+                connectedPeers: [peer(index: 0)]
+            ),
+            .withhold(.peerLacksExplicitCurrentSessionStructuralMarkSupport)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.outboundRouting(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: true,
+                connectedPeers: [
+                    peer(index: 0),
+                    peer(index: 1, supportsStructuralMarks: true)
+                ]
+            ),
+            .sendToPeer(transportIndex: 1)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.outboundRouting(
+                deliveryRepresentation: .structuralMarkV3,
+                activationEnabled: true,
+                structuralMarkEnabled: true,
+                connectedPeers: [
+                    peer(index: 0, supportsStructuralMarks: true),
+                    peer(index: 1, supportsStructuralMarks: true)
+                ]
+            ),
+            .withhold(.requiresExactlyOneStructuralMarkCapablePeer)
+        )
+
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.inboundAdmission(
+                schemaVersion: .v3,
+                activationEnabled: true,
+                hasExplicitCurrentSessionV2Support: true,
+                hasExplicitCurrentSessionStructuralMarkSupport: false,
+                structuralMarkEnabled: true
+            ),
+            .reject(.peerLacksExplicitCurrentSessionStructuralMarkSupport)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.inboundAdmission(
+                schemaVersion: .v3,
+                activationEnabled: true,
+                hasExplicitCurrentSessionV2Support: true,
+                hasExplicitCurrentSessionStructuralMarkSupport: true,
+                structuralMarkEnabled: false
+            ),
+            .reject(.structuralMarkPayloadDisabled)
+        )
+        XCTAssertEqual(
+            SyncBatchTransportAdmissionPlanner.inboundAdmission(
+                schemaVersion: .v3,
+                activationEnabled: true,
+                hasExplicitCurrentSessionV2Support: true,
+                hasExplicitCurrentSessionStructuralMarkSupport: true,
+                structuralMarkEnabled: true
+            ),
+            .admitV3
+        )
+    }
+
     func testMixedRoutingIsWithheld() {
         XCTAssertEqual(
             SyncBatchTransportAdmissionPlanner.outboundRouting(
@@ -164,12 +265,14 @@ final class SyncBatchTransportAdmissionPlannerTests: XCTestCase {
     private func peer(
         index: Int,
         deviceID: String? = nil,
-        supportsV2: Bool = false
+        supportsV2: Bool = false,
+        supportsStructuralMarks: Bool = false
     ) -> SyncBatchTransportPeer {
         SyncBatchTransportPeer(
             transportIndex: index,
             stableDeviceID: deviceID ?? "peer-\(index)",
-            hasExplicitCurrentSessionV2Support: supportsV2
+            hasExplicitCurrentSessionV2Support: supportsV2,
+            hasExplicitCurrentSessionStructuralMarkSupport: supportsStructuralMarks
         )
     }
 }
