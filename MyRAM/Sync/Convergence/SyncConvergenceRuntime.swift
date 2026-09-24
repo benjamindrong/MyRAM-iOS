@@ -83,6 +83,8 @@ protocol SyncConvergenceIncomingLocalBoundaryAdapter: AnyObject {
 enum SyncConvergenceIncomingLocalBoundaryPreparation {
     case ready
     case localObligations(SyncPreparedLocalObligationCollection)
+    case durablyAdmittedLocalObligations(noteIDs: Set<UUID>)
+    case cannotProceed(SyncConvergenceRuntimeOutcome)
     case failed(SyncConvergenceIncomingLocalBoundaryFailure)
 }
 
@@ -389,15 +391,47 @@ final class SyncConvergenceRuntime {
     func admitQueuedLocalObligationsForIncomingMutation(
         affecting noteIDs: Set<UUID>
     ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
+        var registeredIDs: Set<UUID> = []
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
-            for obligation in localObligationQueue.pendingObligations(affecting: noteID) {
-                let outcome = await admitPendingLocalObligationForIncomingMutation(obligation)
-                if case .cannotProceed = outcome {
-                    return outcome
+            for obligation in localObligationQueue.pendingObligations(
+                affecting: noteID
+            ) where registeredIDs.insert(obligation.id).inserted {
+                do {
+                    _ = try admitQueuedLocalObligation(obligation)
+                } catch let evidenceError as SyncConvergenceLocalEvidenceCaptureError {
+                    return .cannotProceed(.quarantined(
+                        SyncConvergenceQuarantinedWork(items: [
+                            SyncConvergenceQuarantinedItem(
+                                domain: .localObligation,
+                                batchID: obligation.id,
+                                affectedNoteIDs: Self.affectedNoteIDs(
+                                    in: obligation.batch
+                                ),
+                                originDeviceID: obligation.batch.originDeviceID,
+                                reason: Self.quarantineReason(for: evidenceError)
+                            )
+                        ])
+                    ))
+                } catch let failure as SyncConvergenceTransactionFailure {
+                    return .cannotProceed(.blocked(
+                        Self.drainFailure(
+                            for: failure,
+                            batchID: obligation.id
+                        )
+                    ))
+                } catch {
+                    return .cannotProceed(.blocked(
+                        SyncBatchDrainFailureClassifier.classify(
+                            error,
+                            batchID: obligation.id
+                        )
+                    ))
                 }
             }
         }
-        return .ready
+        return registeredIDs.first.map {
+            .evidenceRegistered(obligationID: $0)
+        } ?? .ready
     }
 
     func resumePendingWork() async -> SyncConvergenceRuntimeOutcome {
@@ -873,6 +907,12 @@ final class SyncConvergenceRuntime {
             return .ready
         case .localObligations(let collection):
             return await admitLocalObligationsForIncomingBoundary(collection)
+        case .durablyAdmittedLocalObligations(let noteIDs):
+            return await admitQueuedLocalObligationsForIncomingMutation(
+                affecting: noteIDs
+            )
+        case .cannotProceed(let outcome):
+            return .cannotProceed(outcome)
         case .failed(let failure):
             return .cannotProceed(.blocked(Self.drainFailure(for: failure, batchID: batchID)))
         }

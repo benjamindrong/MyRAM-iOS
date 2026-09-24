@@ -3753,10 +3753,34 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
             ) else {
                 return nil
             }
-            let outcome = await syncConvergenceRuntime
-                .admitPendingLocalObligationsForIncomingMutation(collection)
-            if case .cannotProceed(let runtimeOutcome) = outcome {
-                return runtimeOutcome
+            switch await durablyAdmitPreparedLocalCollection(collection) {
+            case .admitted:
+                let affectedNoteIDs = Set(
+                    collection.obligations.flatMap { $0.changes.map(\.noteID) }
+                )
+                let outcome = await syncConvergenceRuntime
+                    .admitQueuedLocalObligationsForIncomingMutation(
+                        affecting: affectedNoteIDs
+                    )
+                if case .cannotProceed(let runtimeOutcome) = outcome {
+                    return runtimeOutcome
+                }
+            case .retryableCapacity:
+                return .blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queueCapacity
+                    )
+                )
+            case .retryablePersistenceFailure:
+                return .blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                )
+            case .terminal(let outcome):
+                return outcome
             }
         }
         return nil
@@ -3772,7 +3796,32 @@ extension NotesViewModel: SyncConvergenceIncomingLocalBoundaryAdapter {
             ) else {
                 return .failed(.boundaryInvariantViolation(noteID: noteID))
             }
-            return .localObligations(collection)
+            switch await durablyAdmitPreparedLocalCollection(collection) {
+            case .admitted:
+                return .durablyAdmittedLocalObligations(
+                    noteIDs: Set(
+                        collection.obligations.flatMap {
+                            $0.changes.map(\.noteID)
+                        }
+                    )
+                )
+            case .retryableCapacity:
+                return .cannotProceed(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queueCapacity
+                    )
+                ))
+            case .retryablePersistenceFailure:
+                return .cannotProceed(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                ))
+            case .terminal(let outcome):
+                return .cannotProceed(outcome)
+            }
         }
         return .ready
     }

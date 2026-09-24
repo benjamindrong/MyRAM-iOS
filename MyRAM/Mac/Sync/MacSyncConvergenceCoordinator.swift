@@ -108,6 +108,19 @@ final class MacSyncConvergenceCoordinator {
         )
     }
 
+    func admitLocalObligations(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceLocalObligationCollectionAdmissionResult {
+        await runtime.admitLocalObligationCollection(collection)
+    }
+
+    func handleTerminalLocalAdmission(
+        _ outcome: SyncConvergenceRuntimeOutcome,
+        sourceBatch: SyncBatch?
+    ) async {
+        await handle(outcome: outcome, sourceBatch: sourceBatch)
+    }
+
     func resumePendingWork() async {
         await handle(outcome: runtime.resumePendingWork(), sourceBatch: nil)
     }
@@ -170,7 +183,32 @@ final class MacSyncIncomingLocalBoundaryAdapter: SyncConvergenceIncomingLocalBou
         case .ready:
             return .ready
         case .localObligations(let collection):
-            return .localObligations(collection)
+            switch await surface.admitPreparedLocalObligations(collection) {
+            case .admitted:
+                return .durablyAdmittedLocalObligations(
+                    noteIDs: Set(
+                        collection.obligations.flatMap {
+                            $0.changes.map(\.noteID)
+                        }
+                    )
+                )
+            case .retryableCapacity:
+                return .cannotProceed(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queueCapacity
+                    )
+                ))
+            case .retryablePersistenceFailure:
+                return .cannotProceed(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                ))
+            case .terminal(let outcome):
+                return .cannotProceed(outcome)
+            }
         case .staleLocalState(let noteID):
             return .failed(.localStateChanged(noteID: noteID))
         case .failed(let failure):
@@ -203,6 +241,22 @@ private extension MacPendingSaveFailure {
 @MainActor
 struct MacSyncIncomingLocalBoundarySurface {
     let prepareForIncomingBodyMutation: (Set<UUID>) async -> MacIncomingBoundaryResult
+    let admitPreparedLocalObligations:
+        (SyncPreparedLocalObligationCollection) async
+            -> SyncConvergenceLocalObligationCollectionAdmissionResult
+
+    init(
+        prepareForIncomingBodyMutation:
+            @escaping (Set<UUID>) async -> MacIncomingBoundaryResult,
+        admitPreparedLocalObligations:
+            @escaping (SyncPreparedLocalObligationCollection) async
+                -> SyncConvergenceLocalObligationCollectionAdmissionResult = { _ in
+                    .admitted
+                }
+    ) {
+        self.prepareForIncomingBodyMutation = prepareForIncomingBodyMutation
+        self.admitPreparedLocalObligations = admitPreparedLocalObligations
+    }
 }
 
 /// Performs the ordered Mac-side admission check before an incoming body mutation is planned.

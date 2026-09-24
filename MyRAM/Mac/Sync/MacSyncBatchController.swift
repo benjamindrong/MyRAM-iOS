@@ -148,7 +148,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         readyBatchTask = Task { [weak self, accumulator] in
             let stream = await accumulator.readyLocalObligations()
             for await collection in stream {
-                await self?.convergenceCoordinator?.submitLocalObligations(collection)
+                await self?.handlePreparedLocalObligations(collection)
             }
         }
     }
@@ -312,19 +312,76 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         if !capturedChanges.isEmpty {
             localCaptureGeneration &+= 1
         }
-        let obligations = await accumulator.recordAndTakeBoundaryObligations(
+        let collection = await accumulator.recordAndPrepareBoundaryCollection(
             adding: capturedChanges,
             affecting: noteID,
             at: date
         )
         await updateSequenceReservationIssue()
-        return SyncPreparedLocalObligationCollection(obligations)
+        return collection
     }
 
     func takePendingLocalObligationsIfAffecting(
         noteID: UUID
     ) async -> SyncPreparedLocalObligationCollection? {
         await accumulator.takePendingObligationCollectionIfAffecting(noteID: noteID)
+    }
+
+    func admitPreparedLocalObligations(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceLocalObligationCollectionAdmissionResult {
+        guard let convergenceCoordinator else {
+            let result: SyncConvergenceLocalObligationCollectionAdmissionResult =
+                .terminal(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                ))
+            await accumulator.reportPreparedCollectionAdmissionResult(
+                token: collection.token,
+                result: result
+            )
+            return result
+        }
+
+        let result = await convergenceCoordinator.admitLocalObligations(collection)
+        switch result {
+        case .admitted:
+            guard await accumulator.commitPreparedCollection(
+                token: collection.token
+            ) else {
+                return .terminal(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                ))
+            }
+        case .retryableCapacity, .retryablePersistenceFailure, .terminal:
+            await accumulator.reportPreparedCollectionAdmissionResult(
+                token: collection.token,
+                result: result
+            )
+        }
+        return result
+    }
+
+    private func handlePreparedLocalObligations(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async {
+        guard let convergenceCoordinator else { return }
+        switch await admitPreparedLocalObligations(collection) {
+        case .admitted:
+            await convergenceCoordinator.resumePendingWork()
+        case .retryableCapacity, .retryablePersistenceFailure:
+            markConvergenceWaiting()
+        case .terminal(let outcome):
+            await convergenceCoordinator.handleTerminalLocalAdmission(
+                outcome,
+                sourceBatch: collection.primary.batch
+            )
+        }
     }
 
     private func updateSequenceReservationIssue() async {

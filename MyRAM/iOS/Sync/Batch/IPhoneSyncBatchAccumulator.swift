@@ -83,8 +83,20 @@ actor IPhoneSyncBatchAccumulator {
         affecting noteID: UUID,
         at date: Date = .now
     ) -> [SyncConvergenceLocalObligation] {
+        recordAndPrepareBoundaryCollection(
+            adding: capturedChanges,
+            affecting: noteID,
+            at: date
+        )?.obligations ?? []
+    }
+
+    func recordAndPrepareBoundaryCollection(
+        adding capturedChanges: [SyncConvergenceCapturedLocalChange],
+        affecting noteID: UUID,
+        at date: Date = .now
+    ) -> SyncPreparedLocalObligationCollection? {
         appendCapturedChanges(capturedChanges, at: date)
-        return extractPendingBatches { pendingBatch in
+        return prepareCollection { pendingBatch in
             pendingBatch.capturedChanges.contains { captured in
                 guard SyncConvergenceLocalEvidenceCapture.isBodyTextOperation(captured.change) else { return false }
                 return SyncConvergenceLocalEvidenceCapture.noteID(for: captured.change) == noteID
@@ -160,7 +172,15 @@ actor IPhoneSyncBatchAccumulator {
     }
 
     func containsPendingBodyChange(for noteID: UUID) -> Bool {
-        pendingBatch?.capturedChanges.contains {
+        if preparedCollection?.obligations.contains(where: { obligation in
+            obligation.changes.contains { change in
+                SyncConvergenceLocalEvidenceCapture.isBodyTextOperation(change)
+                    && SyncConvergenceLocalEvidenceCapture.noteID(for: change) == noteID
+            }
+        }) == true {
+            return true
+        }
+        return pendingBatch?.capturedChanges.contains {
             guard SyncConvergenceLocalEvidenceCapture.isBodyTextOperation($0.change) else { return false }
             return SyncConvergenceLocalEvidenceCapture.noteID(for: $0.change) == noteID
         } ?? false

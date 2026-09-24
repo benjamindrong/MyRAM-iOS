@@ -379,6 +379,9 @@ struct MyRAMMacRootView: View {
                         )
                     }
                 ).prepare(affecting: noteIDs)
+            },
+            admitPreparedLocalObligations: { collection in
+                await syncController.admitPreparedLocalObligations(collection)
             }
         )
         syncConvergenceCoordinator = MacSyncConvergenceCoordinator(
