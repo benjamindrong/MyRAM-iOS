@@ -823,6 +823,46 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(obligationQueue.pendingBatches, [legacy, anchored])
     }
 
+    func testUnsentQueuePersistsStructuralMarkPayloadUsingV3CapableVersion() throws {
+        let fileURL = temporaryQueueFileURL()
+        let markBatch = try makeStructuralMarkBatchForTest(idSuffix: 227_801)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        try queue.enqueueDurably(markBatch)
+
+        let version = try JSONDecoder().decode(
+            TestPersistedQueueVersion.self,
+            from: Data(contentsOf: fileURL)
+        )
+        XCTAssertEqual(version.version, 2)
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(
+                fileURL: fileURL,
+                limit: 10
+            ).pendingBatches,
+            [markBatch]
+        )
+    }
+
+    func testUnsentQueueRejectsStructuralMarkPayloadClaimingLegacyVersionOne() throws {
+        let fileURL = temporaryQueueFileURL()
+        try createDirectory(for: fileURL)
+        let markBatch = try makeStructuralMarkBatchForTest(idSuffix: 227_802)
+        let legacyBytes = try JSONEncoder().encode(
+            TestPersistedSyncBatchQueue(
+                version: 1,
+                batches: [markBatch]
+            )
+        )
+        try legacyBytes.write(to: fileURL)
+
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        XCTAssertTrue(queue.pendingBatches.isEmpty)
+        XCTAssertEqual(queue.snapshot().health, .unsupportedAnchoredPayload)
+        XCTAssertEqual(try Data(contentsOf: fileURL), legacyBytes)
+    }
+
     func testBothDurableQueuesLoadPersistedAnchoredBytes() throws {
         let fileURL = temporaryQueueFileURL()
         try createDirectory(for: fileURL)

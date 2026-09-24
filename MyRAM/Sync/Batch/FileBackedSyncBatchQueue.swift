@@ -256,18 +256,43 @@ final class FileBackedSyncBatchQueue {
 
         do {
             let data = try Data(contentsOf: fileURL)
-            let persistedQueue = try JSONDecoder().decode(PersistedSyncBatchQueue.self, from: data)
-            guard persistedQueue.version == PersistedSyncBatchQueue.currentVersion else {
+            let version = try JSONDecoder().decode(
+                PersistedSyncBatchQueueVersion.self,
+                from: data
+            ).version
+            let batches: [SyncBatch]
+            switch version {
+            case PersistedSyncBatchQueue.currentVersion:
+                batches = try JSONDecoder().decode(
+                    PersistedSyncBatchQueue.self,
+                    from: data
+                ).batches
+            case PersistedLegacySyncBatchQueue.currentVersion:
+                batches = try JSONDecoder().decode(
+                    PersistedLegacySyncBatchQueue.self,
+                    from: data
+                ).batches
+                guard batches.allSatisfy({
+                    SyncBatchDeliveryPartitionPlanner.classification(
+                        of: $0.changes
+                    ) != .structuralMarkV3
+                }) else {
+                    return FileBackedSyncBatchQueueSnapshot(
+                        pendingBatches: [],
+                        health: .unsupportedAnchoredPayload
+                    )
+                }
+            default:
                 return FileBackedSyncBatchQueueSnapshot(
                     pendingBatches: [],
-                    health: .unsupportedVersion(persistedQueue.version)
+                    health: .unsupportedVersion(version)
                 )
             }
-            try persistedQueue.batches.forEach(
+            try batches.forEach(
                 SyncBatchAnchoredPayloadPolicy.validateDurableAdmission
             )
             return FileBackedSyncBatchQueueSnapshot(
-                pendingBatches: persistedQueue.batches,
+                pendingBatches: batches,
                 health: .healthy
             )
         } catch is SyncBatchAnchoredPayloadPolicyError {
@@ -376,8 +401,20 @@ struct FileBackedSyncBatchQueueSnapshot: Equatable {
     let health: PersistedQueueHealth
 }
 
+private struct PersistedSyncBatchQueueVersion: Codable {
+    let version: Int
+}
+
 private struct PersistedSyncBatchQueue: Codable {
-    // Keep a versioned envelope so future SyncBatch shape changes can migrate safely.
+    // Version 2 explicitly permits structural-mark V3 batches.
+    static let currentVersion = 2
+
+    let version: Int
+    let batches: [SyncBatch]
+}
+
+private struct PersistedLegacySyncBatchQueue: Codable {
+    // Version 1 is the pre-structural-mark V1/V2 queue representation.
     static let currentVersion = 1
 
     let version: Int
