@@ -383,6 +383,19 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         )
     }
 
+    func recordStructuralMarkCapabilityForTesting(
+        _ value: String?,
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        peerCapabilityRegistry.recordStructuralMarkDiscoveryValue(
+            value,
+            forPeerDeviceID: peerDeviceID
+        )
+        peerCapabilityRegistry.bindCurrentSessionV2Support(
+            forPeerDeviceID: peerDeviceID
+        )
+    }
+
     func beginBootstrapForTesting(to peerID: MCPeerID) async {
         await beginBootstrap(to: peerID)
     }

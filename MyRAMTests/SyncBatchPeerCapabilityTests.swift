@@ -310,6 +310,60 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertFalse(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "bootstrap-peer"))
     }
 
+    func testFormattingCapablePeerRequiresFormattingCoverageBeforeOpeningBootstrapBarrier() async throws {
+        let peer = MCPeerID(displayName: "Remote|formatting-bootstrap-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let snapshotID = UUID(
+            uuidString: "22700000-0000-0000-0000-000000000801"
+        )!
+        let noteID = UUID(
+            uuidString: "22700000-0000-0000-0000-000000000802"
+        )!
+        controller.buildBootstrapSnapshot = {
+            try self.makeBootstrapSnapshot(id: snapshotID, noteID: noteID)
+        }
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "formatting-bootstrap-peer"
+        )
+        controller.recordStructuralMarkCapabilityForTesting(
+            SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue,
+            forPeerDeviceID: "formatting-bootstrap-peer"
+        )
+
+        await controller.beginBootstrapForTesting(to: peer)
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshotID,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [noteID]
+            ),
+            from: peer
+        )
+        XCTAssertFalse(
+            controller.isOrdinarySyncReadyForTesting(
+                peerDeviceID: "formatting-bootstrap-peer"
+            )
+        )
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshotID,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [noteID],
+                coveredFormattingNoteIDs: [noteID]
+            ),
+            from: peer
+        )
+        XCTAssertTrue(
+            controller.isOrdinarySyncReadyForTesting(
+                peerDeviceID: "formatting-bootstrap-peer"
+            )
+        )
+    }
+
     func testManifestedButUncoveredHistoryContinuesIncrementalReplayAfterBarrier() async throws {
         let peer = MCPeerID(displayName: "Remote|behind-peer")
         let transport = CapabilityRecordingTransport(connectedPeers: [peer])
