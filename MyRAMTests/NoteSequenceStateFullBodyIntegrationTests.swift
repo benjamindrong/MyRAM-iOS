@@ -671,6 +671,130 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
         XCTAssertEqual(decoded.notes.only?.payloadByteCount, source.record.payloadByteCount)
     }
 
+    func testBootstrapSnapshotCarriesAndInstallsExactFormattingBaseline() throws {
+        let source = try makeSeededFixture(body: "AB", revision: 4)
+        let sourceSnapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: source.note, in: source.context)
+        let markState = try fullRangeMarkState(
+            key: .bold,
+            assignment: .enabled,
+            sequence: sourceSnapshot.state,
+            localCounter: 227_201
+        )
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: source.note,
+                expected: sourceSnapshot,
+                finalMarkState: markState,
+                in: source.context
+            )
+        try source.context.save()
+
+        let snapshot = try SyncPeerBootstrapSnapshotPersistence.build(
+            from: source.context
+        )
+        let noteSnapshot = try XCTUnwrap(snapshot.notes.only)
+
+        XCTAssertEqual(noteSnapshot.markFormatVersion, source.record.markFormatVersion)
+        XCTAssertEqual(noteSnapshot.markRevision, source.record.markRevision)
+        XCTAssertEqual(noteSnapshot.markStatePayloadData, source.record.markStatePayloadData)
+
+        let destination = try makeContainer()
+        let destinationContext = ModelContext(destination)
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: destinationContext
+        )
+        let destinationNote = try fetchNote(source.note.id, in: destinationContext)
+        let installed = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: destinationNote, in: destinationContext)
+
+        XCTAssertEqual(installed.markState, markState)
+        XCTAssertEqual(disposition.coveredFormattingNoteIDs, [source.note.id])
+    }
+
+    func testBootstrapStructuralMarkHistoryRequiresFormattingBaselineCoverage() throws {
+        let source = try makeSeededFixture(body: "AB")
+        let sourceSnapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: source.note, in: source.context)
+        let markState = try fullRangeMarkState(
+            key: .italic,
+            assignment: .enabled,
+            sequence: sourceSnapshot.state,
+            localCounter: 227_202
+        )
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: source.note,
+                expected: sourceSnapshot,
+                finalMarkState: markState,
+                in: source.context
+            )
+        try source.context.save()
+
+        let markBatch = SyncBatch(
+            id: UUID(uuidString: "22700000-0000-0000-0000-000000000202")!,
+            originDeviceID: UUID(uuidString: "22700000-0000-0000-0000-000000000203")!,
+            createdAt: Date(timeIntervalSince1970: 227_202),
+            batchSequence: 1,
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: source.note.id,
+                        operations: markState.operations,
+                        modifiedAt: Date(timeIntervalSince1970: 227_202)
+                    )
+                )
+            ]
+        )
+        let fullSnapshot = try SyncPeerBootstrapSnapshotPersistence
+            .build(from: source.context)
+            .attachingHistoryCoverage(for: [markBatch])
+
+        let coveredDestination = try makeContainer()
+        let coveredDisposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            fullSnapshot,
+            to: ModelContext(coveredDestination)
+        )
+        XCTAssertEqual(coveredDisposition.coveredBatchIDs, [markBatch.id])
+        XCTAssertEqual(
+            coveredDisposition.coveredFormattingNoteIDs,
+            [source.note.id]
+        )
+
+        let note = try XCTUnwrap(fullSnapshot.notes.only)
+        let legacyNote = SyncPeerBootstrapNoteSnapshot(
+            id: note.id,
+            title: note.title,
+            body: note.body,
+            isPinned: note.isPinned,
+            createdAt: note.createdAt,
+            modifiedAt: note.modifiedAt,
+            deletedAt: note.deletedAt,
+            folderID: note.folderID,
+            formatVersion: note.formatVersion,
+            revision: note.revision,
+            visibleUTF16Count: note.visibleUTF16Count,
+            tombstonedUTF16Count: note.tombstonedUTF16Count,
+            payloadByteCount: note.payloadByteCount,
+            statePayloadData: note.statePayloadData
+        )
+        let legacySnapshot = SyncPeerBootstrapSnapshot(
+            id: fullSnapshot.id,
+            folders: fullSnapshot.folders,
+            notes: [legacyNote],
+            historyCoverage: fullSnapshot.historyCoverage
+        )
+        let legacyDestination = try makeContainer()
+        let legacyDisposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            legacySnapshot,
+            to: ModelContext(legacyDestination)
+        )
+
+        XCTAssertTrue(legacyDisposition.coveredFormattingNoteIDs.isEmpty)
+        XCTAssertFalse(legacyDisposition.coveredBatchIDs.contains(markBatch.id))
+    }
+
     func testBootstrapMissingNoteInstallsNoteAndExactSequenceStateAtomically() throws {
         let source = try makeSeededFixture(body: "Authoritative", revision: 4)
         let batchID = UUID()
@@ -1654,7 +1778,10 @@ final class NoteSequenceStateFullBodyIntegrationTests: XCTestCase {
             visibleUTF16Count: note.visibleUTF16Count,
             tombstonedUTF16Count: note.tombstonedUTF16Count,
             payloadByteCount: note.payloadByteCount,
-            statePayloadData: note.statePayloadData
+            statePayloadData: note.statePayloadData,
+            markFormatVersion: note.markFormatVersion,
+            markRevision: note.markRevision,
+            markStatePayloadData: note.markStatePayloadData
         )
     }
 
