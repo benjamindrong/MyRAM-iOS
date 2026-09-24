@@ -342,4 +342,48 @@ final class MarkdownPreviewParserTests: XCTestCase {
         XCTAssertEqual(cellsByPosition["2:1"], "Pending")
     }
 
+
+    // MARK: 17. Shared table projection
+    func testTableProjectsAsOneOrderedStructuredBlockWithInlineSemantics() throws {
+        let source = """
+        | Name | Status |
+        | --- | --- |
+        | **Alpha** | [Ready](https://example.com/ready) |
+        | Beta | Pending |
+        """
+
+        guard case .rendered(let document) = parser.parseDocument(source) else {
+            return XCTFail("Valid Markdown table must render")
+        }
+        XCTAssertEqual(document.blocks.count, 1, "One Markdown table must project as one block")
+
+        guard case .table(let table) = document.blocks[0].kind else {
+            return XCTFail("Expected structured table block")
+        }
+
+        XCTAssertEqual(table.columnCount, 2)
+        XCTAssertEqual(table.rows.map(\.index), [0, 1, 2])
+        XCTAssertEqual(table.rows.map(\.isHeader), [true, false, false])
+        XCTAssertEqual(
+            table.rows.map { $0.cells.map { String($0.content.characters) } },
+            [
+                ["Name", "Status"],
+                ["Alpha", "Ready"],
+                ["Beta", "Pending"]
+            ]
+        )
+
+        let strongCell = table.rows[1].cells[0].content
+        XCTAssertTrue(
+            strongCell.runs.contains {
+                $0.inlinePresentationIntent?.contains(.stronglyEmphasized) == true
+            },
+            "Table projection must retain inline strong emphasis"
+        )
+
+        let linkedCell = table.rows[1].cells[1].content
+        let link = linkedCell.runs.compactMap { $0.link }.first
+        XCTAssertEqual(link?.absoluteString, "https://example.com/ready")
+    }
+
 }
