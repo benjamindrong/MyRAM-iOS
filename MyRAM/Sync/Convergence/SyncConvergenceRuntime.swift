@@ -11,6 +11,13 @@ enum SyncConvergenceRuntimeOutcome {
     case blocked(SyncBatchDrainFailure)
 }
 
+enum SyncConvergenceLocalObligationCollectionAdmissionResult {
+    case admitted
+    case retryableCapacity
+    case retryablePersistenceFailure
+    case terminal(SyncConvergenceRuntimeOutcome)
+}
+
 struct SyncConvergenceDrainCompletion {
     let outcome: SyncConvergenceRuntimeOutcome
     let successfullyCompletedBatchIDs: Set<UUID>
@@ -254,31 +261,113 @@ final class SyncConvergenceRuntime {
     func submitLocalObligations(
         _ collection: SyncPreparedLocalObligationCollection
     ) async -> SyncConvergenceRuntimeOutcome {
-        do {
-            for obligation in collection.obligations {
-                try SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)
-                if case .captured = obligation.evidence {
-                    _ = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
-                }
-            }
-            try localObligationQueue.enqueueAtomically(collection.obligations)
-            switch try await satisfyLocalObligations() {
-            case .complete:
-                return .drained(appliedBatchIDs: [])
-            case .deferred(let deferred):
-                return .deferred(SyncConvergenceDeferredWork(incoming: [], localObligations: deferred, postCommit: []))
-            case .quarantined(let quarantined):
-                return .quarantined(SyncConvergenceQuarantinedWork(items: quarantined))
-            case .blocked(let failure):
-                return .blocked(failure)
-            }
-        } catch {
+        switch await admitLocalObligationCollection(collection) {
+        case .admitted:
+            return await resumePendingWork()
+        case .retryableCapacity:
             return .blocked(
+                SyncBatchDrainFailure(
+                    batchID: collection.primary.id,
+                    kind: .queueCapacity
+                )
+            )
+        case .retryablePersistenceFailure:
+            return .blocked(
+                SyncBatchDrainFailure(
+                    batchID: collection.primary.id,
+                    kind: .queuePersistence
+                )
+            )
+        case .terminal(let outcome):
+            return outcome
+        }
+    }
+
+    func admitLocalObligationCollection(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceLocalObligationCollectionAdmissionResult {
+        for obligation in collection.obligations {
+            do {
+                try SyncBatchAnchoredPayloadPolicy.validateConvergence(
+                    obligation.batch
+                )
+                if case .captured = obligation.evidence {
+                    _ = try SyncConvergenceLocalEvidenceCapture.validate(
+                        obligation: obligation
+                    )
+                }
+            } catch let evidenceError as SyncConvergenceLocalEvidenceCaptureError {
+                return .terminal(.quarantined(
+                    SyncConvergenceQuarantinedWork(items: [
+                        SyncConvergenceQuarantinedItem(
+                            domain: .localObligation,
+                            batchID: obligation.id,
+                            affectedNoteIDs: Self.affectedNoteIDs(in: obligation.batch),
+                            originDeviceID: obligation.batch.originDeviceID,
+                            reason: Self.quarantineReason(for: evidenceError)
+                        )
+                    ])
+                ))
+            } catch {
+                return .terminal(.blocked(
+                    SyncBatchDrainFailureClassifier.classify(
+                        error,
+                        batchID: obligation.id
+                    )
+                ))
+            }
+        }
+
+        do {
+            try localObligationQueue.enqueueAtomically(collection.obligations)
+            return .admitted
+        } catch FileBackedSyncConvergenceLocalObligationQueue.QueueError.capacityExceeded {
+            let relief: SyncConvergenceLocalObligationPassOutcome
+            do {
+                relief = try await satisfyLocalObligations()
+            } catch {
+                return .terminal(.blocked(
+                    SyncBatchDrainFailureClassifier.classify(
+                        error,
+                        batchID: collection.primary.id
+                    )
+                ))
+            }
+            switch relief {
+            case .complete, .deferred:
+                do {
+                    try localObligationQueue.enqueueAtomically(
+                        collection.obligations
+                    )
+                    return .admitted
+                } catch FileBackedSyncConvergenceLocalObligationQueue.QueueError.capacityExceeded {
+                    return .retryableCapacity
+                } catch FileBackedSyncConvergenceLocalObligationQueue.QueueError.persistenceFailed {
+                    return .retryablePersistenceFailure
+                } catch {
+                    return .terminal(.blocked(
+                        SyncBatchDrainFailureClassifier.classify(
+                            error,
+                            batchID: collection.primary.id
+                        )
+                    ))
+                }
+            case .quarantined(let quarantined):
+                return .terminal(.quarantined(
+                    SyncConvergenceQuarantinedWork(items: quarantined)
+                ))
+            case .blocked(let failure):
+                return .terminal(.blocked(failure))
+            }
+        } catch FileBackedSyncConvergenceLocalObligationQueue.QueueError.persistenceFailed {
+            return .retryablePersistenceFailure
+        } catch {
+            return .terminal(.blocked(
                 SyncBatchDrainFailureClassifier.classify(
                     error,
                     batchID: collection.primary.id
                 )
-            )
+            ))
         }
     }
 

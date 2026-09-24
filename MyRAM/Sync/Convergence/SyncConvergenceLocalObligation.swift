@@ -42,15 +42,24 @@ struct SyncConvergenceLocalObligation: Codable, Equatable, Identifiable, Sendabl
 }
 
 struct SyncPreparedLocalObligationCollection: Equatable, Sendable {
+    let token: UUID
     let obligations: [SyncConvergenceLocalObligation]
 
-    init?(_ obligations: [SyncConvergenceLocalObligation]) {
+    init?(
+        _ obligations: [SyncConvergenceLocalObligation],
+        token: UUID = UUID()
+    ) {
         guard !obligations.isEmpty else { return nil }
+        self.token = token
         self.obligations = obligations
     }
 
     var primary: SyncConvergenceLocalObligation {
         obligations[0]
+    }
+
+    var batchIDs: Set<SyncBatchID> {
+        Set(obligations.map(\.id))
     }
 }
 

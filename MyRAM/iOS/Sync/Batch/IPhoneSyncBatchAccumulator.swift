@@ -7,8 +7,12 @@ actor IPhoneSyncBatchAccumulator {
     private let batchSequenceProvider: @Sendable () -> SyncBatchSequenceReservation
     private let sleep: @Sendable (TimeInterval) async -> Void
     private var pendingBatch: PendingBatch?
+    private var preparedCollection: SyncPreparedLocalObligationCollection?
     private var lastSequenceReservationIssue: SyncBatchSequenceReservation.SequenceIssue?
     private var readinessTask: Task<Void, Never>?
+    private var preparedRetryTask: Task<Void, Never>?
+    private var preparedRetryAttempt = 0
+    private let preparedRetryDelays: [TimeInterval]
     private var continuations: [UUID: AsyncStream<SyncPreparedLocalObligationCollection>.Continuation] = [:]
 
     init(
@@ -18,7 +22,8 @@ actor IPhoneSyncBatchAccumulator {
         batchSequenceProvider: (@Sendable () -> SyncBatchSequenceReservation)? = nil,
         sleep: @escaping @Sendable (TimeInterval) async -> Void = { interval in
             try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
-        }
+        },
+        preparedRetryDelays: [TimeInterval] = [0.25, 0.5, 1, 2]
     ) {
         self.originDeviceID = originDeviceID
         self.quietWindow = quietWindow
@@ -28,6 +33,14 @@ actor IPhoneSyncBatchAccumulator {
             sequenceStore.nextSequence(for: originDeviceID)
         }
         self.sleep = sleep
+        self.preparedRetryDelays = preparedRetryDelays.isEmpty
+            ? [2]
+            : preparedRetryDelays
+    }
+
+    deinit {
+        readinessTask?.cancel()
+        preparedRetryTask?.cancel()
     }
 
     func readyBatches() -> AsyncStream<SyncPreparedLocalObligationCollection> {
@@ -121,13 +134,13 @@ actor IPhoneSyncBatchAccumulator {
     }
 
     func takeReadyBatches(at date: Date = .now) -> [SyncConvergenceLocalObligation] {
-        extractPendingBatches { pendingBatch in
-            date >= pendingBatch.readyAt
-        }
+        takeReadyCollection(at: date)?.obligations ?? []
     }
 
     func takeReadyCollection(at date: Date = .now) -> SyncPreparedLocalObligationCollection? {
-        SyncPreparedLocalObligationCollection(takeReadyBatches(at: date))
+        prepareCollection { pendingBatch in
+            date >= pendingBatch.readyAt
+        }
     }
 
     private func readyCollectionIfAvailable(at date: Date) -> SyncPreparedLocalObligationCollection? {
@@ -139,11 +152,11 @@ actor IPhoneSyncBatchAccumulator {
     }
 
     func takePendingBatchesNow() -> [SyncConvergenceLocalObligation] {
-        extractPendingBatches { _ in true }
+        takePendingCollectionNow()?.obligations ?? []
     }
 
     func takePendingCollectionNow() -> SyncPreparedLocalObligationCollection? {
-        SyncPreparedLocalObligationCollection(takePendingBatchesNow())
+        prepareCollection { _ in true }
     }
 
     func containsPendingBodyChange(for noteID: UUID) -> Bool {
@@ -160,32 +173,100 @@ actor IPhoneSyncBatchAccumulator {
     func takePendingObligationsIfAffecting(
         noteID: UUID
     ) -> [SyncConvergenceLocalObligation] {
-        extractPendingBatches { pendingBatch in
+        takePendingCollectionIfAffecting(noteID: noteID)?.obligations ?? []
+    }
+
+    func takePendingCollectionIfAffecting(
+        noteID: UUID
+    ) -> SyncPreparedLocalObligationCollection? {
+        prepareCollection { pendingBatch in
             pendingBatch.capturedChanges.contains {
                 SyncConvergenceLocalEvidenceCapture.noteID(for: $0.change) == noteID
             }
         }
     }
 
-    func takePendingCollectionIfAffecting(
-        noteID: UUID
-    ) -> SyncPreparedLocalObligationCollection? {
-        SyncPreparedLocalObligationCollection(
-            takePendingObligationsIfAffecting(noteID: noteID)
-        )
-    }
-
     private func extractPendingBatches(
         when shouldExtract: (PendingBatch) -> Bool
     ) -> [SyncConvergenceLocalObligation] {
-        guard let pendingBatch, shouldExtract(pendingBatch) else { return [] }
-        guard let obligations = try? obligations(for: pendingBatch), !obligations.isEmpty else {
-            return []
+        prepareCollection(when: shouldExtract)?.obligations ?? []
+    }
+
+    private func prepareCollection(
+        when shouldPrepare: (PendingBatch) -> Bool
+    ) -> SyncPreparedLocalObligationCollection? {
+        if let preparedCollection {
+            return preparedCollection
+        }
+        guard let pendingBatch, shouldPrepare(pendingBatch),
+              let collection = try? makePreparedCollection(for: pendingBatch) else {
+            return nil
         }
         readinessTask?.cancel()
         readinessTask = nil
         self.pendingBatch = nil
-        return obligations
+        preparedCollection = collection
+        preparedRetryAttempt = 0
+        return collection
+    }
+
+    private func makePreparedCollection(
+        for pendingBatch: PendingBatch
+    ) throws -> SyncPreparedLocalObligationCollection? {
+        SyncPreparedLocalObligationCollection(
+            try obligations(for: pendingBatch)
+        )
+    }
+
+    func commitPreparedCollection(token: UUID) -> Bool {
+        guard preparedCollection?.token == token else { return false }
+        preparedCollection = nil
+        preparedRetryTask?.cancel()
+        preparedRetryTask = nil
+        preparedRetryAttempt = 0
+        return true
+    }
+
+    func reportPreparedCollectionAdmissionResult(
+        token: UUID,
+        result: SyncConvergenceLocalObligationCollectionAdmissionResult
+    ) {
+        guard preparedCollection?.token == token else { return }
+        switch result {
+        case .admitted:
+            return
+        case .retryableCapacity, .retryablePersistenceFailure:
+            schedulePreparedRetry(token: token)
+        case .terminal:
+            preparedRetryTask?.cancel()
+            preparedRetryTask = nil
+            preparedRetryAttempt = 0
+        }
+    }
+
+    private func schedulePreparedRetry(token: UUID) {
+        preparedRetryTask?.cancel()
+        let delay = preparedRetryDelays[min(
+            preparedRetryAttempt,
+            preparedRetryDelays.count - 1
+        )]
+        preparedRetryAttempt += 1
+        preparedRetryTask = Task { [weak self, sleep] in
+            await sleep(delay)
+            guard !Task.isCancelled else { return }
+            await self?.emitPreparedRetryIfCurrent(token: token)
+        }
+    }
+
+    private func emitPreparedRetryIfCurrent(token: UUID) {
+        preparedRetryTask = nil
+        guard let collection = preparedCollection,
+              collection.token == token else {
+            return
+        }
+        for continuation in continuations.values {
+            continuation.yield(collection)
+        }
     }
 
     private func obligations(
