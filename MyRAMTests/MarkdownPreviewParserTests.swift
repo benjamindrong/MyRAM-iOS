@@ -297,68 +297,49 @@ final class MarkdownPreviewParserTests: XCTestCase {
             )
         )
 
-        var tableCount = 0
-        var headerRowCount = 0
-        var bodyRowCount = 0
-        var cellsByRowIdentity: [Int: [(column: Int, text: String)]] = [:]
-        var headerRowIdentities: Set<Int> = []
+        var tableColumnCount: Int?
+        var headerRowIdentity: Int?
+        var observedBodyRows: Set<Int> = []
+        var cellsByPosition: [String: String] = [:]
 
         for run in attributed.runs {
             guard let intent = run.presentationIntent else { continue }
 
-            var rowIdentity: Int?
-            var column: Int?
+            var rowIndex: Int?
+            var columnIndex: Int?
 
             for component in intent.components {
                 switch component.kind {
-                case .table:
-                    tableCount += 1
+                case .table(let columns):
+                    tableColumnCount = columns.count
                 case .tableHeaderRow:
-                    headerRowCount += 1
-                    headerRowIdentities.insert(component.identity)
-                    rowIdentity = component.identity
-                case .tableRow:
-                    bodyRowCount += 1
-                    rowIdentity = component.identity
-                case .tableCell(let cellColumn):
-                    column = cellColumn
+                    headerRowIdentity = component.identity
+                    rowIndex = 0
+                case .tableRow(let bodyRowIndex):
+                    observedBodyRows.insert(bodyRowIndex)
+                    rowIndex = bodyRowIndex
+                case .tableCell(let cellColumnIndex):
+                    columnIndex = cellColumnIndex
                 default:
                     break
                 }
             }
 
-            if let rowIdentity, let column {
-                cellsByRowIdentity[rowIdentity, default: []].append(
-                    (column: column, text: String(attributed[run.range].characters))
-                )
+            if let rowIndex, let columnIndex {
+                cellsByPosition["\(rowIndex):\(columnIndex)", default: ""] +=
+                    String(attributed[run.range].characters)
             }
         }
 
-        XCTAssertGreaterThan(tableCount, 0, "Foundation MUST expose a table intent")
-        XCTAssertGreaterThan(headerRowCount, 0, "Foundation MUST expose a table header-row intent")
-        XCTAssertGreaterThanOrEqual(bodyRowCount, 2, "Foundation MUST expose both body rows")
-        XCTAssertEqual(cellsByRowIdentity.count, 3, "Foundation MUST expose one header row plus two body rows")
-
-        let orderedRows = cellsByRowIdentity
-            .map { identity, cells in
-                (
-                    isHeader: headerRowIdentities.contains(identity),
-                    cells: cells.sorted { $0.column < $1.column }.map(\.text)
-                )
-            }
-
-        XCTAssertTrue(
-            orderedRows.contains { $0.isHeader && $0.cells == ["Name", "Status"] },
-            "Header cells MUST preserve stable column ordering"
-        )
-        XCTAssertTrue(
-            orderedRows.contains { !$0.isHeader && $0.cells == ["Alpha", "Ready"] },
-            "First body row MUST preserve stable column ordering"
-        )
-        XCTAssertTrue(
-            orderedRows.contains { !$0.isHeader && $0.cells == ["Beta", "Pending"] },
-            "Second body row MUST preserve stable column ordering"
-        )
+        XCTAssertEqual(tableColumnCount, 2, "Foundation MUST expose both table columns")
+        XCTAssertNotNil(headerRowIdentity, "Foundation MUST expose a distinct table header-row intent")
+        XCTAssertEqual(observedBodyRows, Set([1, 2]), "Foundation MUST expose stable body row indexes")
+        XCTAssertEqual(cellsByPosition["0:0"], "Name")
+        XCTAssertEqual(cellsByPosition["0:1"], "Status")
+        XCTAssertEqual(cellsByPosition["1:0"], "Alpha")
+        XCTAssertEqual(cellsByPosition["1:1"], "Ready")
+        XCTAssertEqual(cellsByPosition["2:0"], "Beta")
+        XCTAssertEqual(cellsByPosition["2:1"], "Pending")
     }
 
 }
