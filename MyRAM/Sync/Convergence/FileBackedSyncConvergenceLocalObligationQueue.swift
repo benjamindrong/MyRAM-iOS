@@ -5,6 +5,7 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         case capacityExceeded
         case persistenceFailed
         case unhealthyPersistence
+        case invalidStructuralMarkObligation
     }
 
     private let fileURL: URL?
@@ -48,14 +49,28 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
     }
 
     func enqueue(_ obligation: SyncConvergenceLocalObligation) throws {
-        try SyncBatchAnchoredPayloadPolicy.validateDurableAdmission(obligation.batch)
+        try enqueueAtomically([obligation])
+    }
+
+    func enqueueAtomically(_ newObligations: [SyncConvergenceLocalObligation]) throws {
+        guard !newObligations.isEmpty else { return }
+        try newObligations.forEach(Self.validateDurableObligation)
         guard canPersistCurrentQueue else { throw QueueError.unhealthyPersistence }
         guard limit > 0 else { throw QueueError.capacityExceeded }
-        guard !contains(obligation.id) else { return }
-        guard obligations.count < limit else { throw QueueError.capacityExceeded }
+
+        var seenIDs = Set(obligations.map(\.id))
+        var additions: [SyncConvergenceLocalObligation] = []
+        additions.reserveCapacity(newObligations.count)
+        for obligation in newObligations where seenIDs.insert(obligation.id).inserted {
+            additions.append(obligation)
+        }
+        guard !additions.isEmpty else { return }
+        guard obligations.count + additions.count <= limit else {
+            throw QueueError.capacityExceeded
+        }
 
         let original = obligations
-        obligations.append(obligation)
+        obligations.append(contentsOf: additions)
         do {
             try persistQueueThrowing()
         } catch {
@@ -85,9 +100,7 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
     }
 
     func replacePendingObligations(_ replacement: [SyncConvergenceLocalObligation]) throws {
-        try replacement.forEach {
-            try SyncBatchAnchoredPayloadPolicy.validateDurableAdmission($0.batch)
-        }
+        try replacement.forEach(Self.validateDurableObligation)
         guard canReplaceQueue else { throw QueueError.unhealthyPersistence }
 
         let original = obligations
@@ -133,11 +146,21 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
             switch version {
             case PersistedSyncConvergenceLocalObligationQueue.currentVersion:
                 let persistedQueue = try JSONDecoder().decode(PersistedSyncConvergenceLocalObligationQueue.self, from: data)
-                try persistedQueue.obligations.forEach {
-                    try SyncBatchAnchoredPayloadPolicy.validateDurableAdmission($0.batch)
-                }
+                try persistedQueue.obligations.forEach(Self.validateDurableObligation)
                 return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
                     obligations: persistedQueue.obligations,
+                    health: .healthy
+                )
+            case PersistedLegacySyncConvergenceLocalObligationQueue.currentVersion:
+                let legacyQueue = try JSONDecoder().decode(
+                    PersistedLegacySyncConvergenceLocalObligationQueue.self,
+                    from: data
+                )
+                try legacyQueue.obligations.forEach(Self.validateLegacyV2Obligation)
+                obligations = legacyQueue.obligations
+                try persistQueueThrowing(allowUnhealthyReplacement: true)
+                return FileBackedSyncConvergenceLocalObligationQueueSnapshot(
+                    obligations: legacyQueue.obligations,
                     health: .healthy
                 )
             case PersistedLegacySyncBatchQueue.currentVersion:
@@ -199,6 +222,35 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         }
     }
 
+    private static func validateDurableObligation(
+        _ obligation: SyncConvergenceLocalObligation
+    ) throws {
+        try SyncBatchAnchoredPayloadPolicy.validateDurableAdmission(obligation.batch)
+        switch SyncBatchDeliveryPartitionPlanner.classification(of: obligation.batch.changes) {
+        case .v1Compatible, .anchoredV2:
+            return
+        case .structuralMarkV3:
+            guard obligation.batch.changes.count == 1,
+                  case .noteStructuralMarksChanged(let change) = obligation.batch.changes[0],
+                  !change.operations.isEmpty else {
+                throw QueueError.invalidStructuralMarkObligation
+            }
+        case .invalidMixedRepresentation:
+            throw QueueError.invalidStructuralMarkObligation
+        }
+    }
+
+    private static func validateLegacyV2Obligation(
+        _ obligation: SyncConvergenceLocalObligation
+    ) throws {
+        try validateDurableObligation(obligation)
+        guard SyncBatchDeliveryPartitionPlanner.classification(
+            of: obligation.batch.changes
+        ) != .structuralMarkV3 else {
+            throw QueueError.invalidStructuralMarkObligation
+        }
+    }
+
     private static func affectedNoteIDs(in batch: SyncBatch) -> Set<UUID> {
         Set(batch.changes.map(\.noteID))
     }
@@ -210,7 +262,7 @@ struct FileBackedSyncConvergenceLocalObligationQueueSnapshot: Equatable {
 }
 
 struct PersistedSyncConvergenceLocalObligationQueue: Codable {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     let version: Int
     let obligations: [SyncConvergenceLocalObligation]
@@ -218,6 +270,13 @@ struct PersistedSyncConvergenceLocalObligationQueue: Codable {
 
 private struct PersistedQueueVersion: Codable {
     let version: Int
+}
+
+private struct PersistedLegacySyncConvergenceLocalObligationQueue: Codable {
+    static let currentVersion = 2
+
+    let version: Int
+    let obligations: [SyncConvergenceLocalObligation]
 }
 
 private struct PersistedLegacySyncBatchQueue: Codable {
