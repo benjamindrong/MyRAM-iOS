@@ -2721,30 +2721,53 @@ final class NotesViewModel: ObservableObject {
         }
     }
 
-    private func prepareLocalOwnershipForBootstrap() async {
-        while true {
-            let captureBoundary = nextSyncBatchCaptureID
-            let pendingCaptureTasks = syncBatchCaptureTasks
-                .filter { $0.key <= captureBoundary }
-                .sorted { $0.key < $1.key }
-                .map(\.value)
-            for task in pendingCaptureTasks {
-                await task.value
-            }
-
-            await resumePendingConvergencePresentation()
-            if let collection = await syncBatchAccumulator.takePendingCollectionNow() {
-                await handleReadyLocalObligations(collection)
-                continue
-            }
-
-            guard captureBoundary == nextSyncBatchCaptureID else { continue }
-            return
+    private func prepareLocalOwnershipForBootstrap()
+        async -> SyncBootstrapLocalOwnershipPreparationResult
+    {
+        let captureBoundary = nextSyncBatchCaptureID
+        let pendingCaptureTasks = syncBatchCaptureTasks
+            .filter { $0.key <= captureBoundary }
+            .sorted { $0.key < $1.key }
+            .map(\.value)
+        for task in pendingCaptureTasks {
+            await task.value
         }
+
+        if let collection = await syncBatchAccumulator.takePendingCollectionNow() {
+            switch await durablyAdmitPreparedLocalCollection(collection) {
+            case .admitted:
+                break
+            case .retryableCapacity, .retryablePersistenceFailure:
+                return .retryablePending
+            case .terminal(let outcome):
+                await handleConvergenceRuntimeOutcome(outcome)
+                return .terminal(outcome)
+            }
+        }
+
+        let outcome = await syncConvergenceRuntime.resumePendingWork()
+        await handleConvergenceRuntimeOutcome(outcome)
+        switch outcome {
+        case .blocked, .quarantined:
+            return .terminal(outcome)
+        case .pending, .deferred, .alreadyDraining:
+            return .retryablePending
+        case .drained:
+            break
+        }
+
+        guard captureBoundary == nextSyncBatchCaptureID,
+              pendingLocalConvergenceBatches.pendingCount == 0,
+              await syncBatchAccumulator.takePendingCollectionNow() == nil else {
+            return .retryablePending
+        }
+        return .ready
     }
 
 #if DEBUG
-    func prepareLocalOwnershipForBootstrapForTesting() async {
+    func prepareLocalOwnershipForBootstrapForTesting()
+        async -> SyncBootstrapLocalOwnershipPreparationResult
+    {
         await prepareLocalOwnershipForBootstrap()
     }
 #endif

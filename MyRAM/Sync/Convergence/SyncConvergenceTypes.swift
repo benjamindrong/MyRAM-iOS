@@ -1,3 +1,9 @@
+enum SyncBootstrapLocalOwnershipPreparationResult {
+    case ready
+    case retryablePending
+    case terminal(SyncConvergenceRuntimeOutcome)
+}
+
 import AnchoredSequenceCore
 import Foundation
 

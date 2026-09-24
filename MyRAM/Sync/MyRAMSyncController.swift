@@ -148,7 +148,8 @@ protocol MyRAMSyncConvergenceStatusConfiguring: AnyObject {
 
 @MainActor
 protocol MyRAMSyncBootstrapConfiguring: AnyObject {
-    var onPrepareLocalOwnershipForBootstrap: (() async -> Void)? { get set }
+    var onPrepareLocalOwnershipForBootstrap:
+        (() async -> SyncBootstrapLocalOwnershipPreparationResult)? { get set }
     var buildBootstrapSnapshot: (() throws -> SyncPeerBootstrapSnapshot)? { get set }
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)? { get set }
     var onBootstrapPresentationRefresh: (() -> Void)? { get set }
@@ -224,7 +225,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     var onDurablyCaptureIncomingBatch: ((SyncBatch) async -> Bool)?
     var onFlushLocalConvergenceRequested: (() async -> Void)?
     var localConvergencePendingCountProvider: (() -> Int)?
-    var onPrepareLocalOwnershipForBootstrap: (() async -> Void)?
+    var onPrepareLocalOwnershipForBootstrap:
+        (() async -> SyncBootstrapLocalOwnershipPreparationResult)?
     var buildBootstrapSnapshot: (() throws -> SyncPeerBootstrapSnapshot)?
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)?
     var onBootstrapPresentationRefresh: (() -> Void)?
@@ -252,6 +254,13 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private var bootstrapStateByPeerDeviceID: [String: SyncPeerBootstrapPendingState] = [:]
     private var bootstrapCapabilityResolutionTasks: [String: Task<Void, Never>] = [:]
     private var bootstrapRetryTasks: [String: Task<Void, Never>] = [:]
+    private var bootstrapPreflightRetryAttemptByPeerDeviceID: [String: Int] = [:]
+    private let bootstrapPreflightRetryDelayNanoseconds: [UInt64] = [
+        250_000_000,
+        500_000_000,
+        1_000_000_000,
+        2_000_000_000
+    ]
     private var bootstrapRetryDelayNanoseconds: [UInt64] = [
         250_000_000,
         500_000_000,
@@ -330,6 +339,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     deinit {
         reconnectRetryTasks.values.forEach { $0.cancel() }
+        bootstrapRetryTasks.values.forEach { $0.cancel() }
         advertiser.stopAdvertisingPeer()
         browser.stopBrowsingForPeers()
         session.disconnect()
@@ -1223,16 +1233,27 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
 
         while true {
-            if let onPrepareLocalOwnershipForBootstrap {
-                await onPrepareLocalOwnershipForBootstrap()
-            } else {
-                await onFlushLocalConvergenceRequested?()
-            }
+            let firstPreflight = await prepareBootstrapLocalOwnership()
 #if DEBUG
             await onBootstrapOwnershipPreflightCompletedForTesting?()
 #endif
-            guard (localConvergencePendingCountProvider?() ?? 0) == 0 else {
-                lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
+            switch firstPreflight {
+            case .ready:
+                break
+            case .retryablePending:
+                scheduleBootstrapPreflightRetry(to: peerID)
+                lastErrorMessage =
+                    "Nearby bootstrap is waiting for local sync ownership."
+                await updatePendingCount()
+                return
+            case .terminal:
+                bootstrapPreflightRetryAttemptByPeerDeviceID[
+                    identity.deviceID
+                ] = nil
+                bootstrapRetryTasks.removeValue(
+                    forKey: identity.deviceID
+                )?.cancel()
+                lastErrorMessage = "Unable to prepare nearby bootstrap state."
                 await updatePendingCount()
                 return
             }
@@ -1246,13 +1267,24 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 #else
                 await Task.yield()
 #endif
-                if let onPrepareLocalOwnershipForBootstrap {
-                    await onPrepareLocalOwnershipForBootstrap()
-                } else {
-                    await onFlushLocalConvergenceRequested?()
-                }
-                guard (localConvergencePendingCountProvider?() ?? 0) == 0 else {
-                    lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
+                let secondPreflight = await prepareBootstrapLocalOwnership()
+                switch secondPreflight {
+                case .ready:
+                    break
+                case .retryablePending:
+                    scheduleBootstrapPreflightRetry(to: peerID)
+                    lastErrorMessage =
+                        "Nearby bootstrap is waiting for local sync ownership."
+                    await updatePendingCount()
+                    return
+                case .terminal:
+                    bootstrapPreflightRetryAttemptByPeerDeviceID[
+                        identity.deviceID
+                    ] = nil
+                    bootstrapRetryTasks.removeValue(
+                        forKey: identity.deviceID
+                    )?.cancel()
+                    lastErrorMessage = "Unable to prepare nearby bootstrap state."
                     await updatePendingCount()
                     return
                 }
@@ -1267,6 +1299,9 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                     continue
                 }
 
+                bootstrapPreflightRetryAttemptByPeerDeviceID[
+                    identity.deviceID
+                ] = nil
                 bootstrapStateByPeerDeviceID[identity.deviceID] = SyncPeerBootstrapPendingState(
                     snapshot: snapshot,
                     coveredBatchIDs: Set(capturedBatches.map(\.id)),
@@ -1283,6 +1318,57 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 lastErrorMessage = "Unable to prepare nearby bootstrap state."
                 return
             }
+        }
+    }
+
+    private func prepareBootstrapLocalOwnership()
+        async -> SyncBootstrapLocalOwnershipPreparationResult
+    {
+        if let onPrepareLocalOwnershipForBootstrap {
+            return await onPrepareLocalOwnershipForBootstrap()
+        }
+        await onFlushLocalConvergenceRequested?()
+        return (localConvergencePendingCountProvider?() ?? 0) == 0
+            ? .ready
+            : .retryablePending
+    }
+
+    private func scheduleBootstrapPreflightRetry(to peerID: MCPeerID) {
+        let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
+        bootstrapRetryTasks.removeValue(forKey: deviceID)?.cancel()
+        guard bootstrapStateByPeerDeviceID[deviceID] == nil,
+              peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
+                forPeerDeviceID: deviceID
+              ) else {
+            return
+        }
+
+        let attempt =
+            bootstrapPreflightRetryAttemptByPeerDeviceID[deviceID] ?? 0
+        let delay = bootstrapPreflightRetryDelayNanoseconds[min(
+            attempt,
+            bootstrapPreflightRetryDelayNanoseconds.count - 1
+        )]
+        bootstrapPreflightRetryAttemptByPeerDeviceID[deviceID] = attempt + 1
+        bootstrapRetryTasks[deviceID] = Task { @MainActor [weak self] in
+            if delay > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.bootstrapRetryTasks.removeValue(forKey: deviceID)
+            guard (await self.transport.connectedPeers()).contains(peerID),
+                  self.peerCapabilityRegistry
+                    .hasExplicitCurrentSessionBootstrapV1Support(
+                        forPeerDeviceID: deviceID
+                    ) else {
+                self.bootstrapPreflightRetryAttemptByPeerDeviceID[deviceID] = nil
+                return
+            }
+            await self.beginBootstrap(to: peerID)
         }
     }
 
@@ -1467,6 +1553,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private func handlePeerDisconnect(peerDeviceID: String) {
         bootstrapCapabilityResolutionTasks.removeValue(forKey: peerDeviceID)?.cancel()
         bootstrapRetryTasks.removeValue(forKey: peerDeviceID)?.cancel()
+        bootstrapPreflightRetryAttemptByPeerDeviceID[peerDeviceID] = nil
         outstandingBatchDeliveries.invalidateSession(forPeerDeviceID: peerDeviceID)
         peerCapabilityRegistry.clearCurrentSessionEvidence(forPeerDeviceID: peerDeviceID)
         bootstrapStateByPeerDeviceID.removeValue(forKey: peerDeviceID)

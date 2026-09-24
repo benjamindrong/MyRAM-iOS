@@ -58,6 +58,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private var bootstrapStateByPeerDeviceID: [String: SyncPeerBootstrapPendingState] = [:]
     private var bootstrapCapabilityResolutionTasks: [String: Task<Void, Never>] = [:]
     private var bootstrapRetryTasks: [String: Task<Void, Never>] = [:]
+    private var bootstrapPreflightRetryAttemptByPeerDeviceID: [String: Int] = [:]
+    private let bootstrapPreflightRetryDelayNanoseconds: [UInt64] = [
+        250_000_000,
+        500_000_000,
+        1_000_000_000,
+        2_000_000_000
+    ]
     private var bootstrapRetryDelayNanoseconds: [UInt64] = [
         250_000_000,
         500_000_000,
@@ -155,6 +162,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     deinit {
         readyBatchTask?.cancel()
+        bootstrapRetryTasks.values.forEach { $0.cancel() }
         advertiser.stopAdvertisingPeer()
         browser.stopBrowsingForPeers()
         session.disconnect()
@@ -691,30 +699,110 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
             return
         }
-        guard let convergenceCoordinator else {
+        guard convergenceCoordinator != nil else {
             lastErrorMessage = "Unable to prepare nearby bootstrap state."
             return
         }
 
-        while true {
-            let captureGeneration = localCaptureGeneration
-            await convergenceCoordinator.resumePendingWork()
-            while true {
-                guard let collection = await accumulator.takePendingObligationCollectionNow() else {
-                    break
-                }
-                await convergenceCoordinator.submitLocalObligations(collection)
-            }
+        let preflight = await prepareBootstrapLocalOwnership()
 #if DEBUG
-            await onBootstrapOwnershipPreflightCompletedForTesting?()
+        await onBootstrapOwnershipPreflightCompletedForTesting?()
 #endif
-            guard captureGeneration == localCaptureGeneration else { continue }
-            guard convergenceCoordinator.pendingLocalObligationCount == 0 else {
-                lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
+        switch preflight {
+        case .ready:
+            bootstrapPreflightRetryAttemptByPeerDeviceID[
+                identity.deviceID
+            ] = nil
+            beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
+        case .retryablePending:
+            scheduleBootstrapPreflightRetry(to: peerID)
+            lastErrorMessage =
+                "Nearby bootstrap is waiting for local sync ownership."
+        case .terminal:
+            bootstrapPreflightRetryAttemptByPeerDeviceID[
+                identity.deviceID
+            ] = nil
+            bootstrapRetryTasks.removeValue(
+                forKey: identity.deviceID
+            )?.cancel()
+            lastErrorMessage = "Unable to prepare nearby bootstrap state."
+        }
+    }
+
+    private func prepareBootstrapLocalOwnership()
+        async -> SyncBootstrapLocalOwnershipPreparationResult
+    {
+        guard let convergenceCoordinator else {
+            return .terminal(.blocked(
+                SyncBatchDrainFailure(batchID: nil, kind: .queuePersistence)
+            ))
+        }
+        let captureGeneration = localCaptureGeneration
+
+        if let collection = await accumulator.takePendingObligationCollectionNow() {
+            switch await admitPreparedLocalObligations(collection) {
+            case .admitted:
+                break
+            case .retryableCapacity, .retryablePersistenceFailure:
+                return .retryablePending
+            case .terminal(let outcome):
+                return .terminal(outcome)
+            }
+        }
+
+        let outcome = await convergenceCoordinator.resumePendingWorkOutcome()
+        switch outcome {
+        case .blocked, .quarantined:
+            return .terminal(outcome)
+        case .pending, .deferred, .alreadyDraining:
+            return .retryablePending
+        case .drained:
+            break
+        }
+
+        guard captureGeneration == localCaptureGeneration,
+              convergenceCoordinator.pendingLocalObligationCount == 0,
+              await accumulator.takePendingObligationCollectionNow() == nil else {
+            return .retryablePending
+        }
+        return .ready
+    }
+
+    private func scheduleBootstrapPreflightRetry(to peerID: MCPeerID) {
+        let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        bootstrapRetryTasks.removeValue(forKey: deviceID)?.cancel()
+        guard bootstrapStateByPeerDeviceID[deviceID] == nil,
+              peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
+                forPeerDeviceID: deviceID
+              ) else {
+            return
+        }
+        let attempt =
+            bootstrapPreflightRetryAttemptByPeerDeviceID[deviceID] ?? 0
+        let delay = bootstrapPreflightRetryDelayNanoseconds[min(
+            attempt,
+            bootstrapPreflightRetryDelayNanoseconds.count - 1
+        )]
+        bootstrapPreflightRetryAttemptByPeerDeviceID[deviceID] = attempt + 1
+        bootstrapRetryTasks[deviceID] = Task { @MainActor [weak self] in
+            if delay > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.bootstrapRetryTasks.removeValue(forKey: deviceID)
+            guard self.connectedPeersProvider().contains(peerID),
+                  self.peerCapabilityRegistry
+                    .hasExplicitCurrentSessionBootstrapV1Support(
+                        forPeerDeviceID: deviceID
+                    ) else {
+                self.bootstrapPreflightRetryAttemptByPeerDeviceID[deviceID] = nil
                 return
             }
-            beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
-            return
+            await self.beginBootstrap(to: peerID)
         }
     }
 
@@ -937,6 +1025,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private func handlePeerDisconnect(peerDeviceID: String) {
         bootstrapCapabilityResolutionTasks.removeValue(forKey: peerDeviceID)?.cancel()
         bootstrapRetryTasks.removeValue(forKey: peerDeviceID)?.cancel()
+        bootstrapPreflightRetryAttemptByPeerDeviceID[peerDeviceID] = nil
         outstandingBatchDeliveries.invalidateSession(forPeerDeviceID: peerDeviceID)
         peerCapabilityRegistry.clearCurrentSessionEvidence(forPeerDeviceID: peerDeviceID)
         bootstrapStateByPeerDeviceID.removeValue(forKey: peerDeviceID)

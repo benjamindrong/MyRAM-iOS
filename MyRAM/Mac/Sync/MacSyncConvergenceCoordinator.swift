@@ -122,7 +122,13 @@ final class MacSyncConvergenceCoordinator {
     }
 
     func resumePendingWork() async {
-        await handle(outcome: runtime.resumePendingWork(), sourceBatch: nil)
+        _ = await resumePendingWorkOutcome()
+    }
+
+    func resumePendingWorkOutcome() async -> SyncConvergenceRuntimeOutcome {
+        let outcome = await runtime.resumePendingWork()
+        await handle(outcome: outcome, sourceBatch: nil)
+        return outcome
     }
 
     func refreshAfterBootstrap() {
