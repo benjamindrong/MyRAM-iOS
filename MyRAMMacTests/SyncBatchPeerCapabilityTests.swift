@@ -361,6 +361,81 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(kinds, [.bootstrapSnapshot, .batchSync])
     }
 
+    func testPartialBootstrapNoteCoverageRetiresCoveredHistoryWithoutOpeningMacBarrier() async throws {
+        let peer = MCPeerID(displayName: "Remote|partial-bootstrap-mac")
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let coveredNoteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000C1")!
+        let uncoveredNoteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000C2")!
+        let coveredNote = Note(title: "Covered", content: "")
+        coveredNote.id = coveredNoteID
+        let uncoveredNote = Note(title: "Uncovered", content: "")
+        uncoveredNote.id = uncoveredNoteID
+        context.insert(coveredNote)
+        context.insert(uncoveredNote)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: coveredNote,
+            in: context
+        )
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: uncoveredNote,
+            in: context
+        )
+        try context.save()
+
+        var kinds: [MultipeerSyncMessageKind] = []
+        let controller = try makeController(
+            context: context,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                kinds.append(try MultipeerSyncMessageCoding.decodeMessage(from: data).kind)
+            }
+        )
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "partial-bootstrap-mac"
+        )
+        let historical = makeV1TitleBatch(idSuffix: 2173, noteID: coveredNoteID)
+
+        try await controller.acceptLocalBatch(historical)
+        controller.beginBootstrapForTesting(to: peer)
+        let state = try XCTUnwrap(
+            controller.bootstrapStateForTesting(peerDeviceID: "partial-bootstrap-mac")
+        )
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: state.snapshotID,
+                coveredBatchIDs: [historical.id],
+                coveredNoteIDs: [coveredNoteID]
+            ),
+            from: peer
+        )
+
+        XCTAssertFalse(
+            controller.bootstrapStateForTesting(peerDeviceID: "partial-bootstrap-mac")?
+                .ordinarySyncReady == true
+        )
+        XCTAssertTrue(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        XCTAssertFalse(kinds.contains(.batchSync))
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: state.snapshotID,
+                coveredBatchIDs: [historical.id],
+                coveredNoteIDs: [coveredNoteID, uncoveredNoteID]
+            ),
+            from: peer
+        )
+
+        XCTAssertTrue(
+            controller.bootstrapStateForTesting(peerDeviceID: "partial-bootstrap-mac")?
+                .ordinarySyncReady == true
+        )
+        XCTAssertTrue(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+    }
+
     func testBootstrapApplyRejectsDirtyDestinationWithoutSavingOrRollingBackLocalChanges() throws {
         let sourceContainer = try makeInMemoryContainer()
         let sourceContext = sourceContainer.mainContext

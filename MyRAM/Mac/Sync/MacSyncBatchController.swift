@@ -836,13 +836,22 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
         let requiredNoteIDs = Set(state.snapshot.notes.map(\.id))
         let coveredNoteIDs = acknowledgement.coveredNoteIDs ?? []
-        guard coveredNoteIDs.isSubset(of: requiredNoteIDs),
-              requiredNoteIDs.isSubset(of: coveredNoteIDs) else {
+        guard coveredNoteIDs.isSubset(of: requiredNoteIDs) else {
             lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
             return
         }
+        let establishesSharedSequenceBaseline = requiredNoteIDs.isSubset(of: coveredNoteIDs)
 
         let coveredBatchIDs = acknowledgement.coveredBatchIDs.intersection(state.coveredBatchIDs)
+        let acknowledgedCoverage = state.snapshot.historyCoverage.filter {
+            coveredBatchIDs.contains($0.batchID)
+        }
+        guard acknowledgedCoverage.allSatisfy({
+            $0.noteIDs.isSubset(of: coveredNoteIDs)
+        }) else {
+            lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
+            return
+        }
         do {
             let currentOwnership = try SyncPeerBootstrapOwnershipCandidate(
                 unsentSnapshot: unsentBatches.snapshot(),
@@ -885,6 +894,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             outstandingBatchDeliveries.release(coveredBatchIDs)
         } catch {
             lastErrorMessage = "Unable to update pending sync queues."
+            return
+        }
+
+        guard establishesSharedSequenceBaseline else {
+            lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
             return
         }
 
