@@ -135,6 +135,39 @@ final class SyncConvergencePlanningTests: XCTestCase {
         )
     }
 
+    func testStructuralMarkDependencyDefersTransportAcknowledgement() {
+        let noteID = uuid("00000000-0000-0000-0000-000000227215")
+        let batchID = uuid("00000000-0000-0000-0000-000000227216")
+        let dependency = SyncOperationID(
+            deviceID: uuid("00000000-0000-0000-0000-000000227217"),
+            localCounter: 10
+        )
+        let deferred = SyncConvergenceDeferredWork(
+            incoming: [
+                SyncConvergenceDeferredItem(
+                    domain: .incoming,
+                    batchID: batchID,
+                    affectedNoteIDs: [noteID],
+                    reason: .planning(.structuralMarkDependency(
+                        noteID: noteID,
+                        batchID: batchID,
+                        operationID: dependency
+                    ))
+                )
+            ],
+            localObligations: [],
+            postCommit: []
+        )
+
+        XCTAssertEqual(
+            SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+                for: .deferred(deferred),
+                batchID: batchID
+            ),
+            .acknowledgementDeferred
+        )
+    }
+
     func testStructuralMarkReplayIsIdempotentAndNeedsNoRefresh() throws {
         let noteID = uuid("00000000-0000-0000-0000-000000227221")
         let originID = uuid("00000000-0000-0000-0000-000000227222")

@@ -64,7 +64,8 @@ enum SyncConvergenceRemoteBatchDispositionPolicy {
                 switch reason {
                 case .anchorlessMatchingBaseEvidenceUnavailable, .unreconstructableBase:
                     return .recoverableAnchorlessCompatibilityRejection
-                case .unsupportedReconciliation, .historyPressure, .missingFolderDependency:
+                case .unsupportedReconciliation, .historyPressure, .missingFolderDependency,
+                     .structuralMarkDependency:
                     continue
                 }
             }
