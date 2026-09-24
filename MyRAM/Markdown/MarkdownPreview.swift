@@ -279,6 +279,11 @@ private struct MarkdownTableAccumulator {
     let columnCount: Int
     private var rows: [Int: MarkdownTableRowAccumulator] = [:]
 
+    init(identity: Int, columnCount: Int) {
+        self.identity = identity
+        self.columnCount = columnCount
+    }
+
     mutating func append(
         _ content: AttributedString,
         metadata: MarkdownTableRunMetadata

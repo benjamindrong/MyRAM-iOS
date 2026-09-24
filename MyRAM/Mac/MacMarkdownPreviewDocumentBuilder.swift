@@ -96,7 +96,7 @@ struct MacMarkdownPreviewDocumentBuilder {
     private func buildTable(_ table: MarkdownPreviewTable) -> NSAttributedString {
         let nativeTable = NSTextTable()
         nativeTable.numberOfColumns = table.columnCount
-        nativeTable.layoutAlgorithm = .automatic
+        nativeTable.layoutAlgorithm = .automaticLayoutAlgorithm
         nativeTable.collapsesBorders = true
         nativeTable.hidesEmptyCells = false
 
@@ -112,8 +112,8 @@ struct MacMarkdownPreviewDocumentBuilder {
                     columnSpan: 1
                 )
                 block.setBorderColor(.separatorColor)
-                block.setWidth(1, type: .absolute, for: .border)
-                block.setWidth(6, type: .absolute, for: .padding)
+                block.setWidth(1, type: .absoluteValueType, for: .border)
+                block.setWidth(6, type: .absoluteValueType, for: .padding)
                 if row.isHeader {
                     block.backgroundColor = .controlBackgroundColor
                 }
