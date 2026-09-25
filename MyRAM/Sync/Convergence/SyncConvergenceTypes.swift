@@ -1,3 +1,10 @@
+enum SyncBootstrapLocalOwnershipPreparationResult {
+    case ready
+    case retryablePending
+    case terminal(SyncConvergenceRuntimeOutcome)
+}
+
+import AnchoredSequenceCore
 import Foundation
 
 enum SyncConvergenceKey {
@@ -616,6 +623,11 @@ enum SyncConvergenceDeferredReason: Equatable {
     case unsupportedReconciliation(noteID: UUID, batchID: UUID)
     case historyPressure(noteID: UUID, blockingBatchID: UUID?)
     case missingFolderDependency(noteID: UUID, batchID: UUID, folderID: UUID)
+    case structuralMarkDependency(
+        noteID: UUID,
+        batchID: UUID,
+        operationID: SyncOperationID
+    )
 }
 
 enum SyncConvergenceTransactionFailure: Error, Equatable {

@@ -133,6 +133,253 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10).pendingBatches, [first, second])
     }
 
+    func testLocalObligationQueueMigratesVersionTwoObligationsToVersionThree() throws {
+        let fileURL = temporaryQueueFileURL()
+        try createDirectory(for: fileURL)
+        let obligation = SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 11))
+        try JSONEncoder().encode(
+            TestPersistedSyncConvergenceLocalObligationQueue(
+                version: 2,
+                obligations: [obligation]
+            )
+        ).write(to: fileURL)
+
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10)
+        let header = try JSONDecoder().decode(
+            TestPersistedQueueVersion.self,
+            from: Data(contentsOf: fileURL)
+        )
+
+        XCTAssertEqual(queue.pendingObligations, [obligation])
+        XCTAssertEqual(header.version, 3)
+    }
+
+    func testLocalObligationQueueRejectsStructuralMarkPayloadClaimingVersionTwoWithoutOverwrite() throws {
+        let fileURL = temporaryQueueFileURL()
+        try createDirectory(for: fileURL)
+        let obligation = SyncConvergenceLocalObligation(
+            legacyBatch: try makeStructuralMarkBatchForTest(idSuffix: 12)
+        )
+        let encoded = try JSONEncoder().encode(
+            TestPersistedSyncConvergenceLocalObligationQueue(
+                version: 2,
+                obligations: [obligation]
+            )
+        )
+        try encoded.write(to: fileURL)
+
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10)
+
+        XCTAssertTrue(queue.pendingObligations.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: fileURL), encoded)
+        if case .readFailed = queue.snapshot().health {
+            // Expected fail-closed classification for impossible V2 structural-mark data.
+        } else {
+            XCTFail("Expected invalid V2 structural-mark payload to fail closed")
+        }
+    }
+
+    func testLocalObligationQueueAtomicallyEnqueuesSplitObligations() throws {
+        let fileURL = temporaryQueueFileURL()
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10)
+        let first = SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 21))
+        let second = SyncConvergenceLocalObligation(
+            legacyBatch: try makeStructuralMarkBatchForTest(idSuffix: 22)
+        )
+
+        try queue.enqueueAtomically([first, second])
+
+        let reloaded = FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10)
+        XCTAssertEqual(reloaded.pendingObligations, [first, second])
+    }
+
+    func testLocalObligationQueueRetryableWriteFailurePreservesHealthyImageAndAllowsExactRetry() throws {
+        let fileURL = temporaryQueueFileURL()
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: fileURL,
+            limit: 10
+        )
+        let existing = SyncConvergenceLocalObligation(
+            legacyBatch: makeBatch(idSuffix: 51)
+        )
+        let first = SyncConvergenceLocalObligation(
+            legacyBatch: makeBatch(idSuffix: 52)
+        )
+        let second = SyncConvergenceLocalObligation(
+            legacyBatch: try makeStructuralMarkBatchForTest(idSuffix: 53)
+        )
+        try queue.enqueue(existing)
+
+        queue.injectPersistenceFailureForNextWrite()
+        XCTAssertThrowsError(try queue.enqueueAtomically([first, second])) {
+            XCTAssertEqual(
+                $0 as? FileBackedSyncConvergenceLocalObligationQueue.QueueError,
+                .persistenceFailed
+            )
+        }
+        XCTAssertEqual(queue.pendingObligations, [existing])
+        XCTAssertEqual(queue.snapshot().health, .healthy)
+
+        try queue.enqueueAtomically([first, second])
+
+        XCTAssertEqual(queue.pendingObligations, [existing, first, second])
+        XCTAssertEqual(
+            FileBackedSyncConvergenceLocalObligationQueue(
+                fileURL: fileURL,
+                limit: 10
+            ).pendingObligations,
+            [existing, first, second]
+        )
+    }
+
+    func testLocalObligationQueueRejectsConflictingDuplicateIdentityWithoutMutation() throws {
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: nil,
+            limit: 10
+        )
+        let first = SyncConvergenceLocalObligation(
+            legacyBatch: makeBatch(idSuffix: 61)
+        )
+        var conflictingBatch = makeBatch(idSuffix: 61)
+        conflictingBatch = SyncBatch(
+            id: conflictingBatch.id,
+            originDeviceID: conflictingBatch.originDeviceID,
+            createdAt: conflictingBatch.createdAt,
+            batchSequence: conflictingBatch.batchSequence,
+            changes: [
+                .noteTitleChanged(
+                    SyncBatchNoteTitleChangedChange(
+                        noteID: UUID(
+                            uuidString: "00000000-0000-0000-0000-000000179961"
+                        )!,
+                        title: "conflict",
+                        modifiedAt: Date(timeIntervalSince1970: 61)
+                    )
+                )
+            ]
+        )
+        let conflicting = SyncConvergenceLocalObligation(
+            legacyBatch: conflictingBatch
+        )
+        try queue.enqueue(first)
+
+        XCTAssertThrowsError(try queue.enqueueAtomically([conflicting])) {
+            XCTAssertEqual(
+                $0 as? FileBackedSyncConvergenceLocalObligationQueue.QueueError,
+                .conflictingDuplicateIdentity(first.id)
+            )
+        }
+        XCTAssertEqual(queue.pendingObligations, [first])
+    }
+
+    func testLocalObligationQueueAtomicEnqueueRollsBackWholeCollectionOnPersistenceFailure() throws {
+        let fileURL = temporaryQueueFileURL()
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: fileURL, limit: 10)
+        let existing = SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 31))
+        try queue.enqueue(existing)
+        let first = SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 32))
+        let second = SyncConvergenceLocalObligation(
+            legacyBatch: try makeStructuralMarkBatchForTest(idSuffix: 33)
+        )
+
+        queue.injectPersistenceFailureForNextWrite()
+        XCTAssertThrowsError(try queue.enqueueAtomically([first, second])) {
+            XCTAssertEqual(
+                $0 as? FileBackedSyncConvergenceLocalObligationQueue.QueueError,
+                .persistenceFailed
+            )
+        }
+
+        XCTAssertEqual(queue.pendingObligations, [existing])
+        XCTAssertEqual(
+            FileBackedSyncConvergenceLocalObligationQueue(
+                fileURL: fileURL,
+                limit: 10
+            ).pendingObligations,
+            [existing]
+        )
+    }
+
+    func testLocalObligationQueueAtomicEnqueueRejectsCapacityWithoutPartialMutation() throws {
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: nil, limit: 2)
+        let existing = SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 41))
+        let first = SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 42))
+        let second = SyncConvergenceLocalObligation(legacyBatch: makeBatch(idSuffix: 43))
+        try queue.enqueue(existing)
+
+        XCTAssertThrowsError(try queue.enqueueAtomically([first, second])) {
+            XCTAssertEqual(
+                $0 as? FileBackedSyncConvergenceLocalObligationQueue.QueueError,
+                .capacityExceeded
+            )
+        }
+        XCTAssertEqual(queue.pendingObligations, [existing])
+    }
+
+    func testTerminalStructuralMarkCleanupRemovesWholeSingleNoteV3Identity() throws {
+        let fileURL = temporaryQueueFileURL()
+        let first = try makeStructuralMarkBatchForTest(idSuffix: 227_911)
+        let second = try makeStructuralMarkBatchForTest(idSuffix: 227_912)
+        let targetNoteID = first.changes[0].noteID
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: fileURL,
+            limit: 10
+        )
+        try queue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: first)
+        )
+        try queue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: second)
+        )
+
+        let removed = try queue.removeTerminalStructuralMarkObligations(
+            for: targetNoteID
+        )
+
+        XCTAssertEqual(removed, Set([first.id]))
+        XCTAssertEqual(queue.pendingBatches, [second])
+        XCTAssertEqual(
+            FileBackedSyncConvergenceLocalObligationQueue(
+                fileURL: fileURL,
+                limit: 10
+            ).pendingBatches,
+            [second]
+        )
+    }
+
+    func testTerminalStructuralMarkCleanupPersistenceFailureRetainsObligation() throws {
+        let fileURL = temporaryQueueFileURL()
+        let batch = try makeStructuralMarkBatchForTest(idSuffix: 227_913)
+        let queue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: fileURL,
+            limit: 10
+        )
+        try queue.enqueue(
+            SyncConvergenceLocalObligation(legacyBatch: batch)
+        )
+
+        queue.injectPersistenceFailureForNextWrite()
+        XCTAssertThrowsError(
+            try queue.removeTerminalStructuralMarkObligations(
+                for: batch.changes[0].noteID
+            )
+        ) {
+            XCTAssertEqual(
+                $0 as? FileBackedSyncConvergenceLocalObligationQueue.QueueError,
+                .persistenceFailed
+            )
+        }
+
+        XCTAssertEqual(queue.pendingBatches, [batch])
+        XCTAssertEqual(
+            FileBackedSyncConvergenceLocalObligationQueue(
+                fileURL: fileURL,
+                limit: 10
+            ).pendingBatches,
+            [batch]
+        )
+    }
+
     func testDrainPassSchedulerSkipsBlockedNotesWithoutRotatingQueueOrder() {
         let noteA = UUID(uuidString: "00000000-0000-0000-0000-000000124301")!
         let noteB = UUID(uuidString: "00000000-0000-0000-0000-000000124302")!
@@ -640,6 +887,46 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(obligationQueue.pendingBatches, [legacy, anchored])
     }
 
+    func testUnsentQueuePersistsStructuralMarkPayloadUsingV3CapableVersion() throws {
+        let fileURL = temporaryQueueFileURL()
+        let markBatch = try makeStructuralMarkBatchForTest(idSuffix: 227_801)
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        try queue.enqueueDurably(markBatch)
+
+        let version = try JSONDecoder().decode(
+            TestPersistedQueueVersion.self,
+            from: Data(contentsOf: fileURL)
+        )
+        XCTAssertEqual(version.version, 2)
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(
+                fileURL: fileURL,
+                limit: 10
+            ).pendingBatches,
+            [markBatch]
+        )
+    }
+
+    func testUnsentQueueRejectsStructuralMarkPayloadClaimingLegacyVersionOne() throws {
+        let fileURL = temporaryQueueFileURL()
+        try createDirectory(for: fileURL)
+        let markBatch = try makeStructuralMarkBatchForTest(idSuffix: 227_802)
+        let legacyBytes = try JSONEncoder().encode(
+            TestPersistedSyncBatchQueue(
+                version: 1,
+                batches: [markBatch]
+            )
+        )
+        try legacyBytes.write(to: fileURL)
+
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        XCTAssertTrue(queue.pendingBatches.isEmpty)
+        XCTAssertEqual(queue.snapshot().health, .unsupportedAnchoredPayload)
+        XCTAssertEqual(try Data(contentsOf: fileURL), legacyBytes)
+    }
+
     func testBothDurableQueuesLoadPersistedAnchoredBytes() throws {
         let fileURL = temporaryQueueFileURL()
         try createDirectory(for: fileURL)
@@ -747,6 +1034,39 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         )
     }
 
+
+    private func makeStructuralMarkBatchForTest(idSuffix: Int) throws -> SyncBatch {
+        let noteID = UUID(
+            uuidString: String(format: "00000000-0000-0000-0000-%012d", idSuffix + 100_000)
+        )!
+        let deviceID = UUID(uuidString: "00000000-0000-0000-0000-000000227500")!
+        let operation = try SyncTextMarkOperation(
+            operationID: SyncOperationID(deviceID: deviceID, localCounter: UInt64(idSuffix)),
+            logicalClock: UInt64(idSuffix),
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: .empty,
+            endAnchor: .empty
+        )
+        return SyncBatch(
+            id: UUID(
+                uuidString: String(format: "00000000-0000-0000-0000-%012d", idSuffix)
+            )!,
+            originDeviceID: deviceID,
+            createdAt: Date(timeIntervalSince1970: TimeInterval(idSuffix)),
+            batchSequence: UInt64(idSuffix),
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: noteID,
+                        operations: [operation],
+                        modifiedAt: Date(timeIntervalSince1970: TimeInterval(idSuffix))
+                    )
+                )
+            ]
+        )
+    }
+
     private func temporaryQueueFileURL() -> URL {
         FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
@@ -759,6 +1079,15 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
             withIntermediateDirectories: true
         )
     }
+}
+
+private struct TestPersistedQueueVersion: Codable {
+    let version: Int
+}
+
+private struct TestPersistedSyncConvergenceLocalObligationQueue: Codable {
+    let version: Int
+    let obligations: [SyncConvergenceLocalObligation]
 }
 
 private struct TestPersistedSyncBatchQueue: Codable {

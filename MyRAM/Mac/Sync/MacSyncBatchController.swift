@@ -56,8 +56,17 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private let startBrowsingOperation: () -> Void
     private var peerCapabilityRegistry = SyncBatchPeerCapabilityRegistry()
     private var bootstrapStateByPeerDeviceID: [String: SyncPeerBootstrapPendingState] = [:]
+    private var inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID:
+        [String: Set<SyncBatchNoteID>] = [:]
     private var bootstrapCapabilityResolutionTasks: [String: Task<Void, Never>] = [:]
     private var bootstrapRetryTasks: [String: Task<Void, Never>] = [:]
+    private var bootstrapPreflightRetryAttemptByPeerDeviceID: [String: Int] = [:]
+    private let bootstrapPreflightRetryDelayNanoseconds: [UInt64] = [
+        250_000_000,
+        500_000_000,
+        1_000_000_000,
+        2_000_000_000
+    ]
     private var bootstrapRetryDelayNanoseconds: [UInt64] = [
         250_000_000,
         500_000_000,
@@ -147,14 +156,15 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
         readyBatchTask = Task { [weak self, accumulator] in
             let stream = await accumulator.readyLocalObligations()
-            for await obligation in stream {
-                await self?.convergenceCoordinator?.submitLocalObligation(obligation)
+            for await collection in stream {
+                await self?.handlePreparedLocalObligations(collection)
             }
         }
     }
 
     deinit {
         readyBatchTask?.cancel()
+        bootstrapRetryTasks.values.forEach { $0.cancel() }
         advertiser.stopAdvertisingPeer()
         browser.stopBrowsingForPeers()
         session.disconnect()
@@ -195,6 +205,19 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         peerCapabilityRegistry.recordBootstrapDiscoveryValue(value, forPeerDeviceID: peerDeviceID)
     }
 
+    func recordStructuralMarkCapabilityForTesting(
+        _ value: String?,
+        forPeerDeviceID peerDeviceID: String
+    ) {
+        peerCapabilityRegistry.recordStructuralMarkDiscoveryValue(
+            value,
+            forPeerDeviceID: peerDeviceID
+        )
+        peerCapabilityRegistry.bindCurrentSessionV2Support(
+            forPeerDeviceID: peerDeviceID
+        )
+    }
+
     func beginBootstrapForTesting(to peerID: MCPeerID) {
         beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
     }
@@ -208,6 +231,21 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         from peerID: MCPeerID
     ) async {
         await handleBootstrapAcknowledgement(acknowledgement, from: peerID)
+    }
+
+    func inboundFormattingBaselineForTesting(
+        peerDeviceID: String
+    ) -> Set<SyncBatchNoteID> {
+        inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID[
+            peerDeviceID
+        ] ?? []
+    }
+
+    func outboundFormattingBaselineForTesting(
+        peerDeviceID: String
+    ) -> Set<SyncBatchNoteID> {
+        bootstrapStateByPeerDeviceID[peerDeviceID]?
+            .outboundAcknowledgedFormattingNoteIDs ?? []
     }
 
     func bootstrapStateForTesting(peerDeviceID: String) -> SyncPeerBootstrapPendingState? {
@@ -236,6 +274,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
         let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
         peerCapabilityRegistry.recordBootstrapV1Announcement(forPeerDeviceID: deviceID)
+        peerCapabilityRegistry.recordBootstrapStructuralMarkSchemaVersion(
+            announcement.structuralMarkSchemaVersion,
+            forPeerDeviceID: deviceID
+        )
         bootstrapCapabilityResolutionTasks.removeValue(forKey: deviceID)?.cancel()
         if connectedPeersProvider().contains(peerID) {
             beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
@@ -287,25 +329,84 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         await record([capturedChange], at: date)
     }
 
-    func recordAndTakeBoundaryObligation(
+    func recordAndTakeBoundaryObligations(
         adding capturedChanges: [SyncConvergenceCapturedLocalChange],
         affecting noteID: UUID,
         at date: Date = .now
-    ) async -> SyncConvergenceLocalObligation? {
+    ) async -> SyncPreparedLocalObligationCollection? {
         if !capturedChanges.isEmpty {
             localCaptureGeneration &+= 1
         }
-        let obligation = await accumulator.recordAndTakeBoundaryObligation(
+        let collection = await accumulator.recordAndPrepareBoundaryCollection(
             adding: capturedChanges,
             affecting: noteID,
             at: date
         )
         await updateSequenceReservationIssue()
-        return obligation
+        return collection
     }
 
-    func takePendingLocalObligationIfAffecting(noteID: UUID) async -> SyncConvergenceLocalObligation? {
-        await accumulator.takePendingObligationIfAffecting(noteID: noteID)
+    func takePendingLocalObligationsIfAffecting(
+        noteID: UUID
+    ) async -> SyncPreparedLocalObligationCollection? {
+        await accumulator.takePendingObligationCollectionIfAffecting(noteID: noteID)
+    }
+
+    func admitPreparedLocalObligations(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceLocalObligationCollectionAdmissionResult {
+        guard let convergenceCoordinator else {
+            let result: SyncConvergenceLocalObligationCollectionAdmissionResult =
+                .terminal(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                ))
+            await accumulator.reportPreparedCollectionAdmissionResult(
+                token: collection.token,
+                result: result
+            )
+            return result
+        }
+
+        let result = await convergenceCoordinator.admitLocalObligations(collection)
+        switch result {
+        case .admitted:
+            guard await accumulator.commitPreparedCollection(
+                token: collection.token
+            ) else {
+                return .terminal(.blocked(
+                    SyncBatchDrainFailure(
+                        batchID: collection.primary.id,
+                        kind: .queuePersistence
+                    )
+                ))
+            }
+        case .retryableCapacity, .retryablePersistenceFailure, .terminal:
+            await accumulator.reportPreparedCollectionAdmissionResult(
+                token: collection.token,
+                result: result
+            )
+        }
+        return result
+    }
+
+    private func handlePreparedLocalObligations(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async {
+        guard let convergenceCoordinator else { return }
+        switch await admitPreparedLocalObligations(collection) {
+        case .admitted:
+            await convergenceCoordinator.resumePendingWork()
+        case .retryableCapacity, .retryablePersistenceFailure:
+            markConvergenceWaiting()
+        case .terminal(let outcome):
+            await convergenceCoordinator.handleTerminalLocalAdmission(
+                outcome,
+                sourceBatch: collection.primary.batch
+            )
+        }
     }
 
     private func updateSequenceReservationIssue() async {
@@ -335,12 +436,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     private func validateDurableAdmission(_ batch: SyncBatch) throws {
         let decision = SyncBatchTransportAdmissionPlanner.durableAdmission(
-            representation: batch.bodyOperationRepresentation,
+            deliveryRepresentation: deliveryRepresentation,
             activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled
         )
 
         switch decision {
-        case .admitV1, .admitV2:
+        case .admitV1, .admitV2, .admitV3:
             try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
         case .reject:
             try SyncBatchAnchoredPayloadPolicy.validateOutbound(batch)
@@ -354,6 +455,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         _ batch: SyncBatch,
         connectedPeers: [MCPeerID]
     ) async -> Bool {
+        let deliveryRepresentation =
+            SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes)
+        let structuralMarkNoteID: UUID? = {
+            guard deliveryRepresentation == .structuralMarkV3,
+                  batch.changes.count == 1 else { return nil }
+            return batch.changes[0].noteID
+        }()
         let eligiblePeers = connectedPeers.filter { peerID in
             let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
             guard peerCapabilityRegistry.isBootstrapCapabilityResolved(
@@ -363,8 +471,19 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 forPeerDeviceID: deviceID
             ) else { return true }
             guard let state = bootstrapStateByPeerDeviceID[deviceID],
-                  state.ordinarySyncReady else { return false }
-            return !state.withheldHistoricalBatchIDs.contains(batch.id)
+                  state.ordinarySyncReady,
+                  !state.withheldHistoricalBatchIDs.contains(batch.id) else {
+                return false
+            }
+            if deliveryRepresentation == .structuralMarkV3 {
+                guard let structuralMarkNoteID,
+                      state.outboundAcknowledgedFormattingNoteIDs.contains(
+                        structuralMarkNoteID
+                      ) else {
+                    return false
+                }
+            }
+            return true
         }
         let plannerPeers = eligiblePeers.enumerated().map { index, peerID in
             let identity = MacSyncPeerIdentity(peerID: peerID)
@@ -375,11 +494,17 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                     peerCapabilityRegistry
                         .hasExplicitCurrentSessionV2Support(
                             forPeerDeviceID: identity.deviceID
+                        ),
+                hasExplicitCurrentSessionStructuralMarkSupport:
+                    peerCapabilityRegistry
+                        .hasExplicitCurrentSessionStructuralMarkSupport(
+                            forPeerDeviceID: identity.deviceID
                         )
             )
         }
         let routing = SyncBatchTransportAdmissionPlanner.outboundRouting(
-            representation: batch.bodyOperationRepresentation,
+            deliveryRepresentation:
+                SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes),
             activationEnabled: SyncBatchAnchoredPayloadCapability.isEnabled,
             connectedPeers: plannerPeers
         )
@@ -488,6 +613,26 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
     }
 
+    private func isIntentionallyWithheldStructuralMarkBatch(
+        _ batch: SyncBatch,
+        connectedPeers: [MCPeerID]
+    ) -> Bool {
+        guard SyncBatchDeliveryPartitionPlanner.classification(of: batch.changes)
+                == .structuralMarkV3,
+              !connectedPeers.isEmpty else {
+            return false
+        }
+        let structurallyCapablePeerCount = connectedPeers.reduce(into: 0) { count, peerID in
+            let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+            if peerCapabilityRegistry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: deviceID
+            ) {
+                count += 1
+            }
+        }
+        return structurallyCapablePeerCount != 1
+    }
+
     private func flushUnsentBatches() async {
         guard !unsentBatches.isEmpty else { return }
         let connectedPeers = connectedPeersProvider()
@@ -496,7 +641,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             if await sendQueuedBatch(batch, connectedPeers: connectedPeers) {
                 continue
             }
-            if isIntentionallyWithheldHistoricalBatch(batch, connectedPeers: connectedPeers) {
+            if isIntentionallyWithheldHistoricalBatch(batch, connectedPeers: connectedPeers)
+                || isIntentionallyWithheldStructuralMarkBatch(
+                    batch,
+                    connectedPeers: connectedPeers
+                ) {
                 continue
             }
             break
@@ -584,27 +733,110 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
             return
         }
-        guard let convergenceCoordinator else {
+        guard convergenceCoordinator != nil else {
             lastErrorMessage = "Unable to prepare nearby bootstrap state."
             return
         }
 
-        while true {
-            let captureGeneration = localCaptureGeneration
-            await convergenceCoordinator.resumePendingWork()
-            while let obligation = await accumulator.takePendingObligationNow() {
-                await convergenceCoordinator.submitLocalObligation(obligation)
-            }
+        let preflight = await prepareBootstrapLocalOwnership()
 #if DEBUG
-            await onBootstrapOwnershipPreflightCompletedForTesting?()
+        await onBootstrapOwnershipPreflightCompletedForTesting?()
 #endif
-            guard captureGeneration == localCaptureGeneration else { continue }
-            guard convergenceCoordinator.pendingLocalObligationCount == 0 else {
-                lastErrorMessage = "Unable to prepare nearby bootstrap state while local sync work is pending."
+        switch preflight {
+        case .ready:
+            bootstrapPreflightRetryAttemptByPeerDeviceID[
+                identity.deviceID
+            ] = nil
+            beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
+        case .retryablePending:
+            scheduleBootstrapPreflightRetry(to: peerID)
+            lastErrorMessage =
+                "Nearby bootstrap is waiting for local sync ownership."
+        case .terminal:
+            bootstrapPreflightRetryAttemptByPeerDeviceID[
+                identity.deviceID
+            ] = nil
+            bootstrapRetryTasks.removeValue(
+                forKey: identity.deviceID
+            )?.cancel()
+            lastErrorMessage = "Unable to prepare nearby bootstrap state."
+        }
+    }
+
+    private func prepareBootstrapLocalOwnership()
+        async -> SyncBootstrapLocalOwnershipPreparationResult
+    {
+        guard let convergenceCoordinator else {
+            return .terminal(.blocked(
+                SyncBatchDrainFailure(batchID: nil, kind: .queuePersistence)
+            ))
+        }
+        let captureGeneration = localCaptureGeneration
+
+        if let collection = await accumulator.takePendingObligationCollectionNow() {
+            switch await admitPreparedLocalObligations(collection) {
+            case .admitted:
+                break
+            case .retryableCapacity, .retryablePersistenceFailure:
+                return .retryablePending
+            case .terminal(let outcome):
+                return .terminal(outcome)
+            }
+        }
+
+        let outcome = await convergenceCoordinator.resumePendingWorkOutcome()
+        switch outcome {
+        case .blocked, .quarantined:
+            return .terminal(outcome)
+        case .pending, .deferred, .alreadyDraining:
+            return .retryablePending
+        case .drained:
+            break
+        }
+
+        guard captureGeneration == localCaptureGeneration,
+              convergenceCoordinator.pendingLocalObligationCount == 0,
+              await accumulator.takePendingObligationCollectionNow() == nil else {
+            return .retryablePending
+        }
+        return .ready
+    }
+
+    private func scheduleBootstrapPreflightRetry(to peerID: MCPeerID) {
+        let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        bootstrapRetryTasks.removeValue(forKey: deviceID)?.cancel()
+        guard bootstrapStateByPeerDeviceID[deviceID] == nil,
+              peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
+                forPeerDeviceID: deviceID
+              ) else {
+            return
+        }
+        let attempt =
+            bootstrapPreflightRetryAttemptByPeerDeviceID[deviceID] ?? 0
+        let delay = bootstrapPreflightRetryDelayNanoseconds[min(
+            attempt,
+            bootstrapPreflightRetryDelayNanoseconds.count - 1
+        )]
+        bootstrapPreflightRetryAttemptByPeerDeviceID[deviceID] = attempt + 1
+        bootstrapRetryTasks[deviceID] = Task { @MainActor [weak self] in
+            if delay > 0 {
+                do {
+                    try await Task.sleep(nanoseconds: delay)
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled, let self else { return }
+            self.bootstrapRetryTasks.removeValue(forKey: deviceID)
+            guard self.connectedPeersProvider().contains(peerID),
+                  self.peerCapabilityRegistry
+                    .hasExplicitCurrentSessionBootstrapV1Support(
+                        forPeerDeviceID: deviceID
+                    ) else {
+                self.bootstrapPreflightRetryAttemptByPeerDeviceID[deviceID] = nil
                 return
             }
-            beginBootstrapAfterLocalOwnershipPreflight(to: peerID)
-            return
+            await self.beginBootstrap(to: peerID)
         }
     }
 
@@ -627,9 +859,23 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
 
         do {
+            let formattingCapable =
+                peerCapabilityRegistry
+                    .hasExplicitCurrentSessionStructuralMarkSupport(
+                        forPeerDeviceID: identity.deviceID
+                    )
             let capturedBatches = unsentBatches.pendingBatches
-            let snapshot = try SyncPeerBootstrapSnapshotPersistence.build(from: context)
-                .attachingHistoryCoverage(for: capturedBatches)
+            let baseSnapshot = try SyncPeerBootstrapSnapshotPersistence.build(
+                from: context
+            )
+            let snapshot = (
+                formattingCapable
+                    ? baseSnapshot
+                    : baseSnapshot.withoutFormattingPayload()
+            ).attachingHistoryCoverage(
+                for: capturedBatches,
+                includeStructuralMarks: formattingCapable
+            )
             bootstrapStateByPeerDeviceID[identity.deviceID] = SyncPeerBootstrapPendingState(
                 snapshot: snapshot,
                 coveredBatchIDs: Set(capturedBatches.map(\.id)),
@@ -728,6 +974,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         _ snapshot: SyncPeerBootstrapSnapshot,
         from peerID: MCPeerID
     ) async {
+        let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        let formattingCapable =
+            peerCapabilityRegistry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: deviceID
+            )
         let disposition: SyncPeerBootstrapApplyDisposition
         do {
             guard let convergenceCoordinator else {
@@ -743,10 +994,24 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         if disposition.presentationRefreshRequired {
             convergenceCoordinator?.refreshAfterBootstrap()
         }
+        if formattingCapable {
+            inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID[deviceID] =
+                disposition.coveredFormattingNoteIDs
+        } else {
+            inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID[deviceID] = nil
+        }
         let acknowledgement = SyncPeerBootstrapAcknowledgement(
             snapshotID: snapshot.id,
             coveredBatchIDs: disposition.coveredBatchIDs,
-            coveredNoteIDs: disposition.coveredNoteIDs
+            coveredNoteIDs: disposition.coveredNoteIDs,
+            coveredFormattingNoteIDs:
+                formattingCapable
+                    ? disposition.coveredFormattingNoteIDs
+                    : nil,
+            coveredFormattingBatchIDs:
+                formattingCapable
+                    ? disposition.coveredFormattingBatchIDs
+                    : nil
         )
 
         do {
@@ -772,7 +1037,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
         guard var state = bootstrapStateByPeerDeviceID[deviceID],
               state.snapshotID == acknowledgement.snapshotID,
-              acknowledgement.coveredBatchIDs.isSubset(of: state.coveredBatchIDs) else { return }
+              acknowledgement.coveredBatchIDs.isSubset(of: state.coveredBatchIDs)
+        else { return }
+        let formattingBatchIDs =
+            acknowledgement.coveredFormattingBatchIDs ?? []
+        guard formattingBatchIDs.isSubset(
+            of: state.coveredFormattingBatchIDs
+        ) else { return }
 
         let requiredNoteIDs = Set(state.snapshot.notes.map(\.id))
         let coveredNoteIDs = acknowledgement.coveredNoteIDs ?? []
@@ -781,16 +1052,42 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
             return
         }
+        let formattingCapable =
+            peerCapabilityRegistry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: deviceID
+            )
+        let coveredFormattingNoteIDs =
+            acknowledgement.coveredFormattingNoteIDs ?? []
+        if formattingCapable {
+            guard coveredFormattingNoteIDs.isSubset(of: requiredNoteIDs),
+                  requiredNoteIDs.isSubset(of: coveredFormattingNoteIDs) else {
+                lastErrorMessage =
+                    "Nearby bootstrap did not establish a shared formatting baseline."
+                return
+            }
+        } else {
+            guard coveredFormattingNoteIDs.isEmpty,
+                  formattingBatchIDs.isEmpty else {
+                return
+            }
+        }
 
+        let removableBatchIDs = acknowledgement.coveredBatchIDs.union(
+            formattingBatchIDs
+        )
         do {
-            try unsentBatches.removeBatches(withIDs: acknowledgement.coveredBatchIDs)
-            outstandingBatchDeliveries.release(acknowledgement.coveredBatchIDs)
+            try unsentBatches.removeBatches(withIDs: removableBatchIDs)
+            outstandingBatchDeliveries.release(removableBatchIDs)
         } catch {
             lastErrorMessage = "Unable to update the unsent batch queue."
             return
         }
-        state.withheldHistoricalBatchIDs = state.coveredBatchIDs
-            .subtracting(acknowledgement.coveredBatchIDs)
+        state.recordAcknowledgement(
+            compatibleBatchIDs: acknowledgement.coveredBatchIDs,
+            formattingBatchIDs: formattingBatchIDs,
+            formattingNoteIDs:
+                formattingCapable ? coveredFormattingNoteIDs : []
+        )
         state.ordinarySyncReady = true
         bootstrapStateByPeerDeviceID[deviceID] = state
         bootstrapRetryTasks.removeValue(forKey: deviceID)?.cancel()
@@ -814,9 +1111,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private func handlePeerDisconnect(peerDeviceID: String) {
         bootstrapCapabilityResolutionTasks.removeValue(forKey: peerDeviceID)?.cancel()
         bootstrapRetryTasks.removeValue(forKey: peerDeviceID)?.cancel()
+        bootstrapPreflightRetryAttemptByPeerDeviceID[peerDeviceID] = nil
         outstandingBatchDeliveries.invalidateSession(forPeerDeviceID: peerDeviceID)
         peerCapabilityRegistry.clearCurrentSessionEvidence(forPeerDeviceID: peerDeviceID)
         bootstrapStateByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID[peerDeviceID] = nil
     }
 
     private func handleBootstrapCapabilityAnnouncement(
@@ -828,6 +1127,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
         let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
         peerCapabilityRegistry.recordBootstrapV1Announcement(forPeerDeviceID: deviceID)
+        peerCapabilityRegistry.recordBootstrapStructuralMarkSchemaVersion(
+            announcement.structuralMarkSchemaVersion,
+            forPeerDeviceID: deviceID
+        )
         bootstrapCapabilityResolutionTasks.removeValue(forKey: deviceID)?.cancel()
         if connectedPeersProvider().contains(peerID) {
             await beginBootstrap(to: peerID)
@@ -1090,9 +1393,16 @@ extension MacSyncBatchController: MCSessionDelegate {
                         peerCapabilityRegistry
                             .hasExplicitCurrentSessionV2Support(
                                 forPeerDeviceID: identity.deviceID
+                            ),
+                    hasExplicitCurrentSessionStructuralMarkSupport:
+                        peerCapabilityRegistry
+                            .hasExplicitCurrentSessionStructuralMarkSupport(
+                                forPeerDeviceID: identity.deviceID
                             )
                 )
-                guard admission == .admitV1 || admission == .admitV2 else {
+                guard admission == .admitV1
+                        || admission == .admitV2
+                        || admission == .admitV3 else {
                     MyRAMSyncBenchmarkTelemetry.shared.record(
                         .batchCaptureCompleted,
                         batchID: String(describing: envelope.batch.id),
@@ -1100,6 +1410,24 @@ extension MacSyncBatchController: MCSessionDelegate {
                         outcome: "rejectedByAdmission"
                     )
                     return
+                }
+                if admission == .admitV3 {
+                    let coveredNoteIDs =
+                        inboundFormattingBaselineCoveredNoteIDsByPeerDeviceID[
+                            identity.deviceID
+                        ] ?? []
+                    guard envelope.batch.changes.count == 1,
+                          case .noteStructuralMarksChanged(let marks) =
+                            envelope.batch.changes[0],
+                          coveredNoteIDs.contains(marks.noteID) else {
+                        MyRAMSyncBenchmarkTelemetry.shared.record(
+                            .batchCaptureCompleted,
+                            batchID: String(describing: envelope.batch.id),
+                            peerDeviceID: identity.deviceID,
+                            outcome: "rejectedMissingInboundFormattingBaseline"
+                        )
+                        return
+                    }
                 }
                 guard (try? SyncBatchAnchoredPayloadPolicy.validateInbound(envelope.batch)) != nil else {
                     MyRAMSyncBenchmarkTelemetry.shared.record(
@@ -1185,6 +1513,10 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
             )
             peerCapabilityRegistry.recordBootstrapDiscoveryValue(
                 info?[SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey],
+                forPeerDeviceID: identity.deviceID
+            )
+            peerCapabilityRegistry.recordStructuralMarkDiscoveryValue(
+                info?[SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoKey],
                 forPeerDeviceID: identity.deviceID
             )
             if peerCapabilityRegistry.isBootstrapCapabilityResolved(

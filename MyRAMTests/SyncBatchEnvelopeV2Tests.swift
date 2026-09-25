@@ -46,7 +46,7 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
             in: SyncBatchEnvelopeCodec.encode(batch: anchoredBatch())
         )
         assertEnvelopeError(
-            .representationMismatch(schema: .v1, representation: .anchored),
+            .representationMismatch(schema: .v1, representation: .anchoredV2),
             decoding: anchoredAsV1
         )
 
@@ -55,7 +55,7 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
             in: SyncBatchEnvelopeCodec.encode(batch: legacyBatch())
         )
         assertEnvelopeError(
-            .representationMismatch(schema: .v2, representation: .legacy),
+            .representationMismatch(schema: .v2, representation: .v1Compatible),
             decoding: legacyAsV2
         )
 
@@ -64,7 +64,7 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
             in: SyncBatchEnvelopeCodec.encode(batch: metadataBatch())
         )
         assertEnvelopeError(
-            .representationMismatch(schema: .v2, representation: .none),
+            .representationMismatch(schema: .v2, representation: .v1Compatible),
             decoding: metadataAsV2
         )
 
@@ -75,7 +75,7 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
     }
 
     func testUnsupportedIntegerVersionsFailBeforeNestedBatchDecode() {
-        for version in [0, -1, 3] {
+        for version in [0, -1, 4] {
             let data = Data(
                 "{\"schemaVersion\":\(version),\"batch\":\"malformed\"}".utf8
             )
@@ -148,6 +148,32 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
         )
     }
 
+    func testV3EncodingIsCanonicalMarkOnlyAndRejectsSchemaDowngrade() throws {
+        let batch = try structuralMarkBatch()
+        let first = try SyncBatchEnvelopeCodec.encode(batch: batch)
+        let second = try SyncBatchEnvelopeCodec.encode(batch: batch)
+        let decoded = try SyncBatchEnvelopeCodec.decode(first)
+
+        XCTAssertEqual(first, second)
+        XCTAssertEqual(decoded.schemaVersion, .v3)
+        XCTAssertEqual(
+            SyncBatchDeliveryPartitionPlanner.classification(
+                of: decoded.batch.changes
+            ),
+            .structuralMarkV3
+        )
+        XCTAssertEqual(decoded.batch, batch)
+
+        let downgraded = try replacingSchema(with: 2, in: first)
+        assertEnvelopeError(
+            .representationMismatch(
+                schema: .v2,
+                representation: .structuralMarkV3
+            ),
+            decoding: downgraded
+        )
+    }
+
     func testOuterV1CarriesInnerV2ThroughActivatedProductionTransport() throws {
         let batch = try anchoredBatch()
         let innerV2 = try SyncBatchEnvelopeCodec.encode(batch: batch)
@@ -191,6 +217,35 @@ final class SyncBatchEnvelopeV2Tests: XCTestCase {
         XCTAssertEqual(decodedInner.batch, try anchoredBatch())
         XCTAssertFalse(try preMYR174Admit(outerV1) { downstreamCount += 1 })
         XCTAssertEqual(downstreamCount, 0)
+    }
+
+    private func structuralMarkBatch() throws -> SyncBatch {
+        let operation = try SyncTextMarkOperation(
+            operationID: SyncOperationID(
+                deviceID: deviceID,
+                localCounter: 227
+            ),
+            logicalClock: 1,
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: .empty,
+            endAnchor: .empty
+        )
+        return SyncBatch(
+            id: UUID(uuidString: "17400000-0000-0000-0000-000000000227")!,
+            originDeviceID: deviceID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 227),
+            batchSequence: 8,
+            changes: [
+                .noteStructuralMarksChanged(
+                    SyncBatchNoteStructuralMarksChangedChange(
+                        noteID: noteID,
+                        operations: [operation],
+                        modifiedAt: Date(timeIntervalSinceReferenceDate: 228)
+                    )
+                )
+            ]
+        )
     }
 
     private static let frozenV2JSON = #"{"batch":{"batchSequence":7,"changes":[{"noteBodyTextInsertedAnchored":{"_0":{"baseContentHash":"096d92ee9c796a7c2419a6ff814b2c0322f13c2eae282894002f99e433ec5641","modifiedAt":-978306199,"noteID":"17400000-0000-0000-0000-000000000003","payload":{"anchor":{"kind":"between","leftElementID":{"elementOffset":0,"operationID":{"deviceID":"17400000-0000-0000-0000-000000000004","localCounter":4}},"rightElementID":{"elementOffset":0,"operationID":{"deviceID":"17400000-0000-0000-0000-000000000005","localCounter":5}}},"formatVersion":1,"operationID":{"deviceID":"17400000-0000-0000-0000-000000000002","localCounter":9}},"text":"A","utf16Offset":1}}},{"noteTitleChanged":{"_0":{"modifiedAt":-978306198,"noteID":"17400000-0000-0000-0000-000000000003","title":"Title"}}}],"createdAt":-978306200,"id":"17400000-0000-0000-0000-000000000001","originDeviceID":"17400000-0000-0000-0000-000000000002"},"schemaVersion":2}"#

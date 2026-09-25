@@ -336,6 +336,84 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         XCTAssertTrue(viewModel.hasUndoableAction)
     }
 
+    func testSoftDeleteAndRestorePreserveStructuralFormattingAuthority() throws {
+        let fixture = try makeLifecycleFixture()
+        XCTAssertTrue(
+            fixture.viewModel.commitNoteEdit(
+                fixture.note,
+                title: fixture.note.title,
+                content: "AB"
+            )
+        )
+        let context = fixture.container.mainContext
+        let snapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: fixture.note, in: context)
+        let marks = try testFullRangeMarkState(
+            sequence: snapshot.state,
+            localCounter: 227_701
+        )
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: fixture.note,
+                expected: snapshot,
+                finalMarkState: marks,
+                in: context
+            )
+        try context.save()
+
+        fixture.viewModel.deleteNote(fixture.note)
+        fixture.viewModel.undoLastAction()
+
+        let restored = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: fixture.note, in: context)
+        XCTAssertNil(fixture.note.deletedAt)
+        XCTAssertEqual(restored.markState, marks)
+    }
+
+    func testPermanentDeleteRemovesStructuralTextAndFormattingAuthorityWithNote() throws {
+        let fixture = try makeLifecycleFixture()
+        XCTAssertTrue(
+            fixture.viewModel.commitNoteEdit(
+                fixture.note,
+                title: fixture.note.title,
+                content: "AB"
+            )
+        )
+        let context = fixture.container.mainContext
+        let snapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: fixture.note, in: context)
+        let marks = try testFullRangeMarkState(
+            sequence: snapshot.state,
+            localCounter: 227_702
+        )
+        _ = try NoteSequenceStateFullBodyIntegration
+            .stageStructuralFormattingMutation(
+                of: fixture.note,
+                expected: snapshot,
+                finalMarkState: marks,
+                in: context
+            )
+        try context.save()
+        XCTAssertFalse(try fetchStateRecords(in: fixture.container).isEmpty)
+
+        fixture.viewModel.permanentlyDeleteNote(fixture.note)
+
+        XCTAssertTrue(try fetchNotes(in: fixture.container).isEmpty)
+        XCTAssertTrue(try fetchStateRecords(in: fixture.container).isEmpty)
+    }
+
+    func testExpiredTrashPurgeRemovesStructuralAuthorityWithNote() throws {
+        let fixture = try makeLifecycleFixture()
+        fixture.note.deletedAt = .distantPast
+        try fixture.container.mainContext.save()
+        XCTAssertFalse(try fetchStateRecords(in: fixture.container).isEmpty)
+
+        fixture.viewModel.refreshRecentlyDeletedNotes()
+
+        XCTAssertTrue(try fetchNotes(in: fixture.container).isEmpty)
+        XCTAssertTrue(try fetchStateRecords(in: fixture.container).isEmpty)
+    }
+
     func testConvergenceInsertCreatesNoteAndStateInTheTransaction() throws {
         let container = try makeContainer()
         let context = container.mainContext
@@ -375,6 +453,59 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
             revision: 1,
             in: fixture.container
         )
+    }
+
+    func testConvergenceStructuralMarkUpdatePreservesBodyAndInvalidatesDerivedCache() throws {
+        let fixture = try makePersistedNote(body: "AB")
+        let context = fixture.container.mainContext
+        let requestedID = fixture.noteID
+        let note = try XCTUnwrap(
+            context.fetch(FetchDescriptor<Note>(
+                predicate: #Predicate { $0.id == requestedID }
+            )).first
+        )
+        note.richTextContentData = Data("derived-cache".utf8)
+        try context.save()
+
+        let snapshot = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: note, in: context)
+        let mark = try SyncTextMarkOperation(
+            operationID: SyncOperationID(deviceID: UUID(), localCounter: 1),
+            logicalClock: 1,
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: try snapshot.state.operationAnchor(
+                atVisibleUTF16Offset: 0
+            ),
+            endAnchor: try snapshot.state.operationAnchor(
+                atVisibleUTF16Offset: 2
+            )
+        )
+        let finalMarks = try snapshot.markState.merging(
+            with: SyncTextMarkState(operations: [mark])
+        )
+        let transaction = SwiftDataSyncConvergencePersistenceTransaction(
+            context: context
+        )
+
+        try transaction.updateStructuralMarks(
+            SyncConvergenceStructuralMarkUpdatedNoteRecord(
+                noteID: fixture.noteID,
+                modifiedAt: Date(timeIntervalSince1970: 3),
+                expectedSnapshot: snapshot,
+                finalMarkState: finalMarks
+            )
+        )
+        try transaction.save()
+
+        let committed = try NoteSequenceStateFullBodyIntegration
+            .loadMutationSnapshot(for: note, in: context)
+        XCTAssertEqual(note.content, "AB")
+        XCTAssertNil(note.richTextContentData)
+        XCTAssertEqual(committed.state, snapshot.state)
+        XCTAssertEqual(committed.revision, snapshot.revision)
+        XCTAssertEqual(committed.markState, finalMarks)
+        XCTAssertEqual(committed.markRevision, snapshot.markRevision + 1)
     }
 
     func testConvergenceRollbackRemovesPendingBodyAndStateChanges() throws {
@@ -857,6 +988,31 @@ final class MYR170FullBodyPathIntegrationTests: XCTestCase {
         )
         try context.save()
         return (container, note.id)
+    }
+
+    private func testFullRangeMarkState(
+        sequence: SyncTextSequenceState,
+        localCounter: UInt64
+    ) throws -> SyncTextMarkState {
+        try SyncTextMarkState(operations: [
+            SyncTextMarkOperation(
+                operationID: SyncOperationID(
+                    deviceID: UUID(
+                        uuidString: "22700000-0000-0000-0000-000000000700"
+                    )!,
+                    localCounter: localCounter
+                ),
+                logicalClock: localCounter,
+                key: .bold,
+                assignment: .enabled,
+                startAnchor: sequence.operationAnchor(
+                    atVisibleUTF16Offset: 0
+                ),
+                endAnchor: sequence.operationAnchor(
+                    atVisibleUTF16Offset: sequence.visibleUTF16Count
+                )
+            )
+        ])
     }
 
     private func makeLifecycleFixture() throws -> (

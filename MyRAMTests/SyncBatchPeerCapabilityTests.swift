@@ -99,12 +99,81 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             SyncBatchPeerCapabilityCodec.productionDiscoveryInfo,
             [
                 SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
-                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1",
+                SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoKey: "1"
             ]
         )
         XCTAssertEqual(
             SyncBatchPeerCapabilityCodec.productionInvitationContext,
             Data("1,2".utf8)
+        )
+    }
+
+    func testStructuralMarkCapabilityRebindsSameStableDeviceWithoutRediscovery() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordStructuralMarkDiscoveryValue(
+            SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue,
+            forPeerDeviceID: "peer"
+        )
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
+
+        XCTAssertTrue(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer"
+            )
+        )
+
+        registry.clearCurrentSessionEvidence(forPeerDeviceID: "peer")
+        XCTAssertFalse(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer"
+            )
+        )
+
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
+        XCTAssertTrue(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer"
+            )
+        )
+    }
+
+    func testStructuralMarkCapabilityCannotTransferToDifferentStableDevice() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordStructuralMarkDiscoveryValue(
+            SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue,
+            forPeerDeviceID: "peer-a"
+        )
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer-b")
+
+        XCTAssertFalse(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer-b"
+            )
+        )
+        XCTAssertFalse(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer-a"
+            )
+        )
+    }
+
+    func testContradictoryStructuralMarkEvidenceFailsClosed() {
+        var registry = SyncBatchPeerCapabilityRegistry()
+        registry.recordStructuralMarkDiscoveryValue(
+            nil,
+            forPeerDeviceID: "peer"
+        )
+        registry.recordBootstrapStructuralMarkSchemaVersion(
+            SyncStructuralMarkTransportSchemaVersion.v1.rawValue,
+            forPeerDeviceID: "peer"
+        )
+        registry.bindCurrentSessionV2Support(forPeerDeviceID: "peer")
+
+        XCTAssertFalse(
+            registry.hasExplicitCurrentSessionStructuralMarkSupport(
+                forPeerDeviceID: "peer"
+            )
         )
     }
 
@@ -239,6 +308,60 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(transport.batchRecipientLists, [[peer]])
         controller.clearBootstrapStateForTesting(peerDeviceID: "bootstrap-peer")
         XCTAssertFalse(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "bootstrap-peer"))
+    }
+
+    func testFormattingCapablePeerRequiresFormattingCoverageBeforeOpeningBootstrapBarrier() async throws {
+        let peer = MCPeerID(displayName: "Remote|formatting-bootstrap-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let snapshotID = UUID(
+            uuidString: "22700000-0000-0000-0000-000000000801"
+        )!
+        let noteID = UUID(
+            uuidString: "22700000-0000-0000-0000-000000000802"
+        )!
+        controller.buildBootstrapSnapshot = {
+            try self.makeBootstrapSnapshot(id: snapshotID, noteID: noteID)
+        }
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "formatting-bootstrap-peer"
+        )
+        controller.recordStructuralMarkCapabilityForTesting(
+            SyncBatchPeerCapabilityCodec.structuralMarkDiscoveryInfoValue,
+            forPeerDeviceID: "formatting-bootstrap-peer"
+        )
+
+        await controller.beginBootstrapForTesting(to: peer)
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshotID,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [noteID]
+            ),
+            from: peer
+        )
+        XCTAssertFalse(
+            controller.isOrdinarySyncReadyForTesting(
+                peerDeviceID: "formatting-bootstrap-peer"
+            )
+        )
+
+        await controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshotID,
+                coveredBatchIDs: [],
+                coveredNoteIDs: [noteID],
+                coveredFormattingNoteIDs: [noteID]
+            ),
+            from: peer
+        )
+        XCTAssertTrue(
+            controller.isOrdinarySyncReadyForTesting(
+                peerDeviceID: "formatting-bootstrap-peer"
+            )
+        )
     }
 
     func testManifestedButUncoveredHistoryContinuesIncrementalReplayAfterBarrier() async throws {

@@ -10,13 +10,13 @@ final class PendingSyncRecoveryCoordinator {
         case journalWriteFailed
         case replacementFailed
         case rollbackFailed
-        case capturedBatchNotDurable(SyncBatchID)
+        case capturedBatchesNotDurable([SyncBatchID])
     }
 
     private let queueAdmin: PendingSyncQueueAdministrating
     private let localQueueSnapshot: () -> FileBackedSyncBatchQueueSnapshot
     private let replaceLocalBatches: ([SyncBatch]) async throws -> Void
-    private let flushReadyLocalBatch: () async throws -> SyncBatchID?
+    private let flushReadyLocalBatches: () async throws -> Set<SyncBatchID>
     private let journalStore: PendingSyncRecoveryJournalStore
     private let now: () -> Date
     private let transactionID: () -> UUID
@@ -25,7 +25,7 @@ final class PendingSyncRecoveryCoordinator {
         queueAdmin: PendingSyncQueueAdministrating,
         localQueueSnapshot: @escaping () -> FileBackedSyncBatchQueueSnapshot,
         replaceLocalBatches: @escaping ([SyncBatch]) async throws -> Void,
-        flushReadyLocalBatch: @escaping () async throws -> SyncBatchID?,
+        flushReadyLocalBatches: @escaping () async throws -> Set<SyncBatchID>,
         journalStore: PendingSyncRecoveryJournalStore = PendingSyncRecoveryJournalStore(),
         now: @escaping () -> Date = Date.init,
         transactionID: @escaping () -> UUID = UUID.init
@@ -33,7 +33,7 @@ final class PendingSyncRecoveryCoordinator {
         self.queueAdmin = queueAdmin
         self.localQueueSnapshot = localQueueSnapshot
         self.replaceLocalBatches = replaceLocalBatches
-        self.flushReadyLocalBatch = flushReadyLocalBatch
+        self.flushReadyLocalBatches = flushReadyLocalBatches
         self.journalStore = journalStore
         self.now = now
         self.transactionID = transactionID
@@ -44,7 +44,7 @@ final class PendingSyncRecoveryCoordinator {
         unsent: [SyncBatch],
         local: [SyncBatch]
     ) {
-        let capturedBatchID = try await flushReadyLocalBatch()
+        let capturedBatchIDs = try await flushReadyLocalBatches()
 
         let legacyHealth = await queueAdmin.legacyQueueHealth()
         guard legacyHealth.isRecoveryWritable else {
@@ -61,10 +61,17 @@ final class PendingSyncRecoveryCoordinator {
             throw RecoveryError.unhealthyLocalObligationQueue
         }
 
-        if let capturedBatchID,
-           !unsentSnapshot.pendingBatches.contains(where: { $0.id == capturedBatchID }),
-           !localSnapshot.pendingBatches.contains(where: { $0.id == capturedBatchID }) {
-            throw RecoveryError.capturedBatchNotDurable(capturedBatchID)
+        let durableBatchIDs = Set(
+            unsentSnapshot.pendingBatches.map(\.id)
+                + localSnapshot.pendingBatches.map(\.id)
+        )
+        let missingCapturedBatchIDs = capturedBatchIDs
+            .subtracting(durableBatchIDs)
+            .sorted { $0.uuidString < $1.uuidString }
+        guard missingCapturedBatchIDs.isEmpty else {
+            throw RecoveryError.capturedBatchesNotDurable(
+                missingCapturedBatchIDs
+            )
         }
 
         return (

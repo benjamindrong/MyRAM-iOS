@@ -41,6 +41,28 @@ struct SyncConvergenceLocalObligation: Codable, Equatable, Identifiable, Sendabl
     }
 }
 
+struct SyncPreparedLocalObligationCollection: Equatable, Sendable {
+    let token: UUID
+    let obligations: [SyncConvergenceLocalObligation]
+
+    init?(
+        _ obligations: [SyncConvergenceLocalObligation],
+        token: UUID = UUID()
+    ) {
+        guard !obligations.isEmpty else { return nil }
+        self.token = token
+        self.obligations = obligations
+    }
+
+    var primary: SyncConvergenceLocalObligation {
+        obligations[0]
+    }
+
+    var batchIDs: Set<SyncBatchID> {
+        Set(obligations.map(\.id))
+    }
+}
+
 enum SyncConvergenceLocalEvidenceCaptureError: Error, Equatable {
     case missingBodyEvidence(noteID: UUID)
     case invalidBodyOperation(noteID: UUID)
@@ -80,7 +102,7 @@ enum SyncConvergenceLocalEvidenceCapture {
             return SyncConvergenceCapturedLocalChange(change: change, evidence: evidence)
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
             throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(noteID: change.noteID)
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             return SyncConvergenceCapturedLocalChange(change: change, evidence: nil)
         }
     }
@@ -212,7 +234,7 @@ enum SyncConvergenceLocalEvidenceCapture {
             throw SyncConvergenceLocalEvidenceCaptureError.invalidBodyOperation(
                 noteID: change.noteID
             )
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             return body
         }
     }
@@ -246,7 +268,7 @@ enum SyncConvergenceLocalEvidenceCapture {
         case .noteBodyTextInserted, .noteBodyTextDeleted,
              .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
             true
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteStructuralMarksChanged, .noteLifecycleChanged:
             false
         }
     }

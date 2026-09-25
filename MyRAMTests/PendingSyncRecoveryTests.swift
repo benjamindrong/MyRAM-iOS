@@ -397,7 +397,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             replaceLocalBatches: { batches in
                 localBatches = batches
             },
-            flushReadyLocalBatch: { nil },
+            flushReadyLocalBatches: { [] },
             journalStore: PendingSyncRecoveryJournalStore(fileURL: fileURL),
             now: { Date(timeIntervalSince1970: 100) },
             transactionID: { UUID(uuidString: "00000000-0000-0000-0000-000000160506")! }
@@ -463,7 +463,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
             replaceLocalBatches: { batches in
                 localBatches = batches
             },
-            flushReadyLocalBatch: { nil },
+            flushReadyLocalBatches: { [] },
             journalStore: PendingSyncRecoveryJournalStore(fileURL: fileURL),
             now: { Date(timeIntervalSince1970: 100) },
             transactionID: { UUID(uuidString: "00000000-0000-0000-0000-000000160001")! }
@@ -516,9 +516,9 @@ final class PendingSyncRecoveryTests: XCTestCase {
             replaceLocalBatches: { batches in
                 localBatches = batches
             },
-            flushReadyLocalBatch: {
+            flushReadyLocalBatches: {
                 didFlushLocal = true
-                return nil
+                return []
             },
             journalStore: PendingSyncRecoveryJournalStore(fileURL: fileURL),
             now: { Date(timeIntervalSince1970: 100) },
@@ -568,7 +568,7 @@ final class PendingSyncRecoveryTests: XCTestCase {
                 FileBackedSyncBatchQueueSnapshot(pendingBatches: [], health: .healthy)
             },
             replaceLocalBatches: { _ in },
-            flushReadyLocalBatch: { capturedBatchID }
+            flushReadyLocalBatches: { [capturedBatchID] }
         )
 
         do {
@@ -577,7 +577,81 @@ final class PendingSyncRecoveryTests: XCTestCase {
         } catch {
             XCTAssertEqual(
                 error as? PendingSyncRecoveryCoordinator.RecoveryError,
-                .capturedBatchNotDurable(capturedBatchID)
+                .capturedBatchesNotDurable([capturedBatchID])
+            )
+        }
+    }
+
+    func testPrepareSnapshotsAcceptsCapturedSiblingIDsAcrossUnsentAndLocalQueues() async throws {
+        let compatible = makeBatch(idSuffix: 160_611)
+        let firstMark = makeBatch(idSuffix: 160_612)
+        let secondMark = makeBatch(idSuffix: 160_613)
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [compatible],
+                health: .healthy
+            )
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncBatchQueueSnapshot(
+                    pendingBatches: [firstMark, secondMark],
+                    health: .healthy
+                )
+            },
+            replaceLocalBatches: { _ in },
+            flushReadyLocalBatches: {
+                [compatible.id, firstMark.id, secondMark.id]
+            }
+        )
+
+        let snapshots = try await coordinator.prepareSnapshots()
+
+        XCTAssertEqual(snapshots.unsent.map(\.id), [compatible.id])
+        XCTAssertEqual(
+            snapshots.local.map(\.id),
+            [firstMark.id, secondMark.id]
+        )
+    }
+
+    func testPrepareSnapshotsReportsEveryMissingCapturedSiblingInUUIDOrder() async throws {
+        let present = makeBatch(idSuffix: 160_621)
+        let missingLow = UUID(
+            uuidString: "00000000-0000-0000-0000-000000160622"
+        )!
+        let missingHigh = UUID(
+            uuidString: "00000000-0000-0000-0000-000000160623"
+        )!
+        let admin = FakePendingSyncQueueAdmin(
+            legacySnapshot: SyncQueueSnapshot(),
+            unsentSnapshot: FileBackedSyncBatchQueueSnapshot(
+                pendingBatches: [present],
+                health: .healthy
+            )
+        )
+        let coordinator = PendingSyncRecoveryCoordinator(
+            queueAdmin: admin,
+            localQueueSnapshot: {
+                FileBackedSyncBatchQueueSnapshot(
+                    pendingBatches: [],
+                    health: .healthy
+                )
+            },
+            replaceLocalBatches: { _ in },
+            flushReadyLocalBatches: {
+                [missingHigh, present.id, missingLow]
+            }
+        )
+
+        do {
+            _ = try await coordinator.prepareSnapshots()
+            XCTFail("Expected complete sibling durability validation")
+        } catch {
+            XCTAssertEqual(
+                error as? PendingSyncRecoveryCoordinator.RecoveryError,
+                .capturedBatchesNotDurable([missingLow, missingHigh])
             )
         }
     }

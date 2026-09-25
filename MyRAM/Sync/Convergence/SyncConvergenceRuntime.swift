@@ -11,6 +11,13 @@ enum SyncConvergenceRuntimeOutcome {
     case blocked(SyncBatchDrainFailure)
 }
 
+enum SyncConvergenceLocalObligationCollectionAdmissionResult {
+    case admitted
+    case retryableCapacity
+    case retryablePersistenceFailure
+    case terminal(SyncConvergenceRuntimeOutcome)
+}
+
 struct SyncConvergenceDrainCompletion {
     let outcome: SyncConvergenceRuntimeOutcome
     let successfullyCompletedBatchIDs: Set<UUID>
@@ -57,7 +64,8 @@ enum SyncConvergenceRemoteBatchDispositionPolicy {
                 switch reason {
                 case .anchorlessMatchingBaseEvidenceUnavailable, .unreconstructableBase:
                     return .recoverableAnchorlessCompatibilityRejection
-                case .unsupportedReconciliation, .historyPressure, .missingFolderDependency:
+                case .unsupportedReconciliation, .historyPressure, .missingFolderDependency,
+                     .structuralMarkDependency:
                     continue
                 }
             }
@@ -75,7 +83,9 @@ protocol SyncConvergenceIncomingLocalBoundaryAdapter: AnyObject {
 
 enum SyncConvergenceIncomingLocalBoundaryPreparation {
     case ready
-    case localObligation(SyncConvergenceLocalObligation)
+    case localObligations(SyncPreparedLocalObligationCollection)
+    case durablyAdmittedLocalObligations(noteIDs: Set<UUID>)
+    case cannotProceed(SyncConvergenceRuntimeOutcome)
     case failed(SyncConvergenceIncomingLocalBoundaryFailure)
 }
 
@@ -245,45 +255,184 @@ final class SyncConvergenceRuntime {
     }
 
     func submitLocalObligation(_ obligation: SyncConvergenceLocalObligation) async -> SyncConvergenceRuntimeOutcome {
+        guard let collection = SyncPreparedLocalObligationCollection([obligation]) else {
+            preconditionFailure("A single local obligation must form a non-empty collection")
+        }
+        return await submitLocalObligations(collection)
+    }
+
+    func submitLocalObligations(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceRuntimeOutcome {
+        switch await admitLocalObligationCollection(collection) {
+        case .admitted:
+            return await resumePendingWork()
+        case .retryableCapacity:
+            return .blocked(
+                SyncBatchDrainFailure(
+                    batchID: collection.primary.id,
+                    kind: .queueCapacity
+                )
+            )
+        case .retryablePersistenceFailure:
+            return .blocked(
+                SyncBatchDrainFailure(
+                    batchID: collection.primary.id,
+                    kind: .queuePersistence
+                )
+            )
+        case .terminal(let outcome):
+            return outcome
+        }
+    }
+
+    func admitLocalObligationCollection(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceLocalObligationCollectionAdmissionResult {
+        for obligation in collection.obligations {
+            do {
+                try SyncBatchAnchoredPayloadPolicy.validateConvergence(
+                    obligation.batch
+                )
+                if case .captured = obligation.evidence {
+                    _ = try SyncConvergenceLocalEvidenceCapture.validate(
+                        obligation: obligation
+                    )
+                }
+            } catch let evidenceError as SyncConvergenceLocalEvidenceCaptureError {
+                return .terminal(.quarantined(
+                    SyncConvergenceQuarantinedWork(items: [
+                        SyncConvergenceQuarantinedItem(
+                            domain: .localObligation,
+                            batchID: obligation.id,
+                            affectedNoteIDs: Self.affectedNoteIDs(in: obligation.batch),
+                            originDeviceID: obligation.batch.originDeviceID,
+                            reason: Self.quarantineReason(for: evidenceError)
+                        )
+                    ])
+                ))
+            } catch {
+                return .terminal(.blocked(
+                    SyncBatchDrainFailureClassifier.classify(
+                        error,
+                        batchID: obligation.id
+                    )
+                ))
+            }
+        }
+
         do {
-            try SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)
-            if case .captured = obligation.evidence {
-                _ = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
+            try localObligationQueue.enqueueAtomically(collection.obligations)
+            return .admitted
+        } catch FileBackedSyncConvergenceLocalObligationQueue.QueueError.capacityExceeded {
+            let relief: SyncConvergenceLocalObligationPassOutcome
+            do {
+                relief = try await satisfyLocalObligations()
+            } catch {
+                return .terminal(.blocked(
+                    SyncBatchDrainFailureClassifier.classify(
+                        error,
+                        batchID: collection.primary.id
+                    )
+                ))
             }
-            try localObligationQueue.enqueue(obligation)
-            switch try await satisfyLocalObligations() {
-            case .complete:
-                return .drained(appliedBatchIDs: [])
-            case .deferred(let deferred):
-                return .deferred(SyncConvergenceDeferredWork(incoming: [], localObligations: deferred, postCommit: []))
+            switch relief {
+            case .complete, .deferred:
+                do {
+                    try localObligationQueue.enqueueAtomically(
+                        collection.obligations
+                    )
+                    return .admitted
+                } catch FileBackedSyncConvergenceLocalObligationQueue.QueueError.capacityExceeded {
+                    return .retryableCapacity
+                } catch FileBackedSyncConvergenceLocalObligationQueue.QueueError.persistenceFailed {
+                    return .retryablePersistenceFailure
+                } catch {
+                    return .terminal(.blocked(
+                        SyncBatchDrainFailureClassifier.classify(
+                            error,
+                            batchID: collection.primary.id
+                        )
+                    ))
+                }
             case .quarantined(let quarantined):
-                return .quarantined(SyncConvergenceQuarantinedWork(items: quarantined))
+                return .terminal(.quarantined(
+                    SyncConvergenceQuarantinedWork(items: quarantined)
+                ))
             case .blocked(let failure):
-                return .blocked(failure)
+                return .terminal(.blocked(failure))
             }
+        } catch FileBackedSyncConvergenceLocalObligationQueue.QueueError.persistenceFailed {
+            return .retryablePersistenceFailure
         } catch {
-            return .blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: obligation.id))
+            return .terminal(.blocked(
+                SyncBatchDrainFailureClassifier.classify(
+                    error,
+                    batchID: collection.primary.id
+                )
+            ))
         }
     }
 
     func admitPendingLocalObligationForIncomingMutation(
         _ obligation: SyncConvergenceLocalObligation
     ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
-        await admitLocalObligationForIncomingBoundary(obligation)
+        guard let collection = SyncPreparedLocalObligationCollection([obligation]) else {
+            preconditionFailure("A single local obligation must form a non-empty collection")
+        }
+        return await admitLocalObligationsForIncomingBoundary(collection)
+    }
+
+    func admitPendingLocalObligationsForIncomingMutation(
+        _ collection: SyncPreparedLocalObligationCollection
+    ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
+        await admitLocalObligationsForIncomingBoundary(collection)
     }
 
     func admitQueuedLocalObligationsForIncomingMutation(
         affecting noteIDs: Set<UUID>
     ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
+        var registeredIDs: Set<UUID> = []
         for noteID in noteIDs.sorted(by: { $0.uuidString < $1.uuidString }) {
-            for obligation in localObligationQueue.pendingObligations(affecting: noteID) {
-                let outcome = await admitLocalObligationForIncomingBoundary(obligation)
-                if case .cannotProceed = outcome {
-                    return outcome
+            for obligation in localObligationQueue.pendingObligations(
+                affecting: noteID
+            ) where registeredIDs.insert(obligation.id).inserted {
+                do {
+                    _ = try admitQueuedLocalObligation(obligation)
+                } catch let evidenceError as SyncConvergenceLocalEvidenceCaptureError {
+                    return .cannotProceed(.quarantined(
+                        SyncConvergenceQuarantinedWork(items: [
+                            SyncConvergenceQuarantinedItem(
+                                domain: .localObligation,
+                                batchID: obligation.id,
+                                affectedNoteIDs: Self.affectedNoteIDs(
+                                    in: obligation.batch
+                                ),
+                                originDeviceID: obligation.batch.originDeviceID,
+                                reason: Self.quarantineReason(for: evidenceError)
+                            )
+                        ])
+                    ))
+                } catch let failure as SyncConvergenceTransactionFailure {
+                    return .cannotProceed(.blocked(
+                        Self.drainFailure(
+                            for: failure,
+                            batchID: obligation.id
+                        )
+                    ))
+                } catch {
+                    return .cannotProceed(.blocked(
+                        SyncBatchDrainFailureClassifier.classify(
+                            error,
+                            batchID: obligation.id
+                        )
+                    ))
                 }
             }
         }
-        return .ready
+        return registeredIDs.first.map {
+            .evidenceRegistered(obligationID: $0)
+        } ?? .ready
     }
 
     func resumePendingWork() async -> SyncConvergenceRuntimeOutcome {
@@ -548,6 +697,14 @@ final class SyncConvergenceRuntime {
                     let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
                     blockedNoteIDs.formUnion(affectedNoteIDs)
                     blockedOrigins.insert(batch.originDeviceID)
+                    if case .structuralMarkDependency(
+                        let noteID,
+                        _,
+                        let operationID
+                    ) = reason {
+                        anchoredDependenciesByNoteID[noteID, default: []]
+                            .insert(operationID)
+                    }
                     deferredItems.append(SyncConvergenceDeferredItem(
                         domain: .incoming,
                         batchID: batch.id,
@@ -749,8 +906,14 @@ final class SyncConvergenceRuntime {
         switch await incomingLocalBoundaryAdapter.prepareForIncomingBodyMutation(affecting: noteIDs) {
         case .ready:
             return .ready
-        case .localObligation(let obligation):
-            return await admitLocalObligationForIncomingBoundary(obligation)
+        case .localObligations(let collection):
+            return await admitLocalObligationsForIncomingBoundary(collection)
+        case .durablyAdmittedLocalObligations(let noteIDs):
+            return await admitQueuedLocalObligationsForIncomingMutation(
+                affecting: noteIDs
+            )
+        case .cannotProceed(let outcome):
+            return .cannotProceed(outcome)
         case .failed(let failure):
             return .cannotProceed(.blocked(Self.drainFailure(for: failure, batchID: batchID)))
         }
@@ -774,15 +937,23 @@ final class SyncConvergenceRuntime {
         return SyncBatchDrainFailure(batchID: batchID, kind: kind)
     }
 
-    private func admitLocalObligationForIncomingBoundary(
-        _ obligation: SyncConvergenceLocalObligation
+    private func admitLocalObligationsForIncomingBoundary(
+        _ collection: SyncPreparedLocalObligationCollection
     ) async -> SyncConvergenceIncomingLocalBoundaryOutcome {
         do {
-            try SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)
-            try localObligationQueue.enqueue(obligation)
-            _ = try admitQueuedLocalObligation(obligation)
-            return .evidenceRegistered(obligationID: obligation.id)
+            for obligation in collection.obligations {
+                try SyncBatchAnchoredPayloadPolicy.validateConvergence(obligation.batch)
+                if case .captured = obligation.evidence {
+                    _ = try SyncConvergenceLocalEvidenceCapture.validate(obligation: obligation)
+                }
+            }
+            try localObligationQueue.enqueueAtomically(collection.obligations)
+            for obligation in collection.obligations {
+                _ = try admitQueuedLocalObligation(obligation)
+            }
+            return .evidenceRegistered(obligationID: collection.primary.id)
         } catch let evidenceError as SyncConvergenceLocalEvidenceCaptureError {
+            let obligation = collection.primary
             return .cannotProceed(.quarantined(SyncConvergenceQuarantinedWork(items: [
                 SyncConvergenceQuarantinedItem(
                     domain: .localObligation,
@@ -793,9 +964,18 @@ final class SyncConvergenceRuntime {
                 )
             ])))
         } catch let failure as SyncConvergenceTransactionFailure {
-            return .cannotProceed(.blocked(Self.drainFailure(for: failure, batchID: obligation.id)))
+            return .cannotProceed(
+                .blocked(Self.drainFailure(for: failure, batchID: collection.primary.id))
+            )
         } catch {
-            return .cannotProceed(.blocked(SyncBatchDrainFailureClassifier.classify(error, batchID: obligation.id)))
+            return .cannotProceed(
+                .blocked(
+                    SyncBatchDrainFailureClassifier.classify(
+                        error,
+                        batchID: collection.primary.id
+                    )
+                )
+            )
         }
     }
 
@@ -1017,7 +1197,8 @@ final class SyncConvergenceRuntime {
                 indexedBodyChanges.append((index, change))
             case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
                 throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
-            case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+            case .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+                 .noteStructuralMarksChanged, .noteLifecycleChanged:
                 continue
             }
         }
@@ -1174,7 +1355,8 @@ final class SyncConvergenceRuntime {
                 canonicalReplayKey: replayKey,
                 modifiedAt: deleted.modifiedAt
             )
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+                 .noteStructuralMarksChanged, .noteLifecycleChanged:
             throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
         }
     }
@@ -1201,7 +1383,8 @@ final class SyncConvergenceRuntime {
             mutable.insert(expectedText, at: deleted.utf16Offset)
             return String(mutable)
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored,
-             .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+             .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+             .noteStructuralMarksChanged, .noteLifecycleChanged:
             throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
         }
     }
@@ -1218,7 +1401,8 @@ final class SyncConvergenceRuntime {
             noteID = deleted.noteID
         case .noteBodyTextInsertedAnchored, .noteBodyTextDeletedAnchored:
             throw SyncConvergenceTransactionFailure.invalidMergePlan(noteID: change.noteID)
-        case .noteCreated, .noteTitleChanged, .noteBodyReconciled, .noteLifecycleChanged:
+        case .noteCreated, .noteTitleChanged, .noteBodyReconciled,
+                 .noteStructuralMarksChanged, .noteLifecycleChanged:
             return
         }
         if let declared, declared != reconstructedBaseHash {
@@ -1475,8 +1659,14 @@ final class SyncConvergenceRuntime {
                 return inserted.payload.operationID
             case .noteBodyTextDeletedAnchored(let deleted):
                 return deleted.payload.operationID
-            case .noteCreated, .noteTitleChanged, .noteBodyTextInserted,
-                 .noteBodyTextDeleted, .noteBodyReconciled, .noteLifecycleChanged:
+            case .noteCreated(let created):
+                return try? SyncTextLegacyBootstrap.makeDescriptor(
+                    noteID: created.noteID,
+                    body: created.body
+                ).operationID
+            case .noteTitleChanged, .noteBodyTextInserted,
+                 .noteBodyTextDeleted, .noteBodyReconciled,
+                 .noteStructuralMarksChanged, .noteLifecycleChanged:
                 return nil
             }
         })
@@ -1499,7 +1689,7 @@ final class SyncConvergenceRuntime {
                 return payload.noteID
             case .noteLifecycleChanged(let payload):
                 return payload.noteID
-            case .noteTitleChanged:
+            case .noteTitleChanged, .noteStructuralMarksChanged:
                 return nil
             }
         })
@@ -1521,6 +1711,8 @@ final class SyncConvergenceRuntime {
             return "anchoredDelete"
         case .noteBodyReconciled:
             return "reconcile"
+        case .noteStructuralMarksChanged:
+            return "structuralMarks"
         case .noteLifecycleChanged:
             return "lifecycle"
         }

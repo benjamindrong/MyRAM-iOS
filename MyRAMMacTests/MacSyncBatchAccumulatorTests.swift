@@ -1,3 +1,4 @@
+import AnchoredSequenceCore
 import XCTest
 @testable import MyRAMMac
 
@@ -203,6 +204,83 @@ final class MacSyncBatchAccumulatorTests: XCTestCase {
         let secondObligation = await accumulator.takeReadyBatch(at: secondDate.addingTimeInterval(5))
 
         XCTAssertEqual(secondObligation?.changes, second.map(\.change))
+    }
+
+    func testMixedCapturePartitionsCompatibleThenSingleNoteV3BatchesInCanonicalNoteOrder() async throws {
+        let accumulator = MacSyncBatchAccumulator(
+            originDeviceID: UUID(uuidString: "00000000-0000-0000-0000-000000227300")!,
+            quietWindow: 3,
+            batchSequenceProvider: { .sequenceLess(.transientFailure) }
+        )
+        let noteA = UUID(uuidString: "00000000-0000-0000-0000-000000227301")!
+        let noteB = UUID(uuidString: "00000000-0000-0000-0000-000000227302")!
+        let a1 = try markOperation(counter: 1, logicalClock: 1)
+        let a2 = try markOperation(counter: 2, logicalClock: 2)
+        let b1 = try markOperation(counter: 3, logicalClock: 3)
+        let captured: [SyncConvergenceCapturedLocalChange] = [
+            capturedTitleChange("Compatible"),
+            structuralMarkChange(noteID: noteB, operation: b1, modifiedAt: Date(timeIntervalSince1970: 20)),
+            structuralMarkChange(noteID: noteA, operation: a2, modifiedAt: Date(timeIntervalSince1970: 30)),
+            structuralMarkChange(noteID: noteA, operation: a1, modifiedAt: Date(timeIntervalSince1970: 10))
+        ]
+
+        await accumulator.record(captured, at: Date(timeIntervalSince1970: 1))
+        let originalBatchID = await accumulator.pendingBatchID()
+        let obligations = await accumulator.takePendingObligationsNow()
+
+        XCTAssertEqual(obligations.count, 3)
+        XCTAssertEqual(obligations.first?.id, originalBatchID)
+        XCTAssertEqual(Set(obligations.map(\.id)).count, 3)
+        XCTAssertEqual(
+            obligations.map { SyncBatchDeliveryPartitionPlanner.classification(of: $0.changes) },
+            [.v1Compatible, .structuralMarkV3, .structuralMarkV3]
+        )
+
+        guard case .noteStructuralMarksChanged(let firstMark) = obligations[1].changes.first,
+              case .noteStructuralMarksChanged(let secondMark) = obligations[2].changes.first else {
+            return XCTFail("Expected one structural-mark change per V3 batch")
+        }
+        XCTAssertEqual(firstMark.noteID, noteA)
+        XCTAssertEqual(firstMark.operations, [a1, a2])
+        XCTAssertEqual(firstMark.modifiedAt, Date(timeIntervalSince1970: 30))
+        XCTAssertEqual(secondMark.noteID, noteB)
+        XCTAssertEqual(secondMark.operations, [b1])
+        XCTAssertEqual(obligations[1].changes.count, 1)
+        XCTAssertEqual(obligations[2].changes.count, 1)
+    }
+
+    private func markOperation(
+        counter: UInt64,
+        logicalClock: UInt64
+    ) throws -> SyncTextMarkOperation {
+        try SyncTextMarkOperation(
+            operationID: SyncOperationID(
+                deviceID: UUID(uuidString: "00000000-0000-0000-0000-000000227399")!,
+                localCounter: counter
+            ),
+            logicalClock: logicalClock,
+            key: .bold,
+            assignment: .enabled,
+            startAnchor: .empty,
+            endAnchor: .empty
+        )
+    }
+
+    private func structuralMarkChange(
+        noteID: UUID,
+        operation: SyncTextMarkOperation,
+        modifiedAt: Date
+    ) -> SyncConvergenceCapturedLocalChange {
+        SyncConvergenceCapturedLocalChange(
+            change: .noteStructuralMarksChanged(
+                SyncBatchNoteStructuralMarksChangedChange(
+                    noteID: noteID,
+                    operations: [operation],
+                    modifiedAt: modifiedAt
+                )
+            ),
+            evidence: nil
+        )
     }
 
     private func makeAccumulator() -> MacSyncBatchAccumulator {
