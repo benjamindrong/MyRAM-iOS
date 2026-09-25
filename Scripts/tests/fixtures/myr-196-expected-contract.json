@@ -1,0 +1,467 @@
+{
+  "schema": "myram.verification-contract.v1",
+  "rules_schema": "myram.verification-contract.rules.v1",
+  "repository": "benjamindrong/MyRAM-iOS",
+  "candidate": {
+    "base_sha": "4334f3f3ea718d5523ace296b84feb52df4c0d40",
+    "sha": "69928c0ef7ee377aab046c033440de70945b5e17"
+  },
+  "changed_paths": [
+    "AGENTS.md",
+    "MyRAM.xcodeproj/project.pbxproj",
+    "MyRAM/Mac/MacMarkdownPreviewDocumentBuilder.swift",
+    "MyRAM/Mac/MacMarkdownPreviewFocusResignation.swift",
+    "MyRAM/Mac/MacMarkdownPreviewTextView.swift",
+    "MyRAM/Mac/MacNoteEditorView.swift",
+    "MyRAM/Mac/MacNoteViewZoom.swift",
+    "MyRAM/Mac/MacTextViewRepresentable.swift",
+    "MyRAM/Mac/MyRAMMacApp.swift",
+    "MyRAM/Mac/MyRAMMacRootView.swift",
+    "MyRAM/Markdown/MarkdownPreview.swift",
+    "MyRAMMacTests/MacMarkdownPreviewDocumentBuilderTests.swift",
+    "MyRAMMacTests/MacMarkdownPreviewIntegrationTests.swift",
+    "MyRAMMacTests/MacNoteViewZoomTests.swift",
+    "MyRAMUITests/MarkdownPreviewUITests.swift",
+    "docs/MYR-196-completion-verification-evidence.md"
+  ],
+  "authorities": [
+    {
+      "id": "A-CATALOG",
+      "class": "frozen-external-authority",
+      "identity": {
+        "jira_key": "LAN-39",
+        "comment_id": "11464"
+      }
+    },
+    {
+      "id": "A-FAIL",
+      "class": "frozen-external-authority",
+      "identity": {
+        "jira_key": "LAN-39",
+        "comment_id": "11461"
+      }
+    },
+    {
+      "id": "A-PR114",
+      "class": "pr-change-set",
+      "identity": {
+        "repository": "benjamindrong/MyRAM-iOS",
+        "pr_number": 114,
+        "base_sha": "4334f3f3ea718d5523ace296b84feb52df4c0d40",
+        "candidate_sha": "69928c0ef7ee377aab046c033440de70945b5e17"
+      }
+    },
+    {
+      "id": "A-REPO-AGENTS",
+      "class": "repository-owned-rule",
+      "identity": {
+        "repository": "benjamindrong/MyRAM-iOS",
+        "path": "AGENTS.md",
+        "blob_sha": "54f74bd503a65ded3b1b7bf549761f1174d61317"
+      }
+    },
+    {
+      "id": "A-REPO-DEV",
+      "class": "repository-owned-rule",
+      "identity": {
+        "repository": "benjamindrong/MyRAM-iOS",
+        "path": "docs/DEVELOPMENT_INSTRUCTIONS.md",
+        "blob_sha": "1f5e4cbca4bb6ffe1e073be3a6b6a7ca0d6dd4cc"
+      }
+    },
+    {
+      "id": "A-TICKET",
+      "class": "frozen-external-authority",
+      "identity": {
+        "jira_issue_id": "12015",
+        "jira_key": "MYR-196",
+        "field": "description"
+      }
+    },
+    {
+      "id": "A-V4",
+      "class": "frozen-external-authority",
+      "identity": {
+        "name": "MYR-196-implementation-proposal-v4.md",
+        "library_object_id": "file_00000000288c81fbb19f55742671cfd9",
+        "timestamp": "2026-07-30T22:04:46Z",
+        "pinned_baseline_sha": "4334f3f3ea718d5523ace296b84feb52df4c0d40"
+      }
+    },
+    {
+      "id": "A-V8",
+      "class": "frozen-external-authority",
+      "identity": {
+        "name": "MYR-196-PR-114-remediation-proposal-v8.md",
+        "library_object_id": "file_00000000fce481f7ab67851eff8190b5",
+        "timestamp": "2026-07-30T23:51:20Z",
+        "original_implementation_sha": "11346a8aa9ff6a582995609a355be0068392566e"
+      }
+    }
+  ],
+  "verification_requirements": [
+    {
+      "id": "V01",
+      "definition": "Exact candidate identity and clean-tree preflight before each verification group.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-PR114",
+        "A-REPO-AGENTS",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V02",
+      "definition": "Focused MYR-196 Mac tests.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "changed-area",
+        "predicate": "P-MAC-PROVEN"
+      },
+      "authority_ids": [
+        "A-PR114",
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V03",
+      "definition": "Complete Mac test scheme.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V04",
+      "definition": "Complete iOS test scheme.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V05",
+      "definition": "Generic iOS Simulator build.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V06",
+      "definition": "Native Mac build.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V07",
+      "definition": "Xcode project/scheme listing.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V08",
+      "definition": "project.pbxproj validation.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "changed-area",
+        "predicate": "P-PROJECT"
+      },
+      "authority_ids": [
+        "A-PR114",
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V09",
+      "definition": "Implementation-range whitespace audit.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-REPO-AGENTS",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V10",
+      "definition": "Forbidden-scope audit.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V11",
+      "definition": "Shared/iPhone production non-change and permitted-reminder-change audit.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "changed-area",
+        "predicate": "P-SHARED-IPHONE"
+      },
+      "authority_ids": [
+        "A-PR114",
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V12",
+      "definition": "Complete required manual Mac verification matrix.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "changed-area",
+        "predicate": "P-MAC-PROVEN"
+      },
+      "authority_ids": [
+        "A-PR114",
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "V13",
+      "definition": "Required iPhone non-regression verification.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    }
+  ],
+  "evidence_requirements": [
+    {
+      "id": "E01",
+      "definition": "Exact base/head and frozen authority identities.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-PR114",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "E02",
+      "definition": "Clean-tree state before and after required verification.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-REPO-AGENTS",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "E03",
+      "definition": "Exact command/check identity.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-V8"
+      ]
+    },
+    {
+      "id": "E04",
+      "definition": "Exact focused and complete test counts/outcomes.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-V8"
+      ]
+    },
+    {
+      "id": "E05",
+      "definition": "Required build and project-check outcomes.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-V8"
+      ]
+    },
+    {
+      "id": "E06",
+      "definition": "Required static-audit outcomes.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-V8"
+      ]
+    },
+    {
+      "id": "E07",
+      "definition": "Complete manual Mac matrix results.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "changed-area",
+        "predicate": "P-MAC-PROVEN"
+      },
+      "authority_ids": [
+        "A-PR114",
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "E08",
+      "definition": "Required iPhone non-regression evidence.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "always-required"
+      },
+      "authority_ids": [
+        "A-TICKET",
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "E09",
+      "definition": "Required measured/manual observations and explicit tolerances.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "explicit-authority",
+        "authority_ids": [
+          "A-V4",
+          "A-V8"
+        ]
+      },
+      "authority_ids": [
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "E10",
+      "definition": "Automated/manual/not-run/not-applicable classification.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "explicit-authority",
+        "authority_ids": [
+          "A-V4",
+          "A-V8"
+        ]
+      },
+      "authority_ids": [
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "E11",
+      "definition": "Candidate-bound evidence, evidence-only range, and final local/upstream/PR-head parity.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "explicit-authority",
+        "authority_ids": [
+          "A-V4",
+          "A-V8"
+        ]
+      },
+      "authority_ids": [
+        "A-V4",
+        "A-V8"
+      ]
+    },
+    {
+      "id": "E12",
+      "definition": "Hosted-check status plus final independent review against the final candidate.",
+      "definition_authority_id": "A-CATALOG",
+      "trigger": {
+        "kind": "explicit-authority",
+        "authority_ids": [
+          "A-TICKET",
+          "A-V8"
+        ]
+      },
+      "authority_ids": [
+        "A-TICKET",
+        "A-V8"
+      ]
+    }
+  ],
+  "fail_closed_conditions": [
+    {
+      "id": "F01",
+      "definition": "Required authority is missing or cannot be frozen precisely.",
+      "definition_authority_id": "A-FAIL"
+    },
+    {
+      "id": "F02",
+      "definition": "A changed area, verification obligation, or evidence obligation cannot be mapped to explicit authority.",
+      "definition_authority_id": "A-FAIL"
+    },
+    {
+      "id": "F03",
+      "definition": "Authoritative inputs conflict without explicit precedence.",
+      "definition_authority_id": "A-FAIL"
+    },
+    {
+      "id": "F04",
+      "definition": "Source/test state changes after the candidate is frozen or verification begins without regeneration/restart.",
+      "definition_authority_id": "A-FAIL"
+    }
+  ],
+  "contract_sha256": "6042277937753fac9f659554026ef6c2dec4aa1f849e9bcabc445f60a176690a"
+}
