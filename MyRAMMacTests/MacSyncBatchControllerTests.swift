@@ -247,6 +247,56 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
+    func testOrdinaryBatchAcknowledgementWakesPendingLocalObligationAfterCapacityFrees() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-ack-capacity-wake-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let unsentURL = directory.appendingPathComponent("unsent-batches.json")
+        let localURL = directory.appendingPathComponent("local-obligations.json")
+        let unsentQueue = FileBackedSyncBatchQueue(fileURL: unsentURL, limit: 1)
+        let occupying = makeBatch(idSuffix: 234_900)
+        let local = makeBatch(idSuffix: 234_901)
+        try unsentQueue.enqueueDurably(occupying)
+
+        let peer = MCPeerID(displayName: "remote|myr233-ack-capacity-wake")
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let controller = try makeController(
+            context: container.mainContext,
+            unsentBatchQueueFileURL: unsentURL,
+            unsentBatchQueue: unsentQueue,
+            connectedPeersProvider: { [] },
+            sendBatchDataOperation: { _, _, _ in }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: localURL
+        )
+
+        _ = await coordinator.submitLocalObligation(
+            SyncConvergenceLocalObligation(legacyBatch: local)
+        )
+        XCTAssertEqual(coordinator.pendingLocalObligationCount, 1)
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id), [occupying.id])
+
+        await controller.handleBatchAcknowledgementForTesting(
+            SyncBatchAcknowledgement(batchID: occupying.id),
+            from: peer
+        )
+
+        XCTAssertEqual(coordinator.pendingLocalObligationCount, 0)
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id), [local.id])
+    }
+
     func testBootstrapDeduplicatesIdenticalCrossDomainBatchAndAckRetiresBothOwners() async throws {
         let batch = makeBatch(idSuffix: 235_001)
         let fixture = try makeMYR233BootstrapFixture(

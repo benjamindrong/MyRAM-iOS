@@ -243,6 +243,8 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
     /// prune only this set, never every batch that happened to be queued at capture.
     let coveredBatchIDs: Set<SyncBatchID>
     var withheldHistoricalBatchIDs: Set<SyncBatchID>
+    private(set) var sequenceBaselineCoveredNoteIDs: Set<SyncBatchNoteID> = []
+    private(set) var hasSequenceBaselineAcknowledgement = false
     var ordinarySyncReady: Bool {
         didSet {
             guard ordinarySyncReady else { return }
@@ -281,6 +283,31 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
         frozenCanonicalBatchesByID[batchID]
     }
 
+    mutating func recordSequenceBaselineCoverage(_ noteIDs: Set<SyncBatchNoteID>) {
+        hasSequenceBaselineAcknowledgement = true
+        sequenceBaselineCoveredNoteIDs.formUnion(noteIDs)
+        withheldHistoricalBatchIDs = historicalBatchIDsThatRemainWithheld
+    }
+
+    func permitsOrdinarySync(for batch: SyncBatch) -> Bool {
+        guard hasSequenceBaselineAcknowledgement,
+              !withheldHistoricalBatchIDs.contains(batch.id) else {
+            return false
+        }
+        let uncoveredSnapshotNoteIDs = snapshotNoteIDs
+            .subtracting(sequenceBaselineCoveredNoteIDs)
+        let batchNoteIDs = Set(batch.changes.map(\.noteID))
+        return batchNoteIDs.isDisjoint(with: uncoveredSnapshotNoteIDs)
+    }
+
+    func intentionallyWithholdsOrdinarySync(for batch: SyncBatch) -> Bool {
+        hasSequenceBaselineAcknowledgement && !permitsOrdinarySync(for: batch)
+    }
+
+    private var snapshotNoteIDs: Set<SyncBatchNoteID> {
+        Set(snapshot.notes.map(\.id))
+    }
+
     private var historicalBatchIDsThatRemainWithheld: Set<SyncBatchID> {
         let absentFromManifest = capturedBatchIDs.subtracting(coveredBatchIDs)
         // Empty batches carry no note delta. Keeping an unacknowledged empty entry
@@ -291,7 +318,16 @@ struct SyncPeerBootstrapPendingState: Equatable, Sendable {
                 coverage.noteIDs.isEmpty ? coverage.batchID : nil
             }
         )
-        return absentFromManifest.union(emptyManifestBatchIDs)
+        let baselineUnsafeManifestBatchIDs = Set(
+            snapshot.historyCoverage.compactMap { coverage in
+                coverage.noteIDs.isSubset(of: sequenceBaselineCoveredNoteIDs)
+                    ? nil
+                    : coverage.batchID
+            }
+        )
+        return absentFromManifest
+            .union(emptyManifestBatchIDs)
+            .union(baselineUnsafeManifestBatchIDs)
     }
 }
 

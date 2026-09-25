@@ -212,6 +212,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         await handleBootstrapAcknowledgement(acknowledgement, from: peerID)
     }
 
+    func handleBatchAcknowledgementForTesting(
+        _ acknowledgement: SyncBatchAcknowledgement,
+        from peerID: MCPeerID
+    ) async {
+        await handleBatchAcknowledgement(acknowledgement, from: peerID)
+    }
+
     func bootstrapStateForTesting(peerDeviceID: String) -> SyncPeerBootstrapPendingState? {
         bootstrapStateByPeerDeviceID[peerDeviceID]
     }
@@ -364,9 +371,8 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                 forPeerDeviceID: deviceID
             ) else { return true }
-            guard let state = bootstrapStateByPeerDeviceID[deviceID],
-                  state.ordinarySyncReady else { return false }
-            return !state.withheldHistoricalBatchIDs.contains(batch.id)
+            guard let state = bootstrapStateByPeerDeviceID[deviceID] else { return false }
+            return state.permitsOrdinarySync(for: batch)
         }
         let plannerPeers = eligiblePeers.enumerated().map { index, peerID in
             let identity = MacSyncPeerIdentity(peerID: peerID)
@@ -473,7 +479,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
     }
 
-    private func isIntentionallyWithheldHistoricalBatch(
+    private func isIntentionallyWithheldBootstrapBatch(
         _ batch: SyncBatch,
         connectedPeers: [MCPeerID]
     ) -> Bool {
@@ -482,11 +488,10 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
             guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                 forPeerDeviceID: deviceID
-            ), let state = bootstrapStateByPeerDeviceID[deviceID],
-               state.ordinarySyncReady else {
+            ), let state = bootstrapStateByPeerDeviceID[deviceID] else {
                 return false
             }
-            return state.withheldHistoricalBatchIDs.contains(batch.id)
+            return state.intentionallyWithholdsOrdinarySync(for: batch)
         }
     }
 
@@ -498,7 +503,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             if await sendQueuedBatch(batch, connectedPeers: connectedPeers) {
                 continue
             }
-            if isIntentionallyWithheldHistoricalBatch(batch, connectedPeers: connectedPeers) {
+            if isIntentionallyWithheldBootstrapBatch(batch, connectedPeers: connectedPeers) {
                 continue
             }
             break
@@ -508,16 +513,20 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private func handleBatchAcknowledgement(
         _ acknowledgement: SyncBatchAcknowledgement,
         from peerID: MCPeerID
-    ) {
+    ) async {
         let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
         MyRAMSyncBenchmarkTelemetry.shared.record(
             .batchAcknowledgementReceived,
             batchID: String(describing: acknowledgement.batchID),
             peerDeviceID: peerDeviceID
         )
+        let wasQueued = unsentBatches.contains(acknowledgement.batchID)
         unsentBatches.removeAll(withIDs: [acknowledgement.batchID])
-        if !unsentBatches.contains(acknowledgement.batchID) {
+        let didDequeue = wasQueued && !unsentBatches.contains(acknowledgement.batchID)
+        if didDequeue {
             outstandingBatchDeliveries.release(acknowledgement.batchID)
+            await convergenceCoordinator?.resumePendingWork()
+            await flushUnsentBatches()
         }
     }
 
@@ -841,6 +850,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             return
         }
         let establishesSharedSequenceBaseline = requiredNoteIDs.isSubset(of: coveredNoteIDs)
+        state.recordSequenceBaselineCoverage(coveredNoteIDs)
 
         let coveredBatchIDs = acknowledgement.coveredBatchIDs.intersection(state.coveredBatchIDs)
         let acknowledgedCoverage = state.snapshot.historyCoverage.filter {
@@ -897,17 +907,14 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             return
         }
 
-        guard establishesSharedSequenceBaseline else {
+        if establishesSharedSequenceBaseline {
+            state.ordinarySyncReady = true
+            bootstrapRetryTasks.removeValue(forKey: deviceID)?.cancel()
+            lastErrorMessage = nil
+        } else {
             lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
-            return
         }
-
-        state.withheldHistoricalBatchIDs = state.coveredBatchIDs
-            .subtracting(coveredBatchIDs)
-        state.ordinarySyncReady = true
         bootstrapStateByPeerDeviceID[deviceID] = state
-        bootstrapRetryTasks.removeValue(forKey: deviceID)?.cancel()
-        lastErrorMessage = nil
         await flushUnsentBatches()
         await convergenceCoordinator?.resumePendingWork()
     }
@@ -1231,7 +1238,7 @@ extension MacSyncBatchController: MCSessionDelegate {
                 await receiveLegacyEnvelope(envelope, from: peerID)
             case .batchAcknowledgement:
                 guard let acknowledgement = try? JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload) else { return }
-                handleBatchAcknowledgement(acknowledgement, from: peerID)
+                await handleBatchAcknowledgement(acknowledgement, from: peerID)
             case .bootstrapCapability:
                 guard let announcement = try? JSONDecoder().decode(
                     SyncPeerBootstrapCapabilityAnnouncement.self,

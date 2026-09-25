@@ -399,6 +399,13 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         await handleBootstrapAcknowledgement(acknowledgement, from: peerID)
     }
 
+    func handleBatchAcknowledgementForTesting(
+        _ acknowledgement: SyncBatchAcknowledgement,
+        from peerID: MCPeerID
+    ) async {
+        await handleBatchAcknowledgement(acknowledgement, from: peerID)
+    }
+
     func isOrdinarySyncReadyForTesting(peerDeviceID: String) -> Bool {
         bootstrapStateByPeerDeviceID[peerDeviceID]?.ordinarySyncReady == true
     }
@@ -810,12 +817,8 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                 eligibilityExclusions.append("\(deviceID):bootstrapStateMissing")
                 return false
             }
-            guard state.ordinarySyncReady else {
-                eligibilityExclusions.append("\(deviceID):ordinarySyncNotReady")
-                return false
-            }
-            guard !state.withheldHistoricalBatchIDs.contains(batch.id) else {
-                eligibilityExclusions.append("\(deviceID):historicalBatchWithheld")
+            guard state.permitsOrdinarySync(for: batch) else {
+                eligibilityExclusions.append("\(deviceID):bootstrapBaselineUncovered")
                 return false
             }
             return true
@@ -945,7 +948,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
     }
 
-    private func isIntentionallyWithheldHistoricalBatch(
+    private func isIntentionallyWithheldBootstrapBatch(
         _ batch: SyncBatch,
         connectedPeers: [MCPeerID]
     ) -> Bool {
@@ -954,11 +957,10 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
             guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
                 forPeerDeviceID: deviceID
-            ), let state = bootstrapStateByPeerDeviceID[deviceID],
-               state.ordinarySyncReady else {
+            ), let state = bootstrapStateByPeerDeviceID[deviceID] else {
                 return false
             }
-            return state.withheldHistoricalBatchIDs.contains(batch.id)
+            return state.intentionallyWithholdsOrdinarySync(for: batch)
         }
     }
 
@@ -976,7 +978,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             if await sendQueuedBatch(batch, connectedPeers: connectedPeers) {
                 continue
             }
-            if isIntentionallyWithheldHistoricalBatch(batch, connectedPeers: connectedPeers) {
+            if isIntentionallyWithheldBootstrapBatch(batch, connectedPeers: connectedPeers) {
                 continue
             }
             break
@@ -1017,8 +1019,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
                     "batch=\(acknowledgement.batchID.uuidString, privacy: .public) outcome=acknowledgementIgnoredNotQueued peer=\(peerDeviceID, privacy: .public)"
                 )
             }
-            if didDequeue, await syncEngine.pendingChangeCount() > 0 {
-                await requestLegacyFlush()
+            if didDequeue {
+                await onFlushLocalConvergenceRequested?()
+                await flushUnsentBatches()
+                if await syncEngine.pendingChangeCount() > 0 {
+                    await requestLegacyFlush()
+                }
             }
         } catch {
             lastErrorMessage = "Unable to update the unsent batch queue."
@@ -1383,6 +1389,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             return
         }
         let establishesSharedSequenceBaseline = requiredNoteIDs.isSubset(of: coveredNoteIDs)
+        state.recordSequenceBaselineCoverage(coveredNoteIDs)
 
         let coveredBatchIDs = acknowledgement.coveredBatchIDs.intersection(state.coveredBatchIDs)
         let acknowledgedCoverage = state.snapshot.historyCoverage.filter {
@@ -1444,18 +1451,14 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             return
         }
 
-        guard establishesSharedSequenceBaseline else {
+        if establishesSharedSequenceBaseline {
+            state.ordinarySyncReady = true
+            bootstrapRetryTasks.removeValue(forKey: deviceID)?.cancel()
+            lastErrorMessage = nil
+        } else {
             lastErrorMessage = "Nearby bootstrap did not establish a shared sequence baseline."
-            await updatePendingCount()
-            return
         }
-
-        state.withheldHistoricalBatchIDs = state.coveredBatchIDs
-            .subtracting(coveredBatchIDs)
-        state.ordinarySyncReady = true
         bootstrapStateByPeerDeviceID[deviceID] = state
-        bootstrapRetryTasks.removeValue(forKey: deviceID)?.cancel()
-        lastErrorMessage = nil
         await updatePendingCount()
         await flushUnsentBatches()
         await onFlushLocalConvergenceRequested?()

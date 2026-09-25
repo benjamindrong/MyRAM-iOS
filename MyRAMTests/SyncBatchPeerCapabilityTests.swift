@@ -284,7 +284,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(transport.batchRecipientLists, [[peer]])
     }
 
-    func testPartialBootstrapNoteCoverageRetiresCoveredHistoryWithoutOpeningBarrier() async throws {
+    func testPartialBootstrapNoteCoverageReplaysBaselineSafeHistoryWithoutOpeningBarrier() async throws {
         let peer = MCPeerID(displayName: "Remote|partial-bootstrap-peer")
         let transport = CapabilityRecordingTransport(connectedPeers: [peer])
         let controller = makeController(transport: transport)
@@ -310,15 +310,17 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             "1",
             forPeerDeviceID: "partial-bootstrap-peer"
         )
-        let historical = makeV1TitleBatch(idSuffix: 2173, noteID: coveredNoteID)
+        let blockedHistorical = makeV1TitleBatch(idSuffix: 2173, noteID: uncoveredNoteID)
+        let safeHistorical = makeV1TitleBatch(idSuffix: 2174, noteID: coveredNoteID)
 
-        try await controller.acceptLocalBatch(historical)
+        try await controller.acceptLocalBatch(blockedHistorical)
+        try await controller.acceptLocalBatch(safeHistorical)
         await controller.beginBootstrapForTesting(to: peer)
 
         await controller.handleBootstrapAcknowledgementForTesting(
             SyncPeerBootstrapAcknowledgement(
                 snapshotID: snapshotID,
-                coveredBatchIDs: [historical.id],
+                coveredBatchIDs: [],
                 coveredNoteIDs: [coveredNoteID]
             ),
             from: peer
@@ -329,13 +331,16 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
                 peerDeviceID: "partial-bootstrap-peer"
             )
         )
-        XCTAssertTrue(controller.unsentBatchQueueSnapshot().pendingBatches.isEmpty)
-        XCTAssertTrue(transport.batchRecipientLists.isEmpty)
+        XCTAssertEqual(
+            controller.unsentBatchQueueSnapshot().pendingBatches.map(\.id),
+            [blockedHistorical.id, safeHistorical.id]
+        )
+        XCTAssertEqual(transport.sentBatchIDs, [safeHistorical.id])
 
         await controller.handleBootstrapAcknowledgementForTesting(
             SyncPeerBootstrapAcknowledgement(
                 snapshotID: snapshotID,
-                coveredBatchIDs: [historical.id],
+                coveredBatchIDs: [blockedHistorical.id, safeHistorical.id],
                 coveredNoteIDs: [coveredNoteID, uncoveredNoteID]
             ),
             from: peer
@@ -347,6 +352,28 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             )
         )
         XCTAssertTrue(controller.unsentBatchQueueSnapshot().pendingBatches.isEmpty)
+    }
+
+    func testOrdinaryBatchAcknowledgementWakesPendingLocalConvergence() async throws {
+        let peer = MCPeerID(displayName: "Remote|ack-wake-peer")
+        let transport = CapabilityRecordingTransport()
+        let controller = makeController(transport: transport)
+        var flushCount = 0
+        controller.onFlushLocalConvergenceRequested = {
+            flushCount += 1
+        }
+        let batch = makeV1Batch(idSuffix: 2175)
+
+        try await controller.acceptLocalBatch(batch)
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches.map(\.id), [batch.id])
+
+        await controller.handleBatchAcknowledgementForTesting(
+            SyncBatchAcknowledgement(batchID: batch.id),
+            from: peer
+        )
+
+        XCTAssertTrue(controller.unsentBatchQueueSnapshot().pendingBatches.isEmpty)
+        XCTAssertEqual(flushCount, 1)
     }
 
     func testMYR229ReconnectRetriesProviderBeforeSendingLaterAnchoredDependent() async throws {
