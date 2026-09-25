@@ -88,7 +88,59 @@ struct MacMarkdownPreviewDocumentBuilder {
                 paragraphStyle: paragraphStyle(spacing: 10),
                 backgroundColor: .controlBackgroundColor.withAlphaComponent(0.65)
             )
+        case .table(let table):
+            return buildTable(table)
         }
+    }
+
+    private func buildTable(_ table: MarkdownPreviewTable) -> NSAttributedString {
+        let nativeTable = NSTextTable()
+        nativeTable.numberOfColumns = table.columnCount
+        nativeTable.layoutAlgorithm = .automaticLayoutAlgorithm
+        nativeTable.collapsesBorders = true
+        nativeTable.hidesEmptyCells = false
+
+        let result = NSMutableAttributedString()
+
+        for row in table.rows {
+            for cell in row.cells {
+                let block = NSTextTableBlock(
+                    table: nativeTable,
+                    startingRow: row.index,
+                    rowSpan: 1,
+                    startingColumn: cell.columnIndex,
+                    columnSpan: 1
+                )
+                block.setBorderColor(.separatorColor)
+                block.setWidth(1, type: .absoluteValueType, for: .border)
+                block.setWidth(6, type: .absoluteValueType, for: .padding)
+                if row.isHeader {
+                    block.backgroundColor = .controlBackgroundColor
+                }
+
+                let baseFont = row.isHeader
+                    ? bodyFont.withTraits([.boldFontMask])
+                    : bodyFont
+                let renderedCell = NSMutableAttributedString(
+                    attributedString: buildInlineContent(
+                        cell.content,
+                        baseFont: baseFont
+                    )
+                )
+                renderedCell.append(NSAttributedString(string: "\n"))
+
+                let style = NSMutableParagraphStyle()
+                style.textBlocks = [block]
+                renderedCell.addAttribute(
+                    .paragraphStyle,
+                    value: style,
+                    range: NSRange(location: 0, length: renderedCell.length)
+                )
+                result.append(renderedCell)
+            }
+        }
+
+        return NSAttributedString(attributedString: result)
     }
 
     private func buildListItem(

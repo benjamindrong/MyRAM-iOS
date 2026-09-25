@@ -233,6 +233,53 @@ final class MarkdownPreviewUITests: XCTestCase {
         )
     }
 
+    // MARK: - Test 8: Markdown table rendering and source round trip
+
+    func testMarkdownTableRendersAndRoundTripPreservesSource() throws {
+        let source = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Ready |
+        | Beta | Pending |
+        """
+
+        let app = makeApp()
+        app.launch()
+        openNewNote(in: app)
+
+        let editor = findElement("note-editor-body", in: app)
+        XCTAssertTrue(editor.waitForExistence(timeout: Timeout.standard))
+        editor.tap()
+        XCTAssertTrue(app.keyboards.element.waitForExistence(timeout: Timeout.standard))
+        editor.typeText(source)
+
+        switchToPreviewMode(in: app)
+
+        let table = findElement("markdown-preview-table", in: app)
+        XCTAssertTrue(table.waitForExistence(timeout: Timeout.standard))
+        XCTAssertFalse(findElement("markdown-preview-fallback", in: app).exists)
+
+        let expectedCells: [(String, String)] = [
+            ("markdown-preview-table-cell-0-0", "Name"),
+            ("markdown-preview-table-cell-0-1", "Status"),
+            ("markdown-preview-table-cell-1-0", "Alpha"),
+            ("markdown-preview-table-cell-1-1", "Ready"),
+            ("markdown-preview-table-cell-2-0", "Beta"),
+            ("markdown-preview-table-cell-2-1", "Pending")
+        ]
+        for (identifier, label) in expectedCells {
+            let cell = findElement(identifier, in: app)
+            XCTAssertTrue(cell.waitForExistence(timeout: Timeout.standard))
+            XCTAssertEqual(cell.label, label)
+        }
+
+        switchToEditMode(in: app)
+
+        let returnedEditor = findElement("note-editor-body", in: app)
+        XCTAssertTrue(returnedEditor.waitForExistence(timeout: Timeout.standard))
+        XCTAssertEqual(returnedEditor.value as? String, source)
+    }
+
     // MARK: - Helpers
 
     private func makeApp() -> XCUIApplication {
