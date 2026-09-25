@@ -488,6 +488,84 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         )
     }
 
+    func testBootstrapMergeReportsCausallySubsumedHistoricalBatchAsCovered() throws {
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000D1")!
+        let batchID = UUID(uuidString: "23300000-0000-0000-0000-0000000000D2")!
+        let originDeviceID = UUID(uuidString: "23300000-0000-0000-0000-0000000000D3")!
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_330)
+        let modifiedAt = createdAt.addingTimeInterval(1)
+        let note = Note(title: "Shared", content: "B")
+        note.id = noteID
+        note.createdAt = createdAt
+        note.modifiedAt = createdAt
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+
+        let initial = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        )
+        let insertion = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 1,
+            text: "A",
+            modifiedAt: modifiedAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "B"),
+            operationID: SyncOperationID(deviceID: originDeviceID, localCounter: 1),
+            state: initial.state
+        )
+        guard case .noteBodyTextInsertedAnchored(let anchoredInsertion) = insertion else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let remoteState = try SyncBatchAnchoredInsertReplay.applying(
+            anchoredInsertion,
+            to: initial.state
+        ).sequenceState
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: remoteState,
+            noteID: noteID
+        )
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(uuidString: "23300000-0000-0000-0000-0000000000D4")!,
+            folders: [],
+            notes: [SyncPeerBootstrapNoteSnapshot(
+                id: noteID,
+                title: note.title,
+                body: remoteState.visibleText,
+                isPinned: false,
+                createdAt: createdAt,
+                modifiedAt: modifiedAt,
+                deletedAt: nil,
+                folderID: nil,
+                formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                revision: 1,
+                visibleUTF16Count: remoteState.visibleUTF16Count,
+                tombstonedUTF16Count: remoteState.tombstonedUTF16Count,
+                payloadByteCount: payload.count,
+                statePayloadData: payload
+            )],
+            historyCoverage: [SyncPeerBootstrapHistoryBatchCoverage(
+                batchID: batchID,
+                noteIDs: [noteID],
+                anchoredRecoveryChanges: [.insertion(anchoredInsertion)]
+            )]
+        )
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(snapshot, to: context)
+
+        XCTAssertEqual(note.content, "BA")
+        XCTAssertEqual(disposition.coveredNoteIDs, [noteID])
+        XCTAssertEqual(
+            disposition.coveredBatchIDs,
+            [batchID],
+            "History incorporated by the committed bootstrap baseline must retire through the bootstrap acknowledgement instead of replaying against that newer baseline."
+        )
+    }
+
     func testMYR222NonMergeableBootstrapMaterializesDurableStructuralConflict() throws {
         let container = try makeInMemoryContainer()
         let context = container.mainContext

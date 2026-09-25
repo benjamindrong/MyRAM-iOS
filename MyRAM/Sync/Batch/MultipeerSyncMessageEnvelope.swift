@@ -548,6 +548,16 @@ enum SyncPeerBootstrapSnapshotPersistence {
                                     didMutate = true
                                 }
                                 bootstrapOwnershipStatesByNoteID[note.id] = snapshotState
+                                let isFullyCoveredAfterMerge = note.title == noteSnapshot.title
+                                    && NoteSequenceStateExactText.matches(note.content, noteSnapshot.body)
+                                    && (note.isPinned ?? false) == noteSnapshot.isPinned
+                                    && note.modifiedAt == noteSnapshot.modifiedAt
+                                    && note.deletedAt == noteSnapshot.deletedAt
+                                    && note.folder?.id == noteSnapshot.folderID
+                                    && recordExactlyMatches(record, noteSnapshot)
+                                if isFullyCoveredAfterMerge {
+                                    fullyCoveredNoteIDs.insert(note.id)
+                                }
                             } catch SyncTextSequenceMergeError.noSharedRetainedLineage {
                                 if structuralConflictStore != nil {
                                     stagedStructuralConflicts.append((
