@@ -310,6 +310,305 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
+    func testMYR233SequentialBootstrapOwnedRedeliveriesForSameNoteRetireAndAcknowledge() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-sequential-bootstrap-owned-redelivery-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000F1")!
+        let originDeviceID = UUID(uuidString: "23300000-0000-0000-0000-0000000000F2")!
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_333)
+
+        let note = Note(title: "Shared", content: "B")
+        note.id = noteID
+        note.createdAt = createdAt
+        note.modifiedAt = createdAt
+        context.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+
+        var authoritativeState = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        ).state
+        var batches: [SyncBatch] = []
+        var recoveryChanges: [SyncBatchAnchoredRecoveryChange] = []
+        for index in 1...3 {
+            let modifiedAt = createdAt.addingTimeInterval(TimeInterval(index))
+            let operationID = SyncOperationID(
+                deviceID: originDeviceID,
+                localCounter: UInt64(index)
+            )
+            let change: SyncBatchChange
+            let recoveryChange: SyncBatchAnchoredRecoveryChange
+            if index == 2 {
+                change = try SyncBatchAnchoredPayloadAdapter.makeDeletedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    utf16Length: 1,
+                    expectedText: "1",
+                    modifiedAt: modifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: authoritativeState.visibleText),
+                    operationID: operationID,
+                    state: authoritativeState
+                )
+                guard case .noteBodyTextDeletedAnchored(let deletion) = change else {
+                    return XCTFail("Expected anchored deletion")
+                }
+                authoritativeState = try SyncBatchAnchoredDeleteReplay.applying(
+                    deletion,
+                    to: authoritativeState
+                ).sequenceState
+                recoveryChange = .deletion(deletion)
+            } else {
+                change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: authoritativeState.visibleUTF16Count,
+                    text: String(index),
+                    modifiedAt: modifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: authoritativeState.visibleText),
+                    operationID: operationID,
+                    state: authoritativeState
+                )
+                guard case .noteBodyTextInsertedAnchored(let insertion) = change else {
+                    return XCTFail("Expected anchored insertion")
+                }
+                authoritativeState = try SyncBatchAnchoredInsertReplay.applying(
+                    insertion,
+                    to: authoritativeState
+                ).sequenceState
+                recoveryChange = .insertion(insertion)
+            }
+            let batchID = UUID(uuidString: String(
+                format: "23300000-0000-0000-0000-%012X",
+                0xF2 + index
+            ))!
+            batches.append(SyncBatch(
+                id: batchID,
+                originDeviceID: originDeviceID,
+                createdAt: modifiedAt,
+                batchSequence: UInt64(index),
+                changes: [change]
+            ))
+            recoveryChanges.append(recoveryChange)
+        }
+
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: authoritativeState,
+            noteID: noteID
+        )
+        let unrelatedNoteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000F7")!
+        let unrelatedOriginDeviceID = UUID(uuidString: "23300000-0000-0000-0000-0000000000F8")!
+        let unrelatedInitialState = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: unrelatedNoteID,
+            body: ""
+        ).state
+        let unrelatedChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: unrelatedNoteID,
+            utf16Offset: 0,
+            text: "Earlier",
+            modifiedAt: createdAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            operationID: SyncOperationID(deviceID: unrelatedOriginDeviceID, localCounter: 1),
+            state: unrelatedInitialState
+        )
+        guard case .noteBodyTextInsertedAnchored(let unrelatedInsertion) = unrelatedChange else {
+            return XCTFail("Expected unrelated anchored insertion")
+        }
+        let unrelatedAuthoritativeState = try SyncBatchAnchoredInsertReplay.applying(
+            unrelatedInsertion,
+            to: unrelatedInitialState
+        ).sequenceState
+        let unrelatedPayload = try NoteSequenceStatePersistenceCodec.encode(
+            state: unrelatedAuthoritativeState,
+            noteID: unrelatedNoteID
+        )
+        let unrelatedBatch = SyncBatch(
+            id: UUID(uuidString: "23300000-0000-0000-0000-0000000000F9")!,
+            originDeviceID: unrelatedOriginDeviceID,
+            createdAt: createdAt,
+            batchSequence: 1,
+            changes: [unrelatedChange]
+        )
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(uuidString: "23300000-0000-0000-0000-0000000000F6")!,
+            folders: [],
+            notes: [
+                SyncPeerBootstrapNoteSnapshot(
+                    id: noteID,
+                    title: note.title,
+                    body: authoritativeState.visibleText,
+                    isPinned: false,
+                    createdAt: createdAt,
+                    modifiedAt: createdAt.addingTimeInterval(3),
+                    deletedAt: nil,
+                    folderID: nil,
+                    formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                    revision: 3,
+                    visibleUTF16Count: authoritativeState.visibleUTF16Count,
+                    tombstonedUTF16Count: authoritativeState.tombstonedUTF16Count,
+                    payloadByteCount: payload.count,
+                    statePayloadData: payload
+                ),
+                SyncPeerBootstrapNoteSnapshot(
+                    id: unrelatedNoteID,
+                    title: "Earlier",
+                    body: unrelatedAuthoritativeState.visibleText,
+                    isPinned: false,
+                    createdAt: createdAt,
+                    modifiedAt: createdAt,
+                    deletedAt: nil,
+                    folderID: nil,
+                    formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                    revision: 1,
+                    visibleUTF16Count: unrelatedAuthoritativeState.visibleUTF16Count,
+                    tombstonedUTF16Count: unrelatedAuthoritativeState.tombstonedUTF16Count,
+                    payloadByteCount: unrelatedPayload.count,
+                    statePayloadData: unrelatedPayload
+                )
+            ],
+            historyCoverage: zip(batches, recoveryChanges).map { batch, recoveryChange in
+                SyncPeerBootstrapHistoryBatchCoverage(
+                    batchID: batch.id,
+                    noteIDs: [noteID],
+                    anchoredRecoveryChanges: [recoveryChange]
+                )
+            }
+        )
+
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: directory.appendingPathComponent("anchored-recovery.json")
+        )
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: context,
+            anchoredRecoveryStore: recoveryStore
+        )
+        for recoveryChange in recoveryChanges
+            where recoveryStore.snapshot().record(for: recoveryChange.recordKey) == nil {
+            XCTAssertTrue(try recoveryStore.apply([
+                .insertExpectedAbsent(try SyncBatchAnchoredRecoveryRecord(
+                    change: recoveryChange,
+                    lifecycle: .bootstrapOwned
+                ))
+            ]))
+        }
+        XCTAssertEqual(
+            recoveryChanges.compactMap {
+                recoveryStore.snapshot().record(for: $0.recordKey)?.lifecycle
+            },
+            Array(repeating: .bootstrapOwned, count: recoveryChanges.count)
+        )
+
+        let pendingURL = directory.appendingPathComponent("pending-incoming.json")
+        let pendingQueue = FileBackedSyncBatchQueue(fileURL: pendingURL)
+        try pendingQueue.enqueueIncoming(unrelatedBatch)
+        for batch in batches {
+            try pendingQueue.enqueueIncoming(batch)
+        }
+
+        let peer = MCPeerID(displayName: "remote|myr233-sequential-bootstrap-owned-redelivery")
+        var sentMessages: [Data] = []
+        let controller = try makeController(
+            context: context,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sentMessages.append(data) }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil,
+            anchoredRecoveryStore: recoveryStore
+        )
+        _ = coordinator
+
+        let localPeerID = MCPeerID(displayName: "local|myr233-sequential-local")
+        let browser = MCNearbyServiceBrowser(peer: localPeerID, serviceType: "myram-sync")
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: localPeerID,
+            discoveryInfo: nil,
+            serviceType: "myram-sync"
+        )
+        let session = MCSession(
+            peer: localPeerID,
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+        controller.browser(
+            browser,
+            foundPeer: peer,
+            withDiscoveryInfo: [
+                SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+            ]
+        )
+        controller.advertiser(
+            advertiser,
+            didReceiveInvitationFromPeer: peer,
+            withContext: Data("1,2".utf8),
+            invitationHandler: { _, _ in }
+        )
+        await Task.yield()
+        controller.session(session, peer: peer, didChange: .connected)
+        await Task.yield()
+
+        for batch in batches {
+            controller.session(
+                session,
+                didReceive: try MultipeerSyncMessageCoding.encodeBatch(batch),
+                fromPeer: peer
+            )
+        }
+
+        await waitUntil(timeout: .seconds(2)) {
+            let acknowledgedBatchIDs = Set(sentMessages.compactMap { data -> UUID? in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return nil
+                }
+                return acknowledgement.batchID
+            })
+            return acknowledgedBatchIDs == Set(batches.map(\.id))
+        }
+
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id),
+            [unrelatedBatch.id]
+        )
+        XCTAssertTrue(recoveryChanges.allSatisfy {
+            recoveryStore.snapshot().record(for: $0.recordKey) == nil
+        })
+        XCTAssertEqual(note.content, authoritativeState.visibleText)
+        let acknowledgedBatchIDs = Set(sentMessages.compactMap { data -> UUID? in
+            guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                  message.kind == .batchAcknowledgement,
+                  let acknowledgement = try? JSONDecoder().decode(
+                    SyncBatchAcknowledgement.self,
+                    from: message.payload
+                  ) else {
+                return nil
+            }
+            return acknowledgement.batchID
+        })
+        XCTAssertEqual(acknowledgedBatchIDs, Set(batches.map(\.id)))
+    }
+
     func testMYR233DeferredBatchDoesNotBlockDisjointSameOriginBatch() async throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("MYR-233-same-origin-progress-\(UUID().uuidString)", isDirectory: true)

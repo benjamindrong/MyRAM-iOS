@@ -366,6 +366,7 @@ final class SyncConvergenceRuntime {
             var blockedNoteIDs: Set<UUID> = []
             var anchoredDependenciesByNoteID: [UUID: Set<SyncOperationID>] = [:]
             var deferredItems: [SyncConvergenceDeferredItem] = []
+            var quarantinedItems: [SyncConvergenceQuarantinedItem] = []
             for request in pendingRequests {
                 guard request.affectedNoteIDs.isDisjoint(with: blockedNoteIDs) else { continue }
                 let outcome = await postCommitExecutor.execute(request, activationEnabled: activationEnabled)
@@ -589,15 +590,13 @@ final class SyncConvergenceRuntime {
                     case .bootstrapConflict(let conflict):
                         reason = .anchoredBootstrapConflict(conflict)
                     }
-                    return .quarantined(SyncConvergenceQuarantinedWork(items: [
-                        SyncConvergenceQuarantinedItem(
-                            domain: .incoming,
-                            batchID: batch.id,
-                            affectedNoteIDs: Self.affectedNoteIDs(in: batch),
-                            originDeviceID: batch.originDeviceID,
-                            reason: reason
-                        )
-                    ]))
+                    quarantinedItems.append(SyncConvergenceQuarantinedItem(
+                        domain: .incoming,
+                        batchID: batch.id,
+                        affectedNoteIDs: affectedNoteIDs,
+                        originDeviceID: batch.originDeviceID,
+                        reason: reason
+                    ))
                 case .failedBeforeCommit(let failure):
                     return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
                 }
@@ -605,6 +604,8 @@ final class SyncConvergenceRuntime {
 
             if madeIncomingProgress {
                 drainRequestedWhileActive = true
+            } else if !quarantinedItems.isEmpty {
+                return .quarantined(SyncConvergenceQuarantinedWork(items: quarantinedItems))
             } else if !deferredItems.isEmpty || !localDeferredItems.isEmpty {
                 return .deferred(SyncConvergenceDeferredWork(
                     incoming: deferredItems.filter { $0.domain == .incoming },
