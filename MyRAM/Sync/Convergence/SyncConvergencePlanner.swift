@@ -2148,7 +2148,7 @@ private struct SyncConvergenceHistoryPolicy {
                 projectedSnapshotBytes > Limits.hardSnapshotBytes ||
                 projectedOperationBytes > Limits.hardOperationBytes ||
                 projectedProvenanceBytes > Limits.hardOperationBytes ||
-                projectedFullEvidenceBytes > Limits.hardFullEvidenceBytes ||
+                (projectedFullEvidenceBytes > Limits.hardFullEvidenceBytes && !permitsSoftPressureEvidenceGrowth) ||
                 current.diagnosticEvidenceBytes > Limits.hardEvidenceBytes ||
                 current.cleanupEvidenceBytes > Limits.hardEvidenceBytes ||
                 current.reconciliationEvidenceBytes > Limits.hardEvidenceBytes ||
