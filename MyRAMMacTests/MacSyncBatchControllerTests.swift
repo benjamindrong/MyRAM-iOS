@@ -2199,6 +2199,101 @@ final class MacSyncBatchControllerTests: XCTestCase {
         _ = coordinator
     }
 
+    func testMYR233DurableSamePeerRedeliveryRetriesDeferredConvergenceAndRejectsWrongPeer() async throws {
+        let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
+        let batch = makeLegacyBodyBatch(idSuffix: 233_011)
+        let noteID = UUID(uuidString: "17100000-0000-0000-0000-0000000000BA")!
+        let originalPeerDeviceID = batch.originDeviceID.uuidString
+        let originalPeerID = MCPeerID(displayName: "remote|\(originalPeerDeviceID)")
+        let wrongPeerID = MCPeerID(
+            displayName: "remote|23300000-0000-0000-0000-000000000BAD"
+        )
+        var recordedSends: [Data] = []
+        var boundaryReady = false
+
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [originalPeerID, wrongPeerID] },
+            sendBatchDataOperation: { data, _, _ in recordedSends.append(data) }
+        )
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let note = Note(title: "Retry", content: "")
+        note.id = noteID
+        container.mainContext.insert(note)
+        try container.mainContext.save()
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in
+                    boundaryReady ? .ready : .staleLocalState(noteID: noteID)
+                }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil
+        )
+        let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
+        let dummySession = MCSession(
+            peer: MCPeerID(displayName: "local|myr233-durable-redelivery"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+
+        controller.session(dummySession, didReceive: data, fromPeer: originalPeerID)
+        await waitUntil(timeout: .seconds(2)) {
+            FileBackedSyncBatchQueue(fileURL: pendingURL).contains(batch.id)
+                && controller.lastErrorMessage != nil
+        }
+
+        XCTAssertTrue(FileBackedSyncBatchQueue(fileURL: pendingURL).contains(batch.id))
+        XCTAssertTrue(recordedSends.isEmpty)
+        XCTAssertEqual(note.content, "")
+
+        boundaryReady = true
+        controller.session(dummySession, didReceive: data, fromPeer: wrongPeerID)
+        try await Task.sleep(for: .milliseconds(50))
+
+        XCTAssertTrue(FileBackedSyncBatchQueue(fileURL: pendingURL).contains(batch.id))
+        XCTAssertTrue(recordedSends.isEmpty)
+        XCTAssertEqual(note.content, "")
+
+        controller.session(dummySession, didReceive: data, fromPeer: originalPeerID)
+        await waitUntil(timeout: .seconds(2)) {
+            recordedSends.contains { data in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return false
+                }
+                return acknowledgement.batchID == batch.id
+            }
+        }
+
+        XCTAssertFalse(FileBackedSyncBatchQueue(fileURL: pendingURL).contains(batch.id))
+        XCTAssertEqual(note.content, "A")
+        XCTAssertTrue(
+            recordedSends.contains { data in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return false
+                }
+                return acknowledgement.batchID == batch.id
+            }
+        )
+        _ = coordinator
+    }
+
     func testSessionLevelHashlessBodyBatchRemainsDurableWithoutAcknowledgement() async throws {
         let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
         let remotePeerID = MCPeerID(displayName: "remote|hashless-inbound")
