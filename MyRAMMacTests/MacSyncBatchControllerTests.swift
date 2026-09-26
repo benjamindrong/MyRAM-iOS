@@ -98,6 +98,169 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(created.folder?.id, folderID)
     }
 
+    func testMYR233PersistedBootstrapOwnedRedeliveryRetiresIncomingQueueAndAcknowledges() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-bootstrap-owned-redelivery-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000E1")!
+        let batchID = UUID(uuidString: "23300000-0000-0000-0000-0000000000E2")!
+        let originDeviceID = UUID(uuidString: "23300000-0000-0000-0000-0000000000E3")!
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_331)
+        let modifiedAt = createdAt.addingTimeInterval(1)
+
+        let note = Note(title: "Shared", content: "B")
+        note.id = noteID
+        note.createdAt = createdAt
+        note.modifiedAt = createdAt
+        context.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+
+        let initial = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        )
+        let change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 1,
+            text: "A",
+            modifiedAt: modifiedAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "B"),
+            operationID: SyncOperationID(deviceID: originDeviceID, localCounter: 1),
+            state: initial.state
+        )
+        guard case .noteBodyTextInsertedAnchored(let anchoredInsertion) = change else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let remoteState = try SyncBatchAnchoredInsertReplay.applying(
+            anchoredInsertion,
+            to: initial.state
+        ).sequenceState
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: remoteState,
+            noteID: noteID
+        )
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(uuidString: "23300000-0000-0000-0000-0000000000E4")!,
+            folders: [],
+            notes: [SyncPeerBootstrapNoteSnapshot(
+                id: noteID,
+                title: note.title,
+                body: remoteState.visibleText,
+                isPinned: false,
+                createdAt: createdAt,
+                modifiedAt: modifiedAt,
+                deletedAt: nil,
+                folderID: nil,
+                formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                revision: 1,
+                visibleUTF16Count: remoteState.visibleUTF16Count,
+                tombstonedUTF16Count: remoteState.tombstonedUTF16Count,
+                payloadByteCount: payload.count,
+                statePayloadData: payload
+            )],
+            historyCoverage: [SyncPeerBootstrapHistoryBatchCoverage(
+                batchID: batchID,
+                noteIDs: [noteID],
+                anchoredRecoveryChanges: [.insertion(anchoredInsertion)]
+            )]
+        )
+
+        let recoveryURL = directory.appendingPathComponent("anchored-recovery.json")
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: recoveryURL)
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: context,
+            anchoredRecoveryStore: recoveryStore
+        )
+
+        let recoveryChange = SyncBatchAnchoredRecoveryChange.insertion(anchoredInsertion)
+        let ownership = try XCTUnwrap(
+            recoveryStore.snapshot().record(for: recoveryChange.recordKey)
+        )
+        XCTAssertEqual(ownership.lifecycle, .bootstrapOwned)
+
+        let batch = SyncBatch(
+            id: batchID,
+            originDeviceID: originDeviceID,
+            createdAt: modifiedAt,
+            batchSequence: 1,
+            changes: [change]
+        )
+        let pendingURL = directory.appendingPathComponent("pending-incoming.json")
+        let pendingQueue = FileBackedSyncBatchQueue(fileURL: pendingURL)
+        try pendingQueue.enqueueIncoming(batch)
+
+        let peer = MCPeerID(displayName: "remote|myr233-bootstrap-owned-redelivery")
+        var sentMessages: [Data] = []
+        let controller = try makeController(
+            context: context,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sentMessages.append(data) }
+        )
+        _ = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil,
+            anchoredRecoveryStore: recoveryStore
+        )
+
+        let session = MCSession(
+            peer: MCPeerID(displayName: "local|myr233-bootstrap-owned-redelivery"),
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+        controller.session(
+            session,
+            didReceive: try MultipeerSyncMessageCoding.encodeBatch(batch),
+            fromPeer: peer
+        )
+
+        await waitUntil(timeout: .seconds(2)) {
+            sentMessages.contains { data in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return false
+                }
+                return acknowledgement.batchID == batchID
+            }
+        }
+
+        XCTAssertFalse(FileBackedSyncBatchQueue(fileURL: pendingURL).contains(batchID))
+        XCTAssertNil(recoveryStore.snapshot().record(for: recoveryChange.recordKey))
+        XCTAssertEqual(note.content, remoteState.visibleText)
+        XCTAssertTrue(
+            sentMessages.contains { data in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return false
+                }
+                return acknowledgement.batchID == batchID
+            }
+        )
+    }
+
     func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
         let peerID = MCPeerID(displayName: "remote|connected-mac")
         var invitedPeerIDs: [MCPeerID] = []
