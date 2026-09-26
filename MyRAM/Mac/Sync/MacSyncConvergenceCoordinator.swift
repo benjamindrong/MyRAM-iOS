@@ -49,6 +49,14 @@ final class MacSyncConvergenceCoordinator {
         pendingIncomingQueue.pendingCount
     }
 
+    func pendingIncomingBatchIDs(forOriginDeviceID originDeviceID: UUID) -> Set<SyncBatchID> {
+        Set(
+            pendingIncomingQueue.pendingBatches.compactMap { batch in
+                batch.originDeviceID == originDeviceID ? batch.id : nil
+            }
+        )
+    }
+
     var pendingLocalObligationCount: Int {
         localObligationQueue.pendingCount
     }
