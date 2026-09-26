@@ -963,6 +963,95 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
+    func testMYR233StaleIncomingBatchDoesNotBlockDisjointRecovery() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-stale-head-of-line-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let staleNoteID = UUID(uuidString: "23300000-0000-0000-0000-000000000111")!
+        let disjointNoteID = UUID(uuidString: "23300000-0000-0000-0000-000000000112")!
+        let originDeviceID = UUID(uuidString: "23300000-0000-0000-0000-000000000113")!
+
+        let disjointNote = Note(title: "Before", content: "")
+        disjointNote.id = disjointNoteID
+        context.insert(disjointNote)
+        try context.save()
+
+        let initialState = try NoteSequenceStateBootstrapAdapter.makeInitialState(
+            noteID: staleNoteID,
+            body: ""
+        )
+        let staleChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: staleNoteID,
+            utf16Offset: 0,
+            text: "stale",
+            modifiedAt: Date(timeIntervalSinceReferenceDate: 2_336),
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            operationID: SyncOperationID(deviceID: originDeviceID, localCounter: 1),
+            state: initialState
+        )
+        let staleBatch = SyncBatch(
+            id: UUID(uuidString: "23300000-0000-0000-0000-000000000114")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 2_336),
+            batchSequence: 1,
+            changes: [staleChange]
+        )
+        let disjointBatch = SyncBatch(
+            id: UUID(uuidString: "23300000-0000-0000-0000-000000000115")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 2_337),
+            batchSequence: 2,
+            changes: [.noteTitleChanged(.init(
+                noteID: disjointNoteID,
+                title: "After",
+                modifiedAt: Date(timeIntervalSinceReferenceDate: 2_337)
+            ))]
+        )
+
+        let pendingURL = directory.appendingPathComponent("pending-incoming.json")
+        let controller = try makeController(
+            context: context,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil
+        )
+
+        XCTAssertEqual(
+            await coordinator.submitRemoteBatch(staleBatch),
+            .acknowledgementDeferred
+        )
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id),
+            [staleBatch.id]
+        )
+
+        XCTAssertEqual(
+            await coordinator.submitRemoteBatch(disjointBatch),
+            .acknowledgementPermitted,
+            "A stale batch must remain fail-closed without head-of-line blocking disjoint recovery."
+        )
+        XCTAssertEqual(disjointNote.title, "After")
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id),
+            [staleBatch.id]
+        )
+    }
+
     func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
         let peerID = MCPeerID(displayName: "remote|connected-mac")
         var invitedPeerIDs: [MCPeerID] = []
