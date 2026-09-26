@@ -46,7 +46,8 @@ enum SyncConvergenceRemoteBatchDispositionPolicy {
                 case .anchoredTerminalStructuralFailure, .anchoredBootstrapConflict:
                     return .recoverableAnchoredStructuralRejection
                 case .localEvidenceContinuityViolation, .localEvidenceIndexMismatch,
-                     .localEvidenceInvalidOperation, .localEvidenceBaseHashMismatch:
+                     .localEvidenceInvalidOperation, .localEvidenceBaseHashMismatch,
+                     .staleAuthoritativeState:
                     continue
                 }
             }
@@ -421,6 +422,16 @@ final class SyncConvergenceRuntime {
                 case .evidenceRegistered:
                     drainRequestedWhileActive = true
                     continue
+                case .cannotProceed(.blocked(let failure))
+                    where failure.kind == .staleAuthoritativeState:
+                    attemptedBatchIDs.insert(batch.id)
+                    Self.quarantineStaleIncoming(
+                        batch,
+                        noteID: nil,
+                        blockedNoteIDs: &blockedNoteIDs,
+                        quarantinedItems: &quarantinedItems
+                    )
+                    continue
                 case .cannotProceed(let outcome):
                     return outcome
                 }
@@ -429,6 +440,15 @@ final class SyncConvergenceRuntime {
                 do {
                     input = try makePlanningInput(for: batch)
                 } catch let failure as SyncConvergenceTransactionFailure {
+                    if case .staleAuthoritativeState(let noteID) = failure {
+                        Self.quarantineStaleIncoming(
+                            batch,
+                            noteID: noteID,
+                            blockedNoteIDs: &blockedNoteIDs,
+                            quarantinedItems: &quarantinedItems
+                        )
+                        continue
+                    }
                     return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
                 } catch {
                     return .blocked(SyncBatchDrainFailure(batchID: batch.id, kind: .unexpected))
@@ -493,6 +513,15 @@ final class SyncConvergenceRuntime {
                             activeDrainSuccessfullyCompletedBatchIDs.insert(result.batchID)
                         }
                     case .failedBeforeCommit(let failure), .failedAndRolledBack(let failure):
+                        if case .staleAuthoritativeState(let noteID) = failure {
+                            Self.quarantineStaleIncoming(
+                                batch,
+                                noteID: noteID,
+                                blockedNoteIDs: &blockedNoteIDs,
+                                quarantinedItems: &quarantinedItems
+                            )
+                            continue
+                        }
                         return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
                     }
                 case .alreadyIncorporated(let cleanupPlan):
@@ -604,6 +633,15 @@ final class SyncConvergenceRuntime {
                         reason: reason
                     ))
                 case .failedBeforeCommit(let failure):
+                    if case .staleAuthoritativeState(let noteID) = failure {
+                        Self.quarantineStaleIncoming(
+                            batch,
+                            noteID: noteID,
+                            blockedNoteIDs: &blockedNoteIDs,
+                            quarantinedItems: &quarantinedItems
+                        )
+                        continue
+                    }
                     return .blocked(Self.drainFailure(for: failure, batchID: batch.id))
                 }
             }
@@ -621,6 +659,26 @@ final class SyncConvergenceRuntime {
             }
         } while drainRequestedWhileActive
         return .drained(appliedBatchIDs: appliedBatchIDs)
+    }
+
+    private static func quarantineStaleIncoming(
+        _ batch: SyncBatch,
+        noteID: UUID?,
+        blockedNoteIDs: inout Set<UUID>,
+        quarantinedItems: inout [SyncConvergenceQuarantinedItem]
+    ) {
+        // A SyncBatch is atomic across all of its notes. Quarantine the whole batch
+        // even when the stale precondition identifies only one note, while allowing
+        // the scheduler to continue with work that is fully disjoint from the batch.
+        let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
+        blockedNoteIDs.formUnion(affectedNoteIDs)
+        quarantinedItems.append(SyncConvergenceQuarantinedItem(
+            domain: .incoming,
+            batchID: batch.id,
+            affectedNoteIDs: affectedNoteIDs,
+            originDeviceID: batch.originDeviceID,
+            reason: .staleAuthoritativeState(noteID: noteID)
+        ))
     }
 
     /// Defers presentation-only work by note while preserving globally blocking durability failures.
