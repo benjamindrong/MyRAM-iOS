@@ -216,7 +216,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             connectedPeersProvider: { [peer] },
             sendBatchDataOperation: { data, _, _ in sentMessages.append(data) }
         )
-        _ = MacSyncConvergenceCoordinator(
+        let coordinator = MacSyncConvergenceCoordinator(
             context: context,
             syncController: controller,
             conflictStore: controller.conflictStore,
@@ -290,6 +290,10 @@ final class MacSyncBatchControllerTests: XCTestCase {
                 return acknowledgement.batchID == batchID
             }
         }
+
+        XCTFail(
+            "MYR-233 diagnostic runtime outcome: \(String(describing: coordinator.lastRuntimeOutcomeForTesting))"
+        )
 
         XCTAssertFalse(FileBackedSyncBatchQueue(fileURL: pendingURL).contains(batchID))
         XCTAssertNil(recoveryStore.snapshot().record(for: recoveryChange.recordKey))
