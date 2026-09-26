@@ -1031,17 +1031,16 @@ final class MacSyncBatchControllerTests: XCTestCase {
             localObligationQueueFileURL: nil
         )
 
-        XCTAssertEqual(
-            await coordinator.submitRemoteBatch(staleBatch),
-            .acknowledgementDeferred
-        )
+        let staleDisposition = await coordinator.submitRemoteBatch(staleBatch)
+        XCTAssertEqual(staleDisposition, .acknowledgementDeferred)
         XCTAssertEqual(
             FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id),
             [staleBatch.id]
         )
 
+        let disjointDisposition = await coordinator.submitRemoteBatch(disjointBatch)
         XCTAssertEqual(
-            await coordinator.submitRemoteBatch(disjointBatch),
+            disjointDisposition,
             .acknowledgementPermitted,
             "A stale batch must remain fail-closed without head-of-line blocking disjoint recovery."
         )
