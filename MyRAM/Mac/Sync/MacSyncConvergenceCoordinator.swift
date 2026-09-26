@@ -85,8 +85,10 @@ final class MacSyncConvergenceCoordinator {
             return false
         }
         guard !batch.changes.isEmpty else { return true }
-        if pendingIncomingQueue.contains(batch.id) { return true }
         do {
+            // Re-enqueueing an identical durable batch is idempotent. A same-ID,
+            // different-content redelivery must fail closed instead of borrowing
+            // the existing durable batch's acknowledgement ownership.
             try pendingIncomingQueue.enqueueIncoming(batch)
             return true
         } catch {
