@@ -49,9 +49,31 @@ final class MacSyncConvergenceCoordinator {
         pendingIncomingQueue.pendingCount
     }
 
+    func pendingIncomingBatchIDs(forOriginDeviceID originDeviceID: UUID) -> Set<SyncBatchID> {
+        Set(
+            pendingIncomingQueue.pendingBatches.compactMap { batch in
+                batch.originDeviceID == originDeviceID ? batch.id : nil
+            }
+        )
+    }
+
     var pendingLocalObligationCount: Int {
         localObligationQueue.pendingCount
     }
+
+    func localBootstrapOwnershipSnapshot() -> FileBackedSyncBatchQueueSnapshot {
+        localObligationQueue.snapshot()
+    }
+
+    func removeLocalBootstrapOwnership(withIDs batchIDs: Set<SyncBatchID>) throws {
+        try localObligationQueue.removeObligationsForBootstrapAcknowledgement(withIDs: batchIDs)
+    }
+
+#if DEBUG
+    func injectLocalBootstrapOwnershipPersistenceFailureForTesting() {
+        localObligationQueue.injectPersistenceFailureForNextWrite()
+    }
+#endif
 
     /// Durably persists an incoming batch's raw bytes, independent of whatever
     /// `submitRemoteBatch` later does with them. This is what the transport layer

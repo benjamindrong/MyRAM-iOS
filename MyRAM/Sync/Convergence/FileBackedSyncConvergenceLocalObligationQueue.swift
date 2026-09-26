@@ -79,6 +79,22 @@ final class FileBackedSyncConvergenceLocalObligationQueue {
         }
     }
 
+    func removeObligationsForBootstrapAcknowledgement(withIDs ids: Set<UUID>) throws {
+        let original = obligations
+        do {
+            try removeObligations(withIDs: ids)
+        } catch QueueError.persistenceFailed {
+            let reloaded = loadPersistedQueue()
+            health = reloaded.health
+            if canPersistCurrentQueue, reloaded.obligations == original {
+                obligations = reloaded.obligations
+            } else {
+                health = .readFailed("Bootstrap cleanup rollback verification failed")
+            }
+            throw QueueError.persistenceFailed
+        }
+    }
+
     func replacePendingBatches(_ replacement: [SyncBatch]) throws {
         try replacement.forEach(SyncBatchAnchoredPayloadPolicy.validateDurableAdmission)
         try replacePendingObligations(replacement.map(SyncConvergenceLocalObligation.init(legacyBatch:)))

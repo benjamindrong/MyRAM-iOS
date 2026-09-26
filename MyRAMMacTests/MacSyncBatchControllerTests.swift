@@ -98,6 +98,871 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(created.folder?.id, folderID)
     }
 
+    func testMYR233PersistedBootstrapOwnedRedeliveryRetiresIncomingQueueAndAcknowledges() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-bootstrap-owned-redelivery-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000E1")!
+        let batchID = UUID(uuidString: "23300000-0000-0000-0000-0000000000E2")!
+        let originDeviceID = UUID(uuidString: "23300000-0000-0000-0000-0000000000E3")!
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_331)
+        let modifiedAt = createdAt.addingTimeInterval(1)
+
+        let note = Note(title: "Shared", content: "B")
+        note.id = noteID
+        note.createdAt = createdAt
+        note.modifiedAt = createdAt
+        context.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+
+        let initial = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        )
+        let change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 1,
+            text: "A",
+            modifiedAt: modifiedAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: "B"),
+            operationID: SyncOperationID(deviceID: originDeviceID, localCounter: 1),
+            state: initial.state
+        )
+        guard case .noteBodyTextInsertedAnchored(let anchoredInsertion) = change else {
+            return XCTFail("Expected anchored insertion")
+        }
+        let remoteState = try SyncBatchAnchoredInsertReplay.applying(
+            anchoredInsertion,
+            to: initial.state
+        ).sequenceState
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: remoteState,
+            noteID: noteID
+        )
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(uuidString: "23300000-0000-0000-0000-0000000000E4")!,
+            folders: [],
+            notes: [SyncPeerBootstrapNoteSnapshot(
+                id: noteID,
+                title: note.title,
+                body: remoteState.visibleText,
+                isPinned: false,
+                createdAt: createdAt,
+                modifiedAt: modifiedAt,
+                deletedAt: nil,
+                folderID: nil,
+                formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                revision: 1,
+                visibleUTF16Count: remoteState.visibleUTF16Count,
+                tombstonedUTF16Count: remoteState.tombstonedUTF16Count,
+                payloadByteCount: payload.count,
+                statePayloadData: payload
+            )],
+            historyCoverage: [SyncPeerBootstrapHistoryBatchCoverage(
+                batchID: batchID,
+                noteIDs: [noteID],
+                anchoredRecoveryChanges: [.insertion(anchoredInsertion)]
+            )]
+        )
+
+        let recoveryURL = directory.appendingPathComponent("anchored-recovery.json")
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(fileURL: recoveryURL)
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: context,
+            anchoredRecoveryStore: recoveryStore
+        )
+
+        let recoveryChange = SyncBatchAnchoredRecoveryChange.insertion(anchoredInsertion)
+        if recoveryStore.snapshot().record(for: recoveryChange.recordKey) == nil {
+            // The physical MYR-233 state contains bootstrap-owned recovery evidence
+            // for historical batches that remain durably queued for redelivery.
+            let persistedOwnership = try SyncBatchAnchoredRecoveryRecord(
+                change: recoveryChange,
+                lifecycle: .bootstrapOwned
+            )
+            XCTAssertTrue(try recoveryStore.apply([
+                .insertExpectedAbsent(persistedOwnership)
+            ]))
+        }
+        let ownership = try XCTUnwrap(
+            recoveryStore.snapshot().record(for: recoveryChange.recordKey)
+        )
+        XCTAssertEqual(ownership.lifecycle, .bootstrapOwned)
+
+        let batch = SyncBatch(
+            id: batchID,
+            originDeviceID: originDeviceID,
+            createdAt: modifiedAt,
+            batchSequence: 1,
+            changes: [change]
+        )
+        let pendingURL = directory.appendingPathComponent("pending-incoming.json")
+        let pendingQueue = FileBackedSyncBatchQueue(fileURL: pendingURL)
+        try pendingQueue.enqueueIncoming(batch)
+
+        let peer = MCPeerID(displayName: "remote|myr233-bootstrap-owned-redelivery")
+        var sentMessages: [Data] = []
+        let controller = try makeController(
+            context: context,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sentMessages.append(data) }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil,
+            anchoredRecoveryStore: recoveryStore
+        )
+
+        let localPeerID = MCPeerID(displayName: "local|myr233-local")
+        let browser = MCNearbyServiceBrowser(
+            peer: localPeerID,
+            serviceType: "myram-sync"
+        )
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: localPeerID,
+            discoveryInfo: nil,
+            serviceType: "myram-sync"
+        )
+        let session = MCSession(
+            peer: localPeerID,
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+        controller.browser(
+            browser,
+            foundPeer: peer,
+            withDiscoveryInfo: [
+                SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+            ]
+        )
+        controller.advertiser(
+            advertiser,
+            didReceiveInvitationFromPeer: peer,
+            withContext: Data("1,2".utf8),
+            invitationHandler: { _, _ in }
+        )
+        await Task.yield()
+        controller.session(session, peer: peer, didChange: .connected)
+        await Task.yield()
+        XCTAssertTrue(
+            controller.hasExplicitPeerV2Support(
+                forPeerDeviceID: "myr233-bootstrap-owned-redelivery"
+            )
+        )
+        XCTAssertTrue(
+            controller.isBootstrapCapabilityResolvedForTesting(
+                peerDeviceID: "myr233-bootstrap-owned-redelivery"
+            )
+        )
+        controller.session(
+            session,
+            didReceive: try MultipeerSyncMessageCoding.encodeBatch(batch),
+            fromPeer: peer
+        )
+
+        await waitUntil(timeout: .seconds(2)) {
+            sentMessages.contains { data in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return false
+                }
+                return acknowledgement.batchID == batchID
+            }
+        }
+
+
+        XCTAssertFalse(FileBackedSyncBatchQueue(fileURL: pendingURL).contains(batchID))
+        XCTAssertNil(recoveryStore.snapshot().record(for: recoveryChange.recordKey))
+        XCTAssertEqual(note.content, remoteState.visibleText)
+        XCTAssertTrue(
+            sentMessages.contains { data in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return false
+                }
+                return acknowledgement.batchID == batchID
+            }
+        )
+    }
+
+    func testMYR233SequentialBootstrapOwnedRedeliveriesForSameNoteRetireAndAcknowledge() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-sequential-bootstrap-owned-redelivery-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000F1")!
+        let originDeviceID = UUID(uuidString: "23300000-0000-0000-0000-0000000000F2")!
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_333)
+
+        let note = Note(title: "Shared", content: "B")
+        note.id = noteID
+        note.createdAt = createdAt
+        note.modifiedAt = createdAt
+        context.insert(note)
+        _ = try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(for: note, in: context)
+        try context.save()
+
+        var authoritativeState = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: note,
+            in: context
+        ).state
+        var batches: [SyncBatch] = []
+        var recoveryChanges: [SyncBatchAnchoredRecoveryChange] = []
+        for index in 1...3 {
+            let modifiedAt = createdAt.addingTimeInterval(TimeInterval(index))
+            let operationID = SyncOperationID(
+                deviceID: originDeviceID,
+                localCounter: UInt64(index)
+            )
+            let change: SyncBatchChange
+            let recoveryChange: SyncBatchAnchoredRecoveryChange
+            if index == 2 {
+                change = try SyncBatchAnchoredPayloadAdapter.makeDeletedChange(
+                    noteID: noteID,
+                    utf16Offset: 1,
+                    utf16Length: 1,
+                    expectedText: "1",
+                    modifiedAt: modifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: authoritativeState.visibleText),
+                    operationID: operationID,
+                    state: authoritativeState
+                )
+                guard case .noteBodyTextDeletedAnchored(let deletion) = change else {
+                    return XCTFail("Expected anchored deletion")
+                }
+                authoritativeState = try SyncBatchAnchoredDeleteReplay.applying(
+                    deletion,
+                    to: authoritativeState
+                ).sequenceState
+                recoveryChange = .deletion(deletion)
+            } else {
+                change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: authoritativeState.visibleUTF16Count,
+                    text: String(index),
+                    modifiedAt: modifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: authoritativeState.visibleText),
+                    operationID: operationID,
+                    state: authoritativeState
+                )
+                guard case .noteBodyTextInsertedAnchored(let insertion) = change else {
+                    return XCTFail("Expected anchored insertion")
+                }
+                authoritativeState = try SyncBatchAnchoredInsertReplay.applying(
+                    insertion,
+                    to: authoritativeState
+                ).sequenceState
+                recoveryChange = .insertion(insertion)
+            }
+            let batchID = UUID(uuidString: String(
+                format: "23300000-0000-0000-0000-%012X",
+                0xF2 + index
+            ))!
+            batches.append(SyncBatch(
+                id: batchID,
+                originDeviceID: originDeviceID,
+                createdAt: modifiedAt,
+                batchSequence: UInt64(index),
+                changes: [change]
+            ))
+            recoveryChanges.append(recoveryChange)
+        }
+
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: authoritativeState,
+            noteID: noteID
+        )
+        let unrelatedNoteID = UUID(uuidString: "23300000-0000-0000-0000-0000000000F7")!
+        let unrelatedOriginDeviceID = UUID(uuidString: "23300000-0000-0000-0000-0000000000F8")!
+        let unrelatedInitialState = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: unrelatedNoteID,
+            body: ""
+        ).state
+        let unrelatedChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: unrelatedNoteID,
+            utf16Offset: 0,
+            text: "Earlier",
+            modifiedAt: createdAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            operationID: SyncOperationID(deviceID: unrelatedOriginDeviceID, localCounter: 1),
+            state: unrelatedInitialState
+        )
+        guard case .noteBodyTextInsertedAnchored(let unrelatedInsertion) = unrelatedChange else {
+            return XCTFail("Expected unrelated anchored insertion")
+        }
+        let unrelatedAuthoritativeState = try SyncBatchAnchoredInsertReplay.applying(
+            unrelatedInsertion,
+            to: unrelatedInitialState
+        ).sequenceState
+        let unrelatedPayload = try NoteSequenceStatePersistenceCodec.encode(
+            state: unrelatedAuthoritativeState,
+            noteID: unrelatedNoteID
+        )
+        let unrelatedBatch = SyncBatch(
+            id: UUID(uuidString: "23300000-0000-0000-0000-0000000000F9")!,
+            originDeviceID: unrelatedOriginDeviceID,
+            createdAt: createdAt,
+            batchSequence: 1,
+            changes: [unrelatedChange]
+        )
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(uuidString: "23300000-0000-0000-0000-0000000000F6")!,
+            folders: [],
+            notes: [
+                SyncPeerBootstrapNoteSnapshot(
+                    id: noteID,
+                    title: note.title,
+                    body: authoritativeState.visibleText,
+                    isPinned: false,
+                    createdAt: createdAt,
+                    modifiedAt: createdAt.addingTimeInterval(3),
+                    deletedAt: nil,
+                    folderID: nil,
+                    formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                    revision: 3,
+                    visibleUTF16Count: authoritativeState.visibleUTF16Count,
+                    tombstonedUTF16Count: authoritativeState.tombstonedUTF16Count,
+                    payloadByteCount: payload.count,
+                    statePayloadData: payload
+                ),
+                SyncPeerBootstrapNoteSnapshot(
+                    id: unrelatedNoteID,
+                    title: "Earlier",
+                    body: unrelatedAuthoritativeState.visibleText,
+                    isPinned: false,
+                    createdAt: createdAt,
+                    modifiedAt: createdAt,
+                    deletedAt: nil,
+                    folderID: nil,
+                    formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                    revision: 1,
+                    visibleUTF16Count: unrelatedAuthoritativeState.visibleUTF16Count,
+                    tombstonedUTF16Count: unrelatedAuthoritativeState.tombstonedUTF16Count,
+                    payloadByteCount: unrelatedPayload.count,
+                    statePayloadData: unrelatedPayload
+                )
+            ],
+            historyCoverage: zip(batches, recoveryChanges).map { batch, recoveryChange in
+                SyncPeerBootstrapHistoryBatchCoverage(
+                    batchID: batch.id,
+                    noteIDs: [noteID],
+                    anchoredRecoveryChanges: [recoveryChange]
+                )
+            }
+        )
+
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: directory.appendingPathComponent("anchored-recovery.json")
+        )
+        _ = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: context,
+            anchoredRecoveryStore: recoveryStore
+        )
+        for recoveryChange in recoveryChanges
+            where recoveryStore.snapshot().record(for: recoveryChange.recordKey) == nil {
+            XCTAssertTrue(try recoveryStore.apply([
+                .insertExpectedAbsent(try SyncBatchAnchoredRecoveryRecord(
+                    change: recoveryChange,
+                    lifecycle: .bootstrapOwned
+                ))
+            ]))
+        }
+        XCTAssertEqual(
+            recoveryChanges.compactMap {
+                recoveryStore.snapshot().record(for: $0.recordKey)?.lifecycle
+            },
+            Array(repeating: .bootstrapOwned, count: recoveryChanges.count)
+        )
+
+        let pendingURL = directory.appendingPathComponent("pending-incoming.json")
+        let pendingQueue = FileBackedSyncBatchQueue(fileURL: pendingURL)
+        try pendingQueue.enqueueIncoming(unrelatedBatch)
+        for batch in batches {
+            try pendingQueue.enqueueIncoming(batch)
+        }
+
+        let peer = MCPeerID(displayName: "remote|myr233-sequential-bootstrap-owned-redelivery")
+        var sentMessages: [Data] = []
+        let controller = try makeController(
+            context: context,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sentMessages.append(data) }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil,
+            anchoredRecoveryStore: recoveryStore
+        )
+        _ = coordinator
+
+        let localPeerID = MCPeerID(displayName: "local|myr233-sequential-local")
+        let browser = MCNearbyServiceBrowser(peer: localPeerID, serviceType: "myram-sync")
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: localPeerID,
+            discoveryInfo: nil,
+            serviceType: "myram-sync"
+        )
+        let session = MCSession(
+            peer: localPeerID,
+            securityIdentity: nil,
+            encryptionPreference: .required
+        )
+        controller.browser(
+            browser,
+            foundPeer: peer,
+            withDiscoveryInfo: [
+                SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+            ]
+        )
+        controller.advertiser(
+            advertiser,
+            didReceiveInvitationFromPeer: peer,
+            withContext: Data("1,2".utf8),
+            invitationHandler: { _, _ in }
+        )
+        await Task.yield()
+        controller.session(session, peer: peer, didChange: .connected)
+        await Task.yield()
+
+        for batch in batches {
+            controller.session(
+                session,
+                didReceive: try MultipeerSyncMessageCoding.encodeBatch(batch),
+                fromPeer: peer
+            )
+        }
+
+        await waitUntil(timeout: .seconds(2)) {
+            let acknowledgedBatchIDs = Set(sentMessages.compactMap { data -> UUID? in
+                guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                      message.kind == .batchAcknowledgement,
+                      let acknowledgement = try? JSONDecoder().decode(
+                        SyncBatchAcknowledgement.self,
+                        from: message.payload
+                      ) else {
+                    return nil
+                }
+                return acknowledgement.batchID
+            })
+            return acknowledgedBatchIDs == Set(batches.map(\.id))
+        }
+
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id),
+            [unrelatedBatch.id]
+        )
+        XCTAssertTrue(recoveryChanges.allSatisfy {
+            recoveryStore.snapshot().record(for: $0.recordKey) == nil
+        })
+        XCTAssertEqual(note.content, authoritativeState.visibleText)
+        let acknowledgedBatchIDs = Set(sentMessages.compactMap { data -> UUID? in
+            guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                  message.kind == .batchAcknowledgement,
+                  let acknowledgement = try? JSONDecoder().decode(
+                    SyncBatchAcknowledgement.self,
+                    from: message.payload
+                  ) else {
+                return nil
+            }
+            return acknowledgement.batchID
+        })
+        XCTAssertEqual(acknowledgedBatchIDs, Set(batches.map(\.id)))
+    }
+
+
+    func testMYR233BootstrapReceiveRedrivesPersistedOwnedTailPastQuarantine() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-bootstrap-redrive-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "23300000-0000-0000-0000-000000000201")!
+        let originDeviceID = UUID(uuidString: "23300000-0000-0000-0000-000000000202")!
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_336)
+
+        var authoritativeState = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: noteID,
+            body: "B"
+        ).state
+        var batches: [SyncBatch] = []
+        var recoveryChanges: [SyncBatchAnchoredRecoveryChange] = []
+        for index in 1...6 {
+            let modifiedAt = createdAt.addingTimeInterval(TimeInterval(index))
+            let operationID = SyncOperationID(
+                deviceID: originDeviceID,
+                localCounter: UInt64(index)
+            )
+            let change: SyncBatchChange
+            let recoveryChange: SyncBatchAnchoredRecoveryChange
+            if index == 2 || index == 6 {
+                let expectedText = String(authoritativeState.visibleText.suffix(1))
+                change = try SyncBatchAnchoredPayloadAdapter.makeDeletedChange(
+                    noteID: noteID,
+                    utf16Offset: authoritativeState.visibleUTF16Count - 1,
+                    utf16Length: 1,
+                    expectedText: expectedText,
+                    modifiedAt: modifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: authoritativeState.visibleText),
+                    operationID: operationID,
+                    state: authoritativeState
+                )
+                guard case .noteBodyTextDeletedAnchored(let deletion) = change else {
+                    return XCTFail("Expected anchored deletion")
+                }
+                authoritativeState = try SyncBatchAnchoredDeleteReplay.applying(
+                    deletion,
+                    to: authoritativeState
+                ).sequenceState
+                recoveryChange = .deletion(deletion)
+            } else {
+                change = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: authoritativeState.visibleUTF16Count,
+                    text: String(index),
+                    modifiedAt: modifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: authoritativeState.visibleText),
+                    operationID: operationID,
+                    state: authoritativeState
+                )
+                guard case .noteBodyTextInsertedAnchored(let insertion) = change else {
+                    return XCTFail("Expected anchored insertion")
+                }
+                authoritativeState = try SyncBatchAnchoredInsertReplay.applying(
+                    insertion,
+                    to: authoritativeState
+                ).sequenceState
+                recoveryChange = .insertion(insertion)
+            }
+
+            batches.append(SyncBatch(
+                id: UUID(uuidString: String(
+                    format: "23300000-0000-0000-0000-%012X",
+                    0x220 + index
+                ))!,
+                originDeviceID: originDeviceID,
+                createdAt: modifiedAt,
+                batchSequence: UInt64(index),
+                changes: [change]
+            ))
+            recoveryChanges.append(recoveryChange)
+        }
+
+        let localNote = Note(title: "Local metadata", content: authoritativeState.visibleText)
+        localNote.id = noteID
+        localNote.createdAt = createdAt
+        localNote.modifiedAt = createdAt.addingTimeInterval(6)
+        context.insert(localNote)
+        let authoritativePayload = try NoteSequenceStatePersistenceCodec.encode(
+            state: authoritativeState,
+            noteID: noteID
+        )
+        context.insert(NoteSequenceStateRecord(
+            noteID: noteID,
+            formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+            revision: 6,
+            visibleUTF16Count: authoritativeState.visibleUTF16Count,
+            tombstonedUTF16Count: authoritativeState.tombstonedUTF16Count,
+            payloadByteCount: authoritativePayload.count,
+            statePayloadData: authoritativePayload
+        ))
+
+        let unrelatedNoteID = UUID(uuidString: "23300000-0000-0000-0000-000000000230")!
+        let unrelatedOriginDeviceID = UUID(uuidString: "23300000-0000-0000-0000-000000000231")!
+        let unrelatedInitialState = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: unrelatedNoteID,
+            body: ""
+        ).state
+        let unrelatedChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: unrelatedNoteID,
+            utf16Offset: 0,
+            text: "Earlier",
+            modifiedAt: createdAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: ""),
+            operationID: SyncOperationID(deviceID: unrelatedOriginDeviceID, localCounter: 1),
+            state: unrelatedInitialState
+        )
+        guard case .noteBodyTextInsertedAnchored(let unrelatedInsertion) = unrelatedChange else {
+            return XCTFail("Expected unrelated anchored insertion")
+        }
+        let unrelatedState = try SyncBatchAnchoredInsertReplay.applying(
+            unrelatedInsertion,
+            to: unrelatedInitialState
+        ).sequenceState
+        let unrelatedNote = Note(title: "Earlier", content: unrelatedState.visibleText)
+        unrelatedNote.id = unrelatedNoteID
+        unrelatedNote.createdAt = createdAt
+        unrelatedNote.modifiedAt = createdAt
+        context.insert(unrelatedNote)
+        let unrelatedPayload = try NoteSequenceStatePersistenceCodec.encode(
+            state: unrelatedState,
+            noteID: unrelatedNoteID
+        )
+        context.insert(NoteSequenceStateRecord(
+            noteID: unrelatedNoteID,
+            formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+            revision: 1,
+            visibleUTF16Count: unrelatedState.visibleUTF16Count,
+            tombstonedUTF16Count: unrelatedState.tombstonedUTF16Count,
+            payloadByteCount: unrelatedPayload.count,
+            statePayloadData: unrelatedPayload
+        ))
+        try context.save()
+
+        let unrelatedBatch = SyncBatch(
+            id: UUID(uuidString: "23300000-0000-0000-0000-000000000232")!,
+            originDeviceID: unrelatedOriginDeviceID,
+            createdAt: createdAt,
+            batchSequence: 1,
+            changes: [unrelatedChange]
+        )
+        let pendingBatches = Array(batches.prefix(3))
+        let pendingRecoveryChanges = Array(recoveryChanges.prefix(3))
+        let newlyOwnedBatches = Array(batches.suffix(3))
+        let newlyOwnedRecoveryChanges = Array(recoveryChanges.suffix(3))
+
+        let recoveryStore = FileBackedSyncBatchAnchoredRecoveryStore(
+            fileURL: directory.appendingPathComponent("anchored-recovery.json")
+        )
+        XCTAssertTrue(try recoveryStore.apply(
+            pendingRecoveryChanges.map {
+                .insertExpectedAbsent(try SyncBatchAnchoredRecoveryRecord(
+                    change: $0,
+                    lifecycle: .bootstrapOwned
+                ))
+            }
+        ))
+
+        let pendingURL = directory.appendingPathComponent("pending-incoming.json")
+        let pendingQueue = FileBackedSyncBatchQueue(fileURL: pendingURL)
+        try pendingQueue.enqueueIncoming(unrelatedBatch)
+        for batch in pendingBatches {
+            try pendingQueue.enqueueIncoming(batch)
+        }
+
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(uuidString: "23300000-0000-0000-0000-000000000240")!,
+            folders: [],
+            notes: [SyncPeerBootstrapNoteSnapshot(
+                id: noteID,
+                title: "Remote metadata",
+                body: authoritativeState.visibleText,
+                isPinned: false,
+                createdAt: createdAt,
+                modifiedAt: createdAt.addingTimeInterval(6),
+                deletedAt: nil,
+                folderID: nil,
+                formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                revision: 6,
+                visibleUTF16Count: authoritativeState.visibleUTF16Count,
+                tombstonedUTF16Count: authoritativeState.tombstonedUTF16Count,
+                payloadByteCount: authoritativePayload.count,
+                statePayloadData: authoritativePayload
+            )],
+            historyCoverage: zip(newlyOwnedBatches, newlyOwnedRecoveryChanges).map {
+                batch, recoveryChange in
+                SyncPeerBootstrapHistoryBatchCoverage(
+                    batchID: batch.id,
+                    noteIDs: [noteID],
+                    anchoredRecoveryChanges: [recoveryChange]
+                )
+            }
+        )
+
+        let peer = MCPeerID(displayName: "remote|\(originDeviceID.uuidString)")
+        var sentMessages: [Data] = []
+        let controller = try makeController(
+            context: context,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sentMessages.append(data) }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil,
+            anchoredRecoveryStore: recoveryStore
+        )
+        _ = coordinator
+
+        await controller.receiveBootstrapSnapshotForTesting(snapshot, from: peer)
+
+        await waitUntil(timeout: .seconds(2)) {
+            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id)
+                == [unrelatedBatch.id]
+        }
+
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id),
+            [unrelatedBatch.id],
+            "Bootstrap-triggered resume must retire eligible persisted incoming work past unrelated quarantine."
+        )
+        XCTAssertTrue(pendingRecoveryChanges.allSatisfy {
+            recoveryStore.snapshot().record(for: $0.recordKey) == nil
+        })
+        XCTAssertEqual(
+            newlyOwnedRecoveryChanges.compactMap {
+                recoveryStore.snapshot().record(for: $0.recordKey)?.lifecycle
+            },
+            Array(repeating: .bootstrapOwned, count: newlyOwnedRecoveryChanges.count),
+            "New ownership established by bootstrap history coverage must remain durable when its source batches are not pending incoming."
+        )
+        XCTAssertEqual(localNote.content, authoritativeState.visibleText)
+        XCTAssertEqual(localNote.title, "Local metadata")
+
+        let acknowledgedBatchIDs = Set(sentMessages.compactMap { data -> UUID? in
+            guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                  message.kind == .batchAcknowledgement,
+                  let acknowledgement = try? JSONDecoder().decode(
+                    SyncBatchAcknowledgement.self,
+                    from: message.payload
+                  ) else {
+                return nil
+            }
+            return acknowledgement.batchID
+        })
+        XCTAssertEqual(
+            acknowledgedBatchIDs,
+            Set(pendingBatches.map(\.id)),
+            "Persisted incoming batches completed during bootstrap redrive must acknowledge to the reconnected source peer."
+        )
+        XCTAssertTrue(
+            sentMessages.contains {
+                (try? MultipeerSyncMessageCoding.decodeMessage(from: $0).kind)
+                    == .bootstrapAcknowledgement
+            }
+        )
+    }
+
+    func testMYR233DeferredBatchDoesNotBlockDisjointSameOriginBatch() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-same-origin-progress-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let blockedNoteID = UUID(uuidString: "23300000-0000-0000-0000-000000000101")!
+        let disjointNoteID = UUID(uuidString: "23300000-0000-0000-0000-000000000102")!
+        let originDeviceID = UUID(uuidString: "23300000-0000-0000-0000-000000000103")!
+
+        let blockedNote = Note(title: "Blocked", content: "local-a")
+        blockedNote.id = blockedNoteID
+        let disjointNote = Note(title: "Before", content: "local-b")
+        disjointNote.id = disjointNoteID
+        context.insert(blockedNote)
+        context.insert(disjointNote)
+        try context.save()
+
+        let pendingURL = directory.appendingPathComponent("pending-incoming.json")
+        let controller = try makeController(
+            context: context,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil
+        )
+
+        let deferredBatch = SyncBatch(
+            id: UUID(uuidString: "23300000-0000-0000-0000-000000000104")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 2_334),
+            batchSequence: 1,
+            changes: [.noteBodyTextInserted(.init(
+                noteID: blockedNoteID,
+                utf16Offset: 4,
+                text: " remote",
+                modifiedAt: Date(timeIntervalSinceReferenceDate: 2_334),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "base")
+            ))]
+        )
+        let disjointBatch = SyncBatch(
+            id: UUID(uuidString: "23300000-0000-0000-0000-000000000105")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 2_335),
+            batchSequence: 2,
+            changes: [.noteTitleChanged(.init(
+                noteID: disjointNoteID,
+                title: "After",
+                modifiedAt: Date(timeIntervalSinceReferenceDate: 2_335)
+            ))]
+        )
+
+        let deferredDisposition = await coordinator.submitRemoteBatch(deferredBatch)
+        XCTAssertEqual(deferredDisposition, .recoverableAnchorlessCompatibilityRejection)
+
+        let disjointDisposition = await coordinator.submitRemoteBatch(disjointBatch)
+        XCTAssertEqual(
+            disjointDisposition,
+            .acknowledgementPermitted,
+            "A deferred batch must not head-of-line block disjoint work from the same peer."
+        )
+        XCTAssertEqual(disjointNote.title, "After")
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id),
+            [deferredBatch.id]
+        )
+    }
+
     func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
         let peerID = MCPeerID(displayName: "remote|connected-mac")
         var invitedPeerIDs: [MCPeerID] = []
@@ -177,6 +1042,350 @@ final class MacSyncBatchControllerTests: XCTestCase {
 
         XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id), [covered.id])
         XCTAssertEqual(try MultipeerSyncMessageCoding.decodeMessage(from: sends.last!).kind, .bootstrapSnapshot)
+    }
+
+    func testReconnectBootstrapRecoversWithFullUnsentQueueAndDurableLocalObligations() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-full-queue-bootstrap-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        // Mirrors the captured persisted-stuck shape: transport at capacity with local work behind it.
+        let unsentURL = directory.appendingPathComponent("unsent-batches.json")
+        let localURL = directory.appendingPathComponent("local-obligations.json")
+        let unsentQueue = FileBackedSyncBatchQueue(fileURL: unsentURL)
+        for index in 0..<100 {
+            try unsentQueue.enqueueDurably(makeBatch(idSuffix: 233_000 + index))
+        }
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: localURL)
+        for index in 0..<36 {
+            try localQueue.enqueue(
+                SyncConvergenceLocalObligation(
+                    legacyBatch: makeBatch(idSuffix: 234_000 + index)
+                )
+            )
+        }
+
+        let peer = MCPeerID(displayName: "remote|myr233-full-queue-mac")
+        var sends: [Data] = []
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let controller = try makeController(
+            context: container.mainContext,
+            unsentBatchQueueFileURL: unsentURL,
+            unsentBatchQueue: unsentQueue,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sends.append(data) }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: localURL
+        )
+        _ = coordinator
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "myr233-full-queue-mac"
+        )
+
+        await controller.beginReconnectBootstrapForTesting(to: peer)
+
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.count, 100)
+        XCTAssertEqual(coordinator.pendingLocalObligationCount, 36)
+        let data = try XCTUnwrap(sends.first)
+        let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+        XCTAssertEqual(message.kind, .bootstrapSnapshot)
+        let snapshot = try JSONDecoder().decode(
+            SyncPeerBootstrapSnapshot.self,
+            from: message.payload
+        )
+        XCTAssertEqual(
+            snapshot.historyCoverage.count,
+            136,
+            "Bootstrap must own both full unsent history and durable local obligations without transport promotion."
+        )
+    }
+
+    func testOrdinaryBatchAcknowledgementWakesPendingLocalObligationAfterCapacityFrees() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-ack-capacity-wake-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let unsentURL = directory.appendingPathComponent("unsent-batches.json")
+        let localURL = directory.appendingPathComponent("local-obligations.json")
+        let unsentQueue = FileBackedSyncBatchQueue(fileURL: unsentURL, limit: 1)
+        let occupying = makeBatch(idSuffix: 234_900)
+        let local = makeBatch(idSuffix: 234_901)
+        try unsentQueue.enqueueDurably(occupying)
+
+        let peer = MCPeerID(displayName: "remote|myr233-ack-capacity-wake")
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let controller = try makeController(
+            context: container.mainContext,
+            unsentBatchQueueFileURL: unsentURL,
+            unsentBatchQueue: unsentQueue,
+            connectedPeersProvider: { [] },
+            sendBatchDataOperation: { _, _, _ in }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: localURL
+        )
+
+        _ = await coordinator.submitLocalObligation(
+            SyncConvergenceLocalObligation(legacyBatch: local)
+        )
+        XCTAssertEqual(coordinator.pendingLocalObligationCount, 1)
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id), [occupying.id])
+
+        await controller.handleBatchAcknowledgementForTesting(
+            SyncBatchAcknowledgement(batchID: occupying.id),
+            from: peer
+        )
+
+        XCTAssertEqual(coordinator.pendingLocalObligationCount, 0)
+        XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id), [local.id])
+    }
+
+    func testBootstrapDeduplicatesIdenticalCrossDomainBatchAndAckRetiresBothOwners() async throws {
+        let batch = makeBatch(idSuffix: 235_001)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [batch],
+            peerDeviceID: "myr233-duplicate-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        XCTAssertEqual(snapshot.historyCoverage.map(\.batchID), [batch.id])
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshot.id,
+                coveredBatchIDs: [batch.id]
+            ),
+            from: fixture.peer
+        )
+
+        XCTAssertTrue(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 0)
+        XCTAssertTrue(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-duplicate-mac")?
+                .ordinarySyncReady == true
+        )
+    }
+
+    func testBootstrapRejectsConflictingCrossDomainDuplicateBeforeTransmission() throws {
+        let batch = makeBatch(idSuffix: 235_002)
+        let conflicting = batchWithSameID(batch, createdAtOffset: 1)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [conflicting],
+            peerDeviceID: "myr233-conflict-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+
+        XCTAssertTrue(fixture.sentMessages.values.isEmpty)
+        XCTAssertNil(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-conflict-mac")
+        )
+        XCTAssertEqual(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 1)
+    }
+
+    func testBootstrapUnsentCleanupFailureRemainsRetryableOnAckReplay() async throws {
+        let batch = makeBatch(idSuffix: 235_003)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [],
+            peerDeviceID: "myr233-unsent-replay-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        fixture.unsentQueue.injectPersistenceFailureForNextWrite()
+
+        let acknowledgement = SyncPeerBootstrapAcknowledgement(
+            snapshotID: snapshot.id,
+            coveredBatchIDs: [batch.id]
+        )
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            acknowledgement,
+            from: fixture.peer
+        )
+
+        XCTAssertEqual(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+        XCTAssertFalse(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-unsent-replay-mac")?
+                .ordinarySyncReady == true
+        )
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            acknowledgement,
+            from: fixture.peer
+        )
+
+        XCTAssertTrue(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        XCTAssertTrue(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-unsent-replay-mac")?
+                .ordinarySyncReady == true
+        )
+    }
+
+    func testBootstrapPartialCleanupLocalFailureConvergesOnAckReplay() async throws {
+        let batch = makeBatch(idSuffix: 235_004)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [batch],
+            peerDeviceID: "myr233-local-replay-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        fixture.coordinator.injectLocalBootstrapOwnershipPersistenceFailureForTesting()
+
+        let acknowledgement = SyncPeerBootstrapAcknowledgement(
+            snapshotID: snapshot.id,
+            coveredBatchIDs: [batch.id]
+        )
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            acknowledgement,
+            from: fixture.peer
+        )
+
+        XCTAssertTrue(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 1)
+        XCTAssertFalse(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-local-replay-mac")?
+                .ordinarySyncReady == true
+        )
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            acknowledgement,
+            from: fixture.peer
+        )
+
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 0)
+        XCTAssertTrue(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-local-replay-mac")?
+                .ordinarySyncReady == true
+        )
+    }
+
+    func testFrozenLocalObligationPromotedWhileAckPendingIsRemovedFromBothDomains() async throws {
+        let batch = makeBatch(idSuffix: 235_005)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [],
+            localBatches: [batch],
+            peerDeviceID: "myr233-moved-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        try await fixture.controller.acceptLocalBatch(batch)
+
+        XCTAssertEqual(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [batch])
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 1)
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshot.id,
+                coveredBatchIDs: [batch.id]
+            ),
+            from: fixture.peer
+        )
+
+        XCTAssertTrue(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 0)
+        XCTAssertTrue(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-moved-mac")?
+                .ordinarySyncReady == true
+        )
+    }
+
+    func testFrozenLocalObligationSameIDDifferentContentWhileAckPendingFailsClosed() async throws {
+        let batch = makeBatch(idSuffix: 235_006)
+        let conflicting = batchWithSameID(batch, createdAtOffset: 1)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [],
+            localBatches: [batch],
+            peerDeviceID: "myr233-moved-conflict-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        try await fixture.controller.acceptLocalBatch(conflicting)
+
+        await fixture.controller.handleBootstrapAcknowledgementForTesting(
+            SyncPeerBootstrapAcknowledgement(
+                snapshotID: snapshot.id,
+                coveredBatchIDs: [batch.id]
+            ),
+            from: fixture.peer
+        )
+
+        XCTAssertEqual(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [conflicting])
+        XCTAssertEqual(fixture.coordinator.pendingLocalObligationCount, 1)
+        XCTAssertFalse(
+            fixture.controller.bootstrapStateForTesting(peerDeviceID: "myr233-moved-conflict-mac")?
+                .ordinarySyncReady == true
+        )
+    }
+
+    func testBootstrapMutationBetweenFreezePassesRetriesBeforeTransmission() async throws {
+        let batch = makeBatch(idSuffix: 235_007)
+        let replacement = batchWithSameID(batch, createdAtOffset: 1)
+        let fixture = try makeMYR233BootstrapFixture(
+            unsentBatches: [batch],
+            localBatches: [],
+            peerDeviceID: "myr233-freeze-race-mac"
+        )
+        defer { try? FileManager.default.removeItem(at: fixture.directory) }
+
+        var captureCount = 0
+        var mutationError: Error?
+        fixture.controller.onBootstrapCandidateCapturedForTesting = {
+            captureCount += 1
+            guard captureCount == 1 else { return }
+            do {
+                try fixture.unsentQueue.removeBatches(withIDs: [batch.id])
+                try fixture.unsentQueue.enqueueDurably(replacement)
+            } catch {
+                mutationError = error
+            }
+        }
+
+        await fixture.controller.beginReconnectBootstrapForTesting(to: fixture.peer)
+
+        XCTAssertNil(mutationError)
+        XCTAssertGreaterThanOrEqual(captureCount, 2)
+        XCTAssertEqual(fixture.sentMessages.values.count, 1)
+        let snapshot = try fixture.firstBootstrapSnapshot()
+        XCTAssertEqual(snapshot.historyCoverage.map(\.batchID), [batch.id])
+        XCTAssertEqual(fixture.controller.unsentBatchQueueSnapshotForTesting().pendingBatches, [replacement])
     }
 
     func testReconnectBootstrapCapturesPendingAccumulatorWorkWithoutQuietWindow() async throws {
@@ -1420,6 +2629,74 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.availablePeers, beforeAvailablePeers)
     }
 
+    private func makeMYR233BootstrapFixture(
+        unsentBatches: [SyncBatch],
+        localBatches: [SyncBatch],
+        peerDeviceID: String
+    ) throws -> MYR233MacBootstrapFixture {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let unsentURL = directory.appendingPathComponent("unsent-batches.json")
+        let localURL = directory.appendingPathComponent("local-obligations.json")
+
+        let unsentQueue = FileBackedSyncBatchQueue(fileURL: unsentURL)
+        for batch in unsentBatches {
+            try unsentQueue.enqueueDurably(batch)
+        }
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: localURL)
+        for batch in localBatches {
+            try localQueue.enqueue(SyncConvergenceLocalObligation(legacyBatch: batch))
+        }
+
+        let peer = MCPeerID(displayName: "remote|\(peerDeviceID)")
+        let sentMessages = MYR233MacSentMessageRecorder()
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let controller = try makeController(
+            context: container.mainContext,
+            unsentBatchQueueFileURL: unsentURL,
+            unsentBatchQueue: unsentQueue,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in
+                sentMessages.values.append(data)
+            }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: localURL
+        )
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: peerDeviceID)
+        return MYR233MacBootstrapFixture(
+            directory: directory,
+            controller: controller,
+            coordinator: coordinator,
+            unsentQueue: unsentQueue,
+            peer: peer,
+            sentMessages: sentMessages
+        )
+    }
+
+    private func batchWithSameID(
+        _ batch: SyncBatch,
+        createdAtOffset: TimeInterval
+    ) -> SyncBatch {
+        SyncBatch(
+            id: batch.id,
+            originDeviceID: batch.originDeviceID,
+            createdAt: batch.createdAt.addingTimeInterval(createdAtOffset),
+            batchSequence: batch.batchSequence,
+            changes: batch.changes
+        )
+    }
+
     private func makeController(unsentBatchQueueFileURL: URL?) throws -> MacSyncBatchController {
         try makeController(unsentBatchQueueFileURL: unsentBatchQueueFileURL, unsentBatchQueue: nil)
     }
@@ -1599,6 +2876,26 @@ final class MacSyncBatchControllerTests: XCTestCase {
             for: Schema(MyRAMModelRegistry.models),
             configurations: configuration
         )
+    }
+}
+
+private final class MYR233MacSentMessageRecorder {
+    var values: [Data] = []
+}
+
+private struct MYR233MacBootstrapFixture {
+    let directory: URL
+    let controller: MacSyncBatchController
+    let coordinator: MacSyncConvergenceCoordinator
+    let unsentQueue: FileBackedSyncBatchQueue
+    let peer: MCPeerID
+    let sentMessages: MYR233MacSentMessageRecorder
+
+    func firstBootstrapSnapshot() throws -> SyncPeerBootstrapSnapshot {
+        let data = try XCTUnwrap(sentMessages.values.first)
+        let message = try MultipeerSyncMessageCoding.decodeMessage(from: data)
+        XCTAssertEqual(message.kind, .bootstrapSnapshot)
+        return try JSONDecoder().decode(SyncPeerBootstrapSnapshot.self, from: message.payload)
     }
 }
 
