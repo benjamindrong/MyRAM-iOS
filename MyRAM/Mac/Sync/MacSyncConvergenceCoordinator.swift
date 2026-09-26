@@ -13,9 +13,6 @@ final class MacSyncConvergenceCoordinator {
     private let incomingBoundaryAdapter: MacSyncIncomingLocalBoundaryAdapter
     private let runtime: SyncConvergenceRuntime
 
-#if DEBUG
-    private(set) var lastRuntimeOutcomeForTesting: SyncConvergenceRuntimeOutcome?
-#endif
 
     init(
         context: ModelContext,
@@ -97,9 +94,6 @@ final class MacSyncConvergenceCoordinator {
         }
         let completion = await runtime.submitRemoteBatchAwaitingDrainOwnership(batch)
         let outcome = completion.outcome
-#if DEBUG
-        lastRuntimeOutcomeForTesting = outcome
-#endif
         await handle(outcome: outcome, sourceBatch: batch)
         if completion.successfullyCompletedBatchIDs.contains(batch.id) {
             return .acknowledgementPermitted
