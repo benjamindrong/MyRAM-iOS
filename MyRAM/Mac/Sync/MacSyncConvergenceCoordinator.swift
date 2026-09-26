@@ -13,7 +13,6 @@ final class MacSyncConvergenceCoordinator {
     private let incomingBoundaryAdapter: MacSyncIncomingLocalBoundaryAdapter
     private let runtime: SyncConvergenceRuntime
 
-
     init(
         context: ModelContext,
         syncController: MacSyncBatchController,
