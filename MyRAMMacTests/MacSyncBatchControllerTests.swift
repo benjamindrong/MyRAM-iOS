@@ -180,6 +180,17 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
 
         let recoveryChange = SyncBatchAnchoredRecoveryChange.insertion(anchoredInsertion)
+        if recoveryStore.snapshot().record(for: recoveryChange.recordKey) == nil {
+            // The physical MYR-233 state contains bootstrap-owned recovery evidence
+            // for historical batches that remain durably queued for redelivery.
+            let persistedOwnership = try SyncBatchAnchoredRecoveryRecord(
+                change: recoveryChange,
+                lifecycle: .bootstrapOwned
+            )
+            XCTAssertTrue(try recoveryStore.apply([
+                .insertExpectedAbsent(persistedOwnership)
+            ]))
+        }
         let ownership = try XCTUnwrap(
             recoveryStore.snapshot().record(for: recoveryChange.recordKey)
         )
