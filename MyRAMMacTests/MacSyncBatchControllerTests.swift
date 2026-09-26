@@ -375,7 +375,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
 
         let deferredDisposition = await coordinator.submitRemoteBatch(deferredBatch)
-        XCTAssertEqual(deferredDisposition, .acknowledgementDeferred)
+        XCTAssertEqual(deferredDisposition, .recoverableAnchorlessCompatibilityRejection)
 
         let disjointDisposition = await coordinator.submitRemoteBatch(disjointBatch)
         XCTAssertEqual(
