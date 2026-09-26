@@ -65,6 +65,12 @@ final class MacSyncConvergenceCoordinator {
     func injectLocalBootstrapOwnershipPersistenceFailureForTesting() {
         localObligationQueue.injectPersistenceFailureForNextWrite()
     }
+
+    func submitRemoteBatchCompletionForTesting(
+        _ batch: SyncBatch
+    ) async -> SyncConvergenceDrainCompletion {
+        await runtime.submitRemoteBatchAwaitingDrainOwnership(batch)
+    }
 #endif
 
     /// Durably persists an incoming batch's raw bytes, independent of whatever
