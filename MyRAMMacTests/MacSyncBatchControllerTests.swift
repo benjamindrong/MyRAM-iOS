@@ -216,7 +216,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             connectedPeersProvider: { [peer] },
             sendBatchDataOperation: { data, _, _ in sentMessages.append(data) }
         )
-        _ = MacSyncConvergenceCoordinator(
+        let coordinator = MacSyncConvergenceCoordinator(
             context: context,
             syncController: controller,
             conflictStore: controller.conflictStore,
@@ -227,6 +227,12 @@ final class MacSyncBatchControllerTests: XCTestCase {
             pendingIncomingQueueFileURL: pendingURL,
             localObligationQueueFileURL: nil,
             anchoredRecoveryStore: recoveryStore
+        )
+
+        let diagnosticCompletion = await coordinator.submitRemoteBatchCompletionForTesting(batch)
+        XCTAssertTrue(
+            diagnosticCompletion.successfullyCompletedBatchIDs.contains(batchID),
+            "outcome=\(diagnosticCompletion.outcome) completed=\(diagnosticCompletion.successfullyCompletedBatchIDs)"
         )
 
         let session = MCSession(
