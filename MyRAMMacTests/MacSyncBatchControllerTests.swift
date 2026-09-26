@@ -374,12 +374,12 @@ final class MacSyncBatchControllerTests: XCTestCase {
             ))]
         )
 
+        let deferredDisposition = await coordinator.submitRemoteBatch(deferredBatch)
+        XCTAssertEqual(deferredDisposition, .acknowledgementDeferred)
+
+        let disjointDisposition = await coordinator.submitRemoteBatch(disjointBatch)
         XCTAssertEqual(
-            await coordinator.submitRemoteBatch(deferredBatch),
-            .acknowledgementDeferred
-        )
-        XCTAssertEqual(
-            await coordinator.submitRemoteBatch(disjointBatch),
+            disjointDisposition,
             .acknowledgementPermitted,
             "A deferred batch must not head-of-line block disjoint work from the same peer."
         )
