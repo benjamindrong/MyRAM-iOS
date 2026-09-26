@@ -122,6 +122,17 @@ final class MacSyncConvergenceCoordinator {
         await handle(outcome: runtime.resumePendingWork(), sourceBatch: nil)
     }
 
+    func resumePendingWorkAwaitingDrainOwnership() async -> SyncConvergenceDrainCompletion {
+        let outcome = await runtime.resumePendingWork()
+        let completion = await runtime.awaitActiveDrainCompletion()
+            ?? SyncConvergenceDrainCompletion(
+                outcome: outcome,
+                successfullyCompletedBatchIDs: []
+            )
+        await handle(outcome: completion.outcome, sourceBatch: nil)
+        return completion
+    }
+
     func refreshAfterBootstrap() {
         presentationAdapter.refreshAfterBootstrap()
     }
