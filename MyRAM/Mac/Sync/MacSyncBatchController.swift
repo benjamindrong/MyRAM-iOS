@@ -830,6 +830,18 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             return
         }
 
+        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        if let originDeviceID = UUID(uuidString: peerDeviceID),
+           let convergenceCoordinator {
+            // Pending incoming work survives relaunch, but its transient ACK peer map does not.
+            // Rebind only batches whose durable origin matches this authenticated peer before redrive.
+            for batchID in convergenceCoordinator.pendingIncomingBatchIDs(
+                forOriginDeviceID: originDeviceID
+            ) where acknowledgementPeerByRemoteBatchID[batchID] == nil {
+                acknowledgementPeerByRemoteBatchID[batchID] = peerDeviceID
+            }
+        }
+
         lastErrorMessage = nil
         await convergenceCoordinator?.resumePendingWork()
     }
