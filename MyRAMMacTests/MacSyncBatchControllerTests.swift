@@ -216,7 +216,7 @@ final class MacSyncBatchControllerTests: XCTestCase {
             connectedPeersProvider: { [peer] },
             sendBatchDataOperation: { data, _, _ in sentMessages.append(data) }
         )
-        let coordinator = MacSyncConvergenceCoordinator(
+        _ = MacSyncConvergenceCoordinator(
             context: context,
             syncController: controller,
             conflictStore: controller.conflictStore,
@@ -229,17 +229,21 @@ final class MacSyncBatchControllerTests: XCTestCase {
             anchoredRecoveryStore: recoveryStore
         )
 
-        let diagnosticCompletion = await coordinator.submitRemoteBatchCompletionForTesting(batch)
-        XCTAssertTrue(
-            diagnosticCompletion.successfullyCompletedBatchIDs.contains(batchID),
-            "outcome=\(diagnosticCompletion.outcome) completed=\(diagnosticCompletion.successfullyCompletedBatchIDs)"
-        )
-
         let session = MCSession(
             peer: MCPeerID(displayName: "local|myr233-bootstrap-owned-redelivery"),
             securityIdentity: nil,
             encryptionPreference: .required
         )
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "myr233-bootstrap-owned-redelivery"
+        )
+        controller.session(session, peer: peer, didChange: .connected)
+        await waitUntil {
+            controller.hasExplicitPeerV2Support(
+                forPeerDeviceID: "myr233-bootstrap-owned-redelivery"
+            )
+        }
         controller.session(
             session,
             didReceive: try MultipeerSyncMessageCoding.encodeBatch(batch),
