@@ -291,9 +291,6 @@ final class MacSyncBatchControllerTests: XCTestCase {
             }
         }
 
-        XCTFail(
-            "MYR-233 diagnostic runtime outcome: \(String(describing: coordinator.lastRuntimeOutcomeForTesting))"
-        )
 
         XCTAssertFalse(FileBackedSyncBatchQueue(fileURL: pendingURL).contains(batchID))
         XCTAssertNil(recoveryStore.snapshot().record(for: recoveryChange.recordKey))
