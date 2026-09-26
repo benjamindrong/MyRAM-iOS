@@ -99,10 +99,14 @@ final class SyncConvergencePostCommitTests: XCTestCase {
         let remote = await runtime.submitRemoteBatch(batch)
         let local = await runtime.submitLocalBatch(batch)
 
-        if case .blocked(let failure) = remote {
-            XCTAssertEqual(failure.kind, .staleAuthoritativeState)
+        if case .quarantined(let work) = remote {
+            XCTAssertEqual(work.items.map(\.batchID), [batch.id])
+            XCTAssertEqual(
+                work.items.first?.reason,
+                .staleAuthoritativeState(noteID: batch.changes[0].noteID)
+            )
         } else {
-            XCTFail("Expected anchored remote submission to be blocked")
+            XCTFail("Expected stale anchored remote submission to remain quarantined")
         }
         if case .blocked(let failure) = local {
             XCTAssertEqual(failure.kind, .invalidMergePlan)
