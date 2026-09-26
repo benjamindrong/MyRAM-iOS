@@ -229,21 +229,48 @@ final class MacSyncBatchControllerTests: XCTestCase {
             anchoredRecoveryStore: recoveryStore
         )
 
+        let localPeerID = MCPeerID(displayName: "local|myr233-local")
+        let browser = MCNearbyServiceBrowser(
+            peer: localPeerID,
+            serviceType: "myram-sync"
+        )
+        let advertiser = MCNearbyServiceAdvertiser(
+            peer: localPeerID,
+            discoveryInfo: nil,
+            serviceType: "myram-sync"
+        )
         let session = MCSession(
-            peer: MCPeerID(displayName: "local|myr233-bootstrap-owned-redelivery"),
+            peer: localPeerID,
             securityIdentity: nil,
             encryptionPreference: .required
         )
-        controller.recordBootstrapCapabilityForTesting(
-            "1",
-            forPeerDeviceID: "myr233-bootstrap-owned-redelivery"
+        controller.browser(
+            browser,
+            foundPeer: peer,
+            withDiscoveryInfo: [
+                SyncBatchPeerCapabilityCodec.discoveryInfoKey: "1,2",
+                SyncBatchPeerCapabilityCodec.bootstrapDiscoveryInfoKey: "1"
+            ]
         )
+        controller.advertiser(
+            advertiser,
+            didReceiveInvitationFromPeer: peer,
+            withContext: Data("1,2".utf8),
+            invitationHandler: { _, _ in }
+        )
+        await Task.yield()
         controller.session(session, peer: peer, didChange: .connected)
-        await waitUntil {
+        await Task.yield()
+        XCTAssertTrue(
             controller.hasExplicitPeerV2Support(
                 forPeerDeviceID: "myr233-bootstrap-owned-redelivery"
             )
-        }
+        )
+        XCTAssertTrue(
+            controller.isBootstrapCapabilityResolvedForTesting(
+                peerDeviceID: "myr233-bootstrap-owned-redelivery"
+            )
+        )
         controller.session(
             session,
             didReceive: try MultipeerSyncMessageCoding.encodeBatch(batch),
