@@ -1049,6 +1049,12 @@ final class MacSyncBatchControllerTests: XCTestCase {
             FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id),
             [staleBatch.id]
         )
+        let quarantined = try XCTUnwrap(controller.quarantinedWork)
+        XCTAssertEqual(quarantined.items.map(\.batchID), [staleBatch.id])
+        XCTAssertEqual(
+            quarantined.items.first?.reason,
+            .staleAuthoritativeState(noteID: staleNoteID)
+        )
     }
 
     func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
