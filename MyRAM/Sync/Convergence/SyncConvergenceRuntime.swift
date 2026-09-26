@@ -376,6 +376,12 @@ final class SyncConvergenceRuntime {
                     blockedNoteIDs: &blockedNoteIDs,
                     deferredItems: &deferredItems
                 ) {
+                    MyRAMSyncBenchmarkTelemetry.shared.record(
+                        .batchAcknowledgementDeferred,
+                        batchID: request.sourceBatchID.uuidString,
+                        outcome: "pendingPostCommitDrain",
+                        detail: String(describing: terminal)
+                    )
                     return terminal
                 }
                 if case .complete = outcome {
