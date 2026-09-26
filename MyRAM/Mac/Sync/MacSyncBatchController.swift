@@ -1016,12 +1016,14 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     private func enqueueIncomingBatch(_ batch: SyncBatch, from peerID: MCPeerID) {
         let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
-        if acknowledgementPeerByRemoteBatchID[batch.id] != nil {
+        let existingAcknowledgementPeerDeviceID = acknowledgementPeerByRemoteBatchID[batch.id]
+        if let existingAcknowledgementPeerDeviceID,
+           existingAcknowledgementPeerDeviceID != peerDeviceID {
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .batchCaptureCompleted,
                 batchID: String(describing: batch.id),
                 peerDeviceID: peerDeviceID,
-                outcome: "duplicateAlreadyDurable"
+                outcome: "duplicateAlreadyDurablePeerMismatch"
             )
             return
         }
@@ -1033,6 +1035,14 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 outcome: "duplicatePendingReceive"
             )
             return
+        }
+        if existingAcknowledgementPeerDeviceID != nil {
+            MyRAMSyncBenchmarkTelemetry.shared.record(
+                .batchCaptureCompleted,
+                batchID: String(describing: batch.id),
+                peerDeviceID: peerDeviceID,
+                outcome: "duplicateAlreadyDurableRetry"
+            )
         }
 
         pendingIncomingBatchWork.append(IncomingBatchWork(batch: batch, peerID: peerID))
