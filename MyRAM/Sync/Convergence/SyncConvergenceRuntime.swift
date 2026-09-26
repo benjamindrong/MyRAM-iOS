@@ -364,7 +364,6 @@ final class SyncConvergenceRuntime {
                 return .blocked(SyncBatchDrainFailure(batchID: nil, kind: .corruptHistory))
             }
             var blockedNoteIDs: Set<UUID> = []
-            var blockedOrigins: Set<UUID> = []
             var anchoredDependenciesByNoteID: [UUID: Set<SyncOperationID>] = [:]
             var deferredItems: [SyncConvergenceDeferredItem] = []
             for request in pendingRequests {
@@ -390,7 +389,8 @@ final class SyncConvergenceRuntime {
                 candidates: incomingCandidates(),
                 attemptedBatchIDs: attemptedBatchIDs,
                 blockedNoteIDs: blockedNoteIDs,
-                blockedOrigins: blockedOrigins,
+                // Incoming dependency ordering is note-scoped; disjoint same-origin work may continue.
+                blockedOrigins: [],
                 anchoredDependenciesByNoteID: anchoredDependenciesByNoteID
             ) {
                 let batch = convergenceQueue.pendingBatches[candidateIndex]
@@ -537,7 +537,6 @@ final class SyncConvergenceRuntime {
                     }
                     let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
                     blockedNoteIDs.formUnion(affectedNoteIDs)
-                    blockedOrigins.insert(batch.originDeviceID)
                     deferredItems.append(SyncConvergenceDeferredItem(
                         domain: .incoming,
                         batchID: batch.id,
@@ -547,7 +546,6 @@ final class SyncConvergenceRuntime {
                 case .deferred(let reason):
                     let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
                     blockedNoteIDs.formUnion(affectedNoteIDs)
-                    blockedOrigins.insert(batch.originDeviceID)
                     deferredItems.append(SyncConvergenceDeferredItem(
                         domain: .incoming,
                         batchID: batch.id,
@@ -565,7 +563,6 @@ final class SyncConvergenceRuntime {
                     }
                     let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
                     blockedNoteIDs.formUnion(affectedNoteIDs)
-                    blockedOrigins.insert(batch.originDeviceID)
                     anchoredDependenciesByNoteID[anchoredDeferred.noteID, default: []]
                         .insert(anchoredDeferred.dependency.operationID)
                     deferredItems.append(SyncConvergenceDeferredItem(
@@ -585,7 +582,6 @@ final class SyncConvergenceRuntime {
                     }
                     let affectedNoteIDs = Self.affectedNoteIDs(in: batch)
                     blockedNoteIDs.formUnion(affectedNoteIDs)
-                    blockedOrigins.insert(batch.originDeviceID)
                     let reason: SyncConvergenceQuarantineReason
                     switch anchoredQuarantined.evidence {
                     case .terminal(let failure):
