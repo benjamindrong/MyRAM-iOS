@@ -107,10 +107,20 @@ final class MacSyncConvergenceCoordinator {
         if completion.successfullyCompletedBatchIDs.contains(batch.id) {
             return .acknowledgementPermitted
         }
-        return SyncConvergenceRemoteBatchDispositionPolicy.disposition(
+        let disposition = SyncConvergenceRemoteBatchDispositionPolicy.disposition(
             for: outcome,
             batchID: batch.id
         )
+        MyRAMSyncBenchmarkTelemetry.shared.record(
+            .batchAcknowledgementDeferred,
+            batchID: String(describing: batch.id),
+            outcome: "convergence:\(String(describing: disposition))",
+            detail: Self.benchmarkDiagnostic(
+                completion: completion,
+                batchID: batch.id
+            )
+        )
+        return disposition
     }
 
     func submitLocalObligation(_ obligation: SyncConvergenceLocalObligation) async {
@@ -150,6 +160,41 @@ final class MacSyncConvergenceCoordinator {
             anchoredRecoveryStore: anchoredRecoveryStore,
             structuralConflictStore: conflictStore
         )
+    }
+
+    private static func benchmarkDiagnostic(
+        completion: SyncConvergenceDrainCompletion,
+        batchID: SyncBatchID
+    ) -> String {
+        switch completion.outcome {
+        case .drained(let appliedBatchIDs):
+            return "runtime=drained;sourceApplied=\(appliedBatchIDs.contains(batchID));sourceCompleted=\(completion.successfullyCompletedBatchIDs.contains(batchID))"
+        case .pending(let pending):
+            let work = pending
+                .map { String(describing: $0) }
+                .sorted()
+                .joined(separator: ",")
+            return "runtime=pending;work=\(work)"
+        case .blocked(let failure):
+            return "runtime=blocked;kind=\(String(describing: failure.kind));failureBatchID=\(failure.batchID?.uuidString ?? "nil")"
+        case .alreadyDraining:
+            return "runtime=alreadyDraining"
+        case .deferred(let work):
+            let allItems = work.incoming + work.localObligations + work.postCommit
+            let matchingItems = allItems.filter { $0.batchID == batchID }
+            let diagnosticItems = matchingItems.isEmpty ? Array(allItems.prefix(4)) : matchingItems
+            let detail = diagnosticItems.map {
+                "\(String(describing: $0.domain)):\(String(describing: $0.reason))"
+            }.joined(separator: "|")
+            return "runtime=deferred;sourceItems=\(matchingItems.count);incoming=\(work.incoming.count);local=\(work.localObligations.count);postCommit=\(work.postCommit.count);items=\(detail)"
+        case .quarantined(let work):
+            let matchingItems = work.items.filter { $0.batchID == batchID }
+            let diagnosticItems = matchingItems.isEmpty ? Array(work.items.prefix(4)) : matchingItems
+            let detail = diagnosticItems.map {
+                "\(String(describing: $0.domain)):\(String(describing: $0.reason))"
+            }.joined(separator: "|")
+            return "runtime=quarantined;sourceItems=\(matchingItems.count);total=\(work.items.count);items=\(detail)"
+        }
     }
 
     private func handle(outcome: SyncConvergenceRuntimeOutcome, sourceBatch: SyncBatch?) async {
