@@ -310,6 +310,86 @@ final class MacSyncBatchControllerTests: XCTestCase {
         )
     }
 
+    func testMYR233DeferredBatchDoesNotBlockDisjointSameOriginBatch() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-same-origin-progress-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let blockedNoteID = UUID(uuidString: "23300000-0000-0000-0000-000000000101")!
+        let disjointNoteID = UUID(uuidString: "23300000-0000-0000-0000-000000000102")!
+        let originDeviceID = UUID(uuidString: "23300000-0000-0000-0000-000000000103")!
+
+        let blockedNote = Note(title: "Blocked", content: "local-a")
+        blockedNote.id = blockedNoteID
+        let disjointNote = Note(title: "Before", content: "local-b")
+        disjointNote.id = disjointNoteID
+        context.insert(blockedNote)
+        context.insert(disjointNote)
+        try context.save()
+
+        let pendingURL = directory.appendingPathComponent("pending-incoming.json")
+        let controller = try makeController(
+            context: context,
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil
+        )
+
+        let deferredBatch = SyncBatch(
+            id: UUID(uuidString: "23300000-0000-0000-0000-000000000104")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 2_334),
+            batchSequence: 1,
+            changes: [.noteBodyTextInserted(.init(
+                noteID: blockedNoteID,
+                utf16Offset: 4,
+                text: " remote",
+                modifiedAt: Date(timeIntervalSinceReferenceDate: 2_334),
+                baseContentHash: SyncBatchContentHash.sha256Hex(for: "base")
+            ))]
+        )
+        let disjointBatch = SyncBatch(
+            id: UUID(uuidString: "23300000-0000-0000-0000-000000000105")!,
+            originDeviceID: originDeviceID,
+            createdAt: Date(timeIntervalSinceReferenceDate: 2_335),
+            batchSequence: 2,
+            changes: [.noteTitleChanged(.init(
+                noteID: disjointNoteID,
+                title: "After",
+                modifiedAt: Date(timeIntervalSinceReferenceDate: 2_335)
+            ))]
+        )
+
+        XCTAssertEqual(
+            await coordinator.submitRemoteBatch(deferredBatch),
+            .acknowledgementDeferred
+        )
+        XCTAssertEqual(
+            await coordinator.submitRemoteBatch(disjointBatch),
+            .acknowledgementPermitted,
+            "A deferred batch must not head-of-line block disjoint work from the same peer."
+        )
+        XCTAssertEqual(disjointNote.title, "After")
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches.map(\.id),
+            [deferredBatch.id]
+        )
+    }
+
     func testInviteDoesNotStartAnotherAttemptForConnectedPeer() throws {
         let peerID = MCPeerID(displayName: "remote|connected-mac")
         var invitedPeerIDs: [MCPeerID] = []
