@@ -23,12 +23,22 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         let creationModifiedAt = Date(timeIntervalSinceReferenceDate: 2_351)
         let titleModifiedAt = Date(timeIntervalSinceReferenceDate: 2_352)
         let bodyModifiedAt = Date(timeIntervalSinceReferenceDate: 2_353)
-        let initialBody = "Body"
-        let insertedBody = " later"
+        let initialBody = ""
+        let insertedBody = "Body later"
+        let bodyChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 0,
+            text: insertedBody,
+            modifiedAt: bodyModifiedAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: initialBody),
+            operationID: SyncOperationID(deviceID: originDeviceID, localCounter: 1),
+            state: SyncTextSequenceState(runs: [], fragments: [])
+        )
         let batch = SyncBatch(
             id: Self.uuid(235_003),
             originDeviceID: originDeviceID,
             createdAt: creationModifiedAt,
+            batchSequence: 1,
             changes: [
                 .noteCreated(SyncBatchNoteCreatedChange(
                     noteID: noteID,
@@ -43,13 +53,7 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
                     title: "Renamed",
                     modifiedAt: titleModifiedAt
                 )),
-                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
-                    noteID: noteID,
-                    utf16Offset: initialBody.utf16.count,
-                    text: insertedBody,
-                    modifiedAt: bodyModifiedAt,
-                    baseContentHash: SyncBatchContentHash.sha256Hex(for: initialBody)
-                ))
+                bodyChange
             ]
         )
 
@@ -84,12 +88,22 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         let creationModifiedAt = Date(timeIntervalSinceReferenceDate: 2_361)
         let bodyModifiedAt = Date(timeIntervalSinceReferenceDate: 2_362)
         let titleModifiedAt = Date(timeIntervalSinceReferenceDate: 2_363)
-        let initialBody = "Body"
-        let insertedBody = " later"
+        let initialBody = ""
+        let insertedBody = "Body later"
+        let bodyChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
+            noteID: noteID,
+            utf16Offset: 0,
+            text: insertedBody,
+            modifiedAt: bodyModifiedAt,
+            baseContentHash: SyncBatchContentHash.sha256Hex(for: initialBody),
+            operationID: SyncOperationID(deviceID: originDeviceID, localCounter: 1),
+            state: SyncTextSequenceState(runs: [], fragments: [])
+        )
         let batch = SyncBatch(
             id: Self.uuid(235_013),
             originDeviceID: originDeviceID,
             createdAt: creationModifiedAt,
+            batchSequence: 1,
             changes: [
                 .noteCreated(SyncBatchNoteCreatedChange(
                     noteID: noteID,
@@ -104,13 +118,7 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
                     title: "Renamed",
                     modifiedAt: titleModifiedAt
                 )),
-                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
-                    noteID: noteID,
-                    utf16Offset: initialBody.utf16.count,
-                    text: insertedBody,
-                    modifiedAt: bodyModifiedAt,
-                    baseContentHash: SyncBatchContentHash.sha256Hex(for: initialBody)
-                ))
+                bodyChange
             ]
         )
 
