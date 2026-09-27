@@ -273,40 +273,6 @@ final class BufferedSyncConflictStore: SyncConflictStoring {
         )] = baseline
     }
 
-    func materializeLegacyConflictChecked(
-        _ conflict: SyncConflictVersion
-    ) throws -> SyncLegacyConflictMaterializationOutcome {
-        try commitLegacyIncomingEffectsChecked(
-            LegacyIncomingBufferedEffects(preservedConflicts: [conflict])
-        )
-
-        let legacyConflicts = legacyActiveConflicts(now: Date())
-        if let exactID = legacyConflicts.first(where: { $0.id == conflict.id }) {
-            return exactID == conflict ? .active : .blocked
-        }
-        if legacyConflicts.contains(where: {
-            SyncTextConflictStore.isExactRemoteMatch(
-                $0.syncTextConflict,
-                conflict.syncTextConflict
-            )
-        }) {
-            return .blocked
-        }
-
-        let textConflict = conflict.syncTextConflict
-        if let queued = textConflictStore.queuedConflict(
-            entityType: textConflict.entityType,
-            entityID: textConflict.entityID,
-            fieldID: textConflict.fieldID
-        ), SyncTextConflictStore.isExactRemoteMatch(queued.conflict, textConflict) {
-            return .blocked
-        }
-
-        // NearbySyncCore's checked preserve has only one non-active,
-        // non-queued success path: an exact durable resolved-conflict tombstone.
-        return .alreadyTerminal
-    }
-
     func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date, originDeviceID: String?) {
         saveRemoteBaseline(SyncRemoteTextBaseline(
             entityType: .note,
@@ -878,6 +844,40 @@ final class SyncConflictStore: SyncConflictStoring, SyncConflictLegacyInspecting
                 try persistDeferredRemoteLifecycleResolutionChecked(conflict)
             }
         }
+    }
+
+    func materializeLegacyConflictChecked(
+        _ conflict: SyncConflictVersion
+    ) throws -> SyncLegacyConflictMaterializationOutcome {
+        try commitLegacyIncomingEffectsChecked(
+            LegacyIncomingBufferedEffects(preservedConflicts: [conflict])
+        )
+
+        let legacyConflicts = legacyActiveConflicts(now: Date())
+        if let exactID = legacyConflicts.first(where: { $0.id == conflict.id }) {
+            return exactID == conflict ? .active : .blocked
+        }
+        if legacyConflicts.contains(where: {
+            SyncTextConflictStore.isExactRemoteMatch(
+                $0.syncTextConflict,
+                conflict.syncTextConflict
+            )
+        }) {
+            return .blocked
+        }
+
+        let textConflict = conflict.syncTextConflict
+        if let queued = textConflictStore.queuedConflict(
+            entityType: textConflict.entityType,
+            entityID: textConflict.entityID,
+            fieldID: textConflict.fieldID
+        ), SyncTextConflictStore.isExactRemoteMatch(queued.conflict, textConflict) {
+            return .blocked
+        }
+
+        // NearbySyncCore's checked preserve has only one non-active,
+        // non-queued success path: an exact durable resolved-conflict tombstone.
+        return .alreadyTerminal
     }
 
     func saveNoteTitleBaseline(noteID: UUID, title: String, modifiedAt: Date, originDeviceID: String?) {
