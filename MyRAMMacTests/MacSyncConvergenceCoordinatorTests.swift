@@ -23,22 +23,13 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         let creationModifiedAt = Date(timeIntervalSinceReferenceDate: 2_351)
         let titleModifiedAt = Date(timeIntervalSinceReferenceDate: 2_352)
         let bodyModifiedAt = Date(timeIntervalSinceReferenceDate: 2_353)
-        let initialBody = ""
-        let insertedBody = "Body later"
-        let bodyChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
-            noteID: noteID,
-            utf16Offset: 0,
-            text: insertedBody,
-            modifiedAt: bodyModifiedAt,
-            baseContentHash: SyncBatchContentHash.sha256Hex(for: initialBody),
-            operationID: SyncOperationID(deviceID: originDeviceID, localCounter: 1),
-            state: SyncTextSequenceState(runs: [], fragments: [])
-        )
-        let batch = SyncBatch(
+        let initialBody = "Body"
+        let insertedBody = " later"
+
+        let creationBatch = SyncBatch(
             id: Self.uuid(235_003),
             originDeviceID: originDeviceID,
             createdAt: creationModifiedAt,
-            batchSequence: 1,
             changes: [
                 .noteCreated(SyncBatchNoteCreatedChange(
                     noteID: noteID,
@@ -47,19 +38,38 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
                     folderID: nil,
                     createdAt: createdAt,
                     modifiedAt: creationModifiedAt
-                )),
+                ))
+            ]
+        )
+        XCTAssertEqual(
+            await coordinator.submitRemoteBatch(creationBatch),
+            .acknowledgementPermitted
+        )
+
+        let mutationBatch = SyncBatch(
+            id: Self.uuid(235_004),
+            originDeviceID: originDeviceID,
+            createdAt: titleModifiedAt,
+            changes: [
                 .noteTitleChanged(SyncBatchNoteTitleChangedChange(
                     noteID: noteID,
                     title: "Renamed",
                     modifiedAt: titleModifiedAt
                 )),
-                bodyChange
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: initialBody.utf16.count,
+                    text: insertedBody,
+                    modifiedAt: bodyModifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: initialBody)
+                ))
             ]
         )
 
-        let disposition = await coordinator.submitRemoteBatch(batch)
-
-        XCTAssertEqual(disposition, .acknowledgementPermitted)
+        XCTAssertEqual(
+            await coordinator.submitRemoteBatch(mutationBatch),
+            .acknowledgementPermitted
+        )
         let created = try XCTUnwrap(context.fetch(FetchDescriptor<Note>(
             predicate: #Predicate { $0.id == noteID }
         )).first)
@@ -88,22 +98,13 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
         let creationModifiedAt = Date(timeIntervalSinceReferenceDate: 2_361)
         let bodyModifiedAt = Date(timeIntervalSinceReferenceDate: 2_362)
         let titleModifiedAt = Date(timeIntervalSinceReferenceDate: 2_363)
-        let initialBody = ""
-        let insertedBody = "Body later"
-        let bodyChange = try SyncBatchAnchoredPayloadAdapter.makeInsertedChange(
-            noteID: noteID,
-            utf16Offset: 0,
-            text: insertedBody,
-            modifiedAt: bodyModifiedAt,
-            baseContentHash: SyncBatchContentHash.sha256Hex(for: initialBody),
-            operationID: SyncOperationID(deviceID: originDeviceID, localCounter: 1),
-            state: SyncTextSequenceState(runs: [], fragments: [])
-        )
-        let batch = SyncBatch(
+        let initialBody = "Body"
+        let insertedBody = " later"
+
+        let creationBatch = SyncBatch(
             id: Self.uuid(235_013),
             originDeviceID: originDeviceID,
             createdAt: creationModifiedAt,
-            batchSequence: 1,
             changes: [
                 .noteCreated(SyncBatchNoteCreatedChange(
                     noteID: noteID,
@@ -112,19 +113,38 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
                     folderID: nil,
                     createdAt: createdAt,
                     modifiedAt: creationModifiedAt
+                ))
+            ]
+        )
+        XCTAssertEqual(
+            await coordinator.submitRemoteBatch(creationBatch),
+            .acknowledgementPermitted
+        )
+
+        let mutationBatch = SyncBatch(
+            id: Self.uuid(235_014),
+            originDeviceID: originDeviceID,
+            createdAt: bodyModifiedAt,
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: initialBody.utf16.count,
+                    text: insertedBody,
+                    modifiedAt: bodyModifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: initialBody)
                 )),
                 .noteTitleChanged(SyncBatchNoteTitleChangedChange(
                     noteID: noteID,
                     title: "Renamed",
                     modifiedAt: titleModifiedAt
-                )),
-                bodyChange
+                ))
             ]
         )
 
-        let disposition = await coordinator.submitRemoteBatch(batch)
-
-        XCTAssertEqual(disposition, .acknowledgementPermitted)
+        XCTAssertEqual(
+            await coordinator.submitRemoteBatch(mutationBatch),
+            .acknowledgementPermitted
+        )
         let created = try XCTUnwrap(context.fetch(FetchDescriptor<Note>(
             predicate: #Predicate { $0.id == noteID }
         )).first)
