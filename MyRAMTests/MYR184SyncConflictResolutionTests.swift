@@ -582,6 +582,197 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
         )
     }
 
+    func testMYR233TerminalLegacyEvidenceReconcilesPreparingRecordAndPeerAdoptionCompletesCoverage() throws {
+        let fixture = try makeStructuralResolutionFixture()
+        try fixture.store.saveRemoteBaselineChecked(SyncRemoteTextBaseline(
+            entityType: .note,
+            entityID: fixture.note.id,
+            field: .noteContent,
+            text: fixture.note.content,
+            richTextContentData: fixture.note.richTextContentData,
+            modifiedAt: fixture.note.modifiedAt,
+            originDeviceID: nil
+        ))
+        try fixture.store.commitLegacyIncomingEffectsChecked(
+            LegacyIncomingBufferedEffects(removedResolvedConflicts: [fixture.conflict])
+        )
+        XCTAssertNil(fixture.store.activeConflict(id: fixture.conflict.id))
+
+        let remotePayload = try NoteSequenceStatePersistenceCodec.encode(
+            state: fixture.remoteState,
+            noteID: fixture.note.id
+        )
+        let remoteSnapshot = SyncPeerBootstrapNoteSnapshot(
+            id: fixture.note.id,
+            title: fixture.note.title,
+            body: fixture.conflict.remoteText,
+            isPinned: fixture.note.isPinned ?? false,
+            createdAt: fixture.note.createdAt,
+            modifiedAt: fixture.conflict.remoteModifiedAt,
+            deletedAt: fixture.note.deletedAt,
+            folderID: fixture.note.folder?.id,
+            formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+            revision: 0,
+            visibleUTF16Count: fixture.remoteState.visibleUTF16Count,
+            tombstonedUTF16Count: fixture.remoteState.tombstonedUTF16Count,
+            payloadByteCount: remotePayload.count,
+            statePayloadData: remotePayload
+        )
+        let retrySidecarURL = fixture.sidecarURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("terminal-legacy-retry-\(UUID().uuidString).json")
+
+        let firstRetry = try fixture.store.materializeBootstrapStructuralConflictChecked(
+            noteID: fixture.note.id,
+            localText: fixture.note.content,
+            localState: fixture.localState,
+            remoteSnapshot: remoteSnapshot,
+            bootstrapSnapshotID: UUID(),
+            sidecarFileURL: retrySidecarURL
+        )
+        XCTAssertEqual(firstRetry.id, fixture.conflict.id)
+        XCTAssertNil(fixture.store.activeConflict(id: fixture.conflict.id))
+        XCTAssertEqual(
+            try fixture.store.bootstrapStructuralConflictRecordChecked(
+                id: fixture.conflict.id,
+                sidecarFileURL: retrySidecarURL
+            )?.lifecycle,
+            .resolvedLocalAuthority
+        )
+        let localFingerprint = try SyncConflictStore.bootstrapStructuralFingerprint(
+            noteID: fixture.note.id,
+            state: fixture.localState
+        )
+        let receipt = try XCTUnwrap(fixture.store.bootstrapStructuralResolutionReceiptChecked(
+            conflictID: fixture.conflict.id,
+            sidecarFileURL: retrySidecarURL
+        ))
+        XCTAssertEqual(receipt.choice, .keepLocal)
+        XCTAssertEqual(receipt.chosenFingerprint, localFingerprint)
+
+        // Restart/redelivery of the same persisted episode is idempotent even
+        // though the legacy store correctly keeps the visible row terminal.
+        let secondRetry = try fixture.store.materializeBootstrapStructuralConflictChecked(
+            noteID: fixture.note.id,
+            localText: fixture.note.content,
+            localState: fixture.localState,
+            remoteSnapshot: remoteSnapshot,
+            bootstrapSnapshotID: UUID(),
+            sidecarFileURL: retrySidecarURL
+        )
+        XCTAssertEqual(secondRetry.id, fixture.conflict.id)
+        XCTAssertNil(fixture.store.activeConflict(id: fixture.conflict.id))
+
+        let committed = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: fixture.note,
+            in: fixture.context
+        )
+        let adoptedPayload = try NoteSequenceStatePersistenceCodec.encode(
+            state: committed.state,
+            noteID: fixture.note.id
+        )
+        let batchID = UUID()
+        let adoptedSnapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(),
+            folders: [],
+            notes: [SyncPeerBootstrapNoteSnapshot(
+                id: fixture.note.id,
+                title: fixture.note.title,
+                body: fixture.note.content,
+                isPinned: fixture.note.isPinned ?? false,
+                createdAt: fixture.note.createdAt,
+                modifiedAt: fixture.note.modifiedAt,
+                deletedAt: fixture.note.deletedAt,
+                folderID: fixture.note.folder?.id,
+                formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                revision: committed.revision,
+                visibleUTF16Count: committed.state.visibleUTF16Count,
+                tombstonedUTF16Count: committed.state.tombstonedUTF16Count,
+                payloadByteCount: adoptedPayload.count,
+                statePayloadData: adoptedPayload
+            )],
+            historyCoverage: [SyncPeerBootstrapHistoryBatchCoverage(
+                batchID: batchID,
+                noteIDs: [fixture.note.id],
+                anchoredRecoveryChanges: nil
+            )]
+        )
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            adoptedSnapshot,
+            to: fixture.context,
+            structuralConflictStore: fixture.store,
+            structuralConflictSidecarFileURL: retrySidecarURL
+        )
+
+        XCTAssertTrue(disposition.coveredNoteIDs.contains(fixture.note.id))
+        XCTAssertTrue(disposition.coveredBatchIDs.contains(batchID))
+        XCTAssertEqual(
+            try fixture.store.bootstrapStructuralConflictRecordChecked(
+                id: fixture.conflict.id,
+                sidecarFileURL: retrySidecarURL
+            )?.lifecycle,
+            .terminallySuperseded
+        )
+    }
+
+    func testMYR233TerminalLegacyEvidenceWithoutMatchingBaselineFailsClosed() throws {
+        let fixture = try makeStructuralResolutionFixture()
+        try fixture.store.commitLegacyIncomingEffectsChecked(
+            LegacyIncomingBufferedEffects(removedResolvedConflicts: [fixture.conflict])
+        )
+        XCTAssertNil(fixture.store.activeConflict(id: fixture.conflict.id))
+
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: fixture.remoteState,
+            noteID: fixture.note.id
+        )
+        let remoteSnapshot = SyncPeerBootstrapNoteSnapshot(
+            id: fixture.note.id,
+            title: fixture.note.title,
+            body: fixture.conflict.remoteText,
+            isPinned: fixture.note.isPinned ?? false,
+            createdAt: fixture.note.createdAt,
+            modifiedAt: fixture.conflict.remoteModifiedAt,
+            deletedAt: fixture.note.deletedAt,
+            folderID: fixture.note.folder?.id,
+            formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+            revision: 0,
+            visibleUTF16Count: fixture.remoteState.visibleUTF16Count,
+            tombstonedUTF16Count: fixture.remoteState.tombstonedUTF16Count,
+            payloadByteCount: payload.count,
+            statePayloadData: payload
+        )
+        let retrySidecarURL = fixture.sidecarURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("ambiguous-terminal-retry-\(UUID().uuidString).json")
+
+        XCTAssertThrowsError(try fixture.store.materializeBootstrapStructuralConflictChecked(
+            noteID: fixture.note.id,
+            localText: fixture.note.content,
+            localState: fixture.localState,
+            remoteSnapshot: remoteSnapshot,
+            bootstrapSnapshotID: UUID(),
+            sidecarFileURL: retrySidecarURL
+        )) { error in
+            XCTAssertEqual(
+                error as? SyncBootstrapStructuralConflictStoreError,
+                .contradictoryEvidence
+            )
+        }
+        XCTAssertEqual(
+            try fixture.store.bootstrapStructuralConflictRecordChecked(
+                id: fixture.conflict.id,
+                sidecarFileURL: retrySidecarURL
+            )?.lifecycle,
+            .preparing
+        )
+        XCTAssertNil(try fixture.store.bootstrapStructuralResolutionReceiptChecked(
+            conflictID: fixture.conflict.id,
+            sidecarFileURL: retrySidecarURL
+        ))
+    }
+
     func testMYR222ExactPeerAdoptionTerminalizesWaitingLocalAuthorityAndPermitsCoverage() async throws {
         let fixture = try makeStructuralResolutionFixture()
         let service = MyRAMSyncConflictService(
