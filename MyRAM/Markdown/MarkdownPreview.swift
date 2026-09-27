@@ -96,8 +96,8 @@ enum MarkdownPreviewResult: Equatable {
 // MARK: - Block projection
 
 /// Immutable, shared block model derived solely from Foundation AttributedString + presentation intents.
-/// Permitted block types (§6.4): paragraph, heading, orderedListItem, unorderedListItem,
-/// blockQuote, codeBlock.
+/// Supported block types: paragraph, heading, orderedListItem, unorderedListItem,
+/// blockQuote, codeBlock, and table.
 /// Inline semantics (emphasis, strong, links, inline code) remain AttributedString attributes
 /// inside each block. They are never separate block cases.
 /// Unknown/future Foundation intents render as .paragraph — never trigger plain-text fallback.
@@ -120,10 +120,11 @@ struct MarkdownPreviewDocument: Equatable {
 
         var blocks: [MarkdownPreviewBlock] = []
         var pendingRuns: [AttributedString] = []
+        var pendingTable: MarkdownTableAccumulator?
         var currentIntent: PresentationIntent? = nil
         var currentKind: MarkdownBlockKind = .paragraph
 
-        func flushPending() {
+        func flushPendingRuns() {
             guard !pendingRuns.isEmpty else { return }
             var merged = AttributedString()
             for run in pendingRuns { merged += run }
@@ -131,21 +132,56 @@ struct MarkdownPreviewDocument: Equatable {
             pendingRuns = []
         }
 
+        func flushPendingTable() {
+            guard let table = pendingTable?.makeTable() else { return }
+            blocks.append(
+                MarkdownPreviewBlock(
+                    kind: .table(table),
+                    content: AttributedString()
+                )
+            )
+            pendingTable = nil
+        }
+
         for run in attributed.runs {
             let intent = run.presentationIntent
+
+            if let tableMetadata = MarkdownTableRunMetadata(intent: intent) {
+                flushPendingRuns()
+                currentIntent = nil
+                currentKind = .paragraph
+
+                if pendingTable?.identity != tableMetadata.tableIdentity {
+                    flushPendingTable()
+                    pendingTable = MarkdownTableAccumulator(
+                        identity: tableMetadata.tableIdentity,
+                        columnCount: tableMetadata.columnCount
+                    )
+                }
+
+                pendingTable?.append(
+                    AttributedString(attributed[run.range]),
+                    metadata: tableMetadata
+                )
+                continue
+            }
+
+            flushPendingTable()
+
             let kind = MarkdownBlockKind(from: intent)
 
             // Group runs ONLY when their presentation intent identity and block kind match.
             // Distinct list items or separate paragraphs have different intents and will NOT be merged.
             if intent != currentIntent || kind != currentKind {
-                flushPending()
+                flushPendingRuns()
                 currentIntent = intent
                 currentKind = kind
             }
             pendingRuns.append(AttributedString(attributed[run.range]))
         }
-        flushPending()
 
+        flushPendingRuns()
+        flushPendingTable()
         return blocks
     }
 }
@@ -170,7 +206,135 @@ struct MarkdownListMetadata: Equatable {
     let depth: Int
 }
 
-/// The six permitted block classifications from §6.4.
+struct MarkdownPreviewTable: Equatable {
+    let columnCount: Int
+    let rows: [MarkdownPreviewTableRow]
+}
+
+struct MarkdownPreviewTableRow: Equatable {
+    let index: Int
+    let isHeader: Bool
+    let cells: [MarkdownPreviewTableCell]
+}
+
+struct MarkdownPreviewTableCell: Equatable {
+    let columnIndex: Int
+    let content: AttributedString
+}
+
+private struct MarkdownTableRunMetadata {
+    let tableIdentity: Int
+    let columnCount: Int
+    let rowIndex: Int
+    let isHeader: Bool
+    let columnIndex: Int
+
+    init?(intent: PresentationIntent?) {
+        guard let intent else { return nil }
+
+        var tableIdentity: Int?
+        var columnCount: Int?
+        var rowIndex: Int?
+        var isHeader = false
+        var columnIndex: Int?
+
+        for component in intent.components {
+            switch component.kind {
+            case .table(let columns):
+                tableIdentity = component.identity
+                columnCount = columns.count
+            case .tableHeaderRow:
+                rowIndex = 0
+                isHeader = true
+            case .tableRow(let index):
+                rowIndex = index
+            case .tableCell(let index):
+                columnIndex = index
+            default:
+                break
+            }
+        }
+
+        guard let tableIdentity,
+              let columnCount,
+              columnCount > 0,
+              let rowIndex,
+              rowIndex >= 0,
+              let columnIndex,
+              columnIndex >= 0,
+              columnIndex < columnCount else {
+            return nil
+        }
+
+        self.tableIdentity = tableIdentity
+        self.columnCount = columnCount
+        self.rowIndex = rowIndex
+        self.isHeader = isHeader
+        self.columnIndex = columnIndex
+    }
+}
+
+private struct MarkdownTableAccumulator {
+    let identity: Int
+    let columnCount: Int
+    private var rows: [Int: MarkdownTableRowAccumulator] = [:]
+
+    init(identity: Int, columnCount: Int) {
+        self.identity = identity
+        self.columnCount = columnCount
+    }
+
+    mutating func append(
+        _ content: AttributedString,
+        metadata: MarkdownTableRunMetadata
+    ) {
+        guard metadata.tableIdentity == identity,
+              metadata.columnCount == columnCount else {
+            return
+        }
+
+        var row = rows[metadata.rowIndex]
+            ?? MarkdownTableRowAccumulator(isHeader: metadata.isHeader)
+        row.isHeader = row.isHeader || metadata.isHeader
+        row.append(content, columnIndex: metadata.columnIndex)
+        rows[metadata.rowIndex] = row
+    }
+
+    func makeTable() -> MarkdownPreviewTable {
+        let projectedRows = rows.keys.sorted().map { rowIndex in
+            let row = rows[rowIndex]!
+            let cells = (0..<columnCount).map { columnIndex in
+                MarkdownPreviewTableCell(
+                    columnIndex: columnIndex,
+                    content: row.cells[columnIndex] ?? AttributedString()
+                )
+            }
+            return MarkdownPreviewTableRow(
+                index: rowIndex,
+                isHeader: row.isHeader,
+                cells: cells
+            )
+        }
+
+        return MarkdownPreviewTable(
+            columnCount: columnCount,
+            rows: projectedRows
+        )
+    }
+}
+
+private struct MarkdownTableRowAccumulator {
+    var isHeader: Bool
+    var cells: [Int: AttributedString] = [:]
+
+    mutating func append(_ content: AttributedString, columnIndex: Int) {
+        var cell = cells[columnIndex] ?? AttributedString()
+        cell += content
+        cells[columnIndex] = cell
+    }
+}
+
+/// Shared block classifications derived from Foundation presentation intents.
 /// Unknown or future Foundation presentation intents map to .paragraph.
 enum MarkdownBlockKind: Equatable {
     case paragraph
@@ -179,6 +343,7 @@ enum MarkdownBlockKind: Equatable {
     case unorderedListItem(MarkdownListMetadata)
     case blockQuote
     case codeBlock
+    case table(MarkdownPreviewTable)
 }
 
 extension MarkdownBlockKind {
@@ -383,6 +548,8 @@ private struct MarkdownBlockView: View {
                 .padding(10)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+        case .table(let table):
+            MarkdownTableView(table: table)
         }
     }
 
@@ -400,6 +567,56 @@ private struct MarkdownBlockView: View {
             return String(block.content.characters)
         }
         return "\(ordinal). \(String(block.content.characters))"
+    }
+}
+
+
+private struct MarkdownTableView: View {
+    let table: MarkdownPreviewTable
+
+    var body: some View {
+        Grid(horizontalSpacing: 0, verticalSpacing: 0) {
+            ForEach(table.rows, id: \.index) { row in
+                GridRow {
+                    ForEach(row.cells, id: \.columnIndex) { cell in
+                        tableCell(cell, in: row)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("markdown-preview-table")
+    }
+
+    @ViewBuilder
+    private func tableCell(
+        _ cell: MarkdownPreviewTableCell,
+        in row: MarkdownPreviewTableRow
+    ) -> some View {
+        Group {
+            if row.isHeader {
+                Text(cell.content)
+                    .font(.body)
+                    .fontWeight(.semibold)
+            } else {
+                Text(cell.content)
+                    .font(.body)
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(row.isHeader ? Color.secondary.opacity(0.12) : Color.clear)
+        .overlay(
+            Rectangle()
+                .stroke(Color.secondary.opacity(0.45), lineWidth: 1)
+        )
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(String(cell.content.characters))
+        .accessibilityIdentifier(
+            "markdown-preview-table-cell-\(row.index)-\(cell.columnIndex)"
+        )
     }
 }
 

@@ -128,6 +128,47 @@ final class MacMarkdownPreviewDocumentBuilderTests: XCTestCase {
         }
     }
 
+    func testTableBuildProducesNativeTextTableStructure() throws {
+        let source = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Ready |
+        | Beta | Pending |
+        """
+
+        let document = MacMarkdownPreviewDocumentBuilder().build(source: source)
+        XCTAssertFalse(document.string.contains("|"), "Rendered table must not expose raw pipe syntax")
+        XCTAssertTrue(document.string.contains("Name"))
+        XCTAssertTrue(document.string.contains("Pending"))
+
+        var blocks: [NSTextTableBlock] = []
+        document.enumerateAttribute(
+            .paragraphStyle,
+            in: NSRange(location: 0, length: document.length)
+        ) { value, _, _ in
+            guard let style = value as? NSParagraphStyle else { return }
+            blocks.append(contentsOf: style.textBlocks.compactMap { $0 as? NSTextTableBlock })
+        }
+
+        XCTAssertEqual(blocks.count, 6, "Two columns across three rows must produce six native cells")
+        XCTAssertEqual(Set(blocks.map { ObjectIdentifier($0.table) }).count, 1)
+        XCTAssertEqual(blocks.first?.table.numberOfColumns, 2)
+        XCTAssertEqual(
+            Set(blocks.map { "\($0.startingRow):\($0.startingColumn)" }),
+            Set(["0:0", "0:1", "1:0", "1:1", "2:0", "2:1"])
+        )
+
+        let headerBlocks = blocks.filter { $0.startingRow == 0 }
+        XCTAssertEqual(headerBlocks.count, 2)
+        XCTAssertTrue(headerBlocks.allSatisfy { $0.backgroundColor != nil })
+
+        let headerRange = (document.string as NSString).range(of: "Name")
+        let headerFont = try XCTUnwrap(
+            document.attribute(.font, at: headerRange.location, effectiveRange: nil) as? NSFont
+        )
+        XCTAssertTrue(NSFontManager.shared.traits(of: headerFont).contains(.boldFontMask))
+    }
+
     private func assertTraits(
         _ expected: NSFontTraitMask,
         in substring: String,

@@ -822,6 +822,43 @@ final class MacMarkdownPreviewIntegrationTests: XCTestCase {
             "Body search highlight MUST be nil when AppKit Preview is visible — must not scroll hidden editor")
     }
 
+    func testTablePreviewRoundTripPreservesExactEditorSource() throws {
+        let source = """
+        | Name | Status |
+        | --- | --- |
+        | Alpha | Ready |
+        | Beta | Pending |
+        """
+        let host = makeHostedEditor(text: source)
+        let originalBinding = host.state.attributedText
+        let editor = try XCTUnwrap(host.state.syncBridge.textView)
+
+        host.state.enterPreview()
+        drainMainRunLoop()
+
+        let preview = try XCTUnwrap(previewTextView(in: host.container))
+        XCTAssertTrue(preview.string.contains("Name"))
+        XCTAssertTrue(preview.string.contains("Beta"))
+        XCTAssertFalse(preview.string.contains("| --- |"))
+
+        let nameRange = (preview.string as NSString).range(of: "Name")
+        let nameStyle = try XCTUnwrap(
+            preview.attributedString().attribute(
+                .paragraphStyle,
+                at: nameRange.location,
+                effectiveRange: nil
+            ) as? NSParagraphStyle
+        )
+        XCTAssertTrue(nameStyle.textBlocks.contains { $0 is NSTextTableBlock })
+
+        host.state.enterEdit()
+        drainMainRunLoop()
+
+        XCTAssertEqual(editor.string, source)
+        XCTAssertTrue(host.state.attributedText.isEqual(to: originalBinding))
+        XCTAssertEqual(host.state.recorder.onTextChangedCount, 0)
+    }
+
     private func makeHostedEditor(
         text: String,
         parseOperation: MarkdownPreviewParser.ParseOperation? = nil,
