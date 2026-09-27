@@ -341,6 +341,33 @@ final class SyncBatchUnsentQueueTests: XCTestCase {
         XCTAssertEqual(FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches, [batch])
     }
 
+    func testDurableEnqueueRejectsSameIDDifferentBatchWithoutMutation() throws {
+        let fileURL = temporaryQueueFileURL()
+        let original = makeBatch(idSuffix: 1)
+        let conflicting = SyncBatch(
+            id: original.id,
+            originDeviceID: original.originDeviceID,
+            createdAt: original.createdAt.addingTimeInterval(1),
+            batchSequence: original.batchSequence,
+            changes: original.changes
+        )
+        let queue = FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10)
+
+        try queue.enqueueDurably(original)
+
+        XCTAssertThrowsError(try queue.enqueueDurably(conflicting)) { error in
+            XCTAssertEqual(
+                error as? FileBackedSyncBatchQueue.QueueError,
+                .conflictingDuplicateBatchID(original.id)
+            )
+        }
+        XCTAssertEqual(queue.pendingBatches, [original])
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: fileURL, limit: 10).pendingBatches,
+            [original]
+        )
+    }
+
     func testFileBackedQueueRemovesOnlySuccessfulIDsFromDisk() throws {
         let fileURL = temporaryQueueFileURL()
         let first = makeBatch(idSuffix: 1)
