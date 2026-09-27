@@ -3514,11 +3514,24 @@ final class MyRAMTests: XCTestCase {
 
             let outcome = await runtime.submitRemoteBatch(batch)
 
-            guard case .blocked(let failure) = outcome else {
-                return XCTFail("Expected boundary failure to block incoming planning")
+            if expectedKind == .staleAuthoritativeState {
+                guard case .quarantined(let work) = outcome else {
+                    return XCTFail("Expected stale boundary state to quarantine incoming planning")
+                }
+                XCTAssertEqual(work.items.count, 1)
+                let item = try XCTUnwrap(work.items.first)
+                XCTAssertEqual(item.domain, .incoming)
+                XCTAssertEqual(item.batchID, batch.id)
+                XCTAssertEqual(item.affectedNoteIDs, [noteID])
+                XCTAssertEqual(item.originDeviceID, batch.originDeviceID)
+                XCTAssertEqual(item.reason, .staleAuthoritativeState(noteID: nil))
+            } else {
+                guard case .blocked(let failure) = outcome else {
+                    return XCTFail("Expected non-stale boundary failure to block incoming planning")
+                }
+                XCTAssertEqual(failure.batchID, batch.id)
+                XCTAssertEqual(failure.kind, expectedKind)
             }
-            XCTAssertEqual(failure.batchID, batch.id)
-            XCTAssertEqual(failure.kind, expectedKind)
             XCTAssertEqual(note.content, "Hello")
             XCTAssertEqual(incomingQueue.pendingBatches.map(\.id), [batch.id])
             XCTAssertEqual(try context.fetchCount(FetchDescriptor<IncorporatedSyncBatch>()), 0)
@@ -3561,9 +3574,16 @@ final class MyRAMTests: XCTestCase {
             ))]
         )
 
-        guard case .blocked = await runtime.submitRemoteBatch(batch) else {
-            return XCTFail("The stale boundary must keep the incoming batch queued")
+        guard case .quarantined(let work) = await runtime.submitRemoteBatch(batch) else {
+            return XCTFail("The stale boundary must quarantine the incoming batch")
         }
+        XCTAssertEqual(work.items.count, 1)
+        let item = try XCTUnwrap(work.items.first)
+        XCTAssertEqual(item.domain, .incoming)
+        XCTAssertEqual(item.batchID, batch.id)
+        XCTAssertEqual(item.affectedNoteIDs, [noteID])
+        XCTAssertEqual(item.originDeviceID, batch.originDeviceID)
+        XCTAssertEqual(item.reason, .staleAuthoritativeState(noteID: nil))
         XCTAssertEqual(queue.pendingBatches.map(\.id), [batch.id])
 
         _ = await runtime.resumePendingWork()
