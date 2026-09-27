@@ -3,6 +3,7 @@ import Foundation
 struct SyncBatchUnsentQueue {
     enum EnqueueError: Error, Equatable {
         case capacityExceeded(limit: Int)
+        case conflictingDuplicateBatchID(SyncBatchID)
     }
 
     private let limit: Int
@@ -46,7 +47,12 @@ struct SyncBatchUnsentQueue {
     @discardableResult
     mutating func enqueuePreservingExisting(_ batch: SyncBatch) throws -> Bool {
         guard limit > 0 else { throw EnqueueError.capacityExceeded(limit: limit) }
-        guard !batches.contains(where: { $0.id == batch.id }) else { return false }
+        if let existing = batches.first(where: { $0.id == batch.id }) {
+            guard existing == batch else {
+                throw EnqueueError.conflictingDuplicateBatchID(batch.id)
+            }
+            return false
+        }
         guard batches.count < limit else { throw EnqueueError.capacityExceeded(limit: limit) }
 
         batches.append(batch)

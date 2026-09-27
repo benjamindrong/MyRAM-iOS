@@ -3,6 +3,7 @@ import Foundation
 final class FileBackedSyncBatchQueue {
     enum QueueError: Error, Equatable {
         case capacityExceeded
+        case conflictingDuplicateBatchID(SyncBatchID)
         case persistenceFailed
         case unhealthyPersistence
     }
@@ -113,6 +114,14 @@ final class FileBackedSyncBatchQueue {
                 outcome: "capacityExceeded"
             )
             throw QueueError.capacityExceeded
+        } catch SyncBatchUnsentQueue.EnqueueError.conflictingDuplicateBatchID(let batchID) {
+            recordBenchmark(
+                .queueWriteFailed,
+                batchID: batchID,
+                queueDepth: queue.pendingBatches.count,
+                outcome: "conflictingDuplicateBatchID"
+            )
+            throw QueueError.conflictingDuplicateBatchID(batchID)
         } catch {
             queue.replacePendingBatches(originalBatches)
             recordBenchmark(
@@ -180,6 +189,22 @@ final class FileBackedSyncBatchQueue {
                 itemCount: ids.count,
                 outcome: "persistenceFailed"
             )
+            throw QueueError.persistenceFailed
+        }
+    }
+
+    func removeBatchesForBootstrapAcknowledgement(withIDs ids: Set<SyncBatchID>) throws {
+        let originalBatches = queue.pendingBatches
+        do {
+            try removeBatches(withIDs: ids)
+        } catch QueueError.persistenceFailed {
+            let reloaded = loadPersistedQueue()
+            health = reloaded.health
+            if canPersistCurrentQueue, reloaded.pendingBatches == originalBatches {
+                queue.replacePendingBatches(reloaded.pendingBatches)
+            } else {
+                health = .readFailed("Bootstrap cleanup rollback verification failed")
+            }
             throw QueueError.persistenceFailed
         }
     }

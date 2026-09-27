@@ -883,12 +883,17 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
 #else
     func testReconnectBootstrapIncludesDurablePendingLocalObligationHistory() async throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MYR-222-ios-bootstrap-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MYR-233-ios-bootstrap-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
         let fixture = try await makeDisconnectedEditFixture()
-        let remotePeer = MCPeerID(displayName: "remote|myr222-ios-peer")
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: directory.appendingPathComponent("local-obligations.json")
+        )
+        try localQueue.enqueue(fixture.obligation)
+
+        let remotePeer = MCPeerID(displayName: "remote|myr233-ios-peer")
         let transport = MYR222BootstrapRecordingTransport(connectedPeers: [remotePeer])
         let controller = MyRAMSyncController(
             unsentBatchQueueFileURL: nil,
@@ -896,47 +901,101 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
             startsNetworking: false,
             transport: transport
         )
-        var pendingLocalCount = 1
-        var admissionError: Error?
-        controller.localConvergencePendingCountProvider = { pendingLocalCount }
-        controller.onPrepareLocalOwnershipForBootstrap = { [weak controller] in
-            guard let controller else { return }
-            do {
-                try await controller.acceptLocalBatch(fixture.obligation.batch)
-                pendingLocalCount = 0
-            } catch {
-                admissionError = error
-            }
+        controller.onPrepareLocalOwnershipForBootstrap = {}
+        controller.localBootstrapOwnershipSnapshotProvider = {
+            localQueue.snapshot()
+        }
+        controller.removeLocalBootstrapOwnership = { batchIDs in
+            try localQueue.removeObligationsForBootstrapAcknowledgement(withIDs: batchIDs)
         }
         controller.buildBootstrapSnapshot = {
             try SyncPeerBootstrapSnapshotPersistence.build(from: fixture.context)
         }
         controller.recordBootstrapCapabilityForTesting(
             "1",
-            forPeerDeviceID: "myr222-ios-peer"
+            forPeerDeviceID: "myr233-ios-peer"
         )
         controller.setBootstrapRetryDelayNanosecondsForTesting([1_000_000_000])
 
         await controller.beginBootstrapForTesting(to: remotePeer)
 
-        XCTAssertNil(admissionError)
-        XCTAssertEqual(pendingLocalCount, 0)
+        XCTAssertEqual(localQueue.pendingCount, 1)
         let snapshot = try XCTUnwrap(transport.sentBootstrapSnapshots.first)
         XCTAssertEqual(
             Set(snapshot.historyCoverage.map(\.batchID)),
             [fixture.obligation.batch.id],
-            "iPhone reconnect bootstrap must transfer durable local-obligation ownership before snapshot capture."
+            "iPhone reconnect bootstrap must own durable local obligations directly without transport promotion."
         )
-        controller.handlePeerDisconnectForTesting(peerDeviceID: "myr222-ios-peer")
+        controller.handlePeerDisconnectForTesting(peerDeviceID: "myr233-ios-peer")
     }
 
-    func testReconnectBootstrapFailsClosedWhileLocalObligationRemainsPending() async throws {
+    func testReconnectBootstrapRecoversWithFullUnsentQueueAndDurableLocalObligations() async throws {
         let directory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("MYR-222-ios-fail-closed-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("MYR-233-ios-full-queue-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
 
-        let remotePeer = MCPeerID(displayName: "remote|myr222-ios-blocked-peer")
+        let unsentURL = directory.appendingPathComponent("unsent-batches.json")
+        let localURL = directory.appendingPathComponent("local-obligations.json")
+        let unsentQueue = FileBackedSyncBatchQueue(fileURL: unsentURL)
+        for index in 0..<100 {
+            try unsentQueue.enqueueDurably(makeMYR233Batch(idSuffix: 233_000 + index))
+        }
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(fileURL: localURL)
+        for index in 0..<36 {
+            try localQueue.enqueue(
+                SyncConvergenceLocalObligation(
+                    legacyBatch: makeMYR233Batch(idSuffix: 234_000 + index)
+                )
+            )
+        }
+
+        let remotePeer = MCPeerID(displayName: "remote|myr233-ios-full")
+        let transport = MYR222BootstrapRecordingTransport(connectedPeers: [remotePeer])
+        let controller = MyRAMSyncController(
+            unsentBatchQueueFileURL: unsentURL,
+            pendingChangesFileURL: directory.appendingPathComponent("legacy.json"),
+            startsNetworking: false,
+            transport: transport
+        )
+        controller.onPrepareLocalOwnershipForBootstrap = {}
+        controller.localBootstrapOwnershipSnapshotProvider = {
+            localQueue.snapshot()
+        }
+        controller.removeLocalBootstrapOwnership = { batchIDs in
+            try localQueue.removeObligationsForBootstrapAcknowledgement(withIDs: batchIDs)
+        }
+        controller.buildBootstrapSnapshot = {
+            SyncPeerBootstrapSnapshot(id: UUID(), folders: [], notes: [])
+        }
+        controller.recordBootstrapCapabilityForTesting(
+            "1",
+            forPeerDeviceID: "myr233-ios-full"
+        )
+        controller.setBootstrapRetryDelayNanosecondsForTesting([1_000_000_000])
+
+        await controller.beginBootstrapForTesting(to: remotePeer)
+
+        XCTAssertEqual(controller.unsentBatchQueueSnapshot().pendingBatches.count, 100)
+        XCTAssertEqual(localQueue.pendingCount, 36)
+        let snapshot = try XCTUnwrap(transport.sentBootstrapSnapshots.first)
+        XCTAssertEqual(snapshot.historyCoverage.count, 136)
+        controller.handlePeerDisconnectForTesting(peerDeviceID: "myr233-ios-full")
+    }
+
+    func testBootstrapLocalCleanupFailureRemainsRetryableOnAckReplay() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-ios-local-replay-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let batch = makeMYR233Batch(idSuffix: 235_100)
+        let localQueue = FileBackedSyncConvergenceLocalObligationQueue(
+            fileURL: directory.appendingPathComponent("local-obligations.json")
+        )
+        try localQueue.enqueue(SyncConvergenceLocalObligation(legacyBatch: batch))
+
+        let remotePeer = MCPeerID(displayName: "remote|myr233-ios-replay")
         let transport = MYR222BootstrapRecordingTransport(connectedPeers: [remotePeer])
         let controller = MyRAMSyncController(
             unsentBatchQueueFileURL: nil,
@@ -944,43 +1003,44 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
             startsNetworking: false,
             transport: transport
         )
-        var pendingLocalCount = 1
-        var flushCount = 0
-        var buildCount = 0
-        controller.localConvergencePendingCountProvider = { pendingLocalCount }
-        controller.onFlushLocalConvergenceRequested = {
-            flushCount += 1
+        controller.onPrepareLocalOwnershipForBootstrap = {}
+        controller.localBootstrapOwnershipSnapshotProvider = {
+            localQueue.snapshot()
+        }
+        controller.removeLocalBootstrapOwnership = { batchIDs in
+            try localQueue.removeObligationsForBootstrapAcknowledgement(withIDs: batchIDs)
         }
         controller.buildBootstrapSnapshot = {
-            buildCount += 1
-            return SyncPeerBootstrapSnapshot(id: UUID(), folders: [], notes: [])
+            SyncPeerBootstrapSnapshot(id: UUID(), folders: [], notes: [])
         }
         controller.recordBootstrapCapabilityForTesting(
             "1",
-            forPeerDeviceID: "myr222-ios-blocked-peer"
+            forPeerDeviceID: "myr233-ios-replay"
         )
         controller.setBootstrapRetryDelayNanosecondsForTesting([1_000_000_000])
 
         await controller.beginBootstrapForTesting(to: remotePeer)
-
-        XCTAssertEqual(flushCount, 1)
-        XCTAssertEqual(buildCount, 0)
-        XCTAssertTrue(transport.sentBootstrapSnapshots.isEmpty)
-        XCTAssertFalse(
-            controller.isOrdinarySyncReadyForTesting(peerDeviceID: "myr222-ios-blocked-peer")
-        )
-        XCTAssertEqual(
-            controller.lastErrorMessage,
-            "Unable to prepare nearby bootstrap state while local sync work is pending."
+        let snapshot = try XCTUnwrap(transport.sentBootstrapSnapshots.first)
+        localQueue.injectPersistenceFailureForNextWrite()
+        let acknowledgement = SyncPeerBootstrapAcknowledgement(
+            snapshotID: snapshot.id,
+            coveredBatchIDs: [batch.id]
         )
 
-        pendingLocalCount = 0
-        await controller.beginBootstrapForTesting(to: remotePeer)
+        await controller.handleBootstrapAcknowledgementForTesting(
+            acknowledgement,
+            from: remotePeer
+        )
+        XCTAssertEqual(localQueue.pendingCount, 1)
+        XCTAssertFalse(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "myr233-ios-replay"))
 
-        XCTAssertEqual(flushCount, 3)
-        XCTAssertEqual(buildCount, 2)
-        XCTAssertEqual(transport.sentBootstrapSnapshots.count, 1)
-        controller.handlePeerDisconnectForTesting(peerDeviceID: "myr222-ios-blocked-peer")
+        await controller.handleBootstrapAcknowledgementForTesting(
+            acknowledgement,
+            from: remotePeer
+        )
+        XCTAssertEqual(localQueue.pendingCount, 0)
+        XCTAssertTrue(controller.isOrdinarySyncReadyForTesting(peerDeviceID: "myr233-ios-replay"))
+        controller.handlePeerDisconnectForTesting(peerDeviceID: "myr233-ios-replay")
     }
 #endif
 
@@ -1098,6 +1158,15 @@ final class MYR222DisconnectedConcurrentEditTests: XCTestCase {
             return XCTFail("Expected convergence to drain, got \(outcome)", file: file, line: line)
         }
         XCTAssertEqual(appliedBatchIDs, expectedBatchIDs, file: file, line: line)
+    }
+
+    private func makeMYR233Batch(idSuffix: Int) -> SyncBatch {
+        SyncBatch(
+            id: UUID(uuidString: String(format: "23300000-0000-0000-0000-%012d", idSuffix))!,
+            originDeviceID: UUID(uuidString: "23300000-0000-0000-0000-000000000001")!,
+            createdAt: Date(timeIntervalSinceReferenceDate: TimeInterval(idSuffix)),
+            changes: []
+        )
     }
 
     private func makeDisconnectedEditFixture() async throws -> (

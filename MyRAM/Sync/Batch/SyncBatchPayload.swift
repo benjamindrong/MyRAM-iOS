@@ -433,6 +433,8 @@ enum SyncBatchDrainFailureClassifier {
             switch queueError {
             case .capacityExceeded:
                 kind = .queueCapacity
+            case .conflictingDuplicateBatchID:
+                kind = .invalidMergePlan
             case .persistenceFailed, .unhealthyPersistence:
                 kind = .queuePersistence
             }
