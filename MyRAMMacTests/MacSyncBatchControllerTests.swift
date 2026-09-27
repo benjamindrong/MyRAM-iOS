@@ -2388,6 +2388,54 @@ final class MacSyncBatchControllerTests: XCTestCase {
         _ = coordinator
     }
 
+    func testMYR233DurableCaptureRejectsSameIDDifferentContentRedelivery() throws {
+        let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-duplicate-content.json")
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil,
+            unsentBatchQueue: nil
+        )
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: container.mainContext,
+            syncController: controller,
+            conflictStore: controller.conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: pendingURL,
+            localObligationQueueFileURL: nil
+        )
+        let original = makeLegacyBodyBatch(idSuffix: 233_012)
+        let noteID = UUID(uuidString: "17100000-0000-0000-0000-0000000000BA")!
+        let conflicting = SyncBatch(
+            id: original.id,
+            originDeviceID: original.originDeviceID,
+            createdAt: original.createdAt,
+            batchSequence: original.batchSequence,
+            changes: [
+                .noteBodyTextInserted(.init(
+                    noteID: noteID,
+                    utf16Offset: 0,
+                    text: "B",
+                    modifiedAt: original.createdAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: "")
+                ))
+            ]
+        )
+
+        XCTAssertTrue(coordinator.durablyCaptureIncomingBatch(original))
+        XCTAssertFalse(
+            coordinator.durablyCaptureIncomingBatch(conflicting),
+            "A same-ID/different-content redelivery must not borrow the original durable batch's ACK ownership."
+        )
+        XCTAssertEqual(
+            FileBackedSyncBatchQueue(fileURL: pendingURL).pendingBatches,
+            [original]
+        )
+    }
+
     func testSessionLevelHashlessBodyBatchRemainsDurableWithoutAcknowledgement() async throws {
         let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
         let remotePeerID = MCPeerID(displayName: "remote|hashless-inbound")
