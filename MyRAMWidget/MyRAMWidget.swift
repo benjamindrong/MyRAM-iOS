@@ -184,7 +184,11 @@ private struct MyRAMWidgetEntryView: View {
                     .truncationMode(.tail)
             }
 
-            ForEach(Array(entry.model.pinnedTexts.enumerated()), id: \.offset) { _, text in
+            MyRAMWidgetPinnedContentLayout(
+                pinnedTexts: entry.model.pinnedTexts,
+                bodyText: entry.model.bodyText,
+                verticalSpacing: layoutPolicy.rootSpacing
+            ) { text, variant in
                 HStack(spacing: layoutPolicy.pinSpacing) {
                     Image(systemName: "pin.fill")
                         .font(.caption2)
@@ -192,7 +196,7 @@ private struct MyRAMWidgetEntryView: View {
                     Text(text)
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(pinnedRowForeground)
-                        .lineLimit(1)
+                        .lineLimit(variant.lineLimit)
                         .truncationMode(.tail)
                 }
                 .background {
@@ -204,21 +208,14 @@ private struct MyRAMWidgetEntryView: View {
                             .strokeBorder(.primary.opacity(0.55), lineWidth: 1)
                     }
                 }
-                .layoutPriority(1)
-            }
-
-            if let bodyText = entry.model.bodyText {
+            } bodyRow: { bodyText, isOneLineProbe in
                 Text(bodyText)
                     .font(.footnote)
                     .foregroundStyle(entry.model.state == .content ? .secondary : .primary)
+                    .lineLimit(isOneLineProbe ? 1 : nil)
                     .truncationMode(.tail)
-                    .frame(
-                        maxWidth: .infinity,
-                        maxHeight: .infinity,
-                        alignment: .topLeading
-                    )
-                    .layoutPriority(0)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .padding(contentInsets)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)

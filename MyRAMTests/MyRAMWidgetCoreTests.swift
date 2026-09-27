@@ -306,6 +306,123 @@ final class MyRAMWidgetCoreTests: XCTestCase {
         XCTAssertEqual(baselineStore.read(), .snapshot(first))
     }
 
+
+    func testMYR220MeasuredAllocatorSinglePinRulesAcrossPlatformsAndFamilies() {
+        for platform in [MyRAMWidgetPlatform.iOS, .macOS] {
+            for family in [MyRAMWidgetFamily.small, .medium] {
+                let layout = MyRAMWidgetLayoutPolicy(family: family, platform: platform)
+                let short = MyRAMWidgetPinnedContentAllocationPolicy().plan(
+                    pinMeasurements: [.init(fullHeight: 18, oneLineHeight: 18, twoLineHeight: 36)],
+                    bodyMinimumHeight: 14,
+                    availableHeight: 60,
+                    verticalSpacing: layout.rootSpacing
+                )
+                XCTAssertEqual(short.rows, [.init(pinIndex: 0, representation: .complete, height: 18)])
+                XCTAssertTrue(short.allPinsRepresented)
+                XCTAssertTrue(short.bodyIsEligible)
+
+                let long = MyRAMWidgetPinnedContentAllocationPolicy().plan(
+                    pinMeasurements: [.init(fullHeight: 72, oneLineHeight: 18, twoLineHeight: 36)],
+                    bodyMinimumHeight: 14,
+                    availableHeight: 60,
+                    verticalSpacing: layout.rootSpacing
+                )
+                XCTAssertEqual(long.rows, [.init(pinIndex: 0, representation: .truncatedTwoLines, height: 36)])
+                XCTAssertTrue(long.allPinsRepresented)
+                XCTAssertFalse(long.bodyIsEligible)
+                XCTAssertNotEqual(long.rows.first?.height, 18)
+            }
+        }
+    }
+
+    func testMYR220MultiplePinsStayOrderedAndEarlierLongPinKeepsSecondLine() {
+        let policy = MyRAMWidgetPinnedContentAllocationPolicy()
+        let plan = policy.plan(
+            pinMeasurements: [
+                .init(fullHeight: 72, oneLineHeight: 18, twoLineHeight: 36),
+                .init(fullHeight: 18, oneLineHeight: 18, twoLineHeight: 36)
+            ],
+            bodyMinimumHeight: 14,
+            availableHeight: 54,
+            verticalSpacing: 4
+        )
+
+        XCTAssertEqual(plan.rows, [.init(pinIndex: 0, representation: .truncatedTwoLines, height: 36)])
+        XCTAssertFalse(plan.allPinsRepresented)
+        XCTAssertFalse(plan.bodyIsEligible)
+    }
+
+    func testMYR220TwoLineTruncatedMultiplePinCountsAsRepresentedAndAllowsBodyAfterAllRows() {
+        let plan = MyRAMWidgetPinnedContentAllocationPolicy().plan(
+            pinMeasurements: [
+                .init(fullHeight: 72, oneLineHeight: 18, twoLineHeight: 36),
+                .init(fullHeight: 18, oneLineHeight: 18, twoLineHeight: 36)
+            ],
+            bodyMinimumHeight: 14,
+            availableHeight: 80,
+            verticalSpacing: 4
+        )
+
+        XCTAssertEqual(plan.rows.map(\.pinIndex), [0, 1])
+        XCTAssertEqual(plan.rows.first?.representation, .truncatedTwoLines)
+        XCTAssertEqual(plan.rows.last?.representation, .complete)
+        XCTAssertTrue(plan.allPinsRepresented)
+        XCTAssertTrue(plan.bodyIsEligible)
+    }
+
+    func testMYR220LaterPinMayUseOneRemainingLineOnlyWhenCompleteInOneLine() {
+        let completeOneLine = MyRAMWidgetPinnedContentAllocationPolicy().plan(
+            pinMeasurements: [
+                .init(fullHeight: 18, oneLineHeight: 18, twoLineHeight: 36),
+                .init(fullHeight: 18, oneLineHeight: 18, twoLineHeight: 36)
+            ],
+            bodyMinimumHeight: nil,
+            availableHeight: 40,
+            verticalSpacing: 4
+        )
+        XCTAssertEqual(completeOneLine.rows.map(\.pinIndex), [0, 1])
+        XCTAssertTrue(completeOneLine.allPinsRepresented)
+
+        let needsWrapping = MyRAMWidgetPinnedContentAllocationPolicy().plan(
+            pinMeasurements: [
+                .init(fullHeight: 18, oneLineHeight: 18, twoLineHeight: 36),
+                .init(fullHeight: 36, oneLineHeight: 18, twoLineHeight: 36)
+            ],
+            bodyMinimumHeight: nil,
+            availableHeight: 40,
+            verticalSpacing: 4
+        )
+        XCTAssertEqual(needsWrapping.rows.map(\.pinIndex), [0])
+        XCTAssertFalse(needsWrapping.allPinsRepresented)
+    }
+
+    func testMYR220MediumWidthMeasurementsCanRepresentMoreWithoutChangingOrder() {
+        let policy = MyRAMWidgetPinnedContentAllocationPolicy()
+        let small = policy.plan(
+            pinMeasurements: [
+                .init(fullHeight: 18, oneLineHeight: 18, twoLineHeight: 36),
+                .init(fullHeight: 36, oneLineHeight: 18, twoLineHeight: 36)
+            ],
+            bodyMinimumHeight: nil,
+            availableHeight: 40,
+            verticalSpacing: MyRAMWidgetLayoutPolicy(family: .small, platform: .iOS).rootSpacing
+        )
+        let medium = policy.plan(
+            pinMeasurements: [
+                .init(fullHeight: 18, oneLineHeight: 18, twoLineHeight: 36),
+                .init(fullHeight: 18, oneLineHeight: 18, twoLineHeight: 36)
+            ],
+            bodyMinimumHeight: nil,
+            availableHeight: 40,
+            verticalSpacing: MyRAMWidgetLayoutPolicy(family: .medium, platform: .iOS).rootSpacing
+        )
+
+        XCTAssertEqual(small.rows.map(\.pinIndex), [0])
+        XCTAssertFalse(small.allPinsRepresented)
+        XCTAssertEqual(medium.rows.map(\.pinIndex), [0, 1])
+        XCTAssertTrue(medium.allPinsRepresented)
+    }
+
     private func render(
         pins: [String],
         body: String,
