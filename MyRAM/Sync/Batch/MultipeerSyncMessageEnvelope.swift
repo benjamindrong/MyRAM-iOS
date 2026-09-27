@@ -505,7 +505,13 @@ enum SyncPeerBootstrapSnapshotPersistence {
                                 noteID: note.id,
                                 state: snapshotState
                             )
-                            if structuralConflict.lifecycle == .resolvedLocalAuthority,
+                            let currentLocalFingerprint = try SyncConflictStore.bootstrapStructuralFingerprint(
+                                noteID: note.id,
+                                state: localState
+                            )
+                            if (structuralConflict.lifecycle == .active
+                                    || structuralConflict.lifecycle == .resolvedLocalAuthority),
+                               currentLocalFingerprint == structuralConflict.localStructuralFingerprint,
                                remoteFingerprint == structuralConflict.localStructuralFingerprint {
                                 sequenceBaselineCoveredNoteIDs.insert(note.id)
                                 bootstrapOwnershipStatesByNoteID[note.id] = snapshotState

@@ -559,7 +559,8 @@ extension SyncConflictStore {
         var envelope = try loadBootstrapStructuralEnvelopeChecked(fileURL: sidecarFileURL, fileIO: fileIO)
         let indices = envelope.records.indices.filter {
             envelope.records[$0].noteID == noteID
-                && envelope.records[$0].lifecycle == .resolvedLocalAuthority
+                && (envelope.records[$0].lifecycle == .active
+                    || envelope.records[$0].lifecycle == .resolvedLocalAuthority)
                 && envelope.records[$0].localStructuralFingerprint == adoptedFingerprint
         }
         guard !indices.isEmpty else { return }
@@ -567,9 +568,19 @@ extension SyncConflictStore {
         var visibleConflicts: [SyncConflictVersion] = []
         for index in indices {
             let record = envelope.records[index]
-            guard let receipt = envelope.receipts.first(where: { $0.conflictID == record.conflictID }),
-                  receipt.chosenFingerprint == adoptedFingerprint else {
-                throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
+            switch record.lifecycle {
+            case .active:
+                guard record.pendingResolution == nil,
+                      !envelope.receipts.contains(where: { $0.conflictID == record.conflictID }) else {
+                    throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
+                }
+            case .resolvedLocalAuthority:
+                guard let receipt = envelope.receipts.first(where: { $0.conflictID == record.conflictID }),
+                      receipt.chosenFingerprint == adoptedFingerprint else {
+                    throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
+                }
+            case .preparing, .terminallySuperseded:
+                throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
             }
             if let visible = record.visibleConflict {
                 visibleConflicts.append(visible)
@@ -781,6 +792,7 @@ final class MyRAMSyncConflictService {
     private let saveOperation: (ModelContext) throws -> Void
     private let bootstrapStructuralConflictFileURL: URL
     private let bootstrapStructuralConflictFileIO: SyncBootstrapStructuralConflictFileIO
+    private let operationIDReserver: any SyncOperationIDReserving
     private var resolvingConflictIDs: Set<UUID> = []
 
     init(
@@ -788,12 +800,14 @@ final class MyRAMSyncConflictService {
         store: SyncConflictStore,
         bootstrapStructuralConflictFileURL: URL = SyncConflictStore.defaultBootstrapStructuralConflictFileURL(),
         bootstrapStructuralConflictFileIO: SyncBootstrapStructuralConflictFileIO = .live,
+        operationIDReserver: any SyncOperationIDReserving = MyRAMSyncOperationIDAllocator.shared,
         saveOperation: @escaping (ModelContext) throws -> Void = { try $0.save() }
     ) {
         self.context = context
         self.store = store
         self.bootstrapStructuralConflictFileURL = bootstrapStructuralConflictFileURL
         self.bootstrapStructuralConflictFileIO = bootstrapStructuralConflictFileIO
+        self.operationIDReserver = operationIDReserver
         self.saveOperation = saveOperation
     }
 
@@ -982,24 +996,32 @@ final class MyRAMSyncConflictService {
                 )
                 let previousRichTextContentData = note.richTextContentData
                 let previousModifiedAt = note.modifiedAt
-                _ = try NoteSequenceStateFullBodyIntegration.installAuthoritativeState(
-                    of: note,
-                    expected: current,
-                    body: record.remoteText,
-                    state: remoteState,
-                    in: context
+                let finalMarkState = try await rebasedMarkState(
+                    current: current,
+                    authoritativeState: remoteState
                 )
+                _ = try NoteSequenceStateFullBodyIntegration
+                    .stageSuppliedStateAndStructuralFormattingMutation(
+                        of: note,
+                        expected: current,
+                        newBody: record.remoteText,
+                        finalState: remoteState,
+                        finalMarkState: finalMarkState,
+                        in: context
+                    )
                 note.richTextContentData = nil
                 note.modifiedAt = record.remoteModifiedAt
                 do {
                     try saveOperation(context)
                 } catch {
-                    try NoteSequenceStateFullBodyIntegration.restoreSuppliedStateMutationAfterFailedSave(
-                        of: note,
-                        expected: current,
-                        failedFinalState: remoteState,
-                        in: context
-                    )
+                    try NoteSequenceStateFullBodyIntegration
+                        .restoreSuppliedStateAndStructuralFormattingMutationAfterFailedSave(
+                            of: note,
+                            expected: current,
+                            failedFinalState: remoteState,
+                            failedFinalMarkState: finalMarkState,
+                            in: context
+                        )
                     note.content = current.body
                     note.richTextContentData = previousRichTextContentData
                     note.modifiedAt = previousModifiedAt
@@ -1259,6 +1281,38 @@ final class MyRAMSyncConflictService {
             throw MyRAMSyncConflictResolutionError.terminalPersistenceFailed
         }
         return result
+    }
+
+    private func rebasedMarkState(
+        current: NoteSequenceStateMutationSnapshot,
+        authoritativeState: SyncTextSequenceState
+    ) async throws -> SyncTextMarkState {
+        if (try? current.markState.validating(against: authoritativeState)) != nil {
+            return current.markState
+        }
+        let runs = try current.markState.visibleProjection(in: current.state).map { span in
+            var assignments = Dictionary(
+                uniqueKeysWithValues: SyncTextMarkKey.allCases.map {
+                    ($0, SyncTextMarkAssignment.clear)
+                }
+            )
+            assignments.merge(span.assignments) { _, desired in desired }
+            return NoteStructuralFormattingProjectionRun(
+                startUTF16Offset: span.startUTF16Offset,
+                utf16Length: span.utf16Length,
+                assignments: assignments
+            )
+        }
+        let projection = NoteStructuralFormattingProjection(
+            plainText: current.body,
+            runs: runs
+        )
+        return try await NoteStructuralFormattingEditPlanner.prepare(
+            sequence: authoritativeState,
+            currentMarkState: .empty,
+            desiredProjection: projection,
+            operationIDReserver: operationIDReserver
+        ).finalMarkState
     }
 
     private func checkedBaseline(

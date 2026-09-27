@@ -436,6 +436,152 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
         )
     }
 
+    func testMYR233AcceptIncomingReanchorsFormattingAndRestoresBootstrapCoverage() async throws {
+        let fixture = try makeStructuralResolutionFixture(remoteBody: "Local")
+        let localMarks = try await NoteStructuralFormattingEditPlanner.prepare(
+            sequence: fixture.localState,
+            currentMarkState: .empty,
+            desiredProjection: NoteStructuralFormattingProjection(
+                plainText: "Local",
+                runs: [NoteStructuralFormattingProjectionRun(
+                    startUTF16Offset: 0,
+                    utf16Length: 5,
+                    assignments: Dictionary(
+                        uniqueKeysWithValues: SyncTextMarkKey.allCases.map {
+                            ($0, $0 == .bold ? .enabled : .clear)
+                        }
+                    )
+                )]
+            ),
+            operationIDReserver: MYR233OperationIDReserver()
+        ).finalMarkState
+        let snapshot = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: fixture.note,
+            in: fixture.context
+        )
+        _ = try NoteSequenceStateFullBodyIntegration.stageStructuralFormattingMutation(
+            of: fixture.note,
+            expected: snapshot,
+            finalMarkState: localMarks,
+            in: fixture.context
+        )
+        try fixture.context.save()
+        let service = MyRAMSyncConflictService(
+            context: fixture.context,
+            store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL,
+            operationIDReserver: MYR233OperationIDReserver(start: 100)
+        )
+
+        _ = try await service.acceptIncomingChecked(fixture.conflict, activeNoteID: nil)
+
+        XCTAssertEqual(fixture.note.content, "Local")
+        let committed = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: fixture.note,
+            in: fixture.context
+        )
+        XCTAssertEqual(committed.state, fixture.remoteState)
+        XCTAssertEqual(
+            try committed.markState.visibleProjection(in: committed.state),
+            try localMarks.visibleProjection(in: fixture.localState),
+            "Accept Incoming must preserve visible structural formatting while re-anchoring it to the chosen lineage."
+        )
+        XCTAssertTrue(fixture.store.activeConflicts().isEmpty)
+
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: committed.state,
+            noteID: fixture.note.id
+        )
+        let batchID = UUID()
+        let bootstrapSnapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(),
+            folders: [],
+            notes: [SyncPeerBootstrapNoteSnapshot(
+                id: fixture.note.id,
+                title: fixture.note.title,
+                body: fixture.note.content,
+                isPinned: fixture.note.isPinned ?? false,
+                createdAt: fixture.note.createdAt,
+                modifiedAt: fixture.note.modifiedAt,
+                deletedAt: fixture.note.deletedAt,
+                folderID: nil,
+                formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                revision: committed.revision,
+                visibleUTF16Count: committed.state.visibleUTF16Count,
+                tombstonedUTF16Count: committed.state.tombstonedUTF16Count,
+                payloadByteCount: payload.count,
+                statePayloadData: payload
+            )],
+            historyCoverage: [SyncPeerBootstrapHistoryBatchCoverage(
+                batchID: batchID,
+                noteIDs: [fixture.note.id],
+                anchoredRecoveryChanges: nil
+            )]
+        )
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            bootstrapSnapshot,
+            to: fixture.context,
+            structuralConflictStore: fixture.store,
+            structuralConflictSidecarFileURL: fixture.sidecarURL
+        )
+
+        XCTAssertTrue(disposition.coveredNoteIDs.contains(fixture.note.id))
+        XCTAssertTrue(disposition.coveredBatchIDs.contains(batchID))
+    }
+
+    func testMYR233ReciprocalActiveConflictTerminalizesWhenPeerAdoptsExactLocalState() throws {
+        let fixture = try makeStructuralResolutionFixture()
+        let payload = try NoteSequenceStatePersistenceCodec.encode(
+            state: fixture.localState,
+            noteID: fixture.note.id
+        )
+        let batchID = UUID()
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(),
+            folders: [],
+            notes: [SyncPeerBootstrapNoteSnapshot(
+                id: fixture.note.id,
+                title: fixture.note.title,
+                body: fixture.note.content,
+                isPinned: fixture.note.isPinned ?? false,
+                createdAt: fixture.note.createdAt,
+                modifiedAt: fixture.note.modifiedAt,
+                deletedAt: fixture.note.deletedAt,
+                folderID: nil,
+                formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                revision: 0,
+                visibleUTF16Count: fixture.localState.visibleUTF16Count,
+                tombstonedUTF16Count: fixture.localState.tombstonedUTF16Count,
+                payloadByteCount: payload.count,
+                statePayloadData: payload
+            )],
+            historyCoverage: [SyncPeerBootstrapHistoryBatchCoverage(
+                batchID: batchID,
+                noteIDs: [fixture.note.id],
+                anchoredRecoveryChanges: nil
+            )]
+        )
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            snapshot,
+            to: fixture.context,
+            structuralConflictStore: fixture.store,
+            structuralConflictSidecarFileURL: fixture.sidecarURL
+        )
+
+        XCTAssertTrue(disposition.coveredNoteIDs.contains(fixture.note.id))
+        XCTAssertTrue(disposition.coveredBatchIDs.contains(batchID))
+        XCTAssertTrue(fixture.store.activeConflicts().isEmpty)
+        XCTAssertEqual(
+            try fixture.store.bootstrapStructuralConflictRecordChecked(
+                id: fixture.conflict.id,
+                sidecarFileURL: fixture.sidecarURL
+            )?.lifecycle,
+            .terminallySuperseded
+        )
+    }
+
     func testMYR222ExactPeerAdoptionTerminalizesWaitingLocalAuthorityAndPermitsCoverage() async throws {
         let fixture = try makeStructuralResolutionFixture()
         let service = MyRAMSyncConflictService(
@@ -664,7 +810,7 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
         )
     }
 
-    private func makeStructuralResolutionFixture() throws -> (
+    private func makeStructuralResolutionFixture(remoteBody: String = "Remote") throws -> (
         container: ModelContainer,
         context: ModelContext,
         note: Note,
@@ -696,13 +842,13 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
         ).state
         let remoteState = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
             noteID: UUID(),
-            body: "Remote"
+            body: remoteBody
         ).state
         let payload = try NoteSequenceStatePersistenceCodec.encode(state: remoteState, noteID: noteID)
         let remoteSnapshot = SyncPeerBootstrapNoteSnapshot(
             id: noteID,
             title: "",
-            body: "Remote",
+            body: remoteBody,
             isPinned: false,
             createdAt: note.createdAt,
             modifiedAt: note.createdAt.addingTimeInterval(1),
@@ -811,4 +957,18 @@ private final class MYR184NoopSyncTransport: MyRAMSyncTransporting {
         toPeers peers: [MCPeerID],
         mode: MCSessionSendDataMode
     ) async throws {}
+}
+
+private actor MYR233OperationIDReserver: SyncOperationIDReserving {
+    private let deviceID = UUID(uuidString: "23300000-0000-4000-8000-000000000001")!
+    private var nextCounter: UInt64
+
+    init(start: UInt64 = 1) {
+        nextCounter = start
+    }
+
+    func reserveOperationID() async throws -> SyncOperationID {
+        defer { nextCounter += 1 }
+        return SyncOperationID(deviceID: deviceID, localCounter: nextCounter)
+    }
 }
