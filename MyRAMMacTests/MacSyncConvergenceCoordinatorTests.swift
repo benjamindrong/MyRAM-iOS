@@ -41,10 +41,8 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
                 ))
             ]
         )
-        XCTAssertEqual(
-            await coordinator.submitRemoteBatch(creationBatch),
-            .acknowledgementPermitted
-        )
+        let creationDisposition = await coordinator.submitRemoteBatch(creationBatch)
+        XCTAssertEqual(creationDisposition, .acknowledgementPermitted)
 
         let mutationBatch = SyncBatch(
             id: Self.uuid(235_004),
@@ -66,10 +64,8 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(
-            await coordinator.submitRemoteBatch(mutationBatch),
-            .acknowledgementPermitted
-        )
+        let mutationDisposition = await coordinator.submitRemoteBatch(mutationBatch)
+        XCTAssertEqual(mutationDisposition, .acknowledgementPermitted)
         let created = try XCTUnwrap(context.fetch(FetchDescriptor<Note>(
             predicate: #Predicate { $0.id == noteID }
         )).first)
@@ -116,10 +112,8 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
                 ))
             ]
         )
-        XCTAssertEqual(
-            await coordinator.submitRemoteBatch(creationBatch),
-            .acknowledgementPermitted
-        )
+        let creationDisposition = await coordinator.submitRemoteBatch(creationBatch)
+        XCTAssertEqual(creationDisposition, .acknowledgementPermitted)
 
         let mutationBatch = SyncBatch(
             id: Self.uuid(235_014),
@@ -141,10 +135,8 @@ final class MacSyncConvergenceCoordinatorTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(
-            await coordinator.submitRemoteBatch(mutationBatch),
-            .acknowledgementPermitted
-        )
+        let mutationDisposition = await coordinator.submitRemoteBatch(mutationBatch)
+        XCTAssertEqual(mutationDisposition, .acknowledgementPermitted)
         let created = try XCTUnwrap(context.fetch(FetchDescriptor<Note>(
             predicate: #Predicate { $0.id == noteID }
         )).first)
