@@ -5,6 +5,148 @@ import XCTest
 
 @MainActor
 final class MacSyncConvergenceCoordinatorTests: XCTestCase {
+    func testMYR235FreshCreatedNoteUsesLaterBodyModifiedAtAfterTitleAndBodyConverge() async throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let controller = try makeController()
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: readyBoundarySurface(),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: nil
+        )
+        let noteID = Self.uuid(235_001)
+        let originDeviceID = Self.uuid(235_002)
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_350)
+        let creationModifiedAt = Date(timeIntervalSinceReferenceDate: 2_351)
+        let titleModifiedAt = Date(timeIntervalSinceReferenceDate: 2_352)
+        let bodyModifiedAt = Date(timeIntervalSinceReferenceDate: 2_353)
+        let initialBody = "Body"
+        let insertedBody = " later"
+
+        let creationBatch = SyncBatch(
+            id: Self.uuid(235_003),
+            originDeviceID: originDeviceID,
+            createdAt: creationModifiedAt,
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Initial",
+                    body: initialBody,
+                    folderID: nil,
+                    createdAt: createdAt,
+                    modifiedAt: creationModifiedAt
+                ))
+            ]
+        )
+        let creationDisposition = await coordinator.submitRemoteBatch(creationBatch)
+        XCTAssertEqual(creationDisposition, .acknowledgementPermitted)
+
+        let mutationBatch = SyncBatch(
+            id: Self.uuid(235_004),
+            originDeviceID: originDeviceID,
+            createdAt: titleModifiedAt,
+            changes: [
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteID,
+                    title: "Renamed",
+                    modifiedAt: titleModifiedAt
+                )),
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: initialBody.utf16.count,
+                    text: insertedBody,
+                    modifiedAt: bodyModifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: initialBody)
+                ))
+            ]
+        )
+
+        let mutationDisposition = await coordinator.submitRemoteBatch(mutationBatch)
+        XCTAssertEqual(mutationDisposition, .acknowledgementPermitted)
+        let created = try XCTUnwrap(context.fetch(FetchDescriptor<Note>(
+            predicate: #Predicate { $0.id == noteID }
+        )).first)
+        XCTAssertEqual(created.id, noteID)
+        XCTAssertEqual(created.title, "Renamed")
+        XCTAssertEqual(created.content, initialBody + insertedBody)
+        XCTAssertEqual(created.createdAt, createdAt)
+        XCTAssertEqual(created.modifiedAt, bodyModifiedAt)
+    }
+
+    func testMYR235FreshCreatedNoteKeepsLaterTitleModifiedAtWhenTitleIsLatest() async throws {
+        let container = try makeInMemoryContainer()
+        let context = container.mainContext
+        let controller = try makeController()
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: readyBoundarySurface(),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: nil
+        )
+        let noteID = Self.uuid(235_011)
+        let originDeviceID = Self.uuid(235_012)
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_360)
+        let creationModifiedAt = Date(timeIntervalSinceReferenceDate: 2_361)
+        let bodyModifiedAt = Date(timeIntervalSinceReferenceDate: 2_362)
+        let titleModifiedAt = Date(timeIntervalSinceReferenceDate: 2_363)
+        let initialBody = "Body"
+        let insertedBody = " later"
+
+        let creationBatch = SyncBatch(
+            id: Self.uuid(235_013),
+            originDeviceID: originDeviceID,
+            createdAt: creationModifiedAt,
+            changes: [
+                .noteCreated(SyncBatchNoteCreatedChange(
+                    noteID: noteID,
+                    title: "Initial",
+                    body: initialBody,
+                    folderID: nil,
+                    createdAt: createdAt,
+                    modifiedAt: creationModifiedAt
+                ))
+            ]
+        )
+        let creationDisposition = await coordinator.submitRemoteBatch(creationBatch)
+        XCTAssertEqual(creationDisposition, .acknowledgementPermitted)
+
+        let mutationBatch = SyncBatch(
+            id: Self.uuid(235_014),
+            originDeviceID: originDeviceID,
+            createdAt: bodyModifiedAt,
+            changes: [
+                .noteBodyTextInserted(SyncBatchNoteBodyTextInsertedChange(
+                    noteID: noteID,
+                    utf16Offset: initialBody.utf16.count,
+                    text: insertedBody,
+                    modifiedAt: bodyModifiedAt,
+                    baseContentHash: SyncBatchContentHash.sha256Hex(for: initialBody)
+                )),
+                .noteTitleChanged(SyncBatchNoteTitleChangedChange(
+                    noteID: noteID,
+                    title: "Renamed",
+                    modifiedAt: titleModifiedAt
+                ))
+            ]
+        )
+
+        let mutationDisposition = await coordinator.submitRemoteBatch(mutationBatch)
+        XCTAssertEqual(mutationDisposition, .acknowledgementPermitted)
+        let created = try XCTUnwrap(context.fetch(FetchDescriptor<Note>(
+            predicate: #Predicate { $0.id == noteID }
+        )).first)
+        XCTAssertEqual(created.id, noteID)
+        XCTAssertEqual(created.title, "Renamed")
+        XCTAssertEqual(created.content, initialBody + insertedBody)
+        XCTAssertEqual(created.createdAt, createdAt)
+        XCTAssertEqual(created.modifiedAt, titleModifiedAt)
+    }
+
     func testPendingIncomingSurvivesCoordinatorReconstruction() async throws {
         let pendingURL = temporaryQueueFileURL(named: "mac-pending-incoming-batch-queue.json")
         let container = try makeInMemoryContainer()

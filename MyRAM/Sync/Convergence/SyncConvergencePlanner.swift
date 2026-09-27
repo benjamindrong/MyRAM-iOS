@@ -4187,7 +4187,11 @@ private extension SyncConvergenceNotePlan {
 
     var plannedModifiedAt: Date? {
         if let titleEffect, titleEffect.verdict == .apply {
-            return titleEffect.candidateCanonicalKey.modifiedAt
+            let titleModifiedAt = titleEffect.candidateCanonicalKey.modifiedAt
+            guard lifecycleEffect?.verdict != .apply else {
+                return titleModifiedAt
+            }
+            return latestBodyModifiedAt.map { max(titleModifiedAt, $0) } ?? titleModifiedAt
         }
         return lifecycleEffect?.verdict == .apply ? lifecycleEffect?.modifiedAt ?? latestBodyModifiedAt : latestBodyModifiedAt
     }
