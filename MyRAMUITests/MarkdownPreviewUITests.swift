@@ -255,8 +255,11 @@ final class MarkdownPreviewUITests: XCTestCase {
 
         switchToPreviewMode(in: app)
 
-        let table = findElement("markdown-preview-table", in: app)
-        XCTAssertTrue(table.waitForExistence(timeout: Timeout.standard))
+        let previewBody = findElement("markdown-preview-body", in: app)
+        XCTAssertTrue(
+            previewBody.waitForExistence(timeout: Timeout.standard),
+            "Valid Markdown table MUST render through the document path"
+        )
         XCTAssertFalse(findElement("markdown-preview-fallback", in: app).exists)
 
         let expectedCells: [(String, String)] = [
