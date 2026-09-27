@@ -3,6 +3,7 @@ import Foundation
 final class FileBackedSyncBatchQueue {
     enum QueueError: Error, Equatable {
         case capacityExceeded
+        case conflictingDuplicateBatchID(SyncBatchID)
         case persistenceFailed
         case unhealthyPersistence
     }
@@ -113,6 +114,14 @@ final class FileBackedSyncBatchQueue {
                 outcome: "capacityExceeded"
             )
             throw QueueError.capacityExceeded
+        } catch SyncBatchUnsentQueue.EnqueueError.conflictingDuplicateBatchID(let batchID) {
+            recordBenchmark(
+                .queueWriteFailed,
+                batchID: batchID,
+                queueDepth: queue.pendingBatches.count,
+                outcome: "conflictingDuplicateBatchID"
+            )
+            throw QueueError.conflictingDuplicateBatchID(batchID)
         } catch {
             queue.replacePendingBatches(originalBatches)
             recordBenchmark(
