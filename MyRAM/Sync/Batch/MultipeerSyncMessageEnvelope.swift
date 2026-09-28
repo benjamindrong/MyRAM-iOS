@@ -495,7 +495,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
                         }
                         let exactSequenceBaseline = recordExactlyMatches(record, noteSnapshot)
                         if let structuralConflictStore,
-                           let structuralConflict = try structuralConflictStore.bootstrapStructuralConflictRecordChecked(
+                           let persistedStructuralConflict = try structuralConflictStore.bootstrapStructuralConflictRecordChecked(
                             noteID: note.id,
                             sidecarFileURL: structuralConflictSidecarFileURL,
                             fileIO: structuralConflictFileIO
@@ -509,6 +509,18 @@ enum SyncPeerBootstrapSnapshotPersistence {
                                 noteID: note.id,
                                 state: localState
                             )
+                            let structuralConflict: SyncBootstrapStructuralConflictRecord
+                            if persistedStructuralConflict.lifecycle == .preparing {
+                                structuralConflict = try structuralConflictStore
+                                    .resumeBootstrapStructuralConflictPreparationChecked(
+                                        persistedStructuralConflict,
+                                        currentLocalFingerprint: currentLocalFingerprint,
+                                        sidecarFileURL: structuralConflictSidecarFileURL,
+                                        fileIO: structuralConflictFileIO
+                                    )
+                            } else {
+                                structuralConflict = persistedStructuralConflict
+                            }
                             if (structuralConflict.lifecycle == .active
                                     || structuralConflict.lifecycle == .resolvedLocalAuthority),
                                currentLocalFingerprint == structuralConflict.localStructuralFingerprint,

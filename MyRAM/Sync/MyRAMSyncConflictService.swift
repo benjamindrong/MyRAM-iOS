@@ -323,74 +323,13 @@ extension SyncConflictStore {
             throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
         }
 
-        let legacyOutcome: SyncLegacyConflictMaterializationOutcome
-        do {
-            legacyOutcome = try materializeLegacyConflictChecked(visibleConflict)
-        } catch {
-            throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
-        }
-
-        switch legacyOutcome {
-        case .active:
-            guard activeConflict(id: conflictID) == visibleConflict else {
-                throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
-            }
-            envelope.records[preparingIndex].lifecycle = .active
-            try saveBootstrapStructuralEnvelopeChecked(
-                envelope,
-                fileURL: sidecarFileURL,
-                fileIO: fileIO
-            )
-            let verified = try loadBootstrapStructuralEnvelopeChecked(
-                fileURL: sidecarFileURL,
-                fileIO: fileIO
-            )
-            guard let active = verified.records.first(where: { $0.conflictID == conflictID }),
-                  active.lifecycle == .active,
-                  active.visibleConflict == visibleConflict,
-                  activeConflict(id: conflictID) == visibleConflict else {
-                throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
-            }
-
-        case .alreadyTerminal:
-            let baseline: SyncRemoteTextBaseline?
-            do {
-                baseline = try remoteBaselineChecked(
-                    entityType: .note,
-                    entityID: noteID,
-                    field: .noteContent
-                )
-            } catch {
-                throw SyncBootstrapStructuralConflictStoreError.persistenceUnavailable
-            }
-            guard baseline?.text == localText else {
-                throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
-            }
-            try finalizeBootstrapStructuralLegacyTerminalLocalAuthorityChecked(
-                conflictID: conflictID,
-                chosenText: localText,
-                chosenFingerprint: localFingerprint,
-                sidecarFileURL: sidecarFileURL,
-                fileIO: fileIO,
-                now: now
-            )
-            let verified = try loadBootstrapStructuralEnvelopeChecked(
-                fileURL: sidecarFileURL,
-                fileIO: fileIO
-            )
-            guard let resolved = verified.records.first(where: { $0.conflictID == conflictID }),
-                  resolved.lifecycle == .resolvedLocalAuthority,
-                  resolved.localStructuralFingerprint == localFingerprint,
-                  let receipt = verified.receipts.first(where: { $0.conflictID == conflictID }),
-                  receipt.choice == .keepLocal,
-                  receipt.chosenFingerprint == localFingerprint,
-                  receipt.rejectedFingerprint == remoteFingerprint else {
-                throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
-            }
-
-        case .blocked:
-            throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
-        }
+        _ = try resumeBootstrapStructuralConflictPreparationChecked(
+            envelope.records[preparingIndex],
+            currentLocalFingerprint: localFingerprint,
+            sidecarFileURL: sidecarFileURL,
+            fileIO: fileIO,
+            now: now
+        )
 
         return visibleConflict
     }
@@ -416,12 +355,111 @@ extension SyncConflictStore {
             fileURL: sidecarFileURL,
             fileIO: fileIO
         ).records.filter {
-            $0.noteID == noteID && ($0.lifecycle == .active || $0.lifecycle == .resolvedLocalAuthority)
+            $0.noteID == noteID
+                && ($0.lifecycle == .preparing
+                    || $0.lifecycle == .active
+                    || $0.lifecycle == .resolvedLocalAuthority)
         }
         guard candidates.count <= 1 else {
             throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
         }
         return candidates.first
+    }
+
+    func resumeBootstrapStructuralConflictPreparationChecked(
+        _ record: SyncBootstrapStructuralConflictRecord,
+        currentLocalFingerprint: String,
+        sidecarFileURL: URL = SyncConflictStore.defaultBootstrapStructuralConflictFileURL(),
+        fileIO: SyncBootstrapStructuralConflictFileIO = .live,
+        now: Date = Date()
+    ) throws -> SyncBootstrapStructuralConflictRecord {
+        guard record.lifecycle == .preparing,
+              let visibleConflict = record.visibleConflict,
+              record.pendingResolution == nil,
+              currentLocalFingerprint == record.localStructuralFingerprint else {
+            throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
+        }
+
+        var envelope = try loadBootstrapStructuralEnvelopeChecked(
+            fileURL: sidecarFileURL,
+            fileIO: fileIO
+        )
+        guard let preparingIndex = envelope.records.firstIndex(where: { $0.conflictID == record.conflictID }),
+              envelope.records[preparingIndex] == record else {
+            throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
+        }
+
+        let legacyOutcome: SyncLegacyConflictMaterializationOutcome
+        do {
+            legacyOutcome = try materializeLegacyConflictChecked(visibleConflict)
+        } catch {
+            throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
+        }
+
+        switch legacyOutcome {
+        case .active:
+            guard activeConflict(id: record.conflictID) == visibleConflict else {
+                throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
+            }
+            envelope.records[preparingIndex].lifecycle = .active
+            try saveBootstrapStructuralEnvelopeChecked(
+                envelope,
+                fileURL: sidecarFileURL,
+                fileIO: fileIO
+            )
+
+        case .alreadyTerminal:
+            let baseline: SyncRemoteTextBaseline?
+            do {
+                baseline = try remoteBaselineChecked(
+                    entityType: .note,
+                    entityID: record.noteID,
+                    field: .noteContent
+                )
+            } catch {
+                throw SyncBootstrapStructuralConflictStoreError.persistenceUnavailable
+            }
+            guard baseline?.text == record.localText else {
+                throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
+            }
+            try finalizeBootstrapStructuralLegacyTerminalLocalAuthorityChecked(
+                conflictID: record.conflictID,
+                chosenText: record.localText,
+                chosenFingerprint: record.localStructuralFingerprint,
+                sidecarFileURL: sidecarFileURL,
+                fileIO: fileIO,
+                now: now
+            )
+
+        case .blocked:
+            throw SyncBootstrapStructuralConflictStoreError.visibleConflictPersistenceFailed
+        }
+
+        let verified = try loadBootstrapStructuralEnvelopeChecked(
+            fileURL: sidecarFileURL,
+            fileIO: fileIO
+        )
+        guard let resumed = verified.records.first(where: { $0.conflictID == record.conflictID }) else {
+            throw SyncBootstrapStructuralConflictStoreError.missingStructuralConflict
+        }
+        switch resumed.lifecycle {
+        case .active:
+            guard resumed.visibleConflict == visibleConflict,
+                  activeConflict(id: record.conflictID) == visibleConflict else {
+                throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
+            }
+        case .resolvedLocalAuthority:
+            guard resumed.localStructuralFingerprint == record.localStructuralFingerprint,
+                  let receipt = verified.receipts.first(where: { $0.conflictID == record.conflictID }),
+                  receipt.choice == .keepLocal,
+                  receipt.chosenFingerprint == record.localStructuralFingerprint,
+                  receipt.rejectedFingerprint == record.remoteStructuralFingerprint else {
+                throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
+            }
+        case .preparing, .terminallySuperseded:
+            throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
+        }
+        return resumed
     }
 
     func validatedBootstrapStructuralRemoteState(
