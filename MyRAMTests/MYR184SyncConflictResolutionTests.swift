@@ -716,6 +716,157 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
         )
     }
 
+    func testMYR233ReciprocalTerminalReceiptResumesPersistedPreparingWithoutTextBaseline() async throws {
+        let fixture = try makeStructuralResolutionFixture()
+        let service = MyRAMSyncConflictService(
+            context: fixture.context,
+            store: fixture.store,
+            bootstrapStructuralConflictFileURL: fixture.sidecarURL
+        )
+
+        _ = try await service.acceptIncomingChecked(fixture.conflict, activeNoteID: nil)
+        XCTAssertEqual(fixture.note.content, "Remote")
+        XCTAssertNil(try fixture.store.remoteBaselineChecked(
+            entityType: .note,
+            entityID: fixture.note.id,
+            field: .noteContent
+        ))
+
+        let reversePayload = try NoteSequenceStatePersistenceCodec.encode(
+            state: fixture.localState,
+            noteID: fixture.note.id
+        )
+        let reverseSnapshot = SyncPeerBootstrapNoteSnapshot(
+            id: fixture.note.id,
+            title: fixture.note.title,
+            body: "Local",
+            isPinned: fixture.note.isPinned ?? false,
+            createdAt: fixture.note.createdAt,
+            modifiedAt: fixture.note.createdAt,
+            deletedAt: fixture.note.deletedAt,
+            folderID: fixture.note.folder?.id,
+            formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+            revision: 0,
+            visibleUTF16Count: fixture.localState.visibleUTF16Count,
+            tombstonedUTF16Count: fixture.localState.tombstonedUTF16Count,
+            payloadByteCount: reversePayload.count,
+            statePayloadData: reversePayload
+        )
+
+        var sidecarWriteCount = 0
+        var interruptedFileIO = SyncBootstrapStructuralConflictFileIO.live
+        interruptedFileIO.writeData = { data, url in
+            sidecarWriteCount += 1
+            if sidecarWriteCount == 2 {
+                throw CocoaError(.fileWriteUnknown)
+            }
+            try data.write(to: url, options: [.atomic])
+        }
+
+        XCTAssertThrowsError(try fixture.store.materializeBootstrapStructuralConflictChecked(
+            noteID: fixture.note.id,
+            localText: fixture.note.content,
+            localState: fixture.remoteState,
+            remoteSnapshot: reverseSnapshot,
+            bootstrapSnapshotID: UUID(),
+            sidecarFileURL: fixture.sidecarURL,
+            fileIO: interruptedFileIO
+        ))
+
+        let mirroredConflictID = try SyncConflictStore.bootstrapStructuralConflictID(
+            noteID: fixture.note.id,
+            localFingerprint: SyncConflictStore.bootstrapStructuralFingerprint(
+                noteID: fixture.note.id,
+                state: fixture.remoteState
+            ),
+            remoteFingerprint: SyncConflictStore.bootstrapStructuralFingerprint(
+                noteID: fixture.note.id,
+                state: fixture.localState
+            )
+        )
+        XCTAssertEqual(
+            try fixture.store.bootstrapStructuralConflictRecordChecked(
+                id: mirroredConflictID,
+                sidecarFileURL: fixture.sidecarURL
+            )?.lifecycle,
+            .preparing
+        )
+
+        let committed = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
+            for: fixture.note,
+            in: fixture.context
+        )
+        let adoptedPayload = try NoteSequenceStatePersistenceCodec.encode(
+            state: committed.state,
+            noteID: fixture.note.id
+        )
+        let batchID = UUID()
+        let adoptedSnapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(),
+            folders: [],
+            notes: [SyncPeerBootstrapNoteSnapshot(
+                id: fixture.note.id,
+                title: fixture.note.title,
+                body: fixture.note.content,
+                isPinned: fixture.note.isPinned ?? false,
+                createdAt: fixture.note.createdAt,
+                modifiedAt: fixture.note.modifiedAt,
+                deletedAt: fixture.note.deletedAt,
+                folderID: fixture.note.folder?.id,
+                formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
+                revision: committed.revision,
+                visibleUTF16Count: committed.state.visibleUTF16Count,
+                tombstonedUTF16Count: committed.state.tombstonedUTF16Count,
+                payloadByteCount: adoptedPayload.count,
+                statePayloadData: adoptedPayload
+            )],
+            historyCoverage: [SyncPeerBootstrapHistoryBatchCoverage(
+                batchID: batchID,
+                noteIDs: [fixture.note.id],
+                anchoredRecoveryChanges: nil
+            )]
+        )
+
+        let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
+            adoptedSnapshot,
+            to: fixture.context,
+            structuralConflictStore: fixture.store,
+            structuralConflictSidecarFileURL: fixture.sidecarURL
+        )
+
+        XCTAssertTrue(disposition.coveredNoteIDs.contains(fixture.note.id))
+        XCTAssertTrue(disposition.coveredBatchIDs.contains(batchID))
+        XCTAssertTrue(fixture.store.activeConflicts().isEmpty)
+        XCTAssertEqual(
+            try fixture.store.bootstrapStructuralConflictRecordChecked(
+                id: mirroredConflictID,
+                sidecarFileURL: fixture.sidecarURL
+            )?.lifecycle,
+            .terminallySuperseded
+        )
+        let mirroredReceipt = try XCTUnwrap(
+            fixture.store.bootstrapStructuralResolutionReceiptChecked(
+                conflictID: mirroredConflictID,
+                sidecarFileURL: fixture.sidecarURL
+            )
+        )
+        XCTAssertEqual(mirroredReceipt.choice, .keepLocal)
+        XCTAssertEqual(
+            mirroredReceipt.chosenFingerprint,
+            try SyncConflictStore.bootstrapStructuralFingerprint(
+                noteID: fixture.note.id,
+                state: fixture.remoteState
+            )
+        )
+        XCTAssertEqual(
+            mirroredReceipt.rejectedFingerprint,
+            try SyncConflictStore.bootstrapStructuralFingerprint(
+                noteID: fixture.note.id,
+                state: fixture.localState
+            )
+        )
+    }
+
     func testMYR233PersistedPreparingRecordResumesDuringBootstrapPeerAdoption() throws {
         let fixture = try makeStructuralResolutionFixture()
         try fixture.store.saveRemoteBaselineChecked(SyncRemoteTextBaseline(

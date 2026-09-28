@@ -409,18 +409,24 @@ extension SyncConflictStore {
             )
 
         case .alreadyTerminal:
-            let baseline: SyncRemoteTextBaseline?
-            do {
-                baseline = try remoteBaselineChecked(
-                    entityType: .note,
-                    entityID: record.noteID,
-                    field: .noteContent
-                )
-            } catch {
-                throw SyncBootstrapStructuralConflictStoreError.persistenceUnavailable
-            }
-            guard baseline?.text == record.localText else {
-                throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
+            let hasTerminalStructuralAuthority = try hasBootstrapStructuralTerminalLocalAuthority(
+                for: record,
+                in: envelope
+            )
+            if !hasTerminalStructuralAuthority {
+                let baseline: SyncRemoteTextBaseline?
+                do {
+                    baseline = try remoteBaselineChecked(
+                        entityType: .note,
+                        entityID: record.noteID,
+                        field: .noteContent
+                    )
+                } catch {
+                    throw SyncBootstrapStructuralConflictStoreError.persistenceUnavailable
+                }
+                guard baseline?.text == record.localText else {
+                    throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
+                }
             }
             try finalizeBootstrapStructuralLegacyTerminalLocalAuthorityChecked(
                 conflictID: record.conflictID,
@@ -460,6 +466,53 @@ extension SyncConflictStore {
             throw SyncBootstrapStructuralConflictStoreError.contradictoryEvidence
         }
         return resumed
+    }
+
+    private func hasBootstrapStructuralTerminalLocalAuthority(
+        for preparing: SyncBootstrapStructuralConflictRecord,
+        in envelope: SyncBootstrapStructuralConflictEnvelope
+    ) throws -> Bool {
+        var provesLocalAuthority = false
+        var provesRemoteAuthority = false
+
+        for terminal in envelope.records where
+            terminal.noteID == preparing.noteID
+                && terminal.lifecycle == .terminallySuperseded
+        {
+            guard let receipt = envelope.receipts.first(where: {
+                $0.conflictID == terminal.conflictID
+            }) else {
+                continue
+            }
+            guard receipt.noteID == terminal.noteID else {
+                throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
+            }
+
+            let receiptMatchesTerminalPair =
+                (receipt.chosenFingerprint == terminal.localStructuralFingerprint
+                    && receipt.rejectedFingerprint == terminal.remoteStructuralFingerprint)
+                || (receipt.chosenFingerprint == terminal.remoteStructuralFingerprint
+                    && receipt.rejectedFingerprint == terminal.localStructuralFingerprint)
+            guard receiptMatchesTerminalPair else {
+                throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
+            }
+
+            if receipt.chosenFingerprint == preparing.localStructuralFingerprint,
+               receipt.rejectedFingerprint == preparing.remoteStructuralFingerprint {
+                provesLocalAuthority = true
+            } else if receipt.chosenFingerprint == preparing.remoteStructuralFingerprint,
+                      receipt.rejectedFingerprint == preparing.localStructuralFingerprint {
+                provesRemoteAuthority = true
+            }
+        }
+
+        guard !(provesLocalAuthority && provesRemoteAuthority) else {
+            throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
+        }
+        if provesRemoteAuthority {
+            throw SyncBootstrapStructuralConflictStoreError.contradictoryReceipt
+        }
+        return provesLocalAuthority
     }
 
     func validatedBootstrapStructuralRemoteState(
