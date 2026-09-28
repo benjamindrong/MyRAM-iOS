@@ -773,24 +773,14 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
             fileIO: interruptedFileIO
         ))
 
-        let mirroredConflictID = try SyncConflictStore.bootstrapStructuralConflictID(
-            noteID: fixture.note.id,
-            localFingerprint: SyncConflictStore.bootstrapStructuralFingerprint(
+        let preparingRecord = try XCTUnwrap(
+            fixture.store.bootstrapStructuralConflictRecordChecked(
                 noteID: fixture.note.id,
-                state: fixture.remoteState
-            ),
-            remoteFingerprint: SyncConflictStore.bootstrapStructuralFingerprint(
-                noteID: fixture.note.id,
-                state: fixture.localState
+                sidecarFileURL: fixture.sidecarURL
             )
         )
-        XCTAssertEqual(
-            try fixture.store.bootstrapStructuralConflictRecordChecked(
-                id: mirroredConflictID,
-                sidecarFileURL: fixture.sidecarURL
-            )?.lifecycle,
-            .preparing
-        )
+        XCTAssertEqual(preparingRecord.lifecycle, .preparing)
+        let mirroredConflictID = preparingRecord.conflictID
 
         let committed = try NoteSequenceStateFullBodyIntegration.loadMutationSnapshot(
             for: fixture.note,
