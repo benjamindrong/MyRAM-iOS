@@ -883,7 +883,7 @@ private final class BenchmarkRecordingTransport: MyRAMSyncTransporting {
             sentBatchAcknowledgements.append(
                 try JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload)
             )
-        case .legacySyncEnvelope, .bootstrapCapability, .bootstrapSnapshot, .bootstrapAcknowledgement:
+        case .legacySyncEnvelope, .bootstrapCapability, .bootstrapRefreshRequest, .bootstrapSnapshot, .bootstrapAcknowledgement:
             break
         }
     }
