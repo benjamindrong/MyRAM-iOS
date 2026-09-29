@@ -1140,7 +1140,7 @@ private final class FakeMyRAMSyncTransport: MyRAMSyncTransporting {
             )
         case .batchAcknowledgement:
             sentBatchAcknowledgements.append(try JSONDecoder().decode(SyncBatchAcknowledgement.self, from: message.payload))
-        case .bootstrapCapability, .bootstrapSnapshot, .bootstrapAcknowledgement:
+        case .bootstrapCapability, .bootstrapRefreshRequest, .bootstrapSnapshot, .bootstrapAcknowledgement:
             break
         }
     }
