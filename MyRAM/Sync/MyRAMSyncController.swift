@@ -1365,6 +1365,17 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             coveredNoteIDs: disposition.coveredNoteIDs
         )
 
+        let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
+        let requiredNoteIDs = Set(snapshot.notes.map(\.id))
+        if requiredNoteIDs.isSubset(of: disposition.coveredNoteIDs) {
+            pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: deviceID)
+        } else {
+            pendingReceivedBootstrapByPeerDeviceID[deviceID] = PendingReceivedBootstrap(
+                snapshot: snapshot,
+                peerID: peerID
+            )
+        }
+
         do {
             let payload = try JSONEncoder().encode(acknowledgement)
             let data = try MultipeerSyncMessageCoding.encode(
@@ -1375,17 +1386,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         } catch {
             lastErrorMessage = "Unable to confirm nearby bootstrap state."
             return
-        }
-
-        let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
-        let requiredNoteIDs = Set(snapshot.notes.map(\.id))
-        if requiredNoteIDs.isSubset(of: disposition.coveredNoteIDs) {
-            pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: deviceID)
-        } else {
-            pendingReceivedBootstrapByPeerDeviceID[deviceID] = PendingReceivedBootstrap(
-                snapshot: snapshot,
-                peerID: peerID
-            )
         }
 
         lastErrorMessage = nil
