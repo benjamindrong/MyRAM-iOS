@@ -803,6 +803,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         _ snapshot: SyncPeerBootstrapSnapshot,
         from peerID: MCPeerID
     ) async {
+        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        if let retained = pendingReceivedBootstrapByPeerDeviceID[peerDeviceID],
+           retained.snapshot.id != snapshot.id {
+            pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        }
+
         let disposition: SyncPeerBootstrapApplyDisposition
         do {
             guard let convergenceCoordinator else {
@@ -824,7 +830,6 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             coveredNoteIDs: disposition.coveredNoteIDs
         )
 
-        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
         let requiredNoteIDs = Set(snapshot.notes.map(\.id))
         if requiredNoteIDs.isSubset(of: disposition.coveredNoteIDs) {
             pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: peerDeviceID)
