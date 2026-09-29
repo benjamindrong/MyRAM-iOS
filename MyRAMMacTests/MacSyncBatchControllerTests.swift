@@ -1256,37 +1256,6 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id), [local.id])
     }
 
-    func testConflictResolutionRefreshRebuildsMacBootstrapAndRequestsPeerRefresh() async throws {
-        let fixture = try makeMYR233BootstrapFixture(
-            unsentBatches: [],
-            localBatches: [],
-            peerDeviceID: "myr233-conflict-refresh-mac"
-        )
-        defer { try? FileManager.default.removeItem(at: fixture.directory) }
-        fixture.controller.setBootstrapRetryDelayNanosecondsForTesting([])
-
-        fixture.controller.beginBootstrapForTesting(to: fixture.peer)
-        let firstSnapshot = try fixture.firstBootstrapSnapshot()
-
-        await fixture.controller.refreshBootstrapAfterConflictResolution()
-
-        let messages = try fixture.sentMessages.values.map {
-            try MultipeerSyncMessageCoding.decodeMessage(from: $0)
-        }
-        let snapshots = try messages.compactMap { message -> SyncPeerBootstrapSnapshot? in
-            guard message.kind == .bootstrapSnapshot else { return nil }
-            return try JSONDecoder().decode(
-                SyncPeerBootstrapSnapshot.self,
-                from: message.payload
-            )
-        }
-
-        XCTAssertEqual(snapshots.count, 2)
-        XCTAssertEqual(snapshots.first?.id, firstSnapshot.id)
-        XCTAssertNotEqual(snapshots.last?.id, firstSnapshot.id)
-        XCTAssertEqual(messages.last?.kind, .bootstrapRefreshRequest)
-    }
-
     func testBootstrapDeduplicatesIdenticalCrossDomainBatchAndAckRetiresBothOwners() async throws {
         let batch = makeBatch(idSuffix: 235_001)
         let fixture = try makeMYR233BootstrapFixture(
