@@ -1369,7 +1369,7 @@ final class NotesViewModel: ObservableObject {
             }
             refreshCurrentFolderContent()
             if let bootstrapController = syncController as? MyRAMSyncBootstrapConfiguring {
-                await bootstrapController.refreshBootstrapAfterConflictResolution()
+                await bootstrapController.resumeBootstrapAfterConflictResolution()
             }
             resumePendingConvergencePresentationIfNeeded()
         }
