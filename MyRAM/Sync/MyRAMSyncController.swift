@@ -418,10 +418,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         bootstrapStateByPeerDeviceID[peerDeviceID]?.ordinarySyncReady == true
     }
 
-    func bootstrapStateForTesting(peerDeviceID: String) -> SyncPeerBootstrapPendingState? {
-        bootstrapStateByPeerDeviceID[peerDeviceID]
-    }
-
     func clearBootstrapStateForTesting(peerDeviceID: String) {
         bootstrapStateByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
