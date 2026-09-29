@@ -251,6 +251,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
     }
 
+    func handleBootstrapRefreshRequestForTesting(from peerID: MCPeerID) async {
+        await handleBootstrapRefreshRequest(
+            SyncPeerBootstrapRefreshRequest(),
+            from: peerID
+        )
+    }
+
     func resolveBootstrapCapabilityFallbackForTesting(peerID: MCPeerID) async {
         await resolveBootstrapCapabilityFallback(for: peerID)
     }
@@ -954,6 +961,57 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
     }
 
+    func refreshBootstrapAfterConflictResolution() async {
+        for peerID in connectedPeersProvider() {
+            let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+            guard peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
+                forPeerDeviceID: deviceID
+            ) else {
+                continue
+            }
+            await restartBootstrap(to: peerID)
+            sendBootstrapRefreshRequest(to: peerID)
+        }
+    }
+
+    private func sendBootstrapRefreshRequest(to peerID: MCPeerID) {
+        do {
+            let payload = try JSONEncoder().encode(SyncPeerBootstrapRefreshRequest())
+            let data = try MultipeerSyncMessageCoding.encode(
+                kind: .bootstrapRefreshRequest,
+                payload: payload
+            )
+            try sendBatchDataOperation(data, [peerID], .reliable)
+        } catch {
+            lastErrorMessage = "Unable to request nearby bootstrap refresh."
+        }
+    }
+
+    private func handleBootstrapRefreshRequest(
+        _ request: SyncPeerBootstrapRefreshRequest,
+        from peerID: MCPeerID
+    ) async {
+        guard request.version == SyncPeerBootstrapRefreshRequest.currentVersion else {
+            return
+        }
+        let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        peerCapabilityRegistry.recordBootstrapV1Announcement(forPeerDeviceID: deviceID)
+        await restartBootstrap(to: peerID)
+    }
+
+    private func restartBootstrap(to peerID: MCPeerID) async {
+        let deviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        guard connectedPeersProvider().contains(peerID),
+              peerCapabilityRegistry.hasExplicitCurrentSessionBootstrapV1Support(
+                forPeerDeviceID: deviceID
+              ) else {
+            return
+        }
+        bootstrapRetryTasks.removeValue(forKey: deviceID)?.cancel()
+        bootstrapStateByPeerDeviceID.removeValue(forKey: deviceID)
+        await beginBootstrap(to: peerID)
+    }
+
     private func handlePeerDisconnect(peerDeviceID: String) {
         bootstrapCapabilityResolutionTasks.removeValue(forKey: peerDeviceID)?.cancel()
         bootstrapRetryTasks.removeValue(forKey: peerDeviceID)?.cancel()
@@ -1277,6 +1335,12 @@ extension MacSyncBatchController: MCSessionDelegate {
                     from: message.payload
                 ) else { return }
                 await handleBootstrapCapabilityAnnouncement(announcement, from: peerID)
+            case .bootstrapRefreshRequest:
+                guard let request = try? JSONDecoder().decode(
+                    SyncPeerBootstrapRefreshRequest.self,
+                    from: message.payload
+                ) else { return }
+                await handleBootstrapRefreshRequest(request, from: peerID)
             case .bootstrapSnapshot:
                 guard let snapshot = try? JSONDecoder().decode(
                     SyncPeerBootstrapSnapshot.self,
