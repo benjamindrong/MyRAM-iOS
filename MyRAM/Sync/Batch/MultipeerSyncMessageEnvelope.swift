@@ -7,6 +7,7 @@ enum MultipeerSyncMessageKind: String, Codable, Equatable, Sendable {
     case batchSync = "myram.batchSync.v1"
     case batchAcknowledgement = "myram.batchAcknowledgement.v1"
     case bootstrapCapability = "myram.bootstrapCapability.v1"
+    case bootstrapRefreshRequest = "myram.bootstrapRefreshRequest.v1"
     case bootstrapSnapshot = "myram.bootstrapSnapshot.v1"
     case bootstrapAcknowledgement = "myram.bootstrapAcknowledgement.v1"
 }
@@ -83,6 +84,15 @@ struct SyncPeerBootstrapHistoryBatchCoverage: Codable, Equatable, Sendable {
 }
 
 struct SyncPeerBootstrapCapabilityAnnouncement: Codable, Equatable, Sendable {
+    static let currentVersion = 1
+    let version: Int
+
+    init(version: Int = Self.currentVersion) {
+        self.version = version
+    }
+}
+
+struct SyncPeerBootstrapRefreshRequest: Codable, Equatable, Sendable {
     static let currentVersion = 1
     let version: Int
 
