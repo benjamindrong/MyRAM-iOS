@@ -1348,6 +1348,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     ) async {
         guard let applyBootstrapSnapshot else { return }
 
+        let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
+        if let retained = pendingReceivedBootstrapByPeerDeviceID[deviceID],
+           retained.snapshot.id != snapshot.id {
+            pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: deviceID)
+        }
+
         let disposition: SyncPeerBootstrapApplyDisposition
         do {
             disposition = try applyBootstrapSnapshot(snapshot)
@@ -1365,7 +1371,6 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             coveredNoteIDs: disposition.coveredNoteIDs
         )
 
-        let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
         let requiredNoteIDs = Set(snapshot.notes.map(\.id))
         if requiredNoteIDs.isSubset(of: disposition.coveredNoteIDs) {
             pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: deviceID)
