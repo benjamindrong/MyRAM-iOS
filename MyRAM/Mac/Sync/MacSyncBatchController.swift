@@ -824,6 +824,17 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             coveredNoteIDs: disposition.coveredNoteIDs
         )
 
+        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        let requiredNoteIDs = Set(snapshot.notes.map(\.id))
+        if requiredNoteIDs.isSubset(of: disposition.coveredNoteIDs) {
+            pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        } else {
+            pendingReceivedBootstrapByPeerDeviceID[peerDeviceID] = PendingReceivedBootstrap(
+                snapshot: snapshot,
+                peerID: peerID
+            )
+        }
+
         do {
             let payload = try JSONEncoder().encode(acknowledgement)
             let data = try MultipeerSyncMessageCoding.encode(
@@ -834,17 +845,6 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         } catch {
             lastErrorMessage = "Unable to confirm nearby bootstrap state."
             return
-        }
-
-        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
-        let requiredNoteIDs = Set(snapshot.notes.map(\.id))
-        if requiredNoteIDs.isSubset(of: disposition.coveredNoteIDs) {
-            pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: peerDeviceID)
-        } else {
-            pendingReceivedBootstrapByPeerDeviceID[peerDeviceID] = PendingReceivedBootstrap(
-                snapshot: snapshot,
-                peerID: peerID
-            )
         }
         var persistedIncomingBatchIDsFromPeer: Set<SyncBatchID> = []
         if let originDeviceID = UUID(uuidString: peerDeviceID),
