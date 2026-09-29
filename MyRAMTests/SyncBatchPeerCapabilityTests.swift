@@ -663,6 +663,42 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(transport.sentMessageKinds.last, .bootstrapSnapshot)
     }
 
+    func testBootstrapRefreshRequestRebuildsExpiredBootstrapSnapshot() async throws {
+        let peer = MCPeerID(displayName: "Remote|refresh-peer")
+        let transport = CapabilityRecordingTransport(connectedPeers: [peer])
+        let controller = makeController(transport: transport)
+        let firstSnapshotID = UUID()
+        let secondSnapshotID = UUID()
+        var buildCount = 0
+        controller.recordBootstrapCapabilityForTesting("1", forPeerDeviceID: "refresh-peer")
+        controller.buildBootstrapSnapshot = {
+            buildCount += 1
+            return SyncPeerBootstrapSnapshot(
+                id: buildCount <= 2 ? firstSnapshotID : secondSnapshotID,
+                folders: [],
+                notes: []
+            )
+        }
+        controller.setBootstrapRetryDelayNanosecondsForTesting([])
+
+        await controller.beginBootstrapForTesting(to: peer)
+        XCTAssertEqual(
+            controller.bootstrapStateForTesting(peerDeviceID: "refresh-peer")?.snapshotID,
+            firstSnapshotID
+        )
+
+        await controller.handleBootstrapRefreshRequestForTesting(from: peer)
+
+        XCTAssertEqual(
+            controller.bootstrapStateForTesting(peerDeviceID: "refresh-peer")?.snapshotID,
+            secondSnapshotID
+        )
+        XCTAssertEqual(
+            transport.attemptedBootstrapSnapshots.map(\.id),
+            [firstSnapshotID, secondSnapshotID]
+        )
+    }
+
     func testBootstrapSnapshotSendFailureAutomaticallyRetriesSameSnapshot() async throws {
         let peer = MCPeerID(displayName: "Remote|retry-peer")
         let transport = CapabilityRecordingTransport(connectedPeers: [peer])
@@ -1411,7 +1447,7 @@ private final class CapabilityRecordingTransport: MyRAMSyncTransporting {
                     from: message.payload
                 )
             )
-        case .legacySyncEnvelope, .bootstrapCapability:
+        case .legacySyncEnvelope, .bootstrapCapability, .bootstrapRefreshRequest:
             break
         }
     }
