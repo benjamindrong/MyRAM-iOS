@@ -506,7 +506,10 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
                 deletedAt: fixture.note.deletedAt,
                 folderID: nil,
                 formatVersion: NoteSequenceStatePersistenceCodec.formatVersion,
-                revision: committed.revision,
+                // Peer-local sequence revisions are not cross-peer structural identity.
+                // Reproduce the physical MYR-233 case where the exact same CRDT state
+                // arrived with a different peer-local revision counter.
+                revision: committed.revision + 8,
                 visibleUTF16Count: committed.state.visibleUTF16Count,
                 tombstonedUTF16Count: committed.state.tombstonedUTF16Count,
                 payloadByteCount: payload.count,
@@ -517,6 +520,12 @@ final class MYR184SyncConflictResolutionTests: XCTestCase {
                 noteIDs: [fixture.note.id],
                 anchoredRecoveryChanges: nil
             )]
+        )
+
+        XCTAssertNotEqual(
+            committed.revision,
+            bootstrapSnapshot.notes[0].revision,
+            "Regression requires structurally identical peer state with a different local revision counter."
         )
 
         let disposition = try SyncPeerBootstrapSnapshotPersistence.apply(
