@@ -493,7 +493,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
                         } catch {
                             throw SyncPeerBootstrapError.invalidSequenceState(note.id)
                         }
-                        let exactSequenceBaseline = recordExactlyMatches(record, noteSnapshot)
+                        let exactSequenceBaseline = recordStateExactlyMatches(record, noteSnapshot)
                         if let structuralConflictStore,
                            let persistedStructuralConflict = try structuralConflictStore.bootstrapStructuralConflictRecordChecked(
                             noteID: note.id,
@@ -572,7 +572,7 @@ enum SyncPeerBootstrapSnapshotPersistence {
                                     && note.modifiedAt == noteSnapshot.modifiedAt
                                     && note.deletedAt == noteSnapshot.deletedAt
                                     && note.folder?.id == noteSnapshot.folderID
-                                    && recordExactlyMatches(record, noteSnapshot)
+                                    && recordStateExactlyMatches(record, noteSnapshot)
                                 if isFullyCoveredAfterMerge {
                                     fullyCoveredNoteIDs.insert(note.id)
                                 }
@@ -900,12 +900,14 @@ enum SyncPeerBootstrapSnapshotPersistence {
         )
     }
 
-    private static func recordExactlyMatches(
+    private static func recordStateExactlyMatches(
         _ record: NoteSequenceStateRecord,
         _ note: SyncPeerBootstrapNoteSnapshot
     ) -> Bool {
+        // revision is a peer-local optimistic-concurrency counter, not part of
+        // CRDT structural identity. Equal encoded state plus its derived counts is
+        // sufficient to prove the same sequence baseline across peers.
         record.formatVersion == note.formatVersion
-            && record.revision == note.revision
             && record.visibleUTF16Count == note.visibleUTF16Count
             && record.tombstonedUTF16Count == note.tombstonedUTF16Count
             && record.payloadByteCount == note.payloadByteCount
