@@ -421,6 +421,8 @@ struct MyRAMMacRootView: View {
             (conflict.entityType == .note && selectedNoteID == conflict.entityID) {
             reloadSelectedEditor(reason: .unsafeIncrementalApply)
         }
+        await syncController.resumeBootstrapAfterConflictResolution()
+        resumeSyncConvergence()
     }
 
     private func resumeSyncConvergence() {

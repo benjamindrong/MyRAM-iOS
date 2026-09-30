@@ -155,6 +155,8 @@ protocol MyRAMSyncBootstrapConfiguring: AnyObject {
     var applyBootstrapSnapshot: ((SyncPeerBootstrapSnapshot) throws -> SyncPeerBootstrapApplyDisposition)? { get set }
     var onBootstrapPresentationRefresh: (() -> Void)? { get set }
     var onResumeIncomingAfterBootstrap: (() async -> Void)? { get set }
+
+    func resumeBootstrapAfterConflictResolution() async
 }
 
 @MainActor
@@ -208,6 +210,11 @@ final class MyRAMSyncController: NSObject, ObservableObject {
 
     private struct IncomingBatchWork {
         let batch: SyncBatch
+        let peerID: MCPeerID
+    }
+
+    private struct PendingReceivedBootstrap {
+        let snapshot: SyncPeerBootstrapSnapshot
         let peerID: MCPeerID
     }
 
@@ -280,6 +287,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     private var hasStartedNetworking = false
     private var pendingIncomingBatchWork: [IncomingBatchWork] = []
     private var isProcessingIncomingBatchWork = false
+    private var pendingReceivedBootstrapByPeerDeviceID: [String: PendingReceivedBootstrap] = [:]
 
     init(
         unsentBatchQueueFileURL: URL? = MyRAMSyncController.unsentBatchQueueFileURL(),
@@ -1340,6 +1348,12 @@ final class MyRAMSyncController: NSObject, ObservableObject {
     ) async {
         guard let applyBootstrapSnapshot else { return }
 
+        let deviceID = MyRAMPeerIdentity(peerID: peerID).deviceID
+        if let retained = pendingReceivedBootstrapByPeerDeviceID[deviceID],
+           retained.snapshot.id != snapshot.id {
+            pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: deviceID)
+        }
+
         let disposition: SyncPeerBootstrapApplyDisposition
         do {
             disposition = try applyBootstrapSnapshot(snapshot)
@@ -1356,6 +1370,16 @@ final class MyRAMSyncController: NSObject, ObservableObject {
             coveredBatchIDs: disposition.coveredBatchIDs,
             coveredNoteIDs: disposition.coveredNoteIDs
         )
+
+        let requiredNoteIDs = Set(snapshot.notes.map(\.id))
+        if requiredNoteIDs.isSubset(of: disposition.coveredNoteIDs) {
+            pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: deviceID)
+        } else {
+            pendingReceivedBootstrapByPeerDeviceID[deviceID] = PendingReceivedBootstrap(
+                snapshot: snapshot,
+                peerID: peerID
+            )
+        }
 
         do {
             let payload = try JSONEncoder().encode(acknowledgement)
@@ -1477,12 +1501,27 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         }
     }
 
+    func resumeBootstrapAfterConflictResolution() async {
+        let connectedPeers = await transport.connectedPeers()
+        let connectedDeviceIDs = Set(
+            connectedPeers.map { MyRAMPeerIdentity(peerID: $0).deviceID }
+        )
+        let pending = pendingReceivedBootstrapByPeerDeviceID
+            .filter { connectedDeviceIDs.contains($0.key) }
+            .map(\.value)
+
+        for entry in pending {
+            await receiveBootstrapSnapshot(entry.snapshot, from: entry.peerID)
+        }
+    }
+
     private func handlePeerDisconnect(peerDeviceID: String) {
         bootstrapCapabilityResolutionTasks.removeValue(forKey: peerDeviceID)?.cancel()
         bootstrapRetryTasks.removeValue(forKey: peerDeviceID)?.cancel()
         outstandingBatchDeliveries.invalidateSession(forPeerDeviceID: peerDeviceID)
         peerCapabilityRegistry.clearCurrentSessionEvidence(forPeerDeviceID: peerDeviceID)
         bootstrapStateByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
 
     private func handleBootstrapCapabilityAnnouncement(

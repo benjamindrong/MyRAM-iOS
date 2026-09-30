@@ -1368,6 +1368,9 @@ final class NotesViewModel: ObservableObject {
                 publishActiveEditorReload(noteID: conflict.entityID, reason: .unsupportedIntegratedChange)
             }
             refreshCurrentFolderContent()
+            if let bootstrapController = syncController as? MyRAMSyncBootstrapConfiguring {
+                await bootstrapController.resumeBootstrapAfterConflictResolution()
+            }
             resumePendingConvergencePresentationIfNeeded()
         }
     }

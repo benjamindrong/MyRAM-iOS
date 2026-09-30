@@ -19,6 +19,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         let peerID: MCPeerID
     }
 
+    private struct PendingReceivedBootstrap {
+        let snapshot: SyncPeerBootstrapSnapshot
+        let peerID: MCPeerID
+    }
+
     @Published private(set) var availablePeers: [MacSyncDiscoveredPeer] = []
     @Published private(set) var connectedPeers: [String] = []
     @Published private(set) var lastConnectionEvent = "Browsing for nearby MyRAM devices"
@@ -69,6 +74,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private var hasStartedNetworking = false
     private var pendingIncomingBatchWork: [IncomingBatchWork] = []
     private var isProcessingIncomingBatchWork = false
+    private var pendingReceivedBootstrapByPeerDeviceID: [String: PendingReceivedBootstrap] = [:]
 
     init(
         context: ModelContext,
@@ -797,6 +803,12 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         _ snapshot: SyncPeerBootstrapSnapshot,
         from peerID: MCPeerID
     ) async {
+        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
+        if let retained = pendingReceivedBootstrapByPeerDeviceID[peerDeviceID],
+           retained.snapshot.id != snapshot.id {
+            pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        }
+
         let disposition: SyncPeerBootstrapApplyDisposition
         do {
             guard let convergenceCoordinator else {
@@ -818,6 +830,16 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             coveredNoteIDs: disposition.coveredNoteIDs
         )
 
+        let requiredNoteIDs = Set(snapshot.notes.map(\.id))
+        if requiredNoteIDs.isSubset(of: disposition.coveredNoteIDs) {
+            pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        } else {
+            pendingReceivedBootstrapByPeerDeviceID[peerDeviceID] = PendingReceivedBootstrap(
+                snapshot: snapshot,
+                peerID: peerID
+            )
+        }
+
         do {
             let payload = try JSONEncoder().encode(acknowledgement)
             let data = try MultipeerSyncMessageCoding.encode(
@@ -829,8 +851,6 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
             lastErrorMessage = "Unable to confirm nearby bootstrap state."
             return
         }
-
-        let peerDeviceID = MacSyncPeerIdentity(peerID: peerID).deviceID
         var persistedIncomingBatchIDsFromPeer: Set<SyncBatchID> = []
         if let originDeviceID = UUID(uuidString: peerDeviceID),
            let convergenceCoordinator {
@@ -954,12 +974,26 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         }
     }
 
+    func resumeBootstrapAfterConflictResolution() async {
+        let connectedDeviceIDs = Set(
+            connectedPeersProvider().map { MacSyncPeerIdentity(peerID: $0).deviceID }
+        )
+        let pending = pendingReceivedBootstrapByPeerDeviceID
+            .filter { connectedDeviceIDs.contains($0.key) }
+            .map(\.value)
+
+        for entry in pending {
+            await receiveBootstrapSnapshot(entry.snapshot, from: entry.peerID)
+        }
+    }
+
     private func handlePeerDisconnect(peerDeviceID: String) {
         bootstrapCapabilityResolutionTasks.removeValue(forKey: peerDeviceID)?.cancel()
         bootstrapRetryTasks.removeValue(forKey: peerDeviceID)?.cancel()
         outstandingBatchDeliveries.invalidateSession(forPeerDeviceID: peerDeviceID)
         peerCapabilityRegistry.clearCurrentSessionEvidence(forPeerDeviceID: peerDeviceID)
         bootstrapStateByPeerDeviceID.removeValue(forKey: peerDeviceID)
+        pendingReceivedBootstrapByPeerDeviceID.removeValue(forKey: peerDeviceID)
     }
 
     private func handleBootstrapCapabilityAnnouncement(

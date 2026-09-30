@@ -1256,6 +1256,133 @@ final class MacSyncBatchControllerTests: XCTestCase {
         XCTAssertEqual(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.map(\.id), [local.id])
     }
 
+    func testMYR233ResolvedStructuralConflictReappliesBlockedBootstrapAndUpdatesCoverage() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("MYR-233-conflict-bootstrap-resume-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let container = try makeInMemoryContainer()
+        retainedContainers.append(container)
+        let context = container.mainContext
+        let noteID = UUID(uuidString: "23300000-0000-0000-0000-0000000002B1")!
+        let createdAt = Date(timeIntervalSinceReferenceDate: 2_339)
+        let remoteModifiedAt = createdAt.addingTimeInterval(1)
+
+        let note = Note(title: "Shared", content: "Local")
+        note.id = noteID
+        note.createdAt = createdAt
+        note.modifiedAt = createdAt
+        note.isPinned = false
+        context.insert(note)
+        try NoteSequenceStateFullBodyIntegration.ensureCurrentBodyState(
+            for: note,
+            in: context
+        )
+        try context.save()
+
+        let remotePrepared = try NoteSequenceStateBootstrapPersistence.prepareInitialState(
+            noteID: noteID,
+            body: "Remote"
+        )
+        let remoteRecord = remotePrepared.makeRevisionZeroRecord()
+        let snapshot = SyncPeerBootstrapSnapshot(
+            id: UUID(),
+            folders: [],
+            notes: [
+                SyncPeerBootstrapNoteSnapshot(
+                    id: noteID,
+                    title: "Shared",
+                    body: "Remote",
+                    isPinned: false,
+                    createdAt: createdAt,
+                    modifiedAt: remoteModifiedAt,
+                    deletedAt: nil,
+                    folderID: nil,
+                    formatVersion: remoteRecord.formatVersion,
+                    revision: remoteRecord.revision,
+                    visibleUTF16Count: remoteRecord.visibleUTF16Count,
+                    tombstonedUTF16Count: remoteRecord.tombstonedUTF16Count,
+                    payloadByteCount: remoteRecord.payloadByteCount,
+                    statePayloadData: remoteRecord.statePayloadData
+                )
+            ]
+        )
+
+        let peerDeviceID = "23300000-0000-0000-0000-0000000002B2"
+        let peer = MCPeerID(displayName: "remote|\(peerDeviceID)")
+        let conflictStore = SyncConflictStore(
+            fileURL: directory.appendingPathComponent("conflicts.json")
+        )
+        let structuralURL = directory.appendingPathComponent("structural-conflicts.json")
+        var sentMessages: [Data] = []
+        let controller = MacSyncBatchController(
+            context: context,
+            conflictStore: conflictStore,
+            unsentBatchQueueFileURL: nil,
+            startsNetworking: false,
+            connectedPeersProvider: { [peer] },
+            sendBatchDataOperation: { data, _, _ in sentMessages.append(data) }
+        )
+        let coordinator = MacSyncConvergenceCoordinator(
+            context: context,
+            syncController: controller,
+            conflictStore: conflictStore,
+            presentationSurface: completingPresentationSurface(),
+            incomingBoundarySurface: MacSyncIncomingLocalBoundarySurface(
+                prepareForIncomingBodyMutation: { _ in .ready }
+            ),
+            pendingIncomingQueueFileURL: nil,
+            localObligationQueueFileURL: nil,
+            structuralConflictSidecarFileURL: structuralURL
+        )
+        _ = coordinator
+
+        await controller.receiveBootstrapSnapshotForTesting(snapshot, from: peer)
+
+        let firstAcknowledgement = try XCTUnwrap(sentMessages.compactMap { data -> SyncPeerBootstrapAcknowledgement? in
+            guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                  message.kind == .bootstrapAcknowledgement else {
+                return nil
+            }
+            return try? JSONDecoder().decode(
+                SyncPeerBootstrapAcknowledgement.self,
+                from: message.payload
+            )
+        }.last)
+        XCTAssertEqual(firstAcknowledgement.snapshotID, snapshot.id)
+        XCTAssertFalse(firstAcknowledgement.coveredNoteIDs?.contains(noteID) == true)
+
+        let conflict = try XCTUnwrap(
+            conflictStore.activeConflicts().first {
+                $0.noteID == noteID || $0.entityID == noteID
+            }
+        )
+        let service = MyRAMSyncConflictService(
+            context: context,
+            store: conflictStore,
+            bootstrapStructuralConflictFileURL: structuralURL
+        )
+        _ = try await service.acceptIncomingChecked(conflict, activeNoteID: nil)
+        XCTAssertEqual(note.content, "Remote")
+
+        await controller.resumeBootstrapAfterConflictResolution()
+
+        let acknowledgements = sentMessages.compactMap { data -> SyncPeerBootstrapAcknowledgement? in
+            guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
+                  message.kind == .bootstrapAcknowledgement else {
+                return nil
+            }
+            return try? JSONDecoder().decode(
+                SyncPeerBootstrapAcknowledgement.self,
+                from: message.payload
+            )
+        }
+        XCTAssertEqual(acknowledgements.count, 2)
+        XCTAssertEqual(acknowledgements.last?.snapshotID, snapshot.id)
+        XCTAssertTrue(acknowledgements.last?.coveredNoteIDs?.contains(noteID) == true)
+    }
+
     func testBootstrapDeduplicatesIdenticalCrossDomainBatchAndAckRetiresBothOwners() async throws {
         let batch = makeBatch(idSuffix: 235_001)
         let fixture = try makeMYR233BootstrapFixture(
