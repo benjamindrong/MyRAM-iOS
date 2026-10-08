@@ -5,6 +5,41 @@ import XCTest
 @testable import MyRAMMac
 
 final class MacSyncDeviceIdentityTests: XCTestCase {
+    func testVerificationFixtureIdentityPersistsAndRebindsEveryProviderBeforePeerConstruction() throws {
+        let defaults = makeDefaults()
+        defaults.set(UUID().uuidString, forKey: MacSyncDeviceIdentity.deviceIDKey)
+        let path = FileManager.default.temporaryDirectory.appendingPathComponent("\(UUID().uuidString).bundle")
+        try FileManager.default.createDirectory(at: path, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: path) }
+        let fixtureID = UUID(uuidString: "5CF4DFED-1278-4D5C-BB0A-D63DC5866DC2")!
+        let info: [String: Any] = [
+            "CFBundleIdentifier": "com.northsignalstudio.myram.mac.verification",
+            "MyRAMVerificationFixtureDeviceID": fixtureID.uuidString
+        ]
+        try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+            .write(to: path.appendingPathComponent("Info.plist"))
+        let bundle = try XCTUnwrap(Bundle(path: path.path))
+        let first = MacSyncDeviceIdentityProvider(defaults: defaults, bundle: bundle).currentIdentity()
+        XCTAssertEqual(first.id, fixtureID)
+        XCTAssertEqual(defaults.string(forKey: MacSyncDeviceIdentity.deviceIDKey), fixtureID.uuidString)
+        defaults.set(UUID().uuidString, forKey: MacSyncDeviceIdentity.deviceIDKey)
+        let recreated = MacSyncDeviceIdentityProvider(defaults: defaults, bundle: bundle).currentIdentity()
+        XCTAssertEqual(recreated.id, fixtureID)
+        XCTAssertTrue(recreated.peerDisplayName.hasSuffix("|\(fixtureID.uuidString)"))
+    }
+
+    func testMacProductionBundleRejectsFixtureIdentityWithoutChangingExistingDefaults() {
+        let defaults = makeDefaults()
+        let existing = UUID().uuidString
+        defaults.set(existing, forKey: MacSyncDeviceIdentity.deviceIDKey)
+        for bundleID in ["com.northsignalstudio.myram.mac", "com.northsignalstudio.myram.mac.dev"] {
+            XCTAssertThrowsError(try MyRAMSyncDeviceIdentityStore.resolve(
+                defaults: defaults, bundleIdentifier: bundleID, configuredDeviceID: UUID().uuidString
+            ))
+            XCTAssertEqual(defaults.string(forKey: MacSyncDeviceIdentity.deviceIDKey), existing)
+        }
+    }
+
     func testCurrentIdentityReusesExistingStableDeviceIDKey() {
         let defaults = makeDefaults()
         let existingID = UUID(uuidString: "00000000-0000-0000-0000-000000000123")!

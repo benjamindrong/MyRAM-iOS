@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import plistlib
 import re
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -190,6 +192,24 @@ def replace_required(path: Path, old: str, new: str, *, minimum: int = 1) -> int
     return count
 
 
+def load_fixture_identity(path: Path | None) -> dict[str, Any] | None:
+    if path is None:
+        return None
+    try:
+        data = path.read_bytes()
+        manifest = json.loads(data)
+        if manifest["schema"] != "myr233.seven-batch-restore-fixture.v1":
+            fail("Unsupported Verification fixture manifest schema.")
+        ids = manifest["captured_device_ids"]
+        iphone = str(uuid.UUID(ids["iphone"])).upper()
+        mac = str(uuid.UUID(ids["mac"])).upper()
+        if iphone == mac:
+            fail("Verification fixture peer identities must be distinct.")
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
+        fail(f"Invalid Verification fixture identity manifest: {error}")
+    return {"manifest_sha256": hashlib.sha256(data).hexdigest(), "iphone": iphone, "mac": mac}
+
+
 def configure_project(root: Path, identity: dict[str, Any]) -> None:
     project = root / "MyRAM.xcodeproj" / "project.pbxproj"
     ios = identity["ios"]
@@ -254,7 +274,7 @@ def configure_project(root: Path, identity: dict[str, Any]) -> None:
     )
 
 
-def configure_plists(root: Path, identity: dict[str, Any]) -> None:
+def configure_plists(root: Path, identity: dict[str, Any], fixture: dict[str, Any] | None = None) -> None:
     ios_path = root / "MyRAM" / "Info.plist"
     with ios_path.open("rb") as handle:
         ios_plist = plistlib.load(handle)
@@ -267,6 +287,8 @@ def configure_plists(root: Path, identity: dict[str, Any]) -> None:
         fail("iOS Info.plist Production URL scheme drifted.")
 
     ios = identity["ios"]
+    if fixture:
+        ios_plist["MyRAMVerificationFixtureDeviceID"] = fixture["iphone"]
     ios_plist["CFBundleDisplayName"] = identity["display_name"]
     ios_plist["NSBonjourServices"] = [identity["bonjour_service"]]
     url_types[0]["CFBundleURLSchemes"] = [ios["url_scheme"]]
@@ -305,6 +327,8 @@ def configure_plists(root: Path, identity: dict[str, Any]) -> None:
         fail("macOS Info.plist Production URL scheme drifted.")
 
     macos = identity["macos"]
+    if fixture:
+        mac_plist["MyRAMVerificationFixtureDeviceID"] = fixture["mac"]
     mac_plist["CFBundleDisplayName"] = identity["display_name"]
     mac_plist["NSBonjourServices"] = [identity["bonjour_service"]]
     mac_url_types[0]["CFBundleURLSchemes"] = [macos["url_scheme"]]
@@ -367,7 +391,7 @@ def configure_runtime_identities(root: Path, identity: dict[str, Any]) -> None:
     )
 
 
-def audit(root: Path, identity: dict[str, Any], source_sha: str) -> dict[str, Any]:
+def audit(root: Path, identity: dict[str, Any], source_sha: str, fixture: dict[str, Any] | None = None) -> dict[str, Any]:
     project = root / "MyRAM.xcodeproj" / "project.pbxproj"
     project_text = project.read_text(encoding="utf-8")
     ios = identity["ios"]
@@ -452,6 +476,11 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str) -> dict[str, An
     if mac_plist["CFBundleURLTypes"][0]["CFBundleURLSchemes"] != [macos["url_scheme"]]:
         fail("macOS Verification URL scheme audit failed.")
 
+    for platform, values in (("iphone", ios_plist), ("mac", mac_plist)):
+        expected_fixture_id = fixture[platform] if fixture else None
+        if values.get("MyRAMVerificationFixtureDeviceID") != expected_fixture_id:
+            fail(f"{platform}: Verification fixture device identity audit failed.")
+
     changed_files = {
         line
         for line in run_git(root, "diff", "--name-only").splitlines()
@@ -469,6 +498,7 @@ def audit(root: Path, identity: dict[str, Any], source_sha: str) -> dict[str, An
 
     return {
         "source_candidate_sha": source_sha,
+        "fixture_identity": fixture,
         "environment": identity["environment"],
         "display_name": identity["display_name"],
         "application_identifiers": {
@@ -522,17 +552,19 @@ def main() -> int:
         type=Path,
         help="Optional path for the generated isolation audit JSON.",
     )
+    parser.add_argument("--fixture-manifest", type=Path, help="Approved fixture manifest; binds peer identities only inside Verification apps.")
     args = parser.parse_args()
     root = args.root.resolve()
 
     try:
         source_sha = require_disposable_detached_worktree(root)
         identity = load_identity(root)
+        fixture = load_fixture_identity(args.fixture_manifest)
         configure_project(root, identity)
-        configure_plists(root, identity)
+        configure_plists(root, identity, fixture)
         configure_storage_roots(root, identity)
         configure_runtime_identities(root, identity)
-        report = audit(root, identity, source_sha)
+        report = audit(root, identity, source_sha, fixture)
         rendered = json.dumps(report, indent=2, sort_keys=True) + "\n"
         if args.manifest_output:
             args.manifest_output.parent.mkdir(parents=True, exist_ok=True)
