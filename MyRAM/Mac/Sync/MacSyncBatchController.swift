@@ -112,7 +112,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         runtimeConfiguration = configuration
         transportDiagnostics = MyRAMSyncTransportDiagnostics(configuration: configuration)
         let identity = identityProvider()
-        let retainedPeerID = MCPeerID(displayName: identity.peerDisplayName)
+        let retainedPeerID = MyRAMSyncDeviceIdentityStore.currentPeerID(displayName: identity.peerDisplayName)
         let retainedSession = MCSession(
             peer: retainedPeerID,
             securityIdentity: nil,

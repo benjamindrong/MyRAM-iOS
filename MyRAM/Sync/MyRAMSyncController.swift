@@ -309,7 +309,7 @@ final class MyRAMSyncController: NSObject, ObservableObject {
         transportDiagnostics = MyRAMSyncTransportDiagnostics(configuration: configuration)
         let deviceName = MyRAMDeviceIdentity.currentDisplayName()
         let storedDeviceID = MyRAMDeviceIdentity.currentDeviceID()
-        let peer = MCPeerID(displayName: "\(deviceName)|\(storedDeviceID)")
+        let peer = MyRAMSyncDeviceIdentityStore.currentPeerID(displayName: "\(deviceName)|\(storedDeviceID)")
 
         localPeerName = deviceName
         peerID = peer

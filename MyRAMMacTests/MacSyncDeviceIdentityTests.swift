@@ -179,6 +179,38 @@ final class MacSyncTransportLifecycleTests: XCTestCase {
 }
 
 final class MacSyncDeviceIdentityTests: XCTestCase {
+    func testMYR233TransportIdentitySurvivesDefaultsOwnerRelaunch() throws {
+        let suite = "MYR233-peer-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let name = "Device|\(UUID().uuidString)"
+        let original = try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: name, defaults: defaults)
+        XCTAssertNotEqual(original, MCPeerID(displayName: name))
+        let relaunchedDefaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        let replacement = try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: name, defaults: relaunchedDefaults)
+        XCTAssertEqual(original, replacement)
+        XCTAssertEqual(defaults.data(forKey: MyRAMSyncDeviceIdentityStore.transportPeerIDKey),
+                       relaunchedDefaults.data(forKey: MyRAMSyncDeviceIdentityStore.transportPeerIDKey))
+    }
+
+    func testMYR233TransportIdentityChangesOnlyWithBoundDisplayIdentity() throws {
+        let defaults = makeDefaults()
+        let original = try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: "Original|device-a", defaults: defaults)
+        let renamed = try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: "Renamed|device-a", defaults: defaults)
+        XCTAssertNotEqual(original, renamed)
+        XCTAssertEqual(renamed, try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: "Renamed|device-a", defaults: defaults))
+        XCTAssertNotEqual(renamed, try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: "Renamed|device-b", defaults: defaults))
+    }
+
+    func testMYR233InvalidTransportArchiveCannotSilentlyCreateAnotherPeer() throws {
+        let defaults = makeDefaults()
+        for invalid: Any in ["not an archive", Data([0, 1, 2])] {
+            defaults.set(invalid, forKey: MyRAMSyncDeviceIdentityStore.transportPeerIDKey)
+            XCTAssertThrowsError(try MyRAMSyncDeviceIdentityStore.resolvePeerID(displayName: "Device|device-a", defaults: defaults))
+            XCTAssertEqual(defaults.object(forKey: MyRAMSyncDeviceIdentityStore.transportPeerIDKey) as? NSObject, invalid as? NSObject)
+        }
+    }
+
     func testMYR233ProductionCannotEnableTransportOnlyMode() throws {
         for id in ["com.northsignalstudio.myram", "com.northsignalstudio.myram.dev",
                    "com.northsignalstudio.myram.mac", "com.northsignalstudio.myram.mac.dev", "unknown"] {
