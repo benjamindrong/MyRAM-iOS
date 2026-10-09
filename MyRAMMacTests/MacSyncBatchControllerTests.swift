@@ -9,6 +9,92 @@ import XCTest
 final class MacSyncBatchControllerTests: XCTestCase {
     private var retainedContainers: [ModelContainer] = []
 
+    func testReplacementInvitationWaitsForPrecedingConnectionToRetire() async throws {
+        let prior = MCPeerID(displayName: "phone|replacement-owner")
+        let replacement = prior // The restarted iPhone reuses its archived MCPeerID.
+        let other = MCPeerID(displayName: "other|unrelated-owner")
+        var members = [prior, other]
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil, unsentBatchQueue: nil,
+            connectedPeersProvider: { members }
+        )
+        let local = MCPeerID(displayName: "local|admission-test")
+        let advertiser = MCNearbyServiceAdvertiser(peer: local, discoveryInfo: nil, serviceType: "myram-verify")
+        let session = MCSession(peer: local, securityIdentity: nil, encryptionPreference: .required)
+        var admissions: [Bool] = []
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: replacement, withContext: nil) {
+            accepted, admittedSession in
+            admissions.append(accepted)
+            if accepted { XCTAssertNotNil(admittedSession) }
+        }
+        await Task.yield()
+        XCTAssertTrue(admissions.isEmpty, "Replacement must not be admitted while prior membership remains")
+        controller.session(session, peer: other, didChange: .notConnected)
+        await Task.yield()
+        XCTAssertTrue(admissions.isEmpty, "Another peer's callback cannot release admission")
+        controller.session(session, peer: prior, didChange: .notConnected)
+        await Task.yield()
+        XCTAssertTrue(admissions.isEmpty, "Callback alone cannot override retained membership")
+        members = [other]
+        controller.session(session, peer: prior, didChange: .notConnected)
+        await waitUntil { admissions == [true] }
+        controller.session(session, peer: prior, didChange: .notConnected)
+        await Task.yield()
+        XCTAssertEqual(admissions, [true], "Invitation handler must complete exactly once")
+        XCTAssertEqual(members, [other], "Other peers retain their connection")
+        controller.stopNetworking()
+    }
+
+    func testNewerReplacementInvitationSupersedesPendingHandler() async throws {
+        let prior = MCPeerID(displayName: "phone|superseded-admission")
+        let replacement = MCPeerID(displayName: "phone|superseded-admission")
+        var members = [prior]
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil, unsentBatchQueue: nil,
+            connectedPeersProvider: { members }
+        )
+        let local = MCPeerID(displayName: "local")
+        let advertiser = MCNearbyServiceAdvertiser(peer: local, discoveryInfo: nil, serviceType: "myram-verify")
+        let session = MCSession(peer: local, securityIdentity: nil, encryptionPreference: .required)
+        var first: [Bool] = []
+        var second: [Bool] = []
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: prior, withContext: nil) { accepted, _ in
+            first.append(accepted)
+        }
+        await Task.yield()
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: replacement, withContext: nil) { accepted, _ in
+            second.append(accepted)
+        }
+        await waitUntil { first == [false] }
+        XCTAssertTrue(second.isEmpty)
+        members = []
+        controller.session(session, peer: prior, didChange: .notConnected)
+        await waitUntil { second == [true] }
+        XCTAssertEqual(first, [false])
+        controller.stopNetworking()
+        XCTAssertEqual(second, [true])
+    }
+
+    func testShutdownRejectsReplacementInvitationWaitingForRetirement() async throws {
+        let peer = MCPeerID(displayName: "phone|shutdown-admission")
+        let controller = try makeController(
+            unsentBatchQueueFileURL: nil, unsentBatchQueue: nil,
+            connectedPeersProvider: { [peer] }
+        )
+        let advertiser = MCNearbyServiceAdvertiser(peer: MCPeerID(displayName: "local"), discoveryInfo: nil, serviceType: "myram-verify")
+        var admissions: [Bool] = []
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: peer, withContext: nil) { accepted, session in
+            admissions.append(accepted)
+            XCTAssertNil(session)
+        }
+        await Task.yield()
+        XCTAssertTrue(admissions.isEmpty)
+        controller.stopNetworking()
+        XCTAssertEqual(admissions, [false])
+        controller.stopNetworking()
+        XCTAssertEqual(admissions, [false])
+    }
+
     func testMYR223LegacyFolderReceiptRedrivesDeferredConvergence() async throws {
         let container = try makeInMemoryContainer()
         retainedContainers.append(container)

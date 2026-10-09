@@ -80,6 +80,15 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     private let stopAdvertisingOperation: () -> Void
     private let stopBrowsingOperation: () -> Void
     private let disconnectSessionOperation: () -> Void
+    private struct PendingReplacementInvitation {
+        let peerID: MCPeerID
+        let context: Data?
+        let retiringPeerID: MCPeerID
+        let handler: (Bool, MCSession?) -> Void
+    }
+    // One invitation owns admission for each logical peer. A replacement cannot
+    // enter the session while the preceding connection still owns membership.
+    private var pendingReplacementInvitations: [String: PendingReplacementInvitation] = [:]
     private var pendingIncomingBatchWork: [IncomingBatchWork] = []
     private var isProcessingIncomingBatchWork = false
     private var pendingReceivedBootstrapByPeerDeviceID: [String: PendingReceivedBootstrap] = [:]
@@ -318,6 +327,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         advertiser.delegate = nil
         browser.delegate = nil
         session.delegate = nil
+        let pendingInvitations = pendingReplacementInvitations.values
+        pendingReplacementInvitations.removeAll()
+        pendingInvitations.forEach { $0.handler(false, nil) }
         stopAdvertisingOperation()
         stopBrowsingOperation()
         disconnectSessionOperation()
@@ -1308,6 +1320,14 @@ extension MacSyncBatchController: MCSessionDelegate {
             transportDiagnostics.record("session.state", session: session, peer: peerID, detail: "state=\(state.rawValue)")
             if state == .notConnected {
                 if applicationSyncEnabled { handlePeerDisconnect(peerDeviceID: identity.deviceID) }
+                if let pending = pendingReplacementInvitations[identity.deviceID],
+                   pending.retiringPeerID == peerID,
+                   !connectedPeersProvider().contains(where: {
+                       MacSyncPeerIdentity(peerID: $0).deviceID == identity.deviceID
+                   }) {
+                    pendingReplacementInvitations.removeValue(forKey: identity.deviceID)
+                    acceptInvitation(from: pending.peerID, context: pending.context, handler: pending.handler)
+                }
             }
 
             if state == .connected, !applicationSyncEnabled {
@@ -1416,6 +1436,20 @@ extension MacSyncBatchController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: Error?) {}
 }
 
+extension MacSyncBatchController {
+    private func acceptInvitation(
+        from peerID: MCPeerID, context: Data?, handler: (Bool, MCSession?) -> Void
+    ) {
+        let identity = MacSyncPeerIdentity(peerID: peerID)
+        pendingReplacementInvitations.removeValue(forKey: identity.deviceID)?.handler(false, nil)
+        peerCapabilityRegistry.recordInvitationContext(context, forPeerDeviceID: identity.deviceID)
+        remember(peerID)
+        lastConnectionEvent = "Invitation from \(displayName(for: peerID))"
+        transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID)
+        handler(true, session)
+    }
+}
+
 extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
     nonisolated func advertiser(
         _ advertiser: MCNearbyServiceAdvertiser,
@@ -1429,14 +1463,21 @@ extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
                 return
             }
             let identity = MacSyncPeerIdentity(peerID: peerID)
-            peerCapabilityRegistry.recordInvitationContext(
-                context,
-                forPeerDeviceID: identity.deviceID
-            )
-            remember(peerID)
-            lastConnectionEvent = "Invitation from \(displayName(for: peerID))"
-            transportDiagnostics.record("invitation.incoming.accepted", session: session, peer: peerID)
-            invitationHandler(true, session)
+            if let retiringPeer = connectedPeersProvider().first(where: {
+                MacSyncPeerIdentity(peerID: $0).deviceID == identity.deviceID
+            }) {
+                let superseded = pendingReplacementInvitations.updateValue(
+                    PendingReplacementInvitation(
+                        peerID: peerID, context: context,
+                        retiringPeerID: retiringPeer, handler: invitationHandler
+                    ),
+                    forKey: identity.deviceID
+                )
+                superseded?.handler(false, nil)
+                transportDiagnostics.record("invitation.incoming.awaitingRetirement", session: session, peer: peerID)
+                return
+            }
+            acceptInvitation(from: peerID, context: context, handler: invitationHandler)
         }
     }
 
