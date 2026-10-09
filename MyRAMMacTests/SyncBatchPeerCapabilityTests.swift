@@ -674,7 +674,7 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
         XCTAssertEqual(invitationContexts, [Data("1,2".utf8)])
     }
 
-    func testControllerReconnectRebindsWithoutRediscoveryAndUpdatesRevokeImmediately() async throws {
+    func testControllerReconnectRebindsWithoutRediscoveryAndDefersReplacementCapabilities() async throws {
         let localPeerID = MCPeerID(displayName: "Local|local-device")
         let remotePeerID = MCPeerID(displayName: "Remote|capability-peer")
         var connectedPeers = [remotePeerID]
@@ -715,7 +715,8 @@ final class SyncBatchPeerCapabilityTests: XCTestCase {
             invitationHandler: { _, _ in }
         )
         await Task.yield()
-        XCTAssertFalse(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"))
+        XCTAssertTrue(controller.hasExplicitPeerV2Support(forPeerDeviceID: "capability-peer"),
+                      "Pending replacement context must not revoke the preceding session's capabilities")
 
         controller.advertiser(
             advertiser,
