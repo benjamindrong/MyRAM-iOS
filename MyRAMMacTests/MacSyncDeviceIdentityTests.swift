@@ -4,6 +4,116 @@ import SwiftData
 import XCTest
 @testable import MyRAMMac
 
+@MainActor
+final class MacSyncTransportLifecycleTests: XCTestCase {
+    @MainActor
+    func testMYR233TerminalShutdownStopsDiscoveryBeforeDisconnectAndCannotRestart() throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let controller = makeLifecycleController(container: container) { events.append($0) }
+        controller.startNetworkingIfNeeded()
+        controller.startNetworkingIfNeeded()
+        controller.stopNetworking()
+        controller.stopNetworking()
+        controller.startNetworkingIfNeeded()
+        XCTAssertEqual(events, ["advertise", "browse", "stopAdvertise", "stopBrowse", "disconnect"])
+        XCTAssertFalse(controller.hasConnectedPeers)
+    }
+
+    @MainActor
+    func testMYR233ShutdownBeforeStartupCannotOpenTransport() throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let controller = makeLifecycleController(container: container) { events.append($0) }
+        controller.stopNetworking()
+        controller.startNetworkingIfNeeded()
+        XCTAssertEqual(events, ["stopAdvertise", "stopBrowse", "disconnect"])
+    }
+
+    @MainActor
+    func testMYR233QueuedDiscoveryAndInvitationCannotReopenRetiredOwner() async throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let controller = makeLifecycleController(container: container) { events.append($0) }
+        let local = MCPeerID(displayName: "local")
+        let remote = MCPeerID(displayName: "remote|myr233-replacement")
+        let browser = MCNearbyServiceBrowser(peer: local, serviceType: "myram-verify")
+        let advertiser = MCNearbyServiceAdvertiser(peer: local, discoveryInfo: nil, serviceType: "myram-verify")
+        let finished = expectation(description: "Queued invitation is rejected")
+        controller.browser(browser, foundPeer: remote, withDiscoveryInfo: nil)
+        controller.advertiser(advertiser, didReceiveInvitationFromPeer: remote, withContext: nil) { accepted, session in
+            XCTAssertFalse(accepted)
+            XCTAssertNil(session)
+            finished.fulfill()
+        }
+        controller.stopNetworking()
+        controller.invite(MacSyncDiscoveredPeer(peerID: remote, deviceID: "myr233-replacement", displayName: "remote"))
+        await fulfillment(of: [finished], timeout: 2)
+        XCTAssertTrue(controller.availablePeers.isEmpty)
+        XCTAssertEqual(events, ["stopAdvertise", "stopBrowse", "disconnect"])
+        XCTAssertTrue(controller.unsentBatchQueueSnapshotForTesting().pendingBatches.isEmpty)
+    }
+
+    @MainActor
+    func testMYR233RapidOwnerReplacementCannotReviveOldTransport() throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let retired = makeLifecycleController(container: container) { events.append("old:" + $0) }
+        retired.startNetworkingIfNeeded()
+        retired.stopNetworking()
+        let replacement = makeLifecycleController(container: container) { events.append("new:" + $0) }
+        replacement.startNetworkingIfNeeded()
+        retired.startNetworkingIfNeeded()
+        replacement.startNetworkingIfNeeded()
+        XCTAssertEqual(events, ["old:advertise", "old:browse", "old:stopAdvertise", "old:stopBrowse", "old:disconnect", "new:advertise", "new:browse"])
+        replacement.stopNetworking()
+    }
+
+    func testMYR233DisconnectReconnectKeepsTheRunningOwner() async throws {
+        let container = try makeContainer()
+        var events: [String] = []
+        let controller = makeLifecycleController(container: container) { events.append($0) }
+        controller.startNetworkingIfNeeded()
+        let local = MCPeerID(displayName: "local")
+        let remote = MCPeerID(displayName: "remote|myr233-reconnect")
+        let session = MCSession(peer: local, securityIdentity: nil, encryptionPreference: .required)
+        controller.session(session, peer: remote, didChange: .notConnected)
+        // Let the production delegate's main-actor hop finish before reconnecting.
+        await Task.yield()
+        controller.startNetworkingIfNeeded()
+        controller.invite(MacSyncDiscoveredPeer(peerID: remote, deviceID: "myr233-reconnect", displayName: "remote"))
+        XCTAssertEqual(events, ["advertise", "browse", "invite"])
+        controller.stopNetworking()
+    }
+
+    @MainActor
+    private func makeLifecycleController(
+        container: ModelContainer, event: @escaping (String) -> Void
+    ) -> MacSyncBatchController {
+        MacSyncBatchController(
+            context: container.mainContext,
+            conflictStore: SyncConflictStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("MYR233-lifecycle-\(UUID().uuidString).json")),
+            unsentBatchQueueFileURL: nil,
+            startsNetworking: false,
+            identityProvider: { MacSyncDeviceIdentity(id: UUID(), displayName: "Lifecycle test") },
+            startAdvertisingOperation: { event("advertise") },
+            startBrowsingOperation: { event("browse") },
+            stopAdvertisingOperation: { event("stopAdvertise") },
+            stopBrowsingOperation: { event("stopBrowse") },
+            disconnectSessionOperation: { event("disconnect") },
+            invitePeerOperation: { _, _, _ in event("invite") }
+        )
+    }
+
+    private func makeContainer() throws -> ModelContainer {
+        let schema = Schema(MyRAMModelRegistry.models)
+        let configuration = ModelConfiguration(
+            "MYR233-lifecycle-\(UUID().uuidString)", schema: schema, isStoredInMemoryOnly: true
+        )
+        return try ModelContainer(for: schema, configurations: configuration)
+    }
+}
+
 final class MacSyncDeviceIdentityTests: XCTestCase {
     func testVerificationFixtureIdentityPersistsAndRebindsEveryProviderBeforePeerConstruction() throws {
         let defaults = makeDefaults()

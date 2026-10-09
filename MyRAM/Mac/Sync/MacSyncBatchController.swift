@@ -71,7 +71,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         1_000_000_000
     ]
     private var localCaptureGeneration: UInt64 = 0
-    private var hasStartedNetworking = false
+    private enum NetworkingLifecycle { case idle, running, stopped }
+    private var networkingLifecycle = NetworkingLifecycle.idle
+    private let stopAdvertisingOperation: () -> Void
+    private let stopBrowsingOperation: () -> Void
+    private let disconnectSessionOperation: () -> Void
     private var pendingIncomingBatchWork: [IncomingBatchWork] = []
     private var isProcessingIncomingBatchWork = false
     private var pendingReceivedBootstrapByPeerDeviceID: [String: PendingReceivedBootstrap] = [:]
@@ -88,6 +92,9 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         legacyReceiver: MacLegacySyncReceiver? = nil,
         startAdvertisingOperation: (() -> Void)? = nil,
         startBrowsingOperation: (() -> Void)? = nil,
+        stopAdvertisingOperation: (() -> Void)? = nil,
+        stopBrowsingOperation: (() -> Void)? = nil,
+        disconnectSessionOperation: (() -> Void)? = nil,
         connectedPeersProvider: (() -> [MCPeerID])? = nil,
         sendBatchDataOperation:
             ((Data, [MCPeerID], MCSessionSendDataMode) throws -> Void)? = nil,
@@ -144,6 +151,13 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         self.startBrowsingOperation = startBrowsingOperation
             ?? { [retainedBrowser] in retainedBrowser.startBrowsingForPeers() }
 
+        self.stopAdvertisingOperation = stopAdvertisingOperation
+            ?? { retainedAdvertiser.stopAdvertisingPeer() }
+        self.stopBrowsingOperation = stopBrowsingOperation
+            ?? { retainedBrowser.stopBrowsingForPeers() }
+        self.disconnectSessionOperation = disconnectSessionOperation
+            ?? { retainedSession.disconnect() }
+
         super.init()
 
         session.delegate = self
@@ -163,9 +177,11 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     deinit {
         readyBatchTask?.cancel()
-        advertiser.stopAdvertisingPeer()
-        browser.stopBrowsingForPeers()
-        session.disconnect()
+        if networkingLifecycle != .stopped {
+            stopAdvertisingOperation()
+            stopBrowsingOperation()
+            disconnectSessionOperation()
+        }
     }
 
     var connectionSummary: String {
@@ -173,7 +189,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
     }
 
     var hasConnectedPeers: Bool {
-        !connectedPeersProvider().isEmpty
+        networkingLifecycle != .stopped && !connectedPeersProvider().isEmpty
     }
 
     var advertisedBatchSchemaDiscoveryInfo: [String: String] {
@@ -271,13 +287,39 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
     /// Starts the retained nearby-sync transports exactly once after startup migration succeeds.
     func startNetworkingIfNeeded() {
-        guard !hasStartedNetworking else { return }
-        hasStartedNetworking = true
+        guard networkingLifecycle == .idle else { return }
+        networkingLifecycle = .running
         startAdvertisingOperation()
         startBrowsingOperation()
     }
 
+    /// Terminal process shutdown; discovery cannot reopen this retained session.
+    /// disconnect() requests departure but does not promise remote GCK retirement.
+    func stopNetworking() {
+        guard networkingLifecycle != .stopped else { return }
+        networkingLifecycle = .stopped
+        readyBatchTask?.cancel()
+        bootstrapCapabilityResolutionTasks.values.forEach { $0.cancel() }
+        bootstrapRetryTasks.values.forEach { $0.cancel() }
+        advertiser.delegate = nil
+        browser.delegate = nil
+        session.delegate = nil
+        stopAdvertisingOperation()
+        stopBrowsingOperation()
+        disconnectSessionOperation()
+        connectedPeers = []
+        availablePeers = []
+    }
+
+    private func sendTransportData(
+        _ data: Data, _ peers: [MCPeerID], _ mode: MCSessionSendDataMode
+    ) throws {
+        guard networkingLifecycle != .stopped else { throw CancellationError() }
+        try sendBatchDataOperation(data, peers, mode)
+    }
+
     func invite(_ peer: MacSyncDiscoveredPeer) {
+        guard networkingLifecycle != .stopped else { return }
         guard !connectedPeersProvider().contains(peer.peerID) else {
             lastConnectionEvent = "Connected: \(peer.displayName)"
             return
@@ -456,7 +498,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
 
         do {
             let data = try MultipeerSyncMessageCoding.encodeBatch(batch)
-            try sendBatchDataOperation(data, pendingRecipients, .reliable)
+            try sendTransportData(data, pendingRecipients, .reliable)
             for deviceID in recipientDeviceIDs {
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchSendSucceeded,
@@ -567,7 +609,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                     kind: .batchAcknowledgement,
                     payload: payload
                 )
-                try sendBatchDataOperation(data, [peerID], .reliable)
+                try sendTransportData(data, [peerID], .reliable)
                 acknowledgementOutbox.remove(batchID, forPeerDeviceID: peerDeviceID)
                 MyRAMSyncBenchmarkTelemetry.shared.record(
                     .batchAcknowledgementSent,
@@ -752,7 +794,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 kind: .bootstrapSnapshot,
                 payload: payload
             )
-            try sendBatchDataOperation(data, [peerID], .reliable)
+            try sendTransportData(data, [peerID], .reliable)
             lastErrorMessage = nil
         } catch {
             lastErrorMessage = "Unable to send nearby bootstrap state."
@@ -846,7 +888,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 kind: .bootstrapAcknowledgement,
                 payload: payload
             )
-            try sendBatchDataOperation(data, [peerID], .reliable)
+            try sendTransportData(data, [peerID], .reliable)
         } catch {
             lastErrorMessage = "Unable to confirm nearby bootstrap state."
             return
@@ -968,7 +1010,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
                 kind: .bootstrapCapability,
                 payload: payload
             )
-            try sendBatchDataOperation(data, [peerID], .reliable)
+            try sendTransportData(data, [peerID], .reliable)
         } catch {
             lastErrorMessage = "Unable to announce nearby bootstrap capability."
         }
@@ -1180,7 +1222,7 @@ final class MacSyncBatchController: NSObject, ObservableObject, SyncConvergenceL
         )
         let payload = try JSONEncoder().encode(acknowledgement)
         let data = try MultipeerSyncMessageCoding.encode(kind: .legacySyncEnvelope, payload: payload)
-        try session.send(data, toPeers: [peerID], with: .reliable)
+        try sendTransportData(data, [peerID], .reliable)
     }
 
     private func remember(_ peerID: MCPeerID) {
@@ -1226,6 +1268,7 @@ extension MacSyncBatchController: SyncConvergenceRemoteAcknowledgementRetaining 
 extension MacSyncBatchController: MCSessionDelegate {
     nonisolated func session(_ session: MCSession, peer peerID: MCPeerID, didChange state: MCSessionState) {
         Task { @MainActor in
+            guard networkingLifecycle != .stopped else { return }
             let identity = MacSyncPeerIdentity(peerID: peerID)
             MyRAMSyncBenchmarkTelemetry.shared.record(
                 .peerConnectionState,
@@ -1253,6 +1296,7 @@ extension MacSyncBatchController: MCSessionDelegate {
 
     nonisolated func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         Task { @MainActor in
+            guard networkingLifecycle != .stopped else { return }
             guard let message = try? MultipeerSyncMessageCoding.decodeMessage(from: data),
                   message.schemaVersion == MultipeerSyncMessageEnvelope.currentSchemaVersion else {
                 return
@@ -1343,6 +1387,10 @@ extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
         invitationHandler: @escaping (Bool, MCSession?) -> Void
     ) {
         Task { @MainActor in
+            guard networkingLifecycle != .stopped else {
+                invitationHandler(false, nil)
+                return
+            }
             let identity = MacSyncPeerIdentity(peerID: peerID)
             peerCapabilityRegistry.recordInvitationContext(
                 context,
@@ -1356,6 +1404,7 @@ extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
 
     nonisolated func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
         Task { @MainActor in
+            guard networkingLifecycle != .stopped else { return }
             lastConnectionEvent = "Advertising failed"
             lastErrorMessage = error.localizedDescription
         }
@@ -1365,6 +1414,7 @@ extension MacSyncBatchController: MCNearbyServiceAdvertiserDelegate {
 extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String: String]?) {
         Task { @MainActor in
+            guard networkingLifecycle != .stopped else { return }
             let identity = MacSyncPeerIdentity(peerID: peerID)
             peerCapabilityRegistry.recordDiscoveryValue(
                 info?[SyncBatchPeerCapabilityCodec.discoveryInfoKey],
@@ -1394,6 +1444,7 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
 
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
         Task { @MainActor in
+            guard networkingLifecycle != .stopped else { return }
             let identity = MacSyncPeerIdentity(peerID: peerID)
             peerCapabilityRegistry.clearDiscoveryEvidence(
                 forPeerDeviceID: identity.deviceID
@@ -1405,6 +1456,7 @@ extension MacSyncBatchController: MCNearbyServiceBrowserDelegate {
 
     nonisolated func browser(_ browser: MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
         Task { @MainActor in
+            guard networkingLifecycle != .stopped else { return }
             lastConnectionEvent = "Browsing failed"
             lastErrorMessage = error.localizedDescription
         }
